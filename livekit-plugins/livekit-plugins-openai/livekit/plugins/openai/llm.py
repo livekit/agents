@@ -491,9 +491,7 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
         )
-        perplexity_llm._capabilities = llm.LLMCapabilities(
-            requires_initial_user_message=True
-        )
+        perplexity_llm._capabilities.single_message_per_turn = False
         return perplexity_llm
 
     @staticmethod
@@ -700,14 +698,9 @@ class LLMStream(llm.LLMStream):
             opts = _strip_nones(opts)
 
             messages = _build_oai_context(self._chat_ctx, id(self))
-            if (
-                self._llm._capabilities.requires_initial_user_message
-                and len(messages) > 0
-            ):
-                if messages[0]["role"] == "system" and messages[1]["role"] != "user":
-                    messages.insert(1, {"role": "user", "content": ""})
-                elif messages[0]["role"] != "user":
-                    messages.insert(0, {"role": "user", "content": ""})
+
+            if self._llm._capabilities.single_message_per_turn and len(messages) > 0:
+                messages = self._merge_messages(messages)
 
             stream = await self._client.chat.completions.create(
                 messages=messages,
@@ -828,6 +821,30 @@ class LLMStream(llm.LLMStream):
                 )
             ],
         )
+
+    def _merge_messages(
+        self,
+        messages: list[ChatCompletionMessageParam],
+    ) -> list[ChatCompletionMessageParam]:
+        def merge_content(c1: str, c2: str) -> str:
+            return c1 + c2
+
+        combined_messages: list[ChatCompletionMessageParam] = []
+        for msg in messages:
+            if not combined_messages or msg["role"] != combined_messages[-1]["role"]:
+                combined_messages.append(msg)
+            else:
+                combined_messages[-1]["content"] = merge_content(
+                    combined_messages[-1]["content"], msg["content"]
+                )
+
+        if combined_messages[0]["role"] == "system" and (
+            len(combined_messages) < 2 or combined_messages[1]["role"] != "user"
+        ):
+            combined_messages.insert(1, {"role": "user", "content": ""})
+        elif combined_messages[0]["role"] != "user":
+            combined_messages.insert(0, {"role": "user", "content": ""})
+        return combined_messages
 
 
 def _build_oai_context(

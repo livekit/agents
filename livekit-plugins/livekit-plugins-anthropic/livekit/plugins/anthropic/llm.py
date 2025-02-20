@@ -102,7 +102,7 @@ class LLM(llm.LLM):
             capabilities=LLMCapabilities(
                 requires_persistent_functions=True,
                 supports_choices_on_int=True,
-                requires_initial_user_message=True,
+                single_message_per_turn=True,
             )
         )
 
@@ -379,9 +379,9 @@ def _latest_system_message(
         if isinstance(latest_system_message.content, str):
             latest_system_str = latest_system_message.content
         elif isinstance(latest_system_message.content, list):
-            latest_system_str = " ".join(
-                [c for c in latest_system_message.content if isinstance(c, str)]
-            )
+            latest_system_str = " ".join([
+                c for c in latest_system_message.content if isinstance(c, str)
+            ])
     system_text_block = anthropic.types.TextBlockParam(
         text=latest_system_str,
         type="text",

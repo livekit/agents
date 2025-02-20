@@ -55,8 +55,8 @@ class LLMCapabilities:
     """check whether the LLM supports integer enums choices as function arguments"""
     requires_persistent_functions: bool = False
     """if the LLM requires function definition when previous function calls exist in chat context"""
-    requires_initial_user_message: bool = False
-    """if the LLM requires an initial user message to start the chat context"""
+    single_message_per_turn: bool = False
+    """if the LLM requires alternate messages between user and assistant"""
 
 
 @dataclass

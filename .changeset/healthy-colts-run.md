@@ -4,4 +4,4 @@
 "livekit-agents": patch
 ---
 
-fix: add requires_initial_user_message to LLM capabilities
+fix: add single_message_per_turn to LLM capabilities
