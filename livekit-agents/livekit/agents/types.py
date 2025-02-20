@@ -1,9 +1,17 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal, TypeVar, Union
 
 from typing_extensions import TypeAlias
 
-AgentState = Union[Literal["initializing", "listening", "thinking", "speaking"], str]
+
+class AgentState(str, Enum):
+    INITIALIZING = "initializing"
+    LISTENING = "listening"
+    THINKING = "thinking"
+    SPEAKING = "speaking"
+
+
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"
 """
 The state of the agent, stored in the agent's attributes.

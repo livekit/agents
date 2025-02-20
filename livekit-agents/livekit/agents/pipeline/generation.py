@@ -154,21 +154,29 @@ class _TextOutput:
 
 def perform_text_forwarding(
     *, text_output: io.TextSink | None, llm_output: AsyncIterable[str]
-) -> tuple[asyncio.Task, _TextOutput]:
+) -> tuple[asyncio.Task, _TextOutput, asyncio.Future]:
     out = _TextOutput(text="")
-    task = asyncio.create_task(_text_forwarding_task(text_output, llm_output, out))
-    return task, out
+    first_text_fut = asyncio.Future()
+    task = asyncio.create_task(
+        _text_forwarding_task(text_output, llm_output, out, first_text_fut)
+    )
+    return task, out, first_text_fut
 
 
 @utils.log_exceptions(logger=logger)
 async def _text_forwarding_task(
-    text_output: io.TextSink | None, llm_output: AsyncIterable[str], out: _TextOutput
+    text_output: io.TextSink | None,
+    llm_output: AsyncIterable[str],
+    out: _TextOutput,
+    first_text_fut: asyncio.Future,
 ) -> None:
     try:
         async for delta in llm_output:
             out.text += delta
             if text_output is not None:
                 await text_output.capture_text(delta)
+            if not first_text_fut.done():
+                first_text_fut.set_result(None)
     finally:
         if isinstance(llm_output, _ACloseable):
             await llm_output.aclose()
@@ -186,10 +194,13 @@ def perform_audio_forwarding(
     *,
     audio_output: io.AudioSink,
     tts_output: AsyncIterable[rtc.AudioFrame],
-) -> tuple[asyncio.Task, _AudioOutput]:
+) -> tuple[asyncio.Task, _AudioOutput, asyncio.Future]:
     out = _AudioOutput(audio=[])
-    task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
-    return task, out
+    first_frame_fut = asyncio.Future()
+    task = asyncio.create_task(
+        _audio_forwarding_task(audio_output, tts_output, out, first_frame_fut)
+    )
+    return task, out, first_frame_fut
 
 
 @utils.log_exceptions(logger=logger)
@@ -197,11 +208,14 @@ async def _audio_forwarding_task(
     audio_output: io.AudioSink,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
+    first_frame_fut: asyncio.Future,
 ) -> None:
     try:
         async for frame in tts_output:
             out.audio.append(frame)
             await audio_output.capture_frame(frame)
+            if not first_frame_fut.done():
+                first_frame_fut.set_result(None)
     finally:
         if isinstance(tts_output, _ACloseable):
             await tts_output.aclose()
