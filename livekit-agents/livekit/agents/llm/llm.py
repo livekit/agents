@@ -31,6 +31,7 @@ from .chat_context import ChatContext, ChatRole
 class ChoiceDelta:
     role: ChatRole
     content: str | None = None
+    reasoning: str | None = None
     tool_calls: list[function_context.FunctionCallInfo] | None = None
 
 
