@@ -18,7 +18,7 @@ class InputSpeechStartedEvent:
 
 @dataclass
 class InputSpeechStoppedEvent:
-    pass
+    user_transcription_enabled: bool
 
 
 @dataclass
@@ -70,11 +70,29 @@ class RealtimeModel:
 EventTypes = Literal[
     "input_speech_started",  # serverside VAD (also used for interruptions)
     "input_speech_stopped",  # serverside VAD
+    "input_audio_transcription_completed",
+    "input_audio_transcription_failed",
     "generation_created",
     "error",
 ]
 
 TEvent = TypeVar("TEvent")
+
+
+@dataclass
+class InputTranscriptionCompleted:
+    item_id: str
+    """id of the item"""
+    transcript: str
+    """transcript of the input audio"""
+
+
+@dataclass
+class InputTranscriptionFailed:
+    item_id: str
+    """id of the item"""
+    message: str
+    """error message"""
 
 
 class RealtimeSession(
