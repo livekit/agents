@@ -1,3 +1,20 @@
+"""
+Avatar Runner Module
+
+This module implements the avatar runner service that processes audio to generate
+synchronized video frames. It uses a custom video generator (MyVideoGenerator) to
+render visualizations from audio samples with the help of OpenCV and numpy.
+
+Developers can extend this file to:
+  - Modify the video generation logic and visualization routines.
+  - Adjust media options such as resolution, frame rate, and sample rate.
+  - Integrate custom behavior on participant events.
+
+Requirements:
+  - Python 3.10+ (for union type syntax using "|")
+  - numpy, opencv-python, asyncio, and other dependencies.
+"""
+
 import asyncio
 import logging
 import sys
@@ -36,6 +53,7 @@ class MyVideoGenerator:
         self._av_sync: Optional[rtc.AVSynchronizer] = None
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
+        # Note: The union type syntax (using '|') requires Python 3.10 or above.
         """Process and queue audio frames, handling resampling if needed.
 
         Args:
