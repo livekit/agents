@@ -4,10 +4,10 @@ import asyncio
 import os
 import weakref
 from dataclasses import dataclass, fields
+from typing import Optional
 
 from livekit import rtc
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     tokenize,
@@ -128,7 +128,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
         segment_id: str | None = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
@@ -140,7 +140,7 @@ class TTS(tts.TTS):
         )
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> "SynthesizeStream":
         stream = SynthesizeStream(
             tts=self,
@@ -157,8 +157,8 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: APIConnectOptions,
         opts: _Options,
+        conn_options: Optional[APIConnectOptions] = None,
         segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
@@ -208,8 +208,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         tts: TTS,
-        conn_options: APIConnectOptions,
         opts: _Options,
+        conn_options: Optional[APIConnectOptions] = None,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._client = tts._client

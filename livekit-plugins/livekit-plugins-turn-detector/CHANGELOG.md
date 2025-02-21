@@ -1,5 +1,11 @@
 # livekit-plugins-eou
 
+## 0.4.2
+
+### Patch Changes
+
+- log from job process instead of inference - [#1506](https://github.com/livekit/agents/pull/1506) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.4.1
 
 ### Patch Changes
