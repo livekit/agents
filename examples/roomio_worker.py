@@ -6,6 +6,7 @@ from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cl
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentTask, CallContext, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
+from livekit.agents.pipeline.room_io import RoomIO
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("roomio-example")
@@ -52,7 +53,10 @@ async def entrypoint(ctx: JobContext):
     def on_agent_state_changed(state: AgentState):
         logger.info("agent_state_changed", extra={"state": state})
 
-    await agent.start(room=ctx.room)
+    # await agent.start(room=ctx.room)
+    room_io = RoomIO(room=ctx.room, agent=agent)
+    await room_io.start()
+    await agent.start()
 
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(

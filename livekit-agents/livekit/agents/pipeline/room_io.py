@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from ..pipeline import PipelineAgent
 
 
+ATTRIBUTE_PUBLISH_FOR = "lk.publish_for"
+ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+LK_CHAT_TOPIC = "lk.chat"
+
+
 @dataclass(frozen=True)
 class RoomInputOptions:
     text_enabled: bool = True
@@ -28,31 +33,34 @@ class RoomInputOptions:
     """Sample rate of the input audio in Hz"""
     audio_num_channels: int = 1
     """Number of audio channels"""
-    audio_queue_capacity: int = 0
+    text_input_topic: str | None = LK_CHAT_TOPIC
+    """Topic for text input"""
+    _audio_queue_capacity: int = 0
     """Capacity of the internal audio queue, 0 means unlimited"""
-    video_queue_capacity: int = 0
+    _video_queue_capacity: int = 0
     """Capacity of the internal video queue, 0 means unlimited"""
-    forward_user_transcript: bool = True
-    """Whether to forward user transcript segments to the room"""
 
 
 @dataclass(frozen=True)
 class RoomOutputOptions:
-    sample_rate: int = 24000
-    num_channels: int = 1
-    sync_agent_transcription: bool = True
+    text_enabled: bool = True
+    """Whether to publish text output"""
+    audio_enabled: bool = True
+    """Whether to publish audio output"""
+    audio_sample_rate: int = 24000
+    """Sample rate of the output audio in Hz"""
+    audio_num_channels: int = 1
+    """Number of audio channels"""
+    text_output_topic: str | None = LK_CHAT_TOPIC
+    """Topic for text output"""
+    agent_text_sync_with_audio: bool = True
     """Whether to synchronize agent transcription with audio playback"""
-    forward_agent_transcription: bool = True
-    """Whether to forward transcription segments to the room"""
-    track_source: rtc.TrackSource.ValueType = rtc.TrackSource.SOURCE_MICROPHONE
+    audio_track_source: rtc.TrackSource.ValueType = rtc.TrackSource.SOURCE_MICROPHONE
     """Source of the audio track to publish"""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
-
-ATTRIBUTE_PUBLISH_FOR = "lk.publish_for"
-TOPIC_TEXT_INPUT = "lk.chat"
 
 
 class BaseStreamHandle:
@@ -212,6 +220,281 @@ class VideoStreamHandle(BaseStreamHandle):
         return rtc.VideoStream.from_track(track=track, capacity=self.capacity)
 
 
+class RoomIO:
+    def __init__(
+        self,
+        room: rtc.Room,
+        agent: "PipelineAgent",
+        *,
+        link_to_participant: Optional[rtc.RemoteParticipant | str] = None,
+        input_options: RoomInputOptions = DEFAULT_ROOM_INPUT_OPTIONS,
+        output_options: RoomOutputOptions = DEFAULT_ROOM_OUTPUT_OPTIONS,
+    ) -> None:
+        self._room = room
+        self._agent = agent
+        self._in_opts = input_options
+        self._out_opts = output_options
+
+        # room input
+        self._participant_identity: Optional[str] = (
+            link_to_participant.identity
+            if isinstance(link_to_participant, rtc.RemoteParticipant)
+            else link_to_participant
+        )
+        self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
+        self._audio_input_handle: Optional[AudioStreamHandle] = None
+        self._video_input_handle: Optional[VideoStreamHandle] = None
+
+        # room output
+        self._audio_output: Optional[RoomAudioSink] = None
+        self._user_text_output: Optional[TextSink] = None
+        self._agent_text_output: Optional[TextSink] = None
+        self._text_synchronizer: Optional[TextSynchronizer] = None
+
+        self._tasks: set[asyncio.Task] = set()
+
+    async def start(self) -> None:
+        self._room.on("participant_connected", self._on_participant_connected)
+        self._room.on("participant_disconnected", self._on_participant_disconnected)
+        for participant in self._room.remote_participants.values():
+            self._on_participant_connected(participant)
+
+        # room input setup
+        if self._in_opts.text_enabled:
+            self._room.register_text_stream_handler(
+                topic=LK_CHAT_TOPIC, handler=self._on_user_text_input
+            )
+        if self._in_opts.audio_enabled:
+            self._audio_input_handle = AudioStreamHandle(
+                room=self._room,
+                sample_rate=self._in_opts.audio_sample_rate,
+                num_channels=self._in_opts.audio_num_channels,
+                capacity=self._in_opts._audio_queue_capacity,
+            )
+        if self._in_opts.video_enabled:
+            self._video_input_handle = VideoStreamHandle(
+                room=self._room,
+                capacity=self._in_opts._video_queue_capacity,
+            )
+
+        # room output setup
+        if self._out_opts.audio_enabled:
+            self._audio_output = RoomAudioSink(
+                room=self._room,
+                sample_rate=self._out_opts.audio_sample_rate,
+                num_channels=self._out_opts.audio_num_channels,
+                track_source=self._out_opts.audio_track_source,
+            )
+
+        if self._out_opts.text_enabled:
+            self._user_text_output = self._create_text_sink(
+                participant_identity=self._participant_identity,
+                is_delta_stream=False,
+                topic=self._out_opts.text_output_topic,
+            )
+            self._agent.on("user_transcript_updated", self._on_user_transcript_updated)
+
+            self._agent_text_output = self._create_text_sink(
+                participant_identity=self._room.local_participant.identity,
+                is_delta_stream=True,
+                topic=self._out_opts.text_output_topic,
+            )
+            if self._out_opts.agent_text_sync_with_audio:
+                if not self._audio_output:
+                    logger.warning(
+                        "text sync with audio is enabled but audio output is not enabled, ignoring"
+                    )
+                else:
+                    self._text_synchronizer = TextSynchronizer(
+                        audio_sink=self._audio_output,
+                        text_sink=self._agent_text_output,
+                    )
+
+        if self._audio_output:
+            await self._audio_output.start()
+
+        # wait for the specified participant or the first participant joined
+        input_participant = await self.wait_for_participant()
+        self.set_participant(input_participant.identity)
+
+        self._agent.output.audio = self.audio_output
+        self._agent.output.text = self.text_output
+        self._agent.input.audio = self.audio_input
+        self._agent.input.video = self.video_input
+
+    @property
+    def audio_output(self) -> AudioSink:
+        if self._text_synchronizer:
+            return self._text_synchronizer.audio_sink
+        return self._audio_output
+
+    @property
+    def text_output(self) -> TextSink | None:
+        if self._text_synchronizer:
+            return self._text_synchronizer.text_sink
+        return self._agent_text_output
+
+    @property
+    def audio_input(self) -> AsyncIterator[rtc.AudioFrame] | None:
+        if not self._audio_input_handle:
+            return None
+        return self._audio_input_handle.stream
+
+    @property
+    def video_input(self) -> AsyncIterator[rtc.VideoFrame] | None:
+        if not self._video_input_handle:
+            return None
+        return self._video_input_handle.stream
+
+    @property
+    def linked_participant(self) -> rtc.RemoteParticipant | None:
+        if not self._participant_connected.done():
+            return None
+        return self._participant_connected.result()
+
+    def set_participant(self, participant_identity: str | None) -> None:
+        """Switch audio and video streams to specified participant"""
+        if participant_identity is None:
+            self.unset_participant()
+            return
+
+        # reset future if switching to a different participant
+        if (
+            self._participant_identity is not None
+            and self._participant_identity != participant_identity
+        ):
+            self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
+            # check if new participant is already connected
+            for participant in self._room.remote_participants.values():
+                if participant.identity == participant_identity:
+                    self._participant_connected.set_result(participant)
+                    break
+
+        # update participant identity and handlers
+        self._participant_identity = participant_identity
+        if self._audio_input_handle:
+            self._audio_input_handle.set_participant(participant_identity)
+        if self._video_input_handle:
+            self._video_input_handle.set_participant(participant_identity)
+
+        self._update_user_text_sink(participant_identity)
+
+        logger.debug(
+            "set participant",
+            extra={"participant": participant_identity},
+        )
+
+    def unset_participant(self) -> None:
+        self._participant_identity = None
+        self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
+        if self._audio_input_handle:
+            self._audio_input_handle.set_participant(None)
+        if self._video_input_handle:
+            self._video_input_handle.set_participant(None)
+        self._update_user_text_sink(None)
+        logger.debug("unset participant")
+
+    async def wait_for_participant(self) -> rtc.RemoteParticipant:
+        return await self._participant_connected
+
+    def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
+        logger.debug(
+            "participant connected",
+            extra={"participant": participant.identity},
+        )
+        if self._participant_connected.done():
+            return
+
+        if self._participant_identity is not None:
+            if participant.identity != self._participant_identity:
+                return
+        # otherwise, skip participants that are marked as publishing for this agent
+        elif (
+            participant.attributes.get(ATTRIBUTE_PUBLISH_FOR)
+            == self._room.local_participant.identity
+        ):
+            return
+
+        self._participant_connected.set_result(participant)
+
+    def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        logger.debug(
+            "participant disconnected",
+            extra={"participant": participant.identity},
+        )
+        if (
+            self._participant_identity is None
+            or self._participant_identity != participant.identity
+        ):
+            return
+
+        self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
+
+    def _on_user_transcript_updated(self, ev: stt.SpeechEvent) -> None:
+        if self._user_text_output is None:
+            return
+
+        async def _capture_text():
+            if ev.alternatives:
+                data = ev.alternatives[0]
+                await self._user_text_output.capture_text(data.text)
+
+            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                self._user_text_output.flush()
+
+        task = asyncio.create_task(_capture_text())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    def _on_user_text_input(
+        self, reader: rtc.TextStreamReader, participant_identity: str
+    ) -> None:
+        if participant_identity != self._participant_identity:
+            return
+
+        async def _read_text():
+            text = await reader.read_all()
+            logger.debug(
+                "received text input",
+                extra={"text": text, "participant": self._participant_identity},
+            )
+            if not self._agent._started:
+                logger.warning("received text input but agent is not started, ignoring")
+                return
+
+            self._agent.interrupt()
+            self._agent.generate_reply(user_input=text)
+
+        task = asyncio.create_task(_read_text())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    def _update_user_text_sink(self, participant_identity: str | None) -> None:
+        if not self._user_text_output:
+            return
+
+        for sink in self._user_text_output._sinks:
+            assert isinstance(sink, (DataStreamTextSink, RoomTranscriptEventSink))
+            sink.set_participant(participant_identity)
+
+    def _create_text_sink(
+        self, participant_identity: str | None, is_delta_stream: bool, topic: str | None
+    ) -> TextSink:
+        return ParallelTextSink(
+            RoomTranscriptEventSink(
+                room=self._room,
+                participant=participant_identity,
+                is_delta_stream=is_delta_stream,
+            ),
+            DataStreamTextSink(
+                room=self._room,
+                participant=participant_identity,
+                topic=topic,
+                is_delta_stream=is_delta_stream,
+            ),
+        )
+
+
 class RoomInput:
     """Creates video and audio streams from remote participants in a LiveKit room"""
 
@@ -253,14 +536,14 @@ class RoomInput:
                 room=room,
                 sample_rate=options.audio_sample_rate,
                 num_channels=options.audio_num_channels,
-                capacity=options.audio_queue_capacity,
+                capacity=options._audio_queue_capacity,
             )
             self._audio_handle.set_participant(self._participant_identity)
 
         if options.video_enabled:
             self._video_handle = VideoStreamHandle(
                 room=room,
-                capacity=options.video_queue_capacity,
+                capacity=options._video_queue_capacity,
             )
             self._video_handle.set_participant(self._participant_identity)
 
@@ -477,9 +760,9 @@ class RoomOutput:
         self._room = room
         self._audio_sink = RoomAudioSink(
             room=room,
-            sample_rate=self._options.sample_rate,
-            num_channels=self._options.num_channels,
-            track_source=self._options.track_source,
+            sample_rate=self._options.audio_sample_rate,
+            num_channels=self._options.audio_num_channels,
+            track_source=self._options.audio_track_source,
         )
         self._text_sink: Optional[TextSink] = None
         self._text_synchronizer: Optional[TextSynchronizer] = None
@@ -500,7 +783,7 @@ class RoomOutput:
                 ),
             )
 
-        if self._options.sync_agent_transcription and self._text_sink:
+        if self._options.sync_agent_transcription_with_audio and self._text_sink:
             self._text_synchronizer = TextSynchronizer(
                 audio_sink=self._audio_sink, text_sink=self._text_sink
             )
@@ -646,7 +929,7 @@ class RoomTranscriptEventSink(TextSink):
     def __init__(
         self,
         room: rtc.Room,
-        participant: rtc.Participant | str,
+        participant: rtc.Participant | str | None,
         *,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
         is_delta_stream: bool = True,
@@ -656,33 +939,44 @@ class RoomTranscriptEventSink(TextSink):
         self._is_delta_stream = is_delta_stream
         self._tasks: set[asyncio.Task] = set()
         self._track_id: str | None = None
-        self._is_stream = is_delta_stream
+        self._participant_identity: str | None = None
+
+        self._room.on("track_published", self._on_track_published)
+        self._room.on("local_track_published", self._on_local_track_published)
         self.set_participant(participant, track)
 
     def set_participant(
         self,
-        participant: rtc.Participant | str,
+        participant: rtc.Participant | str | None = None,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
-        identity = participant if isinstance(participant, str) else participant.identity
+        identity = (
+            participant.identity
+            if isinstance(participant, rtc.Participant)
+            else participant
+        )
         self._participant_identity = identity
 
-        if isinstance(track, (rtc.TrackPublication, rtc.Track)):
-            track = track.sid
+        if identity is None:
+            self._track_id = None
         else:
-            try:
-                track = find_micro_track_id(self._room, identity)
-            except ValueError:
-                track = None
-        self._track_id = track
-        if track is None:
-            self._room.on("track_published", self._on_track_published)
+            if isinstance(track, (rtc.TrackPublication, rtc.Track)):
+                track = track.sid
+            else:
+                try:
+                    track = find_micro_track_id(self._room, identity)
+                except ValueError:
+                    track = None
+            self._track_id = track
 
         self._capturing = False
         self._pushed_text = ""
         self._current_id = utils.shortuuid("SG_")
 
     async def capture_text(self, text: str) -> None:
+        if self._participant_identity is None:
+            return
+
         if not self._capturing:
             self._capturing = True
             self._pushed_text = ""
@@ -697,7 +991,7 @@ class RoomTranscriptEventSink(TextSink):
         )
 
     def flush(self) -> None:
-        if not self._capturing:
+        if self._participant_identity is None or not self._capturing:
             return
         self._capturing = False
         task = asyncio.create_task(
@@ -748,7 +1042,19 @@ class RoomTranscriptEventSink(TextSink):
         ):
             return
         self._track_id = track.sid
-        self._room.off("track_published", self._on_track_published)
+
+    def _on_local_track_published(
+        self, track: rtc.LocalTrackPublication, _: rtc.Track
+    ) -> None:
+        # TODO(long): handle local track and remote track
+        if (
+            self._participant_identity is None
+            or self._participant_identity != self._room.local_participant.identity
+        ):
+            return
+
+        if track.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            self._track_id = track.sid
 
 
 class DataStreamTextSink(TextSink):
@@ -757,28 +1063,35 @@ class DataStreamTextSink(TextSink):
     def __init__(
         self,
         room: rtc.Room,
-        participant: rtc.Participant | str,
-        track: rtc.Track | rtc.TrackPublication | str | None = None,
+        participant: rtc.Participant | str | None,
+        *,
         topic: str | None = None,
         is_delta_stream: bool = True,
     ):
         super().__init__()
         self._room = room
-        self._tasks: set[asyncio.Task] = set()
-        self.set_participant(participant, track)
-        self._topic = topic or "lk.chat"
         self._is_delta_stream = is_delta_stream
+        self._tasks: set[asyncio.Task] = set()
+
+        self._participant_identity: str | None = None
+
+        self._topic = topic or LK_CHAT_TOPIC
         self._text_writer: rtc.TextStreamWriter | None = None
-        self._is_capturing = False
-        self._current_id = utils.shortuuid("SG_")
+        self.set_participant(participant)
 
     def set_participant(
         self,
-        participant: rtc.Participant | str,
+        participant: rtc.Participant | str | None,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
-        identity = participant if isinstance(participant, str) else participant.identity
+        # TODO(long): particpant None should have the same behavior as transcript event sink
+        identity = (
+            participant.identity
+            if isinstance(participant, rtc.Participant)
+            else participant
+        )
         self._participant_identity = identity
+
         self._latest_text = ""
         self._current_id = utils.shortuuid("SG_")
         self._is_capturing = False
@@ -791,13 +1104,12 @@ class DataStreamTextSink(TextSink):
 
         try:
             if not self._text_writer:
-                self._is_capturing = True
                 self._text_writer = await self._room.local_participant.stream_text(
                     topic=self._topic,
                     stream_id=self._current_id,
                     sender_identity=self._participant_identity,
                     attributes={
-                        "lk.transcription_final": "false",
+                        ATTRIBUTE_TRANSCRIPTION_FINAL: "false",
                     },
                 )
             await self._text_writer.write(text)
@@ -810,9 +1122,8 @@ class DataStreamTextSink(TextSink):
             logger.exception("Failed to publish transcription to stream")
 
     def flush(self) -> None:
-        attributes = {
-            "lk.transcription_final": "true",
-        }
+        if not self._is_capturing:
+            return
 
         self._is_capturing = False
 
@@ -822,6 +1133,9 @@ class DataStreamTextSink(TextSink):
             stream_id: str,
             participant_identity: str | None,
         ):
+            attributes = {
+                ATTRIBUTE_TRANSCRIPTION_FINAL: "true",
+            }
             if not self._is_delta_stream:
                 if writer:
                     logger.error("non-delta stream writer not closed")
