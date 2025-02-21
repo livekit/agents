@@ -25,7 +25,6 @@ from .llm import (
     ChatChunk,
     ChoiceDelta,
     CompletionUsage,
-    FunctionToolCall,
     LLMStream,
     ToolChoice,
 )
@@ -71,7 +70,6 @@ __all__ = [
     "StopResponse",
     "utils",
     "remote_chat_context",
-    "FunctionToolCall",
     "RealtimeModel",
     "RealtimeError",
     "RealtimeCapabilities",
