@@ -283,6 +283,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._started, self._closed = False, False
 
         self._human_input: HumanInput | None = None
+        self._human_inputs: list[HumanInput] = []
         self._agent_output: AgentOutput | None = None
 
         # done when the agent output track is published
@@ -542,9 +543,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         await self._deferred_validation.aclose()
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
-        if self._human_input is not None:
-            return
-
         self._link_participant(participant.identity)
 
     def _link_participant(self, identity: str) -> None:
@@ -553,13 +551,18 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             logger.error("_link_participant must be called with a valid identity")
             return
 
-        self._human_input = HumanInput(
+        human_input = HumanInput(
             room=self._room,
             vad=self._vad,
             stt=self._stt,
             participant=participant,
             transcription=self._opts.transcription.user_transcription,
         )
+
+        if self._human_input is None:
+            self._human_input = human_input
+
+        self._human_inputs.append(self._human_input)
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:
             self._plotter.plot_event("user_started_speaking")
