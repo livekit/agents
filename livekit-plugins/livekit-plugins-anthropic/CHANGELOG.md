@@ -1,5 +1,11 @@
 # livekit-plugins-anthropic
 
+## 0.2.11
+
+### Patch Changes
+
+- Add cache support for Anthropic - [#1478](https://github.com/livekit/agents/pull/1478) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.2.10
 
 ### Patch Changes
