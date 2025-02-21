@@ -111,11 +111,11 @@ class AgentTask:
 
     async def on_enter(self) -> None:
         """Called when the task is entered"""
-        ...
+        pass
 
     async def on_exit(self) -> None:
         """Called when the task is exited"""
-        ...
+        pass
 
     async def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame]
@@ -262,7 +262,7 @@ class InlineTask(AgentTask, Generic[TaskResult_T]):
         return self.__await_impl().__await__()
 
 
-def _authorize_inline_tasks(task: asyncio.Task) -> None:
+def _authorize_inline_task(task: asyncio.Task) -> None:
     setattr(task, "__livekit_agents_inline_task", True)
 
 

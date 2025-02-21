@@ -28,6 +28,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
+import contextvars
 
 
 def log_event(event: str, **kwargs) -> None:
@@ -37,6 +38,20 @@ def log_event(event: str, **kwargs) -> None:
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent
     from .task import AgentTask
+
+
+_TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")
+
+
+# https://github.com/python/cpython/pull/31837
+def create_task() -> asyncio.Task:
+    tk = _TaskActivityContextVar.set(self)
+    from .task import _authorize_inline_task
+
+    task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
+    _authorize_inline_task(task)
+    _TaskActivityContextVar.reset(tk)
+    return task
 
 
 # NOTE: TaskActivity isn't exposed to the public API
@@ -96,18 +111,6 @@ class TaskActivity(RecognitionHooks):
     async def resume(self) -> None:
         pass
 
-    async def drain(self) -> None:
-        async with self._lock:
-            if self._draining:
-                return
-
-            await self._agent_task.on_exit()
-
-            self._speech_q_changed.set()  # TODO(theomonnom): we shouldn't need this here
-            self._draining = True
-            if self._main_atask is not None:
-                await asyncio.shield(self._main_atask)
-
     async def start(self) -> None:
         async with self._lock:
             self._agent_task._activity = self
@@ -166,7 +169,38 @@ class TaskActivity(RecognitionHooks):
                     logger.exception("failed to update the instructions")
 
             self._started = True
-            await self._agent_task.on_enter()
+
+            # execute on_enter
+            tk = _TaskActivityContextVar.set(self)
+            from .task import _authorize_inline_task
+
+            on_enter_task = asyncio.create_task(
+                self._agent_task.on_enter(), name="_task_on_enter"
+            )
+            _authorize_inline_task(on_enter_task)
+            await on_enter_task
+            _TaskActivityContextVar.reset(tk)
+
+    async def drain(self) -> None:
+        async with self._lock:
+            if self._draining:
+                return
+
+            # execute on_exit
+            tk = _TaskActivityContextVar.set(self)
+            from .task import _authorize_inline_task
+
+            on_exit_task = asyncio.create_task(
+                self._agent_task.on_exit(), name="_task_on_exit"
+            )
+            _authorize_inline_task(on_exit_task)
+            await on_exit_task
+            _TaskActivityContextVar.reset(tk)
+
+            self._speech_q_changed.set()  # TODO(theomonnom): we shouldn't need this here
+            self._draining = True
+            if self._main_atask is not None:
+                await asyncio.shield(self._main_atask)
 
     async def aclose(self) -> None:
         async with self._lock:

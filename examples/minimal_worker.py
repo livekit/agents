@@ -1,15 +1,32 @@
+from dataclasses import dataclass
 import logging
-
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
-from livekit.agents.pipeline import AgentContext, AgentTask, ChatCLI, PipelineAgent
+from livekit.agents.pipeline import (
+    CallContext,
+    AgentTask,
+    ChatCLI,
+    PipelineAgent,
+    InlineTask,
+)
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
+
+@dataclass
+class Userdata:
+    alloy_task: AgentTask
+    echo_task: AgentTask
+
+
+class GetName(InlineTask):
+    def __init__(self) -> None:
+        super().__init__(instructions="What is your name?")
 
 
 class EchoTask(AgentTask):
@@ -27,8 +44,8 @@ class EchoTask(AgentTask):
             pass  # ...
 
     @ai_function
-    async def talk_to_alloy(self, context: AgentContext):
-        return AlloyTask(), "Transfering you to Alloy."
+    async def talk_to_alloy(self, ctx: CallContext[Userdata]):
+        return ctx.userdata.alloy_task, "Transfering you to Alloy."
 
 
 class AlloyTask(AgentTask):
@@ -38,19 +55,22 @@ class AlloyTask(AgentTask):
         )
 
     async def on_enter(self) -> None:
-        pass
+        await GetName()
 
     async def on_exit(self) -> None:
         self.agent.say("Goodbye!")
 
     @ai_function
-    async def talk_to_echo(self, context: AgentContext):
-        return EchoTask(), "Transfering you to Echo."
+    async def talk_to_echo(self, ctx: CallContext[Userdata]):
+        return ctx.userdata.echo_task, "Transfering you to Echo."
 
 
 async def entrypoint(ctx: JobContext):
+    alloy, echo = AlloyTask(), EchoTask()
+    userdata = Userdata(alloy_task=alloy, echo_task=echo)
     agent = PipelineAgent(
-        task=AlloyTask(),
+        task=alloy,
+        userdata=userdata,
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=cartesia.TTS(),
