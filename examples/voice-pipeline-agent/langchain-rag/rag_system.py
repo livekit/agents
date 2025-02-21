@@ -23,20 +23,27 @@ logging.basicConfig(
     datefmt="[%X]",
     handlers=[
         RichHandler(show_time=True, show_level=True, show_path=False),
-        logging.FileHandler("rag_system.log")  # Log to file
-    ]
+        logging.FileHandler("rag_system.log"),  # Log to file
+    ],
 )
 
 load_dotenv()
 
+
 class RAGSystem:
-    def __init__(self, collection_name, data_source_path, persist_directory='rag_vector_store', create_if_not_exists=False):
+    def __init__(
+        self,
+        collection_name,
+        data_source_path,
+        persist_directory="rag_vector_store",
+        create_if_not_exists=False,
+    ):
         """
         Each Instance Creates a collection which will represent a Separate RAG System
         For Example,
             1. Gym Trainer(with gym_data collection)
             2. Recipe Specialist(with recipe_data collection)
-        
+
         :param create_if_not_exists: Flag to specify whether to create collection if it doesn't exist.
         """
         self.collection_name = collection_name
@@ -45,15 +52,23 @@ class RAGSystem:
         self.create_if_not_exists = create_if_not_exists  # New flag
         self.keyword_search_retriever = None
         self.vector_store_retriever = None
-        self.embedding_function = NomicEmbeddings(model="nomic-embed-text-v1.5", dimensionality=768)
+        self.embedding_function = NomicEmbeddings(
+            model="nomic-embed-text-v1.5", dimensionality=768
+        )
         self.vector_store_collection = None
-        self.bm25_cache_path = Path(persist_directory) / f"{collection_name}_bm25_docs.pkl"
+        self.bm25_cache_path = (
+            Path(persist_directory) / f"{collection_name}_bm25_docs.pkl"
+        )
 
         # Check for Nomic API key
         nomic_api_key = os.getenv("NOMIC_API_KEY")
         if not nomic_api_key:
-            logging.error("NOMIC_API_KEY is missing. Please provide it in your environment variables(.env file)")
-            raise ValueError("Missing NOMIC_API_KEY. Please provide the NOMIC_API_KEY in your environment(.env file)")
+            logging.error(
+                "NOMIC_API_KEY is missing. Please provide it in your environment variables(.env file)"
+            )
+            raise ValueError(
+                "Missing NOMIC_API_KEY. Please provide the NOMIC_API_KEY in your environment(.env file)"
+            )
 
         # Try to load the collection if it exists
         if self.collection_exists_in_db():
@@ -62,24 +77,29 @@ class RAGSystem:
                     collection_name=self.collection_name,
                     embedding_function=self.embedding_function,
                     persist_directory=self.persist_directory,
-                    create_collection_if_not_exists=False
+                    create_collection_if_not_exists=False,
                 )
-                logging.info(f"Existing {self.collection_name} collection loaded successfully.")
+                logging.info(
+                    f"Existing {self.collection_name} collection loaded successfully."
+                )
             except Exception as e:
-                logging.error(f"Failed to load existing {self.collection_name} collection: {e}")
+                logging.error(
+                    f"Failed to load existing {self.collection_name} collection: {e}"
+                )
                 self.vector_store_collection = None
-        
+
         # If collection doesn't exist and create_if_not_exists flag is True, create the collection
         if not self.collection_exists_in_db() and self.create_if_not_exists:
-            logging.info(f"Collection {self.collection_name} does not exist. Creating new collection.")
+            logging.info(
+                f"Collection {self.collection_name} does not exist. Creating new collection."
+            )
             self.process()
 
         # Try to load existing BM25 data
         self.load_bm25_retriever()
 
-
     @classmethod
-    def list_available_collections(cls, persist_directory='rag_vector_store'):
+    def list_available_collections(cls, persist_directory="rag_vector_store"):
         """
         Class method that lists all available collections with complete details from the SQLite database.
         :param persist_directory: Directory where the database is stored (default is 'rag_vector_store').
@@ -88,35 +108,33 @@ class RAGSystem:
         if not db_path.exists():
             logging.warning("No database found.")
             return []
-        
+
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            
+
             # Retrieve all collections with their details (name, dimension, metadata, etc.)
             cursor.execute("SELECT name, id, dimension FROM collections")
             collections = cursor.fetchall()
             logging.info(f"Available collections with details: {collections}")
-            
+
             # Prepare a list of collections with complete details
             collection_details = []
             for collection in collections:
                 collection_info = {
-                    'name': collection[0],
-                    'collection_id' : collection[1],
-                    'dimension': collection[2],
+                    "name": collection[0],
+                    "collection_id": collection[1],
+                    "dimension": collection[2],
                 }
                 collection_details.append(collection_info)
-            
+
             return collection_details
-            
+
         except Exception as e:
             logging.error(f"Error retrieving collections: {e}")
             return []
         finally:
             conn.close()
-
-
 
     def collection_exists_in_db(self):
         """
@@ -125,19 +143,22 @@ class RAGSystem:
         db_path = Path(self.persist_directory) / "chroma.sqlite3"
         if not db_path.exists():
             return False
-        
+
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            
+
             # Check if collection exists and has valid dimension
-            cursor.execute("SELECT name, dimension FROM collections WHERE name = ?", (self.collection_name,))
+            cursor.execute(
+                "SELECT name, dimension FROM collections WHERE name = ?",
+                (self.collection_name,),
+            )
             result = cursor.fetchone()
             conn.close()
-            
+
             # Return True only if collection exists and dimension is not None/NULL
             return result is not None and result[1] is not None
-            
+
         except Exception as e:
             logging.error(f"Error checking collection existence: {e}")
             return False
@@ -153,12 +174,13 @@ class RAGSystem:
         document = loader.load()  # This will handle both files and directories
         return document
 
-
     def chunk_text(self, document, chunk_size=1000, chunk_overlap=200):
         """
         Splits the document into semantically meaningful chunks.
         """
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size, chunk_overlap=chunk_overlap
+        )
         logging.info("Chunking...")
         chunks = text_splitter.split_documents(document)
         logging.info(f"Chunking Complete. Total number of chunks: {len(chunks)}")
@@ -174,15 +196,15 @@ class RAGSystem:
                 documents=document_chunks
             )
             self.keyword_search_retriever.k = 2
-            
+
             # Cache the document chunks for future use
             try:
-                with open(self.bm25_cache_path, 'wb') as f:
+                with open(self.bm25_cache_path, "wb") as f:
                     pickle.dump(document_chunks, f)
                 logging.info("BM25 documents cached successfully.")
             except Exception as e:
                 logging.error(f"Failed to cache BM25 documents: {e}")
-                
+
         logging.info("Keyword Search Retriever Created Successfully.")
 
     def load_bm25_retriever(self):
@@ -191,7 +213,7 @@ class RAGSystem:
         """
         if self.bm25_cache_path.exists():
             try:
-                with open(self.bm25_cache_path, 'rb') as f:
+                with open(self.bm25_cache_path, "rb") as f:
                     cached_docs = pickle.load(f)
                 self.keyword_search_retriever = BM25Retriever.from_documents(
                     documents=cached_docs
@@ -212,13 +234,13 @@ class RAGSystem:
         self.vector_store_collection = Chroma(
             collection_name=self.collection_name,
             embedding_function=self.embedding_function,
-            persist_directory=self.persist_directory
+            persist_directory=self.persist_directory,
         )
         if document_chunks:
             logging.info("Adding Documents(chunks) to vector store")
             self.vector_store_collection.add_documents(
                 ids=[str(uuid4()) for _ in range(len(document_chunks))],
-                documents=document_chunks
+                documents=document_chunks,
             )
         logging.info("Vector Store Created Successfully.")
 
@@ -234,8 +256,12 @@ class RAGSystem:
         """
         logging.info("Creating VectorStore Retriever")
         if not self.vector_store_collection:
-            raise ValueError("Vector store collection not initialized. Call 'create_vector_store_collection' first.")
-        self.vector_store_retriever = self.vector_store_collection.as_retriever(search_kwargs={'k': 2})
+            raise ValueError(
+                "Vector store collection not initialized. Call 'create_vector_store_collection' first."
+            )
+        self.vector_store_retriever = self.vector_store_collection.as_retriever(
+            search_kwargs={"k": 2}
+        )
         logging.info("VectorStore Retriever Created Successfully.")
 
     def search_vector_store_retriever(self, query):
@@ -251,7 +277,8 @@ class RAGSystem:
 
     def search(self, query):
         ensemble_retriever = EnsembleRetriever(
-            retrievers=[self.vector_store_retriever, self.keyword_search_retriever], weights=[1, 0]
+            retrievers=[self.vector_store_retriever, self.keyword_search_retriever],
+            weights=[1, 0],
         )
         relevant_docs = ensemble_retriever.invoke(query)
         return relevant_docs
@@ -261,13 +288,13 @@ class RAGSystem:
         A single function that performs all the steps: loading, chunking (if necessary), creating/loading vector store collections, and searching.
         """
         need_chunks = False
-        
+
         # Check if we need to load and chunk documents
         if self.vector_store_retriever is None and not self.collection_exists_in_db():
             need_chunks = True
         if self.keyword_search_retriever is None and not self.load_bm25_retriever():
             need_chunks = True
-        
+
         # Only load and chunk documents if necessary
         chunks = None
         if need_chunks:
@@ -299,13 +326,16 @@ class RAGSystem:
         return f"RAG for {self.collection_name} Initialized"
 
 
-if __name__ == '__main__':
-    data_expert = RAGSystem(collection_name='data-expert', data_source_path='data',create_if_not_exists=True)
+if __name__ == "__main__":
+    data_expert = RAGSystem(
+        collection_name="data-expert",
+        data_source_path="data",
+        create_if_not_exists=True,
+    )
     if data_expert.collection_exists_in_db():
         print(f"Collection named '{data_expert.collection_name}' exists")
     else:
         print(f"Collection named '{data_expert.collection_name}' does not exists")
-
 
     all_collections = RAGSystem.list_available_collections()
     print(all_collections)
