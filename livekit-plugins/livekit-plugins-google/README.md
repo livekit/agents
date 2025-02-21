@@ -57,7 +57,7 @@ async def _process_video_track(self, track: Track):
         frame = event.frame
         
         # Push the frame into the RealtimeSession
-        model.sessions[0].push_video_frame(frame)
+        model.sessions[0].push_video(frame)
         
     await video_stream.aclose()
 

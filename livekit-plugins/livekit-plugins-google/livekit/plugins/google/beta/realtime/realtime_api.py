@@ -338,7 +338,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         )
         self._queue_msg(realtime_input)
 
-    def push_video_frame(self, frame: rtc.VideoFrame) -> None:
+    def push_video(self, frame: rtc.VideoFrame) -> None:
         """Push a video frame to the Gemini Multimodal Live session.
 
         Args:
