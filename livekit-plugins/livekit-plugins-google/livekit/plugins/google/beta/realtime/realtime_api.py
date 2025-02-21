@@ -345,7 +345,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             frame (rtc.VideoFrame): The video frame to push.
 
         Notes:
-        - This will be enqueued immediately so you should use a sampling frame rate that makes sense for your application.
+        - This will be sent immediately so you should use a sampling frame rate that makes sense for your application and Gemini's constraints. 1 FPS is a good starting point.
         - The default is to encode as a JPEG at 1024x1024. If you need more control, see `push_media_chunk`.
         """
         encoded_data = images.encode(
