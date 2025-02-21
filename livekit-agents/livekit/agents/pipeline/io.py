@@ -141,6 +141,18 @@ class TextSink(ABC):
         ...
 
 
+class ParallelTextSink(TextSink):
+    def __init__(self, *sinks: TextSink) -> None:
+        self._sinks = sinks
+
+    async def capture_text(self, text: str) -> None:
+        await asyncio.gather(*[sink.capture_text(text) for sink in self._sinks])
+
+    def flush(self) -> None:
+        for sink in self._sinks:
+            sink.flush()
+
+
 # TODO(theomonnom): Add documentation to VideoSink
 class VideoSink(ABC):
     @abstractmethod

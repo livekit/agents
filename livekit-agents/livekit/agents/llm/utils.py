@@ -96,7 +96,10 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 def is_context_type(ty: type) -> bool:
     from ..pipeline.events import CallContext
 
-    return ty is CallContext
+    origin = get_origin(ty)
+    is_call_context = ty is CallContext or origin is CallContext
+
+    return is_call_context
 
 
 def build_legacy_openai_schema(

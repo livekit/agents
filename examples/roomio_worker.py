@@ -45,7 +45,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     agent = PipelineAgent(
-        task=AlloyTask(),
+        task=EchoTask(),
     )
 
     @agent.on("agent_state_changed")

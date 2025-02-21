@@ -259,6 +259,9 @@ async def _execute_tools_task(
     out: list[tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]],
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
+
+    from .events import CallContext
+
     tasks: list[asyncio.Task] = []
     try:
         async for fnc_call in function_stream:
