@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import inspect
 import asyncio
-from typing import TYPE_CHECKING, AsyncIterable, Optional, Union, TypeVar, Generic
+from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar, Union
 
 from livekit import rtc
 
@@ -14,10 +13,9 @@ from ..llm import (
     FunctionContext,
     find_ai_functions,
 )
+from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
-
-from ..log import logger
 
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent

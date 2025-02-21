@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, TypeVar, TYPE_CHECKING, Generic, get_args
-from ..llm import FunctionCall
+from typing import TYPE_CHECKING, Generic, TypeVar
 
+from ..llm import FunctionCall
 
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent

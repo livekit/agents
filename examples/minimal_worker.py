@@ -1,14 +1,15 @@
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
+
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import (
-    CallContext,
     AgentTask,
+    CallContext,
     ChatCLI,
-    PipelineAgent,
     InlineTask,
+    PipelineAgent,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 

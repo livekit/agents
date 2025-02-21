@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import heapq
 import time
 from typing import (
@@ -15,7 +16,6 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
-from .events import CallContext
 from .generation import (
     _AudioOutput,
     _TextOutput,
@@ -28,7 +28,6 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
-import contextvars
 
 
 def log_event(event: str, **kwargs) -> None:

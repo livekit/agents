@@ -2,7 +2,7 @@ from __future__ import annotations, print_function
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
+from typing import AsyncIterable, Generic, Literal, TypeVar
 
 from livekit import rtc
 
@@ -16,7 +16,6 @@ from .audio_recognition import _TurnDetector
 from .speech_handle import SpeechHandle
 from .task import AgentTask
 from .task_activity import TaskActivity
-from typing import Any, TypeVar, Generic
 
 EventTypes = Literal[
     "user_started_speaking",

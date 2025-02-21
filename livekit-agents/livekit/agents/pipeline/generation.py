@@ -33,8 +33,8 @@ from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .pipeline_agent import PipelineAgent
     from .events import CallContext
+    from .pipeline_agent import PipelineAgent
     from .task import AgentTask
 
 
