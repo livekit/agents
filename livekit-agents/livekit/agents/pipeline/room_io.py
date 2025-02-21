@@ -50,7 +50,7 @@ class RoomOutputOptions:
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 LK_PUBLISH_FOR_ATTR = "lk.publish_for"
-LK_TEXT_INPUT_TOPIC = "lk.room_text_input"
+LK_TEXT_INPUT_TOPIC = "lk.chat"
 
 
 class BaseStreamHandle:
@@ -799,22 +799,37 @@ class DataStreamTextSink(TextSink):
 
         self._is_capturing = False
 
-        async def _close_writer():
+        async def _close_writer(
+            writer: rtc.TextStreamWriter | None,
+            text: str,
+            stream_id: str,
+            participant_identity: str | None,
+        ):
             if not self._is_delta_stream:
+                if writer:
+                    logger.error("non-delta stream writer not closed")
+                    await writer.aclose()
                 writer = await self._room.local_participant.stream_text(
                     topic=self._topic,
-                    stream_id=self._current_id,
-                    sender_identity=self._participant_identity,
+                    stream_id=stream_id,
+                    sender_identity=participant_identity,
                     attributes=attributes,
                 )
-                await writer.write(self._latest_text)
+                await writer.write(text)
                 await writer.aclose(attributes=attributes)
             else:
-                if not self._text_writer:
+                if not writer:
                     return
-                await self._text_writer.aclose(attributes=attributes)
+                await writer.aclose(attributes=attributes)
 
-        task = asyncio.create_task(_close_writer())
+        task = asyncio.create_task(
+            _close_writer(
+                self._text_writer,
+                self._latest_text,
+                self._current_id,
+                self._participant_identity,
+            )
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         self._text_writer = None
