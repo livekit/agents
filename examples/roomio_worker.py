@@ -76,12 +76,13 @@ async def entrypoint(ctx: JobContext):
             "set_participant called",
             extra={"caller_identity": data.caller_identity, "payload": data.payload},
         )
-        if not agent.room_input:
-            logger.warning("room_input not set, skipping set_participant")
-            return
+        # if not agent.room_input:
+        #     logger.warning("room_input not set, skipping set_participant")
+        #     return
 
         target_identity = data.payload or data.caller_identity
-        agent.room_input.set_participant(target_identity)
+        # agent.room_input.set_participant(target_identity)
+        room_io.set_participant(target_identity)
 
     @ctx.room.local_participant.register_rpc_method("unset_participant")
     async def on_unset_participant(data: rtc.RpcInvocationData) -> None:
@@ -89,11 +90,12 @@ async def entrypoint(ctx: JobContext):
             "unset_participant called",
             extra={"caller_identity": data.caller_identity, "payload": data.payload},
         )
-        if not agent.room_input:
-            logger.warning("room_input not set, skipping unset_participant")
-            return
+        room_io.set_participant(None)
+        # if not agent.room_input:
+        #     logger.warning("room_input not set, skipping unset_participant")
+        #     return
 
-        agent.room_input.set_participant(None)
+        # agent.room_input.set_participant(None)
 
 
 if __name__ == "__main__":
