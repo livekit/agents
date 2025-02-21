@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
-from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
+from livekit.agents.pipeline import AgentTask, CallContext, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
 from livekit.plugins import cartesia, deepgram, openai
 
@@ -25,7 +25,7 @@ class EchoTask(AgentTask):
         )
 
     @ai_function
-    async def talk_to_alloy(self, context: AgentContext):
+    async def talk_to_alloy(self, context: CallContext):
         return AlloyTask(), "Transferring you to Alloy."
 
 
@@ -37,7 +37,7 @@ class AlloyTask(AgentTask):
         )
 
     @ai_function
-    async def talk_to_echo(self, context: AgentContext):
+    async def talk_to_echo(self, context: CallContext):
         return EchoTask(), "Transferring you to Echo."
 
 
