@@ -8,6 +8,7 @@ from livekit import rtc
 
 from .. import stt, utils
 from ..log import logger
+from ..types import ATTRIBUTE_AGENT_STATE, AgentState
 from .io import AudioSink, ParallelTextSink, TextSink
 from .transcription import TextSynchronizer, find_micro_track_id
 
@@ -49,8 +50,9 @@ class RoomOutputOptions:
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
-LK_PUBLISH_FOR_ATTR = "lk.publish_for"
-LK_TEXT_INPUT_TOPIC = "lk.chat"
+
+ATTRIBUTE_PUBLISH_FOR = "lk.publish_for"
+TOPIC_TEXT_INPUT = "lk.chat"
 
 
 class BaseStreamHandle:
@@ -270,7 +272,7 @@ class RoomInput:
         # text input from datastream
         if options.text_enabled:
             self._room.register_text_stream_handler(
-                LK_TEXT_INPUT_TOPIC, self._on_text_input
+                TOPIC_TEXT_INPUT, self._on_text_input
             )
 
     @property
@@ -393,7 +395,7 @@ class RoomInput:
                 return
         # otherwise, skip participants that are marked as publishing for this agent
         elif (
-            participant.attributes.get(LK_PUBLISH_FOR_ATTR)
+            participant.attributes.get(ATTRIBUTE_PUBLISH_FOR)
             == self._room.local_participant.identity
         ):
             return
@@ -481,6 +483,7 @@ class RoomOutput:
         )
         self._text_sink: Optional[TextSink] = None
         self._text_synchronizer: Optional[TextSynchronizer] = None
+        self._update_state_task: Optional[asyncio.Task] = None
 
     async def start(self, agent: Optional["PipelineAgent"] = None) -> None:
         await self._audio_sink.start()
@@ -505,6 +508,7 @@ class RoomOutput:
         if agent:
             agent.output.audio = self.audio
             agent.output.text = self.text
+            agent.on("agent_state_changed", self._on_agent_state_changed)
 
     @property
     def audio(self) -> AudioSink:
@@ -517,6 +521,19 @@ class RoomOutput:
         if self._text_synchronizer:
             return self._text_synchronizer.text_sink
         return self._text_sink
+
+    def _on_agent_state_changed(self, state: AgentState):
+        @utils.log_exceptions(logger=logger)
+        async def _set_state() -> None:
+            if self._room.isconnected():
+                await self._room.local_participant.set_attributes(
+                    {ATTRIBUTE_AGENT_STATE: state}
+                )
+
+        if self._update_state_task is not None:
+            self._update_state_task.cancel()
+
+        self._update_state_task = asyncio.create_task(_set_state())
 
 
 class RoomAudioSink(AudioSink):
