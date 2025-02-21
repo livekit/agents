@@ -327,12 +327,27 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._fnc_ctx = value
 
     def push_media_chunk(self, data: bytes, mime_type: str) -> None:
+        """Push a raw media chunk to the Gemini Multimodal Live session.
+
+        Args:
+            data (bytes): The data to push.
+            mime_type (str): The MIME type of the data.
+        """
         realtime_input = LiveClientRealtimeInput(
             media_chunks=[Blob(data=data, mime_type=mime_type)],
         )
         self._queue_msg(realtime_input)
 
     def push_video_frame(self, frame: rtc.VideoFrame) -> None:
+        """Push a video frame to the Gemini Multimodal Live session.
+
+        Args:
+            frame (rtc.VideoFrame): The video frame to push.
+
+        Notes: 
+        - This will be enqueued immediately so you should use a sampling frame rate that makes sense for your application.
+        - The default is to encode as a JPEG at 1024x1024. If you need more control, see `push_media_chunk`.
+        """
         encoded_data = images.encode(
             frame,
             images.EncodeOptions(
