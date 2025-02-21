@@ -138,7 +138,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
         envvar="LIVEKIT_API_SECRET",
         help="LiveKit server or Cloud project's API secret",
     )
-    def chat(
+    def console(
         url: str,
         api_key: str,
         api_secret: str,
@@ -153,7 +153,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
 
         args = proto.CliArgs(
             opts=opts,
-            log_level="ERROR",
+            log_level="WARN",
             devmode=True,
             asyncio_debug=False,
             watch=False,
