@@ -8,7 +8,7 @@ from livekit import rtc
 
 from .. import stt, utils
 from ..log import logger
-from .io import AudioSink, MultiTextSink, TextSink
+from .io import AudioSink, ParallelTextSink, TextSink
 from .transcription import TextSynchronizer, find_micro_track_id
 
 if TYPE_CHECKING:
@@ -305,20 +305,7 @@ class RoomInput:
         agent.input.audio = self.audio
         agent.input.video = self.video
         if self._options.forward_user_transcript:
-            self._text_sink = MultiTextSink(
-                [
-                    RoomTranscriptEventSink(
-                        room=self._room,
-                        participant=self._participant,
-                        is_delta_stream=False,
-                    ),
-                    DataStreamSink(
-                        room=self._room,
-                        participant=self._participant,
-                        is_delta_stream=False,
-                    ),
-                ]
-            )
+            self._update_text_sink(self._participant_identity)
             agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
     def set_participant(self, participant_identity: str | None) -> None:
@@ -348,12 +335,7 @@ class RoomInput:
 
         # update text sink if user transcript forwarding is enabled
         if self._options.forward_user_transcript:
-            if self._text_sink:
-                self._text_sink.set_participant(participant_identity)
-            else:
-                self._text_sink = RoomTranscriptEventSink(
-                    room=self._room, participant=participant_identity, is_stream=False
-                )
+            self._update_text_sink(participant_identity)
 
         logger.debug(
             "set participant",
@@ -367,11 +349,36 @@ class RoomInput:
             self._audio_handle.set_participant(None)
         if self._video_handle:
             self._video_handle.set_participant(None)
-        self._text_sink = None
+        self._update_text_sink(None)
         logger.debug("unset participant")
 
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         return await self._participant_connected
+
+    def _update_text_sink(self, participant_identity: str | None) -> None:
+        if participant_identity is None:
+            if self._text_sink:
+                self._text_sink.flush()
+                self._text_sink = None
+            return
+
+        if self._text_sink:
+            for sink in self._text_sink._sinks:
+                assert isinstance(sink, (DataStreamTextSink, RoomTranscriptEventSink))
+                sink.set_participant(participant_identity)
+        else:
+            self._text_sink = ParallelTextSink(
+                RoomTranscriptEventSink(
+                    room=self._room,
+                    participant=participant_identity,
+                    is_delta_stream=False,
+                ),
+                DataStreamTextSink(
+                    room=self._room,
+                    participant=participant_identity,
+                    is_delta_stream=False,
+                ),
+            )
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         logger.debug(
@@ -479,17 +486,15 @@ class RoomOutput:
         await self._audio_sink.start()
 
         if self._options.forward_agent_transcription:
-            self._text_sink = MultiTextSink(
-                [
-                    RoomTranscriptEventSink(
-                        room=self._room, participant=self._room.local_participant
-                    ),
-                    DataStreamSink(
-                        room=self._room,
-                        participant=self._room.local_participant,
-                        topic="lk.chat",
-                    ),
-                ]
+            self._text_sink = ParallelTextSink(
+                RoomTranscriptEventSink(
+                    room=self._room, participant=self._room.local_participant
+                ),
+                DataStreamTextSink(
+                    room=self._room,
+                    participant=self._room.local_participant,
+                    topic="lk.chat",
+                ),
             )
 
         if self._options.sync_agent_transcription and self._text_sink:
@@ -631,7 +636,7 @@ class RoomTranscriptEventSink(TextSink):
     ):
         super().__init__()
         self._room = room
-        self.is_delta_stream = is_delta_stream
+        self._is_delta_stream = is_delta_stream
         self._tasks: set[asyncio.Task] = set()
 
         self._track_id: str | None = None
@@ -667,13 +672,13 @@ class RoomTranscriptEventSink(TextSink):
         self._pushed_text = ""
         self._current_id = utils.shortuuid("SG_")
 
-    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
+    async def capture_text(self, text: str) -> None:
         if not self._capturing:
             self._capturing = True
             self._pushed_text = ""
-            self._current_id = segment_id or utils.shortuuid("SG_")
+            self._current_id = utils.shortuuid("SG_")
 
-        if self._is_stream:
+        if self._is_delta_stream:
             self._pushed_text += text
         else:
             self._pushed_text = text
@@ -735,7 +740,7 @@ class RoomTranscriptEventSink(TextSink):
             self._track_id = track.sid
 
 
-class DataStreamSink(TextSink):
+class DataStreamTextSink(TextSink):
     """TextSink implementation that publishes transcriptions as text streams to a LiveKit room"""
 
     def __init__(
@@ -754,6 +759,7 @@ class DataStreamSink(TextSink):
         self._is_delta_stream = is_delta_stream
         self._text_writer: rtc.TextStreamWriter | None = None
         self._is_capturing = False
+        self._current_id = utils.shortuuid("SG_")
 
     def set_participant(
         self,
@@ -763,14 +769,13 @@ class DataStreamSink(TextSink):
         identity = participant if isinstance(participant, str) else participant.identity
         self._participant_identity = identity
         self._latest_text = ""
+        self._current_id = utils.shortuuid("SG_")
+        self._is_capturing = False
 
-    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
-        if segment_id is not None and segment_id != self._current_id:
-            self.flush()
-
+    async def capture_text(self, text: str) -> None:
         self._latest_text = text
         if not self._is_capturing:
-            self._current_id = segment_id or utils.shortuuid("SG_")
+            self._current_id = utils.shortuuid("SG_")
             self._is_capturing = True
 
         try:

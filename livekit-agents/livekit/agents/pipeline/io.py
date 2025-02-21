@@ -131,7 +131,7 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
 
 class TextSink(ABC):
     @abstractmethod
-    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
+    async def capture_text(self, text: str) -> None:
         """Capture a text segment (Used by the output of LLM nodes)"""
         ...
 
@@ -141,14 +141,12 @@ class TextSink(ABC):
         ...
 
 
-class MultiTextSink(TextSink):
-    def __init__(self, sinks: list[TextSink]) -> None:
+class ParallelTextSink(TextSink):
+    def __init__(self, *sinks: TextSink) -> None:
         self._sinks = sinks
 
-    async def capture_text(self, text: str, *, segment_id: str | None = None) -> None:
-        await asyncio.gather(
-            *[sink.capture_text(text, segment_id=segment_id) for sink in self._sinks]
-        )
+    async def capture_text(self, text: str) -> None:
+        await asyncio.gather(*[sink.capture_text(text) for sink in self._sinks])
 
     def flush(self) -> None:
         for sink in self._sinks:

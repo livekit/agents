@@ -358,7 +358,7 @@ class TextSynchronizer:
             self._current_segment_id = segment.id
 
         async def _capture_text():
-            await self._base_text_sink.capture_text(segment.text, segment_id=segment.id)
+            await self._base_text_sink.capture_text(segment.text)
             if segment.final:
                 self._base_text_sink.flush()
 
