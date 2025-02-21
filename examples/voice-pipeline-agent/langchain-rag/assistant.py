@@ -1,10 +1,11 @@
 import logging
+import random
+
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 from rag_system import RAGSystem
-import random
 
 # Configure logging
 logging.basicConfig(
@@ -69,7 +70,7 @@ async def entrypoint(ctx: JobContext):
             logging.info(f"saying filler message: {message}")
 
             # Add filler message to the chat context
-            speech_handle = await agent.say(message, add_to_chat_ctx=True)
+            await agent.say(message, add_to_chat_ctx=True)
 
         # Now perform the query
         result = await query_rag_system(query)

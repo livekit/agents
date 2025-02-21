@@ -1,18 +1,20 @@
-from rich.logging import RichHandler
 import logging
-from dotenv import load_dotenv
+import os
+import pickle
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
-from langchain_community.document_loaders import DirectoryLoader
+
+from dotenv import load_dotenv
+from langchain.retrievers import EnsembleRetriever
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
+from langchain_community.document_loaders import DirectoryLoader
+from langchain_community.retrievers import BM25Retriever
+
 # from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_nomic import NomicEmbeddings
-from langchain.retrievers import EnsembleRetriever
-from langchain_community.retrievers import BM25Retriever
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-import sqlite3
-import pickle
-import os
+from rich.logging import RichHandler
 
 # Configure logging with RichHandler
 logging.basicConfig(
@@ -157,7 +159,7 @@ class RAGSystem:
         Splits the document into semantically meaningful chunks.
         """
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        logging.info(f"Chunking...")
+        logging.info("Chunking...")
         chunks = text_splitter.split_documents(document)
         logging.info(f"Chunking Complete. Total number of chunks: {len(chunks)}")
         return chunks
