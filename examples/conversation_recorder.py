@@ -9,7 +9,6 @@ from livekit.agents import (
     JobContext,
     WorkerOptions,
     cli,
-    utils,
 )
 
 from livekit.agents.pipeline import PipelineAgent
