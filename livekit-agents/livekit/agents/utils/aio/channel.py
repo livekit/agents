@@ -47,7 +47,9 @@ class ChanReceiver(Protocol[T_co]):
 
 class Chan(Generic[T]):
     def __init__(
-        self, maxsize: int = 0, loop: asyncio.AbstractEventLoop | None = None
+        self,
+        maxsize: int = 0,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._maxsize = max(maxsize, 0)

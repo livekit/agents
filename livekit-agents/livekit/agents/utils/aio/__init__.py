@@ -1,37 +1,10 @@
-import asyncio
-import functools
-
 from . import debug, duplex_unix, itertools
 from .channel import Chan, ChanClosed, ChanReceiver, ChanSender
 from .interval import Interval, interval
 from .sleep import Sleep, SleepFinished, sleep
 from .task_set import TaskSet
-
-
-async def gracefully_cancel(*futures: asyncio.Future):
-    loop = asyncio.get_running_loop()
-    waiters = []
-
-    for fut in futures:
-        waiter = loop.create_future()
-        cb = functools.partial(_release_waiter, waiter)
-        waiters.append((waiter, cb))
-        fut.add_done_callback(cb)
-        fut.cancel()
-
-    try:
-        for waiter, _ in waiters:
-            await waiter
-    finally:
-        for i, fut in enumerate(futures):
-            _, cb = waiters[i]
-            fut.remove_done_callback(cb)
-
-
-def _release_waiter(waiter, *args):
-    if not waiter.done():
-        waiter.set_result(None)
-
+from .utils import cancel_and_wait, gracefully_cancel
+from .wait_group import WaitGroup
 
 __all__ = [
     "ChanClosed",
@@ -45,8 +18,11 @@ __all__ = [
     "SleepFinished",
     "sleep",
     "TaskSet",
+    "WaitGroup",
     "debug",
-    "gracefully_cancel",
+    "cancel_and_wait",
     "duplex_unix",
     "itertools",
+    "cancel_and_wait",
+    "gracefully_cancel",
 ]

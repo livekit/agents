@@ -2,19 +2,20 @@ import asyncio
 import pathlib
 import signal
 import sys
+import threading
 
 import click
-from livekit.protocol import models
 
 from .. import utils
 from ..log import logger
 from ..plugin import Plugin
-from ..worker import Worker, WorkerOptions
+from ..types import NOT_GIVEN, NotGivenOr
+from ..worker import JobExecutorType, Worker, WorkerOptions
 from . import proto
 from .log import setup_logging
 
 
-def run_app(opts: WorkerOptions) -> None:
+def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) -> None:
     """Run the CLI to interact with the worker"""
     cli = click.Group()
 
@@ -58,6 +59,7 @@ def run_app(opts: WorkerOptions) -> None:
             log_level=log_level,
             devmode=False,
             asyncio_debug=False,
+            register=True,
             watch=False,
             drain_timeout=drain_timeout,
         )
@@ -94,7 +96,7 @@ def run_app(opts: WorkerOptions) -> None:
     )
     @click.option(
         "--watch/--no-watch",
-        default=True,
+        default=hot_reload if utils.is_given(hot_reload) else True,
         help="Watch for changes in the current directory and plugins in editable mode",
     )
     def dev(
@@ -105,7 +107,63 @@ def run_app(opts: WorkerOptions) -> None:
         asyncio_debug: bool,
         watch: bool,
     ) -> None:
-        _run_dev(opts, log_level, url, api_key, api_secret, asyncio_debug, watch)
+        opts.ws_url = url or opts.ws_url
+        opts.api_key = api_key or opts.api_key
+        opts.api_secret = api_secret or opts.api_secret
+        args = proto.CliArgs(
+            opts=opts,
+            log_level=log_level,
+            devmode=True,
+            asyncio_debug=asyncio_debug,
+            watch=watch,
+            drain_timeout=0,
+            register=True,
+        )
+
+        _run_dev(args)
+
+    @cli.command(help="Start a new chat")
+    @click.option(
+        "--url",
+        envvar="LIVEKIT_URL",
+        help="LiveKit server or Cloud project's websocket URL",
+    )
+    @click.option(
+        "--api-key",
+        envvar="LIVEKIT_API_KEY",
+        help="LiveKit server or Cloud project's API key",
+    )
+    @click.option(
+        "--api-secret",
+        envvar="LIVEKIT_API_SECRET",
+        help="LiveKit server or Cloud project's API secret",
+    )
+    def console(
+        url: str,
+        api_key: str,
+        api_secret: str,
+    ) -> None:
+        # keep everything inside the same process when using the chat mode
+        opts.job_executor_type = JobExecutorType.THREAD
+        opts.ws_url = url or opts.ws_url
+        opts.api_key = api_key or opts.api_key
+        opts.api_secret = api_secret or opts.api_secret
+
+        chat_name = utils.shortuuid("chat_cli_")
+
+        args = proto.CliArgs(
+            opts=opts,
+            log_level="WARN",
+            devmode=True,
+            asyncio_debug=False,
+            watch=False,
+            drain_timeout=0,
+            register=False,
+            simulate_job=proto.SimulateJobArgs(
+                room=chat_name,
+            ),
+        )
+        _run_dev(args)
 
     @cli.command(help="Connect to a specific room")
     @click.option(
@@ -155,17 +213,24 @@ def run_app(opts: WorkerOptions) -> None:
         room: str,
         participant_identity: str,
     ) -> None:
-        _run_dev(
-            opts,
-            log_level,
-            url,
-            api_key,
-            api_secret,
-            asyncio_debug,
-            watch,
-            room,
-            participant_identity,
+        opts.ws_url = url or opts.ws_url
+        opts.api_key = api_key or opts.api_key
+        opts.api_secret = api_secret or opts.api_secret
+        args = proto.CliArgs(
+            opts=opts,
+            log_level=log_level,
+            devmode=True,
+            register=False,
+            asyncio_debug=asyncio_debug,
+            watch=watch,
+            drain_timeout=0,
+            simulate_job=proto.SimulateJobArgs(
+                room=room,
+                participant_identity=participant_identity,
+            ),
         )
+
+        _run_dev(args)
 
     @cli.command(help="Download plugin dependency files")
     @click.option(
@@ -188,34 +253,12 @@ def run_app(opts: WorkerOptions) -> None:
 
 
 def _run_dev(
-    opts: WorkerOptions,
-    log_level: str,
-    url: str,
-    api_key: str,
-    api_secret: str,
-    asyncio_debug: bool,
-    watch: bool,
-    room: str = "",
-    participant_identity: str = "",
+    args: proto.CliArgs,
 ):
-    opts.ws_url = url or opts.ws_url
-    opts.api_key = api_key or opts.api_key
-    opts.api_secret = api_secret or opts.api_secret
-    args = proto.CliArgs(
-        opts=opts,
-        log_level=log_level,
-        devmode=True,
-        asyncio_debug=asyncio_debug,
-        watch=watch,
-        drain_timeout=0,
-        room=room,
-        participant_identity=participant_identity,
-    )
-
-    if watch:
+    if args.watch:
         from .watcher import WatchServer
 
-        setup_logging(log_level, args.devmode)
+        setup_logging(args.log_level, args.devmode)
         main_file = pathlib.Path(sys.argv[0]).parent
 
         async def _run_loop():
@@ -236,27 +279,34 @@ def run_worker(args: proto.CliArgs) -> None:
     setup_logging(args.log_level, args.devmode)
     args.opts.validate_config(args.devmode)
 
-    loop = asyncio.get_event_loop()
-    worker = Worker(args.opts, devmode=args.devmode, loop=loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    worker = Worker(args.opts, devmode=args.devmode, register=args.register, loop=loop)
 
     loop.set_debug(args.asyncio_debug)
     loop.slow_callback_duration = 0.1  # 100ms
     utils.aio.debug.hook_slow_callbacks(2)
 
-    if args.room and args.reload_count == 0:
-        # directly connect to a specific room
-        @worker.once("worker_registered")
-        def _connect_on_register(worker_id: str, server_info: models.ServerInfo):
-            logger.info("connecting to room %s", args.room)
-            loop.create_task(worker.simulate_job(args.room, args.participant_identity))
+    @worker.once("worker_started")
+    def _worker_started():
+        if args.simulate_job and args.reload_count == 0:
+            logger.info("connecting to room %s", args.simulate_job.room)
+            loop.create_task(
+                worker.simulate_job(
+                    args.simulate_job.room, args.simulate_job.participant_identity
+                )
+            )
 
     try:
 
         def _signal_handler():
             raise KeyboardInterrupt
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, _signal_handler)
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, _signal_handler)
+
     except NotImplementedError:
         # TODO(theomonnom): add_signal_handler is not implemented on win
         pass

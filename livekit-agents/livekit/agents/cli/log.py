@@ -225,11 +225,6 @@ def setup_logging(log_level: str, devmode: bool) -> None:
     if logger.level == logging.NOTSET:
         logger.setLevel(log_level)
 
-    from ..pipeline.log import logger
-
-    if logger.level == logging.NOTSET:
-        logger.setLevel(log_level)
-
     def _configure_plugin_logger(plugin: Plugin) -> None:
         if plugin.logger is not None and plugin.logger.level == logging.NOTSET:
             plugin.logger.setLevel(log_level)

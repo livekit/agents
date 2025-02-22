@@ -237,10 +237,10 @@ class FallbackAdapter(
     async def aclose(self) -> None:
         for stt_status in self._status:
             if stt_status.recovering_synthesize_task is not None:
-                await aio.gracefully_cancel(stt_status.recovering_synthesize_task)
+                await aio.cancel_and_wait(stt_status.recovering_synthesize_task)
 
             if stt_status.recovering_stream_task is not None:
-                await aio.gracefully_cancel(stt_status.recovering_stream_task)
+                await aio.cancel_and_wait(stt_status.recovering_stream_task)
 
 
 class FallbackRecognizeStream(RecognizeStream):
@@ -340,7 +340,7 @@ class FallbackRecognizeStream(RecognizeStream):
             self._try_recovery(stt)
 
         if forward_input_task is not None:
-            await aio.gracefully_cancel(forward_input_task)
+            await aio.cancel_and_wait(forward_input_task)
 
         await asyncio.gather(*[stream.aclose() for stream in self._recovering_streams])
 

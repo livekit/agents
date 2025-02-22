@@ -95,7 +95,7 @@ class WatchServer:
                 callback=self._on_reload,
             )
         finally:
-            await utils.aio.gracefully_cancel(read_ipc_task)
+            await utils.aio.cancel_and_wait(read_ipc_task)
             await self._pch.aclose()
 
     async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:

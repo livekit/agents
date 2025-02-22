@@ -15,7 +15,7 @@ def log_exceptions(
                 try:
                     return await fn(*args, **kwargs)
                 except Exception:
-                    err = f"Error in {fn.__name__}"
+                    err = f"Error in {async_fn_logs.__name__}"
                     if msg:
                         err += f" – {msg}"
                     logger.exception(err)
@@ -29,7 +29,7 @@ def log_exceptions(
                 try:
                     return fn(*args, **kwargs)
                 except Exception:
-                    err = f"Error in {fn.__name__}"
+                    err = f"Error in {fn_logs.__name__}"
                     if msg:
                         err += f" – {msg}"
                     logger.exception(err)

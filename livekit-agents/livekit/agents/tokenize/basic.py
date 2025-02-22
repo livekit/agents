@@ -89,5 +89,11 @@ def hyphenate_word(word: str) -> list[str]:
     return _basic_hyphenator.hyphenate_word(word)
 
 
+def split_words(
+    text: str, ignore_punctuation: bool = True
+) -> list[tuple[str, int, int]]:
+    return _basic_word.split_words(text, ignore_punctuation=ignore_punctuation)
+
+
 def tokenize_paragraphs(text: str) -> list[str]:
     return [tok[0] for tok in _basic_paragraph.split_paragraphs(text)]

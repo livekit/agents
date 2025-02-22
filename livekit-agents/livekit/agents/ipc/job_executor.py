@@ -8,6 +8,9 @@ from ..job import RunningJobInfo
 
 class JobExecutor(Protocol):
     @property
+    def id(self) -> str: ...
+
+    @property
     def started(self) -> bool: ...
 
     @property
@@ -31,6 +34,8 @@ class JobExecutor(Protocol):
     async def aclose(self) -> None: ...
 
     async def launch_job(self, info: RunningJobInfo) -> None: ...
+
+    async def tracing_info(self) -> dict[str, Any]: ...
 
 
 class JobStatus(Enum):

@@ -155,8 +155,8 @@ class _ProcClient:
             main_task.add_done_callback(_done_cb)
 
             await exit_flag.wait()
-            await aio.gracefully_cancel(read_task, main_task)
+            await aio.cancel_and_wait(read_task, main_task)
             if health_check_task is not None:
-                await aio.gracefully_cancel(health_check_task)
+                await aio.cancel_and_wait(health_check_task)
         finally:
             await self._acch.aclose()
