@@ -3,7 +3,9 @@ import logging
 import datetime
 import aiohttp
 import os
-from typing import Literal, Annotated
+from enum import Enum
+from typing import Literal
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -12,6 +14,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     llm,
+    NotGivenOr,
+    NOT_GIVEN,
 )
 
 from livekit.agents.llm import ai_function, ChatContext
@@ -19,70 +23,128 @@ from livekit.agents.pipeline import AgentContext, AgentTask, PipelineAgent
 from livekit.plugins import openai
 
 
+@dataclass
+class UserInfo:
+    name: str
+    email: NotGivenOr[str] = NOT_GIVEN
+    phone: NotGivenOr[str] = NOT_GIVEN
+    message: NotGivenOr[str] = NOT_GIVEN
+
+
+class ServicesOffered(Enum):
+    MESSENGER = "messenger"
+    SCHEDULER = "scheduler"
+
+
 class Receptionist(AgentTask):
-    def __init__(self) -> None:
+    def __init__(self, userdata: NotGivenOr[UserInfo] = NOT_GIVEN) -> None:
         super().__init__(
-            instructions="You are Alloy, a receptionist scheduling dentist appointments for users. Always speak in English.",
+            instructions="""You are Alloy, a receptionist at the LiveKit Dental Office scheduling dentist appointments for users. Always speak in English.
+                            The office is closed on Sundays but operates 10AM to 12PM and 1PM to 4PM PT otherwise. The services offered are routine checkups and tooth extractions.
+                            The location of the office is 123 LiveKit Lane, California.""",
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
+        self._userdata = userdata or None
+        self._userdata_event = asyncio.Event()
 
     async def on_enter(self) -> None:
         speech_handle = await self.agent.generate_reply(
-            instructions="Welcome the user to the LiveKit Dental Office and ask how you could assist."
+            instructions="Welcome the user to the LiveKit Dental Office and ask how you can assist."
         )
 
     async def on_exit(self) -> None:
-        self.agent.say("Thank you for calling the LiveKit Dental Office, have a wonderful day!")
+        self.agent.say(
+            "Thank you for calling the LiveKit Dental Office, have a wonderful day!"
+        )
 
     @ai_function()
-    async def callback_request(self, message: str):
-        """ Allows the user to request a call back and leave a message for the dentist """
-        ...
-    
-    @ai_function()
-    async def services_inquiry(self):
-        """ Answers questions regarding hours of operation, services offered, and location """
-        ...
+    async def servicer(self, service_requested: ServicesOffered):
+        """Performs a service for the user, either managing appointments or leaving a message
+
+        Args:
+            service_requested (ServicesOffered): either "messenger", which allows the user to leave a message, or "scheduler",
+            which allows the user to schedule a new appointment and reschedule or cancel an existing appointment.
+        """
+        if self._userdata is None:
+            self.agent.say("What is your name and contact information?")
+            await self._userdata_event.wait()
+
+        if service_requested.value == "messenger":
+            return Messenger(
+                userdata=self._userdata
+            ), "I'll be transferring you to Shimmer."
+
+        if service_requested.value == "scheduler":
+            # perhaps would be better to also pass schedule/reschedule/cancel to prevent repetitiveness
+            return Scheduler(
+                userdata=self._userdata
+            ), "I'll be transferring you to Echo."
 
     @ai_function()
-    async def scheduler(self, context: AgentContext):
-        """ Handles appointments: scheduling, rescheduling, and canceling """
-        return Scheduler(chat_ctx=self.llm.chat_ctx)
+    async def get_userdata(
+        self, name: str, phone: str | None, email: str | None
+    ) -> None:
+        """Records user data.
+
+        Args:
+            name (str): User's name
+            phone (str | None): User's phone number
+            email (str | None): User's email
+        """
+        # to do: allow for correcting fields within userdata, confirm that details are correct
+        self._userdata = UserInfo(name=name)
+        if phone:
+            self._userdata.phone = phone
+        if email:
+            self._userdata.email = email
+
+        self._userdata_event.set()
+
 
 class Scheduler(AgentTask):
-    def __init__(self, *, chat_ctx: llm.ChatContext) -> None:
+    def __init__(self, *, userdata: UserInfo) -> None:
         super().__init__(
             instructions="You are Echo, a scheduler managing appointments for the LiveKit dental office.",
             llm=openai.realtime.RealtimeModel(voice="echo"),
-            chat_ctx=chat_ctx,
         )
-    
+        self._userdata = userdata
+
+    async def on_enter(self) -> None:
+        speech_handle = await self.agent.generate_reply(
+            instructions="Introduce yourself and ask the user if they'd like to schedule a new appointment, reschedule, or cancel an existing appointment."
+        )
+
     @ai_function
     async def schedule(self) -> None:
-        """ Schedules a new appointment """
+        """Schedules a new appointment"""
         ...
-    
+
     @ai_function
     async def cancel(self) -> None:
-        """ Cancels an existing appointment """
+        """Cancels an existing appointment"""
         ...
-    
+
     @ai_function
     async def reschedule(self) -> None:
-        """ Reschedules an existing appointment """
+        """Reschedules an existing appointment"""
         ...
-    
+
+
 class Messenger(AgentTask):
-    def __init__(self) -> None:
+    def __init__(self, *, userdata: UserInfo) -> None:
         super().__init__(
             instructions="You are Shimmer, an assistant taking messages for the LiveKit dental office.",
             llm=openai.realtime.RealtimeModel(voice="shimmer"),
         )
+        self._userdata = userdata
 
     async def on_enter(self) -> None:
-        speech_handle = await self.agent.generate_reply(
-            instructions="Ask the user for their message and their contact information."
+        self.agent.say(
+            f"Alright {self._userdata.name}, please state your message whenever you're ready."
         )
+
+    # either directly use the transcript or function calling
+
 
 load_dotenv()
 
@@ -96,6 +158,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
     agent.start(ctx.room, participant)
+
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
