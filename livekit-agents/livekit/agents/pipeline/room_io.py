@@ -549,6 +549,9 @@ class RoomTranscriptEventSink(TextSink):
         task.add_done_callback(self._tasks.discard)
 
     async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
+        if self._participant_identity is None:
+            return
+
         if self._track_id is None:
             logger.warning(
                 "track not found, skipping transcription publish",
@@ -582,10 +585,10 @@ class RoomTranscriptEventSink(TextSink):
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
-        if self._track_id is not None:
-            return
         if (
-            participant.identity != self._participant_identity
+            self._track_id is not None
+            or self._participant_identity is None
+            or participant.identity != self._participant_identity
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
             return
@@ -594,15 +597,14 @@ class RoomTranscriptEventSink(TextSink):
     def _on_local_track_published(
         self, track: rtc.LocalTrackPublication, _: rtc.Track
     ) -> None:
-        # TODO(long): handle local track and remote track
         if (
-            self._participant_identity is None
+            self._track_id is not None
+            or self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
+            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
             return
-
-        if track.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            self._track_id = track.sid
+        self._track_id = track.sid
 
 
 class DataStreamTextSink(TextSink):
@@ -632,19 +634,23 @@ class DataStreamTextSink(TextSink):
         participant: rtc.Participant | str | None,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
-        # TODO(long): particpant None should have the same behavior as transcript event sink
         identity = (
             participant.identity
             if isinstance(participant, rtc.Participant)
             else participant
         )
-        self._participant_identity = identity
+        if identity != self._participant_identity:
+            self.flush()
 
+        self._participant_identity = identity
         self._latest_text = ""
         self._current_id = utils.shortuuid("SG_")
         self._is_capturing = False
 
     async def capture_text(self, text: str) -> None:
+        if self._participant_identity is None:
+            return
+
         self._latest_text = text
         if not self._is_capturing:
             self._current_id = utils.shortuuid("SG_")
@@ -670,7 +676,7 @@ class DataStreamTextSink(TextSink):
             logger.exception("Failed to publish transcription to stream")
 
     def flush(self) -> None:
-        if not self._is_capturing:
+        if not self._is_capturing or self._participant_identity is None:
             return
 
         self._is_capturing = False
