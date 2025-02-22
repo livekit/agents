@@ -53,6 +53,8 @@ class RoomOutputOptions:
     """Number of audio channels"""
     text_output_topic: str | None = TOPIC_CHAT
     """Topic for text output"""
+    agent_text_identity: str | None = None
+    """Identity of the sender for text output, default to the local participant"""
     agent_text_sync_with_audio: bool = True
     """Whether to synchronize agent transcription with audio playback"""
     audio_track_source: rtc.TrackSource.ValueType = rtc.TrackSource.SOURCE_MICROPHONE
@@ -139,18 +141,22 @@ class RoomIO:
             self._agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
             self._agent_text_output = self._create_text_sink(
-                participant_identity=self._room.local_participant.identity,
+                participant_identity=(
+                    self._out_opts.agent_text_identity
+                    or self._room.local_participant.identity
+                ),
                 is_delta_stream=True,
                 topic=self._out_opts.text_output_topic,
             )
             if self._out_opts.agent_text_sync_with_audio:
-                if not self._audio_output:
+                audio_output = self._audio_output or self._agent.output.audio
+                if not audio_output:
                     logger.warning(
                         "text sync with audio is enabled but audio output is not enabled, ignoring"
                     )
                 else:
                     self._text_synchronizer = TextSynchronizer(
-                        audio_sink=self._audio_output,
+                        audio_sink=audio_output,
                         text_sink=self._agent_text_output,
                     )
 
@@ -161,14 +167,21 @@ class RoomIO:
         input_participant = await self.wait_for_participant()
         self.set_participant(input_participant.identity)
 
-        self._agent.output.audio = self.audio_output
-        self._agent.output.text = self.text_output
-        self._agent.input.audio = self.audio_input
-        self._agent.input.video = self.video_input
+        # TODO(long): only set the available inputs/outputs or both?
+        if self.audio_input:
+            self._agent.input.audio = self.audio_input
+        if self.video_input:
+            self._agent.input.video = self.video_input
+
+        if self.audio_output:
+            self._agent.output.audio = self.audio_output
+        if self.text_output:
+            self._agent.output.text = self.text_output
+
         self._agent.on("agent_state_changed", self._on_agent_state_changed)
 
     @property
-    def audio_output(self) -> AudioSink:
+    def audio_output(self) -> AudioSink | None:
         if self._text_synchronizer:
             return self._text_synchronizer.audio_sink
         return self._audio_output
@@ -639,8 +652,12 @@ class DataStreamTextSink(TextSink):
             if isinstance(participant, rtc.Participant)
             else participant
         )
-        if identity != self._participant_identity:
-            self.flush()
+        if identity != self._participant_identity and self._text_writer:
+            # close the previous stream if the participant has changed
+            task = asyncio.create_task(self._text_writer.aclose())
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            self._text_writer = None
 
         self._participant_identity = identity
         self._latest_text = ""

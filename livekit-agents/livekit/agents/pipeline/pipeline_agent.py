@@ -1,6 +1,7 @@
 from __future__ import annotations, print_function
 
 import asyncio
+import copy
 from dataclasses import dataclass
 from typing import AsyncIterable, Generic, Literal, TypeVar
 
@@ -94,8 +95,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._lock = asyncio.Lock()
 
         # room io and transcription sync
-        self._room_input: room_io.RoomInput | None = None
-        self._room_output: room_io.RoomOutput | None = None
+        self._room_io: room_io.RoomIO | None = None
 
         # agent tasks
         self._agent_task: AgentTask
@@ -146,12 +146,8 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._vad
 
     @property
-    def room_input(self) -> room_io.RoomInput | None:
-        return self._room_input
-
-    @property
-    def room_output(self) -> room_io.RoomOutput | None:
-        return self._room_output
+    def room_io(self) -> room_io.RoomIO | None:
+        return self._room_io
 
     @property
     def input(self) -> io.AgentInput:
@@ -185,8 +181,8 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             room: The room to use for input and output
-            room_input_options: Options for the room input, set to None to disable
-            room_output_options: Options for the room output, set to None to disable
+            room_input_options: Options for the room input
+            room_output_options: Options for the room output
         """
         if self._started:
             return
@@ -195,21 +191,50 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._on_agent_state_changed(AgentState.INITIALIZING)
 
             if is_given(room):
-                if self.input.audio is None:
-                    self._room_input = room_io.RoomInput(
-                        room=room,
-                        options=room_input_options
-                        or room_io.DEFAULT_ROOM_INPUT_OPTIONS,
-                    )
-                    await self._room_input.start(agent=self)
+                room_input_options = copy.deepcopy(room_input_options)
+                room_output_options = copy.deepcopy(room_output_options)
 
-                if self.output.audio is None and self.output.text is None:
-                    self._room_output = room_io.RoomOutput(
-                        room=room,
-                        options=room_output_options
-                        or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS,
+                if (
+                    self.input.audio is not None
+                    and is_given(room_input_options)
+                    and room_input_options.audio_enabled
+                ):
+                    logger.warning(
+                        "room audio input is enabled but input.audio is already set, ignoring"
                     )
-                    await self._room_output.start(agent=self)
+                    room_input_options.audio_enabled = False
+
+                if (
+                    self.output.audio is not None
+                    and is_given(room_output_options)
+                    and room_output_options.audio_enabled
+                ):
+                    logger.warning(
+                        "room audio output is enabled but output.audio or output.text is already set, ignoring"
+                    )
+                    room_output_options.audio_enabled = False
+
+                if (
+                    self.output.text is not None
+                    and is_given(room_output_options)
+                    and room_output_options.text_enabled
+                ):
+                    logger.warning(
+                        "room text output is enabled but output.text is already set, ignoring"
+                    )
+                    room_output_options.text_enabled = False
+
+                self._room_io = room_io.RoomIO(
+                    room=room,
+                    agent=self,
+                    input_options=(
+                        room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
+                    ),
+                    output_options=(
+                        room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
+                    ),
+                )
+                await self._room_io.start()
 
             if self.input.audio is not None:
                 self._forward_audio_atask = asyncio.create_task(
@@ -223,6 +248,11 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._on_agent_state_changed(AgentState.LISTENING)
+
+        if self.input.audio is None or (
+            self.output.audio is None and self.output.text is None
+        ):
+            logger.warning("agent started without input or output")
 
     async def aclose(self) -> None:
         if not self._started:
