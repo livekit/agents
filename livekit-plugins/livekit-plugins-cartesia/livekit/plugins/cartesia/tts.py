@@ -282,6 +282,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ):
         super().__init__(tts=tts)
+        self._cartesia_tts = tts
         self._opts, self._pool = opts, pool
         self._sent_tokenizer = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
@@ -387,7 +388,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._tts._is_closing_ws:
+                    if not self._cartesia_tts._is_closing_ws:
                         raise APIStatusError(
                             "Cartesia connection closed unexpectedly",
                             request_id=request_id,

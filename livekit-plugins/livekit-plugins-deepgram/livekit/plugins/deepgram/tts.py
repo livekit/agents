@@ -255,6 +255,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ):
         super().__init__(tts=tts)
+        self._deepgram_tts = tts
         self._opts = opts
         self._pool = pool
         self._base_url = base_url
@@ -363,7 +364,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._tts._is_closing_ws:
+                    if not self._deepgram_tts._is_closing_ws:
                         raise APIStatusError(
                             "Deepgram websocket connection closed unexpectedly",
                             request_id=request_id,

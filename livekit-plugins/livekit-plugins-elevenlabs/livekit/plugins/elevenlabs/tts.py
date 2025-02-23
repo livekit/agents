@@ -180,11 +180,11 @@ class TTS(tts.TTS):
         return self._closing_ws
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        session = self._ensure_session()
         retries = 3
         delay = 5
         for attempt in range(retries):
             try:
+                session = self._ensure_session()
                 ws = await asyncio.wait_for(
                     session.ws_connect(
                         _stream_url(self._opts),
@@ -205,6 +205,7 @@ class TTS(tts.TTS):
                     raise Exception(
                         f"failed to connect to 11labs after {retries} retries"
                     ) from e
+        raise Exception(f"failed to connect to 11labs after {retries} retries")
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         self._closing_ws = True
@@ -359,6 +360,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _TTSOptions,
     ):
         super().__init__(tts=tts)
+        self._elevenlabs_tts = tts
         self._opts, self._pool = opts, pool
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
@@ -480,7 +482,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        if not self._tts._is_closing_ws:
+                        if not self._elevenlabs_tts._is_closing_ws:
                             raise APIStatusError(
                                 "11labs connection closed unexpectedly, not all tokens have been consumed",
                                 request_id=request_id,
