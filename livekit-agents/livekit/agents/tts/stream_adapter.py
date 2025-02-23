@@ -99,9 +99,8 @@ class StreamAdapterWrapper(SynthesizeStream):
                 await _synthesize(input_stream)
 
         async def _synthesize(input_stream):
+            last_audio: SynthesizedAudio | None = None
             async for ev in input_stream:
-                print("ev: ", ev)
-                last_audio: SynthesizedAudio | None = None
                 async for audio in self._wrapped_tts.synthesize(
                     ev.token, segment_id=ev.segment_id
                 ):
