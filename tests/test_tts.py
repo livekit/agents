@@ -133,39 +133,38 @@ async def test_stream(tts_factory):
         if i == 1:
             stream.end_input()
 
-    events = []
     segment_ids = []
+    final_indices = {}
+    frames = []
+    idx = 0
     async for event in stream:
-        events.append(event)
-        if event.segment_id and event.segment_id not in segment_ids:
-            segment_ids.append(event.segment_id)
-
+        if event.frame is not None:
+            frames.append(event.frame)
+        if event.segment_id:
+            if event.segment_id not in segment_ids:
+                segment_ids.append(event.segment_id)
+            if event.is_final:
+                if event.segment_id in final_indices:
+                    raise AssertionError(
+                        f"Multiple final events for segment {event.segment_id}"
+                    )
+                final_indices[event.segment_id] = idx
+        idx += 1
     await stream.aclose()
 
     assert len(segment_ids) == 2, (
-        f"Expected 2 unique segments, got {len(segment_ids)}: {segment_ids}"
+        f"Expected 2 segments, got {len(segment_ids)}: {segment_ids}"
+    )
+    seg0, seg1 = segment_ids
+
+    # Assert each segment has exactly one final event and ordering is correct.
+    assert seg0 in final_indices, f"No final event for segment {seg0}"
+    assert seg1 in final_indices, f"No final event for segment {seg1}"
+    assert final_indices[seg0] < final_indices[seg1], (
+        f"Segment {seg0} final event (index={final_indices[seg0]}) did not occur before "
+        f"segment {seg1} final event (index={final_indices[seg1]})."
     )
 
-    seg0_id, seg1_id = segment_ids
-
-    # Each segment should have at least one final frame
-    seg0_final_indices = [
-        i for i, e in enumerate(events) if e.segment_id == seg0_id and e.is_final
-    ]
-    seg1_final_indices = [
-        i for i, e in enumerate(events) if e.segment_id == seg1_id and e.is_final
-    ]
-    assert seg0_final_indices, f"No final frame found for segment {seg0_id}"
-    assert seg1_final_indices, f"No final frame found for segment {seg1_id}"
-
-    # Ensure segment #0's final occurs before segment #1's final
-    assert max(seg0_final_indices) < min(seg1_final_indices), (
-        f"Segment #0 final (index={max(seg0_final_indices)}) did NOT occur "
-        f"before segment #1 final (index={min(seg1_final_indices)})."
-    )
-
-    # Validate the synthesized audio frames
-    frames = [e.frame for e in events if e.frame is not None]
     expected_text = "".join(text_segments)
     await _assert_valid_synthesized_audio(frames, tts, expected_text, WER_THRESHOLD)
 

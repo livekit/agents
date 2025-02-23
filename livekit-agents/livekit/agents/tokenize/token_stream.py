@@ -81,7 +81,11 @@ class BufferedTokenStream:
 
             if self._out_buf:
                 self._event_ch.send_nowait(
-                    TokenData(token=self._out_buf, segment_id=self._current_segment_id)
+                    TokenData(
+                        token=self._out_buf,
+                        segment_id=self._current_segment_id,
+                        is_final=True,
+                    )
                 )
 
             self._current_segment_id = shortuuid()

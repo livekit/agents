@@ -110,7 +110,7 @@ class StreamAdapterWrapper(SynthesizeStream):
 
                     last_audio = audio
 
-                if last_audio is not None:
+                if last_audio is not None and ev.is_final:
                     last_audio.is_final = True
                     self._event_ch.send_nowait(last_audio)
 
