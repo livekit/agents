@@ -130,6 +130,10 @@ class TTS(tts.TTS):
             close_cb=self._close_ws,
         )
 
+    @property
+    def _is_closing_ws(self) -> bool:
+        return self._closing_ws
+
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
@@ -383,7 +387,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._tts._closing_ws:
+                    if not self._tts._is_closing_ws:
                         raise APIStatusError(
                             "Cartesia connection closed unexpectedly",
                             request_id=request_id,
@@ -395,7 +399,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data = json.loads(msg.data)
-                segment_id = data.get("context_id")
 
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
@@ -408,9 +411,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         last_frame = frame
 
                     _send_last_frame(segment_id=segment_id, is_final=True)
-                    if segment_id == request_id:
-                        # we're not going to receive more frames, end stream
-                        break
+
+                    break
                 else:
                     logger.error("unexpected Cartesia message %s", data)
 

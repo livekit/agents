@@ -206,6 +206,7 @@ class ChunkedStream(tts.ChunkedStream):
                     tts.SynthesizedAudio(
                         frame=frame,
                         request_id=request_id,
+                        segment_id=self._segment_id,
                     )
                 )
             await decode_task
