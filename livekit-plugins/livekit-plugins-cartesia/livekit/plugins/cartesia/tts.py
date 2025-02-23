@@ -124,6 +124,7 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
+        self._close_ws = False
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -134,11 +135,13 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
+        self._close_ws = False
         return await asyncio.wait_for(
             session.ws_connect(url), self._conn_options.timeout
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        self._close_ws = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -279,9 +282,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._sent_tokenizer = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
         )
+        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self) -> None:
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        request_id = utils.shortuuid()
 
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
@@ -293,68 +297,64 @@ class SynthesizeStream(tts.SynthesizeStream):
                         # new segment (after flush for e.g)
                         input_stream = self._sent_tokenizer.stream()
                         self._segments_ch.send_nowait(input_stream)
-
                     input_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if input_stream is not None:
                         input_stream.end_input()
-
                     input_stream = None
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
         async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
             async for input_stream in self._segments_ch:
-                await self._run_ws(input_stream, ws)
+                await self._run_ws(input_stream, ws, request_id)
 
-        url = f"wss://api.cartesia.ai/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
-
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
-        try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(url), self._conn_options.timeout
-            )
+        async with self._pool.connection() as ws:
             tasks = [
                 asyncio.create_task(_tokenize_input()),
                 asyncio.create_task(_run_segments(ws)),
             ]
             try:
                 await asyncio.gather(*tasks)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError() from e
+            except aiohttp.ClientResponseError as e:
+                raise APIStatusError(
+                    message=e.message,
+                    status_code=e.status,
+                    request_id=request_id,
+                    body=None,
+                ) from e
+            except Exception as e:
+                raise APIConnectionError() from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
-        finally:
-            if ws is not None:
-                await ws.close()
 
     async def _run_ws(
         self,
         input_stream: tokenize.SentenceStream,
         ws: aiohttp.ClientWebSocketResponse,
+        request_id: str,
     ) -> None:
-        request_id = utils.shortuuid()
-        done_segment = False
+        segment_id = utils.shortuuid()
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse):
-            nonlocal done_segment
             base_pkt = _to_cartesia_options(self._opts)
             async for ev in input_stream:
                 token_pkt = base_pkt.copy()
-                token_pkt["context_id"] = request_id
+                token_pkt["context_id"] = segment_id
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
 
             end_pkt = base_pkt.copy()
-            end_pkt["context_id"] = request_id
+            end_pkt["context_id"] = segment_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
-            done_segment = True
             await ws.send_str(json.dumps(end_pkt))
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
-            nonlocal done_segment
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
@@ -383,7 +383,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not done_segment:
+                    if not self._tts._close_ws:
                         raise APIStatusError(
                             "Cartesia connection closed unexpectedly",
                             request_id=request_id,
