@@ -42,6 +42,7 @@ class STTOptions:
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
     speech_endpoint: str | None = None
+    profanity_option: speechsdk.enums.ProfanityOption | None = None
 
 
 class STT(stt.STT):
@@ -61,6 +62,7 @@ class STT(stt.STT):
         languages: list[str] = ["en-US"],
         # for compatibility with other STT plugins
         language: str | None = None,
+        profanity_option: speechsdk.enums.ProfanityOption | None = None,
     ):
         """
         Create a new instance of Azure STT.
@@ -73,7 +75,8 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True)
         )
         speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
@@ -102,6 +105,7 @@ class STT(stt.STT):
             segmentation_silence_timeout_ms=segmentation_silence_timeout_ms,
             segmentation_max_time_ms=segmentation_max_time_ms,
             segmentation_strategy=segmentation_strategy,
+            profanity_option=profanity_option,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -112,7 +116,8 @@ class STT(stt.STT):
         language: str | None,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError("Azure STT does not support single frame recognition")
+        raise NotImplementedError(
+            "Azure STT does not support single frame recognition")
 
     def stream(
         self,
@@ -180,7 +185,8 @@ class SpeechStream(stt.SpeechStream):
             )
             self._recognizer.recognizing.connect(self._on_recognizing)
             self._recognizer.recognized.connect(self._on_recognized)
-            self._recognizer.speech_start_detected.connect(self._on_speech_start)
+            self._recognizer.speech_start_detected.connect(
+                self._on_speech_start)
             self._recognizer.speech_end_detected.connect(self._on_speech_end)
             self._recognizer.session_started.connect(self._on_session_started)
             self._recognizer.session_stopped.connect(self._on_session_stopped)
@@ -197,7 +203,8 @@ class SpeechStream(stt.SpeechStream):
                             self._stream.write(input.data.tobytes())
 
                 process_input_task = asyncio.create_task(process_input())
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                wait_reconnect_task = asyncio.create_task(
+                    self._reconnect_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
@@ -226,7 +233,8 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.to_thread(_cleanup)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
+        detected_lg = speechsdk.AutoDetectSourceLanguageResult(
+            evt.result).language
         text = evt.result.text.strip()
         if not text:
             return
@@ -242,12 +250,14 @@ class SpeechStream(stt.SpeechStream):
             self._loop.call_soon_threadsafe(
                 self._event_ch.send_nowait,
                 stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[
+                        final_data]
                 ),
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
+        detected_lg = speechsdk.AutoDetectSourceLanguageResult(
+            evt.result).language
         text = evt.result.text.strip()
         if not text:
             return
@@ -329,6 +339,11 @@ def _create_speech_recognizer(
         speech_config.set_property(
             speechsdk.enums.PropertyId.Speech_SegmentationStrategy,
             str(config.segmentation_strategy),
+        )
+    if config.profanity_option:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.SpeechServiceResponse_ProfanityOption,
+            str(config.profanity_option.name.lower()),
         )
 
     auto_detect_source_language_config = None
