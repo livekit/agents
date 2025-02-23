@@ -16,10 +16,10 @@ This example demonstrates how to create an animated avatar that responds to audi
 
 1. Start the avatar dispatcher server:
 ```bash
-python examples/avatar/dispatcher.py [--port 8089]
+python examples/avatar/simli_avatar/dispatcher.py [--port 8089]
 ```
 
 2. Start the agent worker:
 ```bash
-python examples/avatar/agent_worker.py dev [--avatar-url http://localhost:8089/launch]
+python examples/avatar/simli_avatar/agent_worker.py dev [--avatar-url http://localhost:8089/launch]
 ```
