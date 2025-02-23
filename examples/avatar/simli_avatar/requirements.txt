@@ -1,3 +1,7 @@
 fastapi
 uvicorn
 opencv-python
+httpx
+python-dotenv
+numpy
+sounddevice

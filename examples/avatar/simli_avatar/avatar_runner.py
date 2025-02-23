@@ -35,7 +35,7 @@ class MyVideoGenerator:
         )
         self._av_sync: Optional[rtc.AVSynchronizer] = None
 
-    async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
+    async def push_audio(self, frame: Union[rtc.AudioFrame, AudioFlushSentinel]) -> None:
         """Process and queue audio frames, handling resampling if needed.
 
         Args:
