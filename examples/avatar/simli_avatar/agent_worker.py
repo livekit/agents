@@ -52,7 +52,7 @@ async def launch_avatar_worker(
     token = (
         api.AccessToken()
         .with_identity(avatar_identity)
-        .with_name("Avatar Runner")
+        .with_name("Simli Avatar Runner")
         .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
         .with_kind("agent")
         .with_attributes({ATTRIBUTE_PUBLISH_FOR: agent_identity})  # Special attribute

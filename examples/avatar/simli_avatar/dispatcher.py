@@ -2,6 +2,7 @@ import asyncio
 import logging
 import subprocess
 import sys
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,10 @@ class WorkerLauncher:
             connection_info.url,
             "--token",
             connection_info.token,
+            "--simli-api-key",
+            os.environ["SIMLI_API_KEY"],
+            "--simli-face-id",
+            os.environ["SIMLI_FACE_ID"],
             "--room",
             connection_info.room_name,
         ]

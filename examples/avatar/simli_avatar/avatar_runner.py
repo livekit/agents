@@ -2,20 +2,20 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from typing import AsyncIterator, Generator, Optional, Union
+from typing import AsyncIterator, Optional, Union
 
-import numpy as np
 from livekit import rtc
 from livekit.agents.pipeline.avatar import AvatarRunner, MediaOptions
+from livekit.agents.pipeline.avatar import VideoGenerator
 from livekit.agents.pipeline.datastream_io import AudioFlushSentinel
+from simli import SimliClient, SimliConfig
 
 sys.path.insert(0, str(Path(__file__).parent))
-from wave_viz import WaveformVisualizer
 
 logger = logging.getLogger("avatar-example")
 
 
-class MyVideoGenerator:
+class SimliVideoGenerator(VideoGenerator):
     def __init__(self, media_options: MediaOptions):
         self.media_options = media_options
         self._audio_queue: asyncio.Queue[Union[rtc.AudioFrame, AudioFlushSentinel]] = (
@@ -24,186 +24,134 @@ class MyVideoGenerator:
 
         self._audio_resampler: Optional[rtc.AudioResampler] = None
 
-        # NOTE: Audio frames and video frames have different frequencies,
-        #       so we accumulate audio samples in a buffer before
-        #       generating corresponding video frames
-        self._audio_buffer = np.zeros(
-            (0, self.media_options.audio_channels), dtype=np.int16
-        )
-        self._audio_samples_per_frame = int(
-            self.media_options.audio_sample_rate / self.media_options.video_fps
-        )
+        self.audioReceiverTask: asyncio.Task = None
+        self.audioBytesQueue: bytearray = bytearray()
+        self.audioBufferMutex: asyncio.Lock = asyncio.Lock()
+
+        self.videoReceiverTask: asyncio.Task = None
+        self.videoQueue: asyncio.Queue[rtc.VideoFrame] = asyncio.Queue()
         self._av_sync: Optional[rtc.AVSynchronizer] = None
+        self.clearBufferTasks: list[asyncio.Task] = []
 
-    async def push_audio(self, frame: Union[rtc.AudioFrame, AudioFlushSentinel]) -> None:
-        """Process and queue audio frames, handling resampling if needed.
+    def set_av_sync(self, av_sync: rtc.AVSynchronizer | None) -> None:
+        self._av_sync = av_sync
 
-        Args:
-            frame: Either an AudioFrame to process or AudioFlushSentinel to flush
-        """
-        if isinstance(frame, AudioFlushSentinel):
+    async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
+        # resample audio frame if necessary
+        print(frame)
+        if isinstance(frame, rtc.AudioFrame):
+            if self._audio_resampler is None and (
+                frame.sample_rate != 16000 or frame.num_channels != 1
+            ):
+                self._audio_resampler = rtc.AudioResampler(
+                    input_rate=frame.sample_rate,
+                    output_rate=16000,
+                    num_channels=1,
+                )
             if self._audio_resampler is not None:
-                # flush the resampler and queue any remaining frames
-                for resampled_frame in self._audio_resampler.flush():
-                    await self._audio_queue.put(resampled_frame)
-            await self._audio_queue.put(frame)
+                for resampled_frame in self._audio_resampler.push(frame):
+                    await self.simliClient.send(
+                        resampled_frame.to_wav_bytes()[44:]
+                    )  # Remove wav header
+                return
+
+        elif self._audio_resampler is not None:
+            # flush the resampler
+            for resampled_frame in self._audio_resampler.flush():
+                await self.simliClient.send(
+                    resampled_frame.to_wav_bytes()[44:]
+                )  # Remove wav header
             return
 
-        # initialize resampler if needed
-        needs_resampling = (
-            frame.sample_rate != self.media_options.audio_sample_rate
-            or frame.num_channels != self.media_options.audio_channels
-        )
+        # elif isinstance(frame, AudioFlushSentinel):
+        #     self.clear_buffer()
 
-        if needs_resampling and self._audio_resampler is None:
-            self._audio_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=self.media_options.audio_sample_rate,
-                num_channels=self.media_options.audio_channels,
-            )
+    def clear_buffer(self):
+        # asking for feedback: our built in clear buffer function is async, got a better idea?
+        return self.simliClient.clearBuffer()
 
-        if self._audio_resampler is not None:
-            for resampled_frame in self._audio_resampler.push(frame):
-                await self._audio_queue.put(resampled_frame)
-        else:
-            # no resampling needed, queue directly
-            await self._audio_queue.put(frame)
+    async def _generate_frames(self):
+        # 1/30 * 48000 * 2 * 2
+        # 30FPS * audio_sample_rate * audio_channel_count * 2bytes per sample
+        while self.simliClient.run:
+            while len(self.audioBytesQueue) < 6400:
+                # wait 0.1ms to get next frame
+                await asyncio.sleep(0.0001)
 
-    def clear_buffer(self) -> None:
-        while not self._audio_queue.empty():
-            try:
-                self._audio_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        self._reset_audio_buffer()
+            audioChunk: bytearray = None
+            async with self.audioBufferMutex:
+                audioChunk = self.audioBytesQueue[:6400]
+                self.audioBytesQueue = self.audioBytesQueue[6400:]
+            lkAudioFrame = rtc.AudioFrame(audioChunk, 48000, 2, 1600)
+            lkVideoFrame = await self.videoQueue.get()
+            yield (lkVideoFrame, lkAudioFrame)
 
     async def stream(
         self,
     ) -> AsyncIterator[
         tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]] | AudioFlushSentinel
     ]:
-        # initialize background canvas
-        background = np.zeros(
-            (self.media_options.video_height, self.media_options.video_width, 4),
-            dtype=np.uint8,
-        )
-        background.fill(255)
+        try:
+            self.audioReceiverTask = asyncio.create_task(self.getAudioFrames())
+            self.videoReceiverTask = asyncio.create_task(self.getVideoFrames())
 
-        wave_visualizer = WaveformVisualizer(
-            sample_rate=self.media_options.audio_sample_rate
-        )
-
-        def _generate_idle_frame() -> rtc.VideoFrame:
-            idle_frame = background.copy()
-            fps = self._av_sync.actual_fps if self._av_sync else None
-            wave_visualizer.draw(
-                idle_frame,
-                audio_samples=np.zeros((1, self.media_options.audio_channels)),
-                fps=fps,
-            )
-            return self._np_to_video_frame(idle_frame)
-
-        def _generate_active_frames(
-            audio_frame: rtc.AudioFrame | AudioFlushSentinel,
-        ) -> Generator[tuple[rtc.VideoFrame, rtc.AudioFrame], None, None]:
-            samples_per_frame = self._audio_samples_per_frame
-
-            if isinstance(audio_frame, rtc.AudioFrame):
-                audio_samples = np.frombuffer(audio_frame.data, dtype=np.int16).reshape(
-                    -1, audio_frame.num_channels
-                )  # (n_samples, n_channels)
-            else:
-                # fill the buffer with zeros if the buffer is not multiple of samples_per_frame
-                n_fill_samples = (
-                    (samples_per_frame - len(self._audio_buffer) % samples_per_frame)
-                    if len(self._audio_buffer) > 0
-                    else 0
-                )
-                audio_samples = np.zeros(
-                    [n_fill_samples, self._audio_buffer.shape[1]],
-                    dtype=self._audio_buffer.dtype,
-                )
-            self._audio_buffer = np.concatenate(
-                [self._audio_buffer, audio_samples], axis=0
-            )
-
-            # generate video frames with audio in buffer
-            while len(self._audio_buffer) >= samples_per_frame:
-                sub_samples = self._audio_buffer[:samples_per_frame]
-                self._audio_buffer = self._audio_buffer[samples_per_frame:]
-
-                canvas = background.copy()
-                fps = self._av_sync.actual_fps if self._av_sync else None
-                wave_visualizer.draw(canvas, sub_samples, fps=fps)
-                video_frame = self._np_to_video_frame(canvas)
-                sub_audio_frame = rtc.AudioFrame(
-                    data=sub_samples.tobytes(),
-                    sample_rate=self.media_options.audio_sample_rate,
-                    num_channels=sub_samples.shape[1],
-                    samples_per_channel=sub_samples.shape[0],
-                )
-                yield video_frame, sub_audio_frame
-
-        while True:
-            try:
-                # timeout has to be shorter than the frame interval to avoid starvation
-                ori_audio_frame = await asyncio.wait_for(
-                    self._audio_queue.get(), timeout=0.5 / self.media_options.video_fps
-                )
-            except asyncio.TimeoutError:
-                # generate frame without audio (e.g. silence state)
-                if self._av_sync and self._av_sync._video_queue.qsize() > 1:
-                    # skip if there are already video frames in the queue
-                    continue
-                video_frame = _generate_idle_frame()
-                yield video_frame, None
-                await asyncio.sleep(0)
-                continue
-
-            for video_frame, audio_frame in _generate_active_frames(ori_audio_frame):
+            async for video_frame, audio_frame in self._generate_frames():
                 yield video_frame, audio_frame
+                # print(video_frame, audio_frame)
+        finally:
+            await asyncio.gather(*self.clearBufferTasks)
 
-            if isinstance(ori_audio_frame, AudioFlushSentinel):
-                yield ori_audio_frame
-                self._reset_audio_buffer()
-
-    def set_av_sync(self, av_sync: rtc.AVSynchronizer | None) -> None:
-        self._av_sync = av_sync
-
-    def _reset_audio_buffer(self) -> None:
-        self._audio_buffer = np.zeros(
-            (0, self.media_options.audio_channels), dtype=np.int16
+    async def initSimli(self, api_key: str, face_id: str):
+        self.config = SimliConfig(
+            api_key,
+            face_id,
+            maxIdleTime=100,
         )
-
-    def _np_to_video_frame(self, image: np.ndarray) -> rtc.VideoFrame:
-        return rtc.VideoFrame(
-            width=image.shape[1],
-            height=image.shape[0],
-            type=rtc.VideoBufferType.RGBA,
-            data=image.tobytes(),
+        self.simliClient = SimliClient(
+            self.config,
+            # simliURL="http://127.0.0.1:8892",  # used for debugging on simli servers or to connect to a relay server
         )
+        await self.simliClient.Initialize()
+
+    async def getAudioFrames(self):
+        async for audioFrame in self.simliClient.getAudioStreamIterator():
+            async with self.audioBufferMutex:
+                self.audioBytesQueue.extend(audioFrame.to_ndarray().tobytes())
+
+    async def getVideoFrames(self):
+        async for videoFrame in self.simliClient.getVideoStreamIterator("yuva420p"):
+            await self.videoQueue.put(
+                rtc.VideoFrame(
+                    videoFrame.width,
+                    videoFrame.height,
+                    rtc.VideoBufferType.I420A,
+                    videoFrame.to_ndarray().tobytes(),
+                )
+            )
 
 
-async def main(room: rtc.Room):
+async def main(room: rtc.Room, apikey, faceid):
     """Main application logic for the avatar worker"""
-    runner: AvatarRunner | None = None
+    worker = None
     stop_event = asyncio.Event()
 
     try:
         # Initialize and start worker
         media_options = MediaOptions(
-            video_width=1280,
-            video_height=720,
+            video_width=512,
+            video_height=512,
             video_fps=30,
-            audio_sample_rate=24000,
-            audio_channels=1,
+            audio_sample_rate=48000,
+            audio_channels=2,
         )
-        video_generator = MyVideoGenerator(media_options)
-        runner = AvatarRunner(
+        video_generator = SimliVideoGenerator(media_options)
+        await video_generator.initSimli(apikey, faceid)
+        await video_generator.simliClient.sendSilence()
+        worker = AvatarRunner(
             room, video_generator=video_generator, media_options=media_options
         )
-        video_generator.set_av_sync(runner.av_sync)
-        await runner.start()
+        video_generator.set_av_sync(worker.av_sync)
+        await worker.start()
 
         # Set up disconnect handler
         async def handle_disconnect(participant: rtc.RemoteParticipant):
@@ -226,11 +174,11 @@ async def main(room: rtc.Room):
         logging.error("Unexpected error: %s", e)
         raise
     finally:
-        if runner:
-            await runner.aclose()
+        if worker:
+            await worker.aclose()
 
 
-async def run_service(url: str, token: str):
+async def run_service(url: str, token: str, apikey, faceid):
     """Run the avatar worker service"""
     room = rtc.Room()
     try:
@@ -240,7 +188,7 @@ async def run_service(url: str, token: str):
         logging.info("Connected to room %s", room.name)
 
         # Run main application logic
-        await main(room)
+        await main(room, apikey, faceid)
     except rtc.ConnectError as e:
         logging.error("Failed to connect to room: %s", e)
         raise
@@ -258,6 +206,16 @@ if __name__ == "__main__":
         parser.add_argument("--url", required=True, help="LiveKit server URL")
         parser.add_argument("--token", required=True, help="Token for joining room")
         parser.add_argument("--room", help="Room name")
+        parser.add_argument(
+            "--simli-api-key",
+            required=True,
+            help="Simli API key, get it from https://app.simli.com",
+        )
+        parser.add_argument(
+            "--simli-face-id",
+            default="tmp9i8bbq7c",
+            help="Simli face id, create your own at https://app.simli.com or get a premade one from https://docs.simli.com/api-reference/available-faces",
+        )
         parser.add_argument(
             "--log-level",
             default="INFO",
@@ -277,7 +235,9 @@ if __name__ == "__main__":
     args = parse_args()
     setup_logging(args.room, args.log_level)
     try:
-        asyncio.run(run_service(args.url, args.token))
+        asyncio.run(
+            run_service(args.url, args.token, args.simli_api_key, args.simli_face_id)
+        )
     except KeyboardInterrupt:
         logging.info("Received interrupt signal, shutting down...")
     except Exception as e:
