@@ -169,6 +169,7 @@ class TTS(tts.TTS):
             language=language,
         )
         self._session = http_session
+        self._closing_ws = False
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -187,10 +188,9 @@ class TTS(tts.TTS):
                     ),
                     self._conn_options.timeout,
                 )
-                self._close_ws = True
+                self._closing_ws = False
                 return ws
             except Exception as e:
-                self._close_ws = True
                 if attempt < retries - 1:
                     logger.warning(
                         f"failed to connect to 11labs on attempt {attempt + 1}/{retries}. retrying in {delay}s",
@@ -203,7 +203,7 @@ class TTS(tts.TTS):
                     ) from e
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        self._close_ws = True
+        self._closing_ws = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -476,7 +476,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        if not self._tts._close_ws:
+                        if not self._tts._closing_ws:
                             raise APIStatusError(
                                 "11labs connection closed unexpectedly, not all tokens have been consumed",
                                 request_id=request_id,

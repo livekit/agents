@@ -124,7 +124,7 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
-        self._close_ws = False
+        self._closing_ws = False
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -135,13 +135,13 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
-        self._close_ws = False
+        self._closing_ws = False
         return await asyncio.wait_for(
             session.ws_connect(url), self._conn_options.timeout
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        self._close_ws = True
+        self._closing_ws = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -383,7 +383,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._tts._close_ws:
+                    if not self._tts._closing_ws:
                         raise APIStatusError(
                             "Cartesia connection closed unexpectedly",
                             request_id=request_id,
