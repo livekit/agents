@@ -42,6 +42,7 @@ class STTOptions:
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
     speech_endpoint: str | None = None
+    profanity_option: speechsdk.enums.ProfanityOption | None = None
 
 
 class STT(stt.STT):
@@ -61,6 +62,7 @@ class STT(stt.STT):
         languages: list[str] = ["en-US"],
         # for compatibility with other STT plugins
         language: str | None = None,
+        profanity_option: speechsdk.enums.ProfanityOption | None = None,
     ):
         """
         Create a new instance of Azure STT.
@@ -102,6 +104,7 @@ class STT(stt.STT):
             segmentation_silence_timeout_ms=segmentation_silence_timeout_ms,
             segmentation_max_time_ms=segmentation_max_time_ms,
             segmentation_strategy=segmentation_strategy,
+            profanity_option=profanity_option,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -329,6 +332,11 @@ def _create_speech_recognizer(
         speech_config.set_property(
             speechsdk.enums.PropertyId.Speech_SegmentationStrategy,
             str(config.segmentation_strategy),
+        )
+    if config.profanity_option:
+        speech_config.set_property(
+            speechsdk.enums.PropertyId.SpeechServiceResponse_ProfanityOption,
+            str(config.profanity_option.name.lower()),
         )
 
     auto_detect_source_language_config = None
