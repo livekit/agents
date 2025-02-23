@@ -124,21 +124,28 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
+        self._closing_ws = False
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
+
+    @property
+    def _is_closing_ws(self) -> bool:
+        return self._closing_ws
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
+        self._closing_ws = False
         return await asyncio.wait_for(
             session.ws_connect(url), self._conn_options.timeout
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        self._closing_ws = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -190,9 +197,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> "SynthesizeStream":
+    def stream(self) -> "SynthesizeStream":
         return SynthesizeStream(
             tts=self,
             pool=self._pool,
@@ -275,6 +280,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ):
         super().__init__(tts=tts)
+        self._cartesia_tts = tts
         self._opts, self._pool = opts, pool
         self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
@@ -336,10 +342,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError(
-                        "Cartesia connection closed unexpectedly",
-                        request_id=request_id,
-                    )
+                    if self._cartesia_tts._is_closing_ws:
+                        raise APIStatusError(
+                            "Cartesia connection closed unexpectedly",
+                            request_id=request_id,
+                        )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Cartesia message type %s", msg.type)
