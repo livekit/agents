@@ -369,6 +369,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
         self._reconnect_event = asyncio.Event()
 
+    def force_reconnect(self) -> None:
+        self._reconnect_event.set()
+
     async def _run(self) -> None:
         request_id = utils.shortuuid()
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
