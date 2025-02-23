@@ -89,6 +89,10 @@ class TTS(tts.TTS):
             close_cb=self._close_ws,
         )
 
+    @property
+    def _is_closing_ws(self) -> bool:
+        return self._closing_ws
+
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         config = {
@@ -258,11 +262,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._api_key = api_key
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         self._reconnect_event = asyncio.Event()
-        self._closing_ws = False
-
-    @property
-    def _is_closing_ws(self) -> bool:
-        return self._closing_ws
 
     def update_options(
         self,
