@@ -45,7 +45,6 @@ BeforeTTSCallback = Callable[
     SpeechSource,
 ]
 
-
 EventTypes = Literal[
     "user_started_speaking",
     "user_stopped_speaking",
@@ -199,6 +198,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         before_tts_cb: BeforeTTSCallback = _default_before_tts_cb,
         plotting: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        first_message: Optional[str] = None,
         # backward compatibility
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply | None = None,
     ) -> None:
@@ -233,9 +233,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 (e.g: editing the pronunciation of a word).
             plotting: Whether to enable plotting for debugging. matplotlib must be installed.
             loop: Event loop to use. Default to asyncio.get_event_loop().
+            first_message: Optional first message to be spoken after the first user interaction.
+            will_synthesize_assistant_reply: (Deprecated) use before_llm_cb instead.
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+        self._first_message = first_message
+        self._first_message_spoken = False
+        self._waiting_after_first_message = False
 
         if will_synthesize_assistant_reply is not None:
             logger.warning(
@@ -562,6 +567,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         )
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:
+            if self._waiting_after_first_message:
+                # Clear waiting flag and reset transcript when new user speech starts
+                self._waiting_after_first_message = False
+                self._transcribed_text = ""
             self._plotter.plot_event("user_started_speaking")
             self.emit("user_started_speaking")
             self._deferred_validation.on_human_start_of_speech(ev)
@@ -602,6 +611,21 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         def _on_final_transcript(ev: stt.SpeechEvent) -> None:
             new_transcript = ev.alternatives[0].text
             if not new_transcript:
+                return
+            if self._waiting_after_first_message:
+                # Ignore transcript while waiting for new user interaction after first message
+                return
+            # Ensure that the agent does not use the first customer interaction
+            # to generate a response.
+            if not self._first_message_spoken:
+                self._first_message_spoken = True
+                if self._first_message:
+                    logger.debug("Triggering first message", extra={"first_message": self._first_message})
+                    asyncio.create_task(self.say(self._first_message, allow_interruptions=True, add_to_chat_ctx=True))
+                else:
+                    logger.debug("Ignoring first user interaction; not generating a response from customer message.")
+                self._waiting_after_first_message = True
+                self._transcribed_text = ""
                 return
 
             logger.debug(
@@ -1138,7 +1162,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             SpeechDataContextVar.reset(tk)
 
     def _validate_reply_if_possible(self) -> None:
-        """Check if the new agent speech should be played"""
+        # If waiting after triggering the first message, do not start a new synthesis.
+        if self._waiting_after_first_message:
+            self._transcribed_text = ""
+            return
 
         if self._playing_speech and not self._playing_speech.interrupted:
             should_ignore_input = False
@@ -1205,7 +1232,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._add_speech_for_playout(self._pending_agent_reply)
         self._pending_agent_reply = None
         self._transcribed_interim_text = ""
-        # self._transcribed_text is reset after MIN_TIME_PLAYED_FOR_COMMIT, see self._play_speech
 
     def _interrupt_if_possible(self) -> None:
         """Check whether the current assistant speech should be interrupted"""
