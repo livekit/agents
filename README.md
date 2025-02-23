@@ -96,6 +96,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Azure OpenAI | livekit-plugins-openai     |           |               | [openai.TTS.with_azure()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.TTS.with_azure) |
 | Google       | livekit-plugins-google     | ✅        | ✅            | [google.TTS()](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.TTS)             |
 | Deepgram     | livekit-plugins-deepgram   | ✅        |               | [deepgram.TTS()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.TTS)       |
+| SmallestAI   | livekit-plugins-smallestai |           |                | [smallestai.TTS()](https://docs.livekit.io/python/livekit/plugins/smallest/index.html#livekit.plugins.smallestai.TTS)  |
 | Play.ai      | livekit-plugins-playai     | ✅        | ✅            | [playai.TTS()](https://docs.livekit.io/python/livekit/plugins/playai/index.html#livekit.plugins.playai.TTS)             |
 | Rime         | livekit-plugins-rime       | ✅        |               | [rime.TTS()](https://docs.livekit.io/python/livekit/plugins/rime/index.html#livekit.plugins.rime.TTS)                   |
 
