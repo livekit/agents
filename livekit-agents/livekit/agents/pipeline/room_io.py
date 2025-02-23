@@ -654,10 +654,11 @@ class DataStreamTextSink(TextSink):
         )
         if identity != self._participant_identity and self._text_writer:
             # close the previous stream if the participant has changed
-            task = asyncio.create_task(self._text_writer.aclose())
+            current_writer = self._text_writer
+            self._text_writer = None
+            task = asyncio.create_task(current_writer.aclose())
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
-            self._text_writer = None
 
         self._participant_identity = identity
         self._latest_text = ""
@@ -673,22 +674,32 @@ class DataStreamTextSink(TextSink):
             self._current_id = utils.shortuuid("SG_")
             self._is_capturing = True
 
-        try:
-            if not self._text_writer:
-                self._text_writer = await self._room.local_participant.stream_text(
-                    topic=self._topic,
-                    stream_id=self._current_id,
-                    sender_identity=self._participant_identity,
-                    attributes={
-                        ATTRIBUTE_TRANSCRIPTION_FINAL: "false",
-                    },
-                )
-            await self._text_writer.write(text)
+        async def _create_writer() -> rtc.TextStreamWriter:
+            return await self._room.local_participant.stream_text(
+                topic=self._topic,
+                stream_id=self._current_id,
+                sender_identity=self._participant_identity,
+                attributes={ATTRIBUTE_TRANSCRIPTION_FINAL: "false"},
+            )
 
-            if not self._is_delta_stream:
-                # close non-delta stream immediately after writing
-                await self._text_writer.aclose()
-                self._text_writer = None
+        try:
+            if self._is_delta_stream:
+                # reuse existing writer for delta streams
+                writer = self._text_writer or await _create_writer()
+                if not self._text_writer:
+                    self._text_writer = writer
+            else:
+                # always create new writer for non-delta streams
+                if self._text_writer:
+                    logger.error("non-delta stream should not have an active writer")
+                    await self._text_writer.aclose()
+                    self._text_writer = None
+                writer = await _create_writer()
+
+            await writer.write(text)
+            if writer is not self._text_writer:
+                await writer.aclose()
+
         except Exception:
             logger.exception("Failed to publish transcription to stream")
 
@@ -724,9 +735,11 @@ class DataStreamTextSink(TextSink):
                     return
                 await writer.aclose(attributes=attributes)
 
+        current_writer = self._text_writer
+        self._text_writer = None
         task = asyncio.create_task(
             _close_writer(
-                self._text_writer,
+                current_writer,
                 self._latest_text,
                 self._current_id,
                 self._participant_identity,
@@ -734,7 +747,6 @@ class DataStreamTextSink(TextSink):
         )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-        self._text_writer = None
 
 
 # -- Input Streams --
