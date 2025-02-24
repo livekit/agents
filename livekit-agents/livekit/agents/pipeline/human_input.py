@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+from typing import Literal, Callable
 
 from livekit import rtc
 
@@ -28,6 +28,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         stt: speech_to_text.STT,
         participant: rtc.RemoteParticipant,
         transcription: bool,
+        should_subscribe_to_audio: Callable[[rtc.RemoteTrackPublication], bool] | bool,
     ) -> None:
         super().__init__()
         self._room, self._vad, self._stt, self._participant, self._transcription = (
@@ -47,6 +48,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         self._room.on("track_published", self._subscribe_to_microphone)
         self._room.on("track_subscribed", self._subscribe_to_microphone)
         self._subscribe_to_microphone()
+        self._should_subscribe_to_audio = should_subscribe_to_audio
 
     async def aclose(self) -> None:
         if self._closed:
@@ -76,6 +78,13 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         for publication in self._participant.track_publications.values():
             if publication.source != rtc.TrackSource.SOURCE_MICROPHONE:
                 continue
+
+            if self._should_subscribe_to_audio is not None:
+                if callable(self._should_subscribe_to_audio):
+                    if not self._should_subscribe_to_audio(publication):
+                        continue
+                elif not self._should_subscribe_to_audio:
+                    continue
 
             if not publication.subscribed:
                 publication.set_subscribed(True)
