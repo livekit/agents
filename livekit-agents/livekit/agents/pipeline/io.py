@@ -22,7 +22,7 @@ STTNode = Callable[
     Union[Awaitable[Optional[AsyncIterable[stt.SpeechEvent]]]],  # TODO: support str
 ]
 LLMNode = Callable[
-    [llm.ChatContext, Optional[llm.FunctionContext]],
+    [llm.ChatContext, list[llm.AIFunction]],
     Union[
         Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]],
         Awaitable[
@@ -139,6 +139,18 @@ class TextSink(ABC):
     def flush(self) -> None:
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
         ...
+
+
+class ParallelTextSink(TextSink):
+    def __init__(self, *sinks: TextSink) -> None:
+        self._sinks = sinks
+
+    async def capture_text(self, text: str) -> None:
+        await asyncio.gather(*[sink.capture_text(text) for sink in self._sinks])
+
+    def flush(self) -> None:
+        for sink in self._sinks:
+            sink.flush()
 
 
 # TODO(theomonnom): Add documentation to VideoSink

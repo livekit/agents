@@ -15,12 +15,12 @@ from typing import (
 from pydantic import BaseModel, create_model
 from pydantic.fields import FieldInfo
 
+from . import _strict
 from .chat_context import ChatContext
 from .function_context import AIFunction, get_function_info
 
 if TYPE_CHECKING:
-    from ..pipeline.context import AgentContext
-    from ..pipeline.speech_handle import SpeechHandle
+    from ..pipeline.events import CallContext
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -94,10 +94,12 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
 
 def is_context_type(ty: type) -> bool:
-    from ..pipeline.context import AgentContext
-    from ..pipeline.speech_handle import SpeechHandle
+    from ..pipeline.events import CallContext
 
-    return ty is AgentContext or ty is SpeechHandle
+    origin = get_origin(ty)
+    is_call_context = ty is CallContext or origin is CallContext
+
+    return is_call_context
 
 
 def build_legacy_openai_schema(
@@ -106,9 +108,8 @@ def build_legacy_openai_schema(
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
     model = function_arguments_to_pydantic_model(ai_function)
-    schema = model.model_json_schema()
-
     info = get_function_info(ai_function)
+    schema = model.model_json_schema()
 
     if internally_tagged:
         return {
@@ -126,6 +127,25 @@ def build_legacy_openai_schema(
                 "parameters": schema,
             },
         }
+
+
+def build_strict_openai_schema(
+    ai_function: AIFunction,
+) -> dict[str, Any]:
+    """strict mode tool description"""
+    model = function_arguments_to_pydantic_model(ai_function)
+    info = get_function_info(ai_function)
+    schema = _strict.to_strict_json_schema(model)
+
+    return {
+        "type": "function",
+        "function": {
+            "name": info.name,
+            "strict": True,
+            "description": info.description or "",
+            "parameters": schema,
+        },
+    }
 
 
 def function_arguments_to_pydantic_model(
@@ -180,16 +200,14 @@ def pydantic_model_to_function_arguments(
     *,
     ai_function: Callable,
     model: BaseModel,
-    agent_ctx: AgentContext | None = None,
-    speech_handle: SpeechHandle | None = None,
+    call_ctx: CallContext | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     """
     Convert a model’s fields into function args/kwargs.
     Raises TypeError if required params are missing
     """
 
-    from ..pipeline.context import AgentContext
-    from ..pipeline.speech_handle import SpeechHandle
+    from ..pipeline.events import CallContext
 
     signature = inspect.signature(ai_function)
     type_hints = get_type_hints(ai_function, include_extras=True)
@@ -197,10 +215,8 @@ def pydantic_model_to_function_arguments(
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
-        if type_hint is AgentContext and agent_ctx is not None:
-            context_dict[param_name] = agent_ctx
-        elif type_hint is SpeechHandle and speech_handle is not None:
-            context_dict[param_name] = speech_handle
+        if type_hint is CallContext and call_ctx is not None:
+            context_dict[param_name] = call_ctx
 
     bound = signature.bind(**{**model.model_dump(), **context_dict})
     bound.apply_defaults()

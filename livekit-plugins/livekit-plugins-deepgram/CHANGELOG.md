@@ -1,5 +1,23 @@
 # livekit-plugins-deepgram
 
+## 0.6.19
+
+### Patch Changes
+
+- deepgram: support for Nova-3 keyterms - [#1484](https://github.com/livekit/agents/pull/1484) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.6.18
+
+### Patch Changes
+
+- chore(Deepgram STT): add nova-3 model to type literal - [#1464](https://github.com/livekit/agents/pull/1464) ([@chasemcdo](https://github.com/chasemcdo))
+
+## 0.6.17
+
+### Patch Changes
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.6.16
 
 ### Patch Changes

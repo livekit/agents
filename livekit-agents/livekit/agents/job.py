@@ -20,7 +20,7 @@ import functools
 import multiprocessing as mp
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Any, Callable, Coroutine, Tuple
+from typing import Any, Callable, Coroutine, Tuple, Union
 
 from livekit import api, rtc
 from livekit.protocol import agent, models
@@ -78,6 +78,7 @@ DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
 
 
 class JobContext:
+    # private ctor
     def __init__(
         self,
         *,
@@ -93,7 +94,9 @@ class JobContext:
         self._room = room
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
-        self._shutdown_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
+        self._shutdown_callbacks: list[
+            Callable[[str], Coroutine[None, None, None]],
+        ] = []
         self._participant_entrypoints: list[
             Tuple[
                 Callable[
@@ -143,9 +146,24 @@ class JobContext:
         return self._room.local_participant
 
     def add_shutdown_callback(
-        self, callback: Callable[[], Coroutine[None, None, None]]
+        self,
+        callback: Union[
+            Callable[[], Coroutine[None, None, None]],
+            Callable[[str], Coroutine[None, None, None]],
+        ],
     ) -> None:
-        self._shutdown_callbacks.append(callback)
+        """
+        Add a callback to be called when the job is shutting down.
+        Optionally the callback can take a single argument, the shutdown reason.
+        """
+        if callback.__code__.co_argcount > 0:
+            self._shutdown_callbacks.append(callback)  # type: ignore
+        else:
+
+            async def wrapper(_: str) -> None:
+                await callback()  # type: ignore
+
+            self._shutdown_callbacks.append(wrapper)
 
     async def wait_for_participant(
         self,

@@ -199,7 +199,7 @@ class ChatCLI:
             device_info = sd.query_devices(input_device)
             assert isinstance(device_info, dict)
 
-            self._input_device_name = device_info.get("name", "Microphone")
+            self._input_device_name: str = device_info.get("name", "Microphone")
             self._input_stream = sd.InputStream(
                 callback=self._sd_input_callback,
                 dtype="int16",
@@ -298,7 +298,7 @@ class ChatCLI:
                     text = "".join(self._text_input_buf)
                     if text:
                         self._text_input_buf = []
-                        self._agent.generate_reply(text)
+                        self._agent.generate_reply(user_input=text)
                         click.echo("\n", nl=False)
                 elif char == "\x7f":  # Backspace
                     if self._text_input_buf:

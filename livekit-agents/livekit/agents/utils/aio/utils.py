@@ -25,3 +25,6 @@ async def cancel_and_wait(*futures: asyncio.Future):
 def _release_waiter(waiter, *_):
     if not waiter.done():
         waiter.set_result(None)
+
+
+gracefully_cancel = cancel_and_wait

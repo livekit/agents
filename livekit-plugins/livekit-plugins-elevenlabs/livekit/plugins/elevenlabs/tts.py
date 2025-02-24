@@ -20,12 +20,11 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, List, Literal
+from typing import Any, List, Literal, Optional
 
 import aiohttp
 from livekit import rtc
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -104,7 +103,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: Voice = DEFAULT_VOICE,
-        model: TTSModels | str = "eleven_turbo_v2_5",
+        model: TTSModels | str = "eleven_flash_v2_5",
         api_key: str | None = None,
         base_url: str | None = None,
         encoding: TTSEncoding = "mp3_22050_32",
@@ -205,7 +204,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
@@ -216,7 +215,7 @@ class TTS(tts.TTS):
         )
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> "SynthesizeStream":
         return SynthesizeStream(
             tts=self,
@@ -235,7 +234,7 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _TTSOptions,
-        conn_options: APIConnectOptions,
+        conn_options: Optional[APIConnectOptions] = None,
         session: aiohttp.ClientSession,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
@@ -318,8 +317,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions,
         opts: _TTSOptions,
+        conn_options: Optional[APIConnectOptions] = None,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts, self._session = opts, session
@@ -431,6 +430,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text=f"{text} ",  # must always end with a space
                     try_trigger_generation=False,
                 )
+                self._mark_started()
                 await ws_conn.send_str(json.dumps(data_pkt))
 
             if xml_content:
@@ -519,6 +519,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+            if ws_conn is not None:
+                await ws_conn.close()
 
 
 def _dict_to_voices_list(data: dict[str, Any]):

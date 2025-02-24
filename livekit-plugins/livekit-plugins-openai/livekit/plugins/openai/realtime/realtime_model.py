@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
+from typing import Literal, Optional
 
 from livekit import rtc
-from livekit.agents import llm, multimodal, utils
+from livekit.agents import llm, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from pydantic import ValidationError
 
 import openai
@@ -17,6 +19,8 @@ from openai.types.beta.realtime import (
     ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
     ConversationItemDeleteEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
+    ConversationItemInputAudioTranscriptionFailedEvent,
     ConversationItemTruncateEvent,
     ErrorEvent,
     InputAudioBufferAppendEvent,
@@ -59,9 +63,18 @@ NUM_CHANNELS = 1
 
 
 @dataclass
+class _InputAudioTranscription:
+    model: Literal["whisper-1"] = "whisper-1"
+
+
+DEFAULT_INPUT_AUDIO_TRANSCRIPTION = _InputAudioTranscription()
+
+
+@dataclass
 class _RealtimeOptions:
     model: str
     voice: str
+    input_audio_transcription: Optional[_InputAudioTranscription]
 
 
 @dataclass
@@ -73,25 +86,30 @@ class _MessageGeneration:
 
 @dataclass
 class _ResponseGeneration:
-    message_ch: utils.aio.Chan[multimodal.MessageGeneration]
+    message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
 
     messages: dict[str, _MessageGeneration]
 
 
-class RealtimeModel(multimodal.RealtimeModel):
+class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
+        input_audio_transcription: Optional[
+            _InputAudioTranscription
+        ] = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
         client: openai.AsyncClient | None = None,
     ) -> None:
-        super().__init__(
-            capabilities=multimodal.RealtimeCapabilities(message_truncation=True)
-        )
+        super().__init__(capabilities=llm.RealtimeCapabilities(message_truncation=True))
 
-        self._opts = _RealtimeOptions(model=model, voice=voice)
+        self._opts = _RealtimeOptions(
+            model=model,
+            voice=voice,
+            input_audio_transcription=input_audio_transcription,
+        )
         self._client = client or openai.AsyncClient()
 
     def session(self) -> "RealtimeSession":
@@ -100,7 +118,7 @@ class RealtimeModel(multimodal.RealtimeModel):
     async def aclose(self) -> None: ...
 
 
-class RealtimeSession(multimodal.RealtimeSession):
+class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
@@ -113,7 +131,7 @@ class RealtimeSession(multimodal.RealtimeSession):
         )
 
         self._response_created_futures: dict[
-            str, asyncio.Future[multimodal.GenerationCreatedEvent]
+            str, asyncio.Future[llm.GenerationCreatedEvent]
         ] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
@@ -146,6 +164,15 @@ class RealtimeSession(multimodal.RealtimeSession):
                     self._handle_conversion_item_created(event)
                 elif event.type == "conversation.item.deleted":
                     self._handle_conversion_item_deleted(event)
+                elif (
+                    event.type
+                    == "conversation.item.input_audio_transcription.completed"
+                ):
+                    self._handle_conversion_item_input_audio_transcription_completed(
+                        event
+                    )
+                elif event.type == "conversation.item.input_audio_transcription.failed":
+                    self._handle_conversion_item_input_audio_transcription_failed(event)
                 elif event.type == "response.audio_transcript.delta":
                     self._handle_response_audio_transcript_delta(event)
                 elif event.type == "response.audio.delta":
@@ -169,12 +196,23 @@ class RealtimeSession(multimodal.RealtimeSession):
                 except Exception:
                     break
 
+        input_audio_transcription: Optional[
+            session_update_event.SessionInputAudioTranscription
+        ] = None
+        if self._realtime_model._opts.input_audio_transcription:
+            input_audio_transcription = (
+                session_update_event.SessionInputAudioTranscription(
+                    model=self._realtime_model._opts.input_audio_transcription.model,
+                )
+            )
+
         self._msg_ch.send_nowait(
             SessionUpdateEvent(
                 type="session.update",
                 session=session_update_event.Session(
                     model=self._realtime_model._opts.model,  # type: ignore
                     voice=self._realtime_model._opts.voice,  # type: ignore
+                    input_audio_transcription=input_audio_transcription,
                 ),
                 event_id=utils.shortuuid("session_update_"),
             )
@@ -241,7 +279,7 @@ class RealtimeSession(multimodal.RealtimeSession):
                     asyncio.gather(*futs, return_exceptions=True), timeout=5.0
                 )
             except asyncio.TimeoutError:
-                raise multimodal.RealtimeError("update_chat_ctx timed out.") from None
+                raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
     async def update_fnc_ctx(
         self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
@@ -309,7 +347,9 @@ class RealtimeSession(multimodal.RealtimeSession):
             )
         )
 
-    def generate_reply(self) -> asyncio.Future[multimodal.GenerationCreatedEvent]:
+    def generate_reply(
+        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future()
         self._response_created_futures[event_id] = fut
@@ -317,13 +357,16 @@ class RealtimeSession(multimodal.RealtimeSession):
             ResponseCreateEvent(
                 type="response.create",
                 event_id=event_id,
-                response=Response(metadata={"client_event_id": event_id}),
+                response=Response(
+                    instructions=instructions or None,
+                    metadata={"client_event_id": event_id},
+                ),
             )
         )
 
         def _on_timeout() -> None:
             if fut and not fut.done():
-                fut.set_exception(multimodal.RealtimeError("generate_reply timed out."))
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
         handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
         fut.add_done_callback(lambda _: handle.cancel())
@@ -349,12 +392,20 @@ class RealtimeSession(multimodal.RealtimeSession):
     def _handle_input_audio_buffer_speech_started(
         self, _: InputAudioBufferSpeechStartedEvent
     ) -> None:
-        self.emit("input_speech_started", multimodal.InputSpeechStartedEvent())
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_audio_buffer_speech_stopped(
         self, _: InputAudioBufferSpeechStoppedEvent
     ) -> None:
-        self.emit("input_speech_stopped", multimodal.InputSpeechStoppedEvent())
+        user_transcription_enabled = (
+            self._realtime_model._opts.input_audio_transcription is not None
+        )
+        self.emit(
+            "input_speech_stopped",
+            llm.InputSpeechStoppedEvent(
+                user_transcription_enabled=user_transcription_enabled
+            ),
+        )
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         assert event.response.id is not None, "response.id is None"
@@ -365,18 +416,21 @@ class RealtimeSession(multimodal.RealtimeSession):
             messages={},
         )
 
-        generation_ev = multimodal.GenerationCreatedEvent(
+        generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
+            user_initiated=False,
         )
 
-        self.emit("generation_created", generation_ev)
-
-        if isinstance(event.response.metadata, dict) and (
-            client_event_id := event.response.metadata.get("client_event_id")
+        if (
+            isinstance(event.response.metadata, dict)
+            and (client_event_id := event.response.metadata.get("client_event_id"))
+            and (fut := self._response_created_futures.pop(client_event_id, None))
         ):
-            if fut := self._response_created_futures.pop(client_event_id, None):
-                fut.set_result(generation_ev)
+            generation_ev.user_initiated = True
+            fut.set_result(generation_ev)
+
+        self.emit("generation_created", generation_ev)
 
     def _handle_response_output_item_added(
         self, event: ResponseOutputItemAddedEvent
@@ -392,7 +446,7 @@ class RealtimeSession(multimodal.RealtimeSession):
                 audio_ch=utils.aio.Chan(),
             )
             self._current_generation.message_ch.send_nowait(
-                multimodal.MessageGeneration(
+                llm.MessageGeneration(
                     message_id=item_id,
                     text_stream=item_generation.text_ch,
                     audio_stream=item_generation.audio_ch,
@@ -420,6 +474,33 @@ class RealtimeSession(multimodal.RealtimeSession):
 
         if fut := self._item_delete_future.pop(event.item_id, None):
             fut.set_result(None)
+
+    def _handle_conversion_item_input_audio_transcription_completed(
+        self, event: ConversationItemInputAudioTranscriptionCompletedEvent
+    ) -> None:
+        remote_item = self._remote_chat_ctx.get(event.item_id)
+        if remote_item:
+            remote_item.item.content.append(event.transcript)
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id, transcript=event.transcript
+            ),
+        )
+
+    def _handle_conversion_item_input_audio_transcription_failed(
+        self, event: ConversationItemInputAudioTranscriptionFailedEvent
+    ) -> None:
+        logger.error(
+            "OpenAI Realtime API failed to transcribe input audio",
+            extra={"error": event.error},
+        )
+        self.emit(
+            "input_audio_transcription_failed",
+            llm.InputTranscriptionFailed(
+                item_id=event.item_id, message=event.error.message
+            ),
+        )
 
     def _handle_response_audio_transcript_delta(
         self, event: ResponseAudioTranscriptDeltaEvent
@@ -491,7 +572,7 @@ class RealtimeSession(multimodal.RealtimeSession):
         )
         self.emit(
             "error",
-            multimodal.ErrorEvent(type=event.error.type, message=event.error.message),
+            llm.ErrorEvent(type=event.error.type, message=event.error.message),
         )
 
         # if event.error.event_id:

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import base64
-import json
 import os
 from typing import Any, Awaitable, Callable, Optional, Union
 
 from livekit import rtc
 from livekit.agents import llm, utils
+
+from openai.types.chat import (
+    ChatCompletionContentPartParam,
+    ChatCompletionMessageParam,
+    ChatCompletionToolParam,
+)
 
 AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
 
@@ -17,72 +22,75 @@ def get_base_url(base_url: Optional[str]) -> str:
     return base_url
 
 
-def build_oai_message(msg: llm.ChatMessage, cache_key: Any):
-    oai_msg: dict[str, Any] = {"role": msg.role}
+def to_chat_ctx(
+    chat_ctx: llm.ChatContext, cache_key: Any
+) -> list[ChatCompletionMessageParam]:
+    return [to_chat_item(msg, cache_key) for msg in chat_ctx.items]
 
-    if msg.name:
-        oai_msg["name"] = msg.name
 
-    # add content if provided
-    if isinstance(msg.content, str):
-        oai_msg["content"] = msg.content
-    elif isinstance(msg.content, dict):
-        oai_msg["content"] = json.dumps(msg.content)
-    elif isinstance(msg.content, list):
-        oai_content: list[dict[str, Any]] = []
-        for cnt in msg.content:
-            if isinstance(cnt, str):
-                oai_content.append({"type": "text", "text": cnt})
-            elif isinstance(cnt, llm.ChatImage):
-                oai_content.append(_build_oai_image_content(cnt, cache_key))
+def to_fnc_ctx(fnc_ctx: list[llm.AIFunction]) -> list[ChatCompletionToolParam]:
+    return [llm.utils.build_strict_openai_schema(fnc) for fnc in fnc_ctx]  # type: ignore
 
-        oai_msg["content"] = oai_content
 
-    # make sure to provide when function has been called inside the context
-    # (+ raw_arguments)
-    if msg.tool_calls is not None:
-        tool_calls: list[dict[str, Any]] = []
-        oai_msg["tool_calls"] = tool_calls
-        for fnc in msg.tool_calls:
-            tool_calls.append(
+def to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessageParam:
+    if msg.type == "message":
+        oai_content: list[ChatCompletionContentPartParam] = []
+        for content in msg.content:
+            if isinstance(content, str):
+                oai_content.append({"type": "text", "text": content})
+            elif isinstance(content, llm.ImageContent):
+                oai_content.append(to_image_content(content, cache_key))
+
+        return {
+            "role": msg.role,  # type: ignore
+            "content": oai_content,
+        }
+
+    elif msg.type == "function_call":
+        return {
+            "role": "assistant",
+            "tool_calls": [
                 {
-                    "id": fnc.tool_call_id,
+                    "id": msg.call_id,
                     "type": "function",
                     "function": {
-                        "name": fnc.function_info.name,
-                        "arguments": fnc.raw_arguments,
+                        "name": msg.name,
+                        "arguments": msg.arguments,
                     },
                 }
-            )
+            ],
+        }
 
-    # tool_call_id is set when the message is a response/result to a function call
-    # (content is a string in this case)
-    if msg.tool_call_id:
-        oai_msg["tool_call_id"] = msg.tool_call_id
+    elif msg.type == "function_call_output":
+        return {
+            "role": "tool",
+            "tool_call_id": msg.call_id,
+            "content": msg.output,
+        }
 
-    return oai_msg
 
-
-def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
-    if isinstance(image.image, str):  # image url
+def to_image_content(
+    image: llm.ImageContent, cache_key: Any
+) -> ChatCompletionContentPartParam:
+    if isinstance(image.image, str):
         return {
             "type": "image_url",
             "image_url": {"url": image.image, "detail": image.inference_detail},
         }
-    elif isinstance(image.image, rtc.VideoFrame):  # VideoFrame
+    elif isinstance(image.image, rtc.VideoFrame):
         if cache_key not in image._cache:
-            # inside our internal implementation, we allow to put extra metadata to
-            # each ChatImage (avoid to reencode each time we do a chatcompletion request)
             opts = utils.images.EncodeOptions()
-            if image.inference_width and image.inference_height:
-                opts.resize_options = utils.images.ResizeOptions(
-                    width=image.inference_width,
-                    height=image.inference_height,
-                    strategy="scale_aspect_fit",
+            opts.resize_options = (
+                utils.images.ResizeOptions(
+                    image.inference_width, image.inference_height, "scale_aspect_fit"
                 )
+                if image.inference_width and image.inference_height
+                else None
+            )
 
-            encoded_data = utils.images.encode(image.image, opts)
-            image._cache[cache_key] = base64.b64encode(encoded_data).decode("utf-8")
+            image._cache[cache_key] = base64.b64encode(
+                utils.images.encode(image.image, opts)
+            ).decode("utf-8")
 
         return {
             "type": "image_url",
@@ -92,6 +100,4 @@ def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
             },
         }
 
-    raise ValueError(
-        "LiveKit OpenAI Plugin: ChatImage must be an rtc.VideoFrame or a URL"
-    )
+    raise ValueError("ChatImage must be an rtc.VideoFrame or a URL")

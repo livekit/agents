@@ -5,7 +5,7 @@ import contextlib
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import AsyncGenerator, Literal, Union
+from typing import AsyncGenerator, Literal, Optional, Union
 
 from livekit import rtc
 
@@ -120,22 +120,22 @@ class FallbackAdapter(
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "FallbackChunkedStream":
         return FallbackChunkedStream(
             tts=self,
             input_text=text,
-            conn_options=conn_options,
+            conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
         )
 
     def stream(
         self,
         *,
-        conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "FallbackSynthesizeStream":
         return FallbackSynthesizeStream(
             tts=self,
-            conn_options=conn_options,
+            conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
         )
 
     async def aclose(self) -> None:
@@ -146,7 +146,11 @@ class FallbackAdapter(
 
 class FallbackChunkedStream(ChunkedStream):
     def __init__(
-        self, *, tts: FallbackAdapter, input_text: str, conn_options: APIConnectOptions
+        self,
+        *,
+        tts: FallbackAdapter,
+        input_text: str,
+        conn_options: Optional[APIConnectOptions],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._fallback_adapter = tts
@@ -324,9 +328,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
         self,
         *,
         tts: FallbackAdapter,
-        conn_options: APIConnectOptions,
+        conn_options: Optional[APIConnectOptions] = None,
     ):
-        super().__init__(tts=tts, conn_options=conn_options)
+        super().__init__(
+            tts=tts, conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS
+        )
         self._fallback_adapter = tts
 
         self._total_segments: list[list[str]] = []

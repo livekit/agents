@@ -1,7 +1,17 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal, TypeVar, Union
 
-AgentState = Union[Literal["initializing", "listening", "thinking", "speaking"], str]
+from typing_extensions import TypeAlias
+
+
+class AgentState(str, Enum):
+    INITIALIZING = "initializing"
+    LISTENING = "listening"
+    THINKING = "thinking"
+    SPEAKING = "speaking"
+
+
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"
 """
 The state of the agent, stored in the agent's attributes.
@@ -26,7 +36,7 @@ class NotGiven:
         return "NOT_GIVEN"
 
 
-NotGivenOr = Union[_T, NotGiven]
+NotGivenOr: TypeAlias = Union[_T, NotGiven]
 NOT_GIVEN = NotGiven()
 
 
@@ -56,6 +66,16 @@ class APIConnectOptions:
 
         if self.timeout < 0:
             raise ValueError("timeout must be greater than or equal to 0")
+
+    def _interval_for_retry(self, num_retries: int) -> float:
+        """
+        Return the interval for the given number of retries.
+
+        The first retry is immediate, and then uses specified retry_interval
+        """
+        if num_retries == 0:
+            return 0.1
+        return self.retry_interval
 
 
 DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()

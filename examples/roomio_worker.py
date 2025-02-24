@@ -1,59 +1,59 @@
 import logging
 
 from dotenv import load_dotenv
-from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.pipeline import AgentTask, PipelineAgent
+from livekit import rtc
+from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents.llm import ai_function
+from livekit.agents.pipeline import AgentTask, CallContext, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomInputOptions
-from livekit.plugins import openai
+from livekit.plugins import cartesia, deepgram, openai
 
-logger = logging.getLogger("my-worker")
+logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
+
+class EchoTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="You are Echo.",
+            # llm=openai.realtime.RealtimeModel(voice="echo"),
+            stt=deepgram.STT(),
+            llm=openai.LLM(model="gpt-4o-mini"),
+            tts=cartesia.TTS(),
+        )
+
+    @ai_function
+    async def talk_to_alloy(self, context: CallContext):
+        return AlloyTask(), "Transferring you to Alloy."
+
+
+class AlloyTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="You are Alloy.",
+            llm=openai.realtime.RealtimeModel(voice="alloy"),
+        )
+
+    @ai_function
+    async def talk_to_echo(self, context: CallContext):
+        return EchoTask(), "Transferring you to Echo."
 
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     agent = PipelineAgent(
-        task=AgentTask(
-            instructions="Talk to me!",
-            llm=openai.realtime.RealtimeModel(),
-        )
+        task=EchoTask(),
     )
 
-    # default use RoomIO if room is provided
-    await agent.start(
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            audio_enabled=True,
-            video_enabled=False,
-            audio_sample_rate=24000,
-            audio_num_channels=1,
-        ),
-    )
+    @agent.on("agent_state_changed")
+    def on_agent_state_changed(state: AgentState):
+        logger.info("agent_state_changed", extra={"state": state})
 
-    # # Or use RoomInput and RoomOutput explicitly
-    # room_input = RoomInput(
-    #     ctx.room,
-    #     options=RoomInputOptions(
-    #         audio_enabled=True,
-    #         video_enabled=False,
-    #         audio_sample_rate=24000,
-    #         audio_num_channels=1,
-    #     ),
-    # )
-    # room_output = RoomOutput(ctx.room, sample_rate=24000, num_channels=1)
+    await agent.start(room=ctx.room)
 
-    # agent.input.audio = room_input.audio
-    # agent.output.audio = room_output.audio
-
-    # await room_input.wait_for_participant()
-    # await room_output.start()
-
-    # TODO: the interrupted flag is not set correctly
-    @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
             "playback_finished",
@@ -62,6 +62,34 @@ async def entrypoint(ctx: JobContext):
                 "interrupted": ev.interrupted,
             },
         )
+
+    if agent.output.audio is not None:
+        agent.output.audio.on("playback_finished", on_playback_finished)
+
+    @ctx.room.local_participant.register_rpc_method("set_participant")
+    async def on_set_participant(data: rtc.RpcInvocationData) -> None:
+        logger.info(
+            "set_participant called",
+            extra={"caller_identity": data.caller_identity, "payload": data.payload},
+        )
+        if not agent.room_input:
+            logger.warning("room_input not set, skipping set_participant")
+            return
+
+        target_identity = data.payload or data.caller_identity
+        agent.room_input.set_participant(target_identity)
+
+    @ctx.room.local_participant.register_rpc_method("unset_participant")
+    async def on_unset_participant(data: rtc.RpcInvocationData) -> None:
+        logger.info(
+            "unset_participant called",
+            extra={"caller_identity": data.caller_identity, "payload": data.payload},
+        )
+        if not agent.room_input:
+            logger.warning("room_input not set, skipping unset_participant")
+            return
+
+        agent.room_input.set_participant(None)
 
 
 if __name__ == "__main__":
