@@ -39,6 +39,8 @@ class CompletionUsage:
     completion_tokens: int
     prompt_tokens: int
     total_tokens: int
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 @dataclass
@@ -50,6 +52,9 @@ class Choice:
 @dataclass
 class LLMCapabilities:
     supports_choices_on_int: bool = True
+    """check whether the LLM supports integer enums choices as function arguments"""
+    requires_persistent_functions: bool = False
+    """if the LLM requires function definition when previous function calls exist in chat context"""
 
 
 @dataclass
@@ -73,9 +78,11 @@ class LLM(
     rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
     Generic[TEvent],
 ):
-    def __init__(self) -> None:
+    def __init__(self, *, capabilities: LLMCapabilities | None = None) -> None:
         super().__init__()
-        self._capabilities = LLMCapabilities()
+        if capabilities is None:
+            capabilities = LLMCapabilities()
+        self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property

@@ -102,26 +102,25 @@ class _EUORunner(_InferenceRunner):
             truncation=True,
         )
         # Run inference
-        outputs = self._session.run(None, {"input_ids": inputs["input_ids"]})
+        outputs = self._session.run(
+            None, {"input_ids": inputs["input_ids"].astype("int64")}
+        )
         eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
-        logger.debug(
-            "eou prediction",
-            extra={
-                "eou_probability": eou_probability,
-                "input": text,
-                "duration": round(end_time - start_time, 3),
-            },
-        )
-        return json.dumps({"eou_probability": float(eou_probability)}).encode()
+        data = {
+            "eou_probability": float(eou_probability),
+            "input": text,
+            "duration": round(end_time - start_time, 3),
+        }
+        return json.dumps(data).encode()
 
 
 class EOUModel:
     def __init__(
         self,
         inference_executor: InferenceExecutor | None = None,
-        unlikely_threshold: float = 0.15,
+        unlikely_threshold: float = 0.008,
     ) -> None:
         self._executor = (
             inference_executor or get_current_job_context().inference_executor
@@ -183,4 +182,8 @@ class EOUModel:
         )
 
         result_json = json.loads(result.decode())
+        logger.debug(
+            "eou prediction",
+            extra=result_json,
+        )
         return result_json["eou_probability"]

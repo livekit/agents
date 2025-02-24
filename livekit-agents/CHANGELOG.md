@@ -1,5 +1,39 @@
 # livekit-agents
 
+## 0.12.15
+
+### Patch Changes
+
+- Revert "fix(cli): update main_file path to use current directory" - [#1509](https://github.com/livekit/agents/pull/1509) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.12.14
+
+### Patch Changes
+
+- openai tts: switch to using Opus encoding - [#1494](https://github.com/livekit/agents/pull/1494) ([@davidzhao](https://github.com/davidzhao))
+
+- improve exception logging - [#1490](https://github.com/livekit/agents/pull/1490) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix interrupting nested speech from before_llm_cb - [#1504](https://github.com/livekit/agents/pull/1504) ([@longcw](https://github.com/longcw))
+
+- add cache tokens in `CompletionUsage` dataclass - [#1478](https://github.com/livekit/agents/pull/1478) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.12.13
+
+### Patch Changes
+
+- Allow shutdown callbacks to take reason - [#1475](https://github.com/livekit/agents/pull/1475) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+## 0.12.12
+
+### Patch Changes
+
+- fix agent transcription could not be disabled - [#1448](https://github.com/livekit/agents/pull/1448) ([@davidzhao](https://github.com/davidzhao))
+
+- Added an additional field in LLM capabilities class to check if model providers support function call history within chat context without needing function definitions. - [#1441](https://github.com/livekit/agents/pull/1441) ([@jayeshp19](https://github.com/jayeshp19))
+
+- support agent.say inside the before_llm_cb - [#1460](https://github.com/livekit/agents/pull/1460) ([@longcw](https://github.com/longcw))
+
 ## 0.12.11
 
 ### Patch Changes
