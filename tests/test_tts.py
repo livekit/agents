@@ -18,6 +18,7 @@ from livekit.plugins import (
     google,
     openai,
     playai,
+    silero,
     rime,
 )
 
@@ -54,6 +55,7 @@ SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: cartesia.TTS(), id="cartesia"),
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
+    pytest.param(lambda: silero.TTS(), id="silero"),
     pytest.param(lambda: rime.TTS(), id="rime"),
 ]
 
@@ -101,6 +103,12 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
     ),
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=silero.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
+        id="silero.stream",
+    ),
 ]
 
 
