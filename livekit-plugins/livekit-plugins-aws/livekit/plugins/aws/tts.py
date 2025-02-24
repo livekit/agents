@@ -14,13 +14,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import aiohttp
 from aiobotocore.session import AioSession, get_session
 from livekit import rtc
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -117,8 +116,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        segment_id: str | None = None,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
@@ -126,7 +124,6 @@ class TTS(tts.TTS):
             conn_options=conn_options,
             opts=self._opts,
             get_client=self._get_client,
-            segment_id=segment_id,
         )
 
 
@@ -136,15 +133,14 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         text: str,
-        conn_options: APIConnectOptions,
+        conn_options: Optional[APIConnectOptions] = None,
         opts: _TTSOptions,
         get_client: Callable[[], Any],
-        segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=text, conn_options=conn_options)
         self._opts = opts
         self._get_client = get_client
-        self._segment_id = segment_id or utils.shortuuid()
+        self._segment_id = utils.shortuuid()
 
     async def _run(self):
         request_id = utils.shortuuid()
