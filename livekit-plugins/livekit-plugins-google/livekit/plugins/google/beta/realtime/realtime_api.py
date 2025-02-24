@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from google import genai
 from google.genai._api_client import HttpOptions
@@ -20,7 +22,6 @@ from google.genai.types import (
     Part,
     PrebuiltVoiceConfig,
     SpeechConfig,
-    Tool,
     VoiceConfig,
 )
 
@@ -33,25 +34,10 @@ from .api_proto import (
 
 # from .transcriber import TranscriberSession, TranscriptionContent
 
-EventTypes = Literal[
-    "start_session",
-    "input_speech_started",
-    "response_content_added",
-    "response_content_done",
-    "function_calls_collected",
-    "function_calls_finished",
-    "function_calls_cancelled",
-    "input_speech_transcription_completed",
-    "agent_speech_transcription_completed",
-    "agent_speech_stopped",
-]
 
-
-@dataclass
-class GeminiContent:
-    response_id: str
-    item_id: str
-    transcript: str
+INPUT_AUDIO_SAMPLE_RATE = 16000
+OUTPUT_AUDIO_SAMPLE_RATE = 24000
+NUM_CHANNELS = 1
 
 
 @dataclass
@@ -61,13 +47,7 @@ class InputTranscription:
 
 
 @dataclass
-class Capabilities:
-    supports_truncate: bool
-    input_audio_sample_rate: int | None = None
-
-
-@dataclass
-class _ModelOptions:
+class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
@@ -87,7 +67,22 @@ class _ModelOptions:
     enable_agent_audio_transcription: bool
 
 
-class RealtimeModel:
+@dataclass
+class _MessageGeneration:
+    message_id: str
+    text_ch: utils.aio.Chan[str]
+    audio_ch: utils.aio.Chan[rtc.AudioFrame]
+
+
+@dataclass
+class _ResponseGeneration:
+    message_ch: utils.aio.Chan[llm.MessageGeneration]
+    function_ch: utils.aio.Chan[llm.FunctionCall]
+
+    messages: dict[str, _MessageGeneration]
+
+
+class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
@@ -143,11 +138,10 @@ class RealtimeModel:
             ValueError: If the API key is required but not found.
         """
         super().__init__()
-        self._capabilities = Capabilities(
-            supports_truncate=False,
-            input_audio_sample_rate=16000,
+
+        super().__init__(
+            capabilities=llm.RealtimeCapabilities(message_truncation=False)
         )
-        super().__init__(capabilities=capabilities)
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
         self._project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -170,9 +164,7 @@ class RealtimeModel:
         instructions_content = (
             Content(parts=[Part(text=instructions)]) if instructions else None
         )
-
-        self._rt_sessions: list[GeminiRealtimeSession] = []
-        self._opts = ModelOptions(
+        self._opts = _RealtimeOptions(
             model=model,
             api_key=self._api_key,
             voice=voice,
@@ -192,35 +184,13 @@ class RealtimeModel:
             instructions=instructions_content,
         )
 
-    @property
-    def sessions(self) -> list[GeminiRealtimeSession]:
-        return self._rt_sessions
-
-    @property
-    def capabilities(self) -> Capabilities:
-        return self._capabilities
-
-    def session(
-        self,
-        *,
-        chat_ctx: llm.ChatContext | None = None,
-        fnc_ctx: llm.FunctionContext | None = None,
-    ) -> GeminiRealtimeSession:
-        session = GeminiRealtimeSession(
-            opts=self._opts,
-            chat_ctx=chat_ctx or llm.ChatContext(),
-            fnc_ctx=fnc_ctx,
-            loop=self._loop,
-        )
-
     def session(self) -> "RealtimeSession":
         return RealtimeSession(self)
 
-    async def aclose(self) -> None:
-        pass
+    async def aclose(self) -> None: ...
 
 
-class RealtimeSession(multimodal.RealtimeSession):
+class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
@@ -231,9 +201,9 @@ class RealtimeSession(multimodal.RealtimeSession):
         self._msg_ch = utils.aio.Chan[ClientEvents]()
 
         tools = []
-        if self._fnc_ctx is not None:
-            functions = _build_tools(self._fnc_ctx)
-            tools.append(Tool(function_declarations=functions))
+        # if self._fnc_ctx is not None:
+        #     functions = _build_tools(self._fnc_ctx)
+        #     tools.append(Tool(function_declarations=functions))
 
         self._config = LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
@@ -318,20 +288,12 @@ class RealtimeSession(multimodal.RealtimeSession):
         )
         self._msg_ch.send_nowait(realtime_input)
 
-    def generate_reply(self) -> asyncio.Future[multimodal.GenerationCreatedEvent]:
+    def generate_reply(
+        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         fut = asyncio.Future()
 
-        turns, _ = _build_gemini_ctx(self.chat_ctx, id(self))
-        ctx = []
-        if self._opts.instructions:
-            ctx.append(self._opts.instructions)
-        ctx.extend(turns)
-
-        if not ctx:
-            logger.warning(
-                "gemini-realtime-session: No chat context, sending dummy content."
-            )
-            ctx = [Content(parts=[Part(text=".")])]
+        ctx = [Content(parts=[Part(text=instructions or ".")])]
 
         self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
 
@@ -398,7 +360,7 @@ class RealtimeSession(multimodal.RealtimeSession):
         self._is_interrupted = False
         self._active_response_id = utils.shortuuid("gemini-turn-")
         self._current_generation = _ResponseGeneration(
-            message_ch=utils.aio.Chan[multimodal.MessageGeneration](),
+            message_ch=utils.aio.Chan[llm.MessageGeneration](),
             function_ch=utils.aio.Chan[llm.FunctionCall](),
             messages={},
         )
@@ -411,14 +373,14 @@ class RealtimeSession(multimodal.RealtimeSession):
         )
 
         self._current_generation.message_ch.send_nowait(
-            multimodal.MessageGeneration(
+            llm.MessageGeneration(
                 message_id=self._active_response_id,
                 text_stream=item_generation.text_ch,
                 audio_stream=item_generation.audio_ch,
             )
         )
 
-        generation_event = multimodal.GenerationCreatedEvent(
+        generation_event = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
         )
