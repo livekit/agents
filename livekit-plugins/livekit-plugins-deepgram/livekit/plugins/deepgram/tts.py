@@ -248,7 +248,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ):
         super().__init__(tts=tts)
-        self._deepgram_tts = tts
         self._opts = opts
         self._pool = pool
         self._base_url = base_url

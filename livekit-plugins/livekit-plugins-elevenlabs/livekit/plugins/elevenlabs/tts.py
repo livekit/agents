@@ -338,7 +338,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         opts: _TTSOptions,
     ):
         super().__init__(tts=tts)
-        self._elevenlabs_tts = tts
         self._opts, self._pool = opts, pool
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
         self._reconnect_event = asyncio.Event()

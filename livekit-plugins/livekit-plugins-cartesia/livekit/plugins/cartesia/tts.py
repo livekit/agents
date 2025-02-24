@@ -275,7 +275,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ):
         super().__init__(tts=tts)
-        self._cartesia_tts = tts
         self._opts, self._pool = opts, pool
         self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
