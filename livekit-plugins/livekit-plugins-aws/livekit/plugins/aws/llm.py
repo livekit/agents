@@ -86,6 +86,7 @@ class LLM(llm.LLM):
         self._api_key, self._api_secret = _get_aws_credentials(
             api_key, api_secret, region
         )
+
         self._opts = LLMOptions(
             model=model,
             temperature=temperature,
@@ -94,7 +95,7 @@ class LLM(llm.LLM):
             top_p=top_p,
             additional_request_fields=additional_request_fields,
         )
-        self._client = boto3.client("bedrock-runtime", region_name=region)
+        self._region = region
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     def chat(
@@ -117,8 +118,10 @@ class LLM(llm.LLM):
 
         return LLMStream(
             self,
-            client=self._client,
             model=self._opts.model,
+            aws_access_key_id=self._api_key,
+            aws_secret_access_key=self._api_secret,
+            region_name=self._region,
             max_output_tokens=self._opts.max_output_tokens,
             top_p=self._opts.top_p,
             additional_request_fields=self._opts.additional_request_fields,
@@ -135,8 +138,10 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        client: boto3.client,
         model: str | TEXT_MODEL,
+        aws_access_key_id: str | None,
+        aws_secret_access_key: str | None,
+        region_name: str,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
         fnc_ctx: llm.FunctionContext | None,
@@ -149,7 +154,12 @@ class LLMStream(llm.LLMStream):
         super().__init__(
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
         )
-        self._client = client
+        self._client = boto3.client(
+            "bedrock-runtime",
+            region_name=region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+        )
         self._model = model
         self._llm: LLM = llm
         self._max_output_tokens = max_output_tokens
@@ -209,7 +219,7 @@ class LLMStream(llm.LLMStream):
                 system=[system_instruction],
                 inferenceConfig=inference_config,
                 **opts,
-            )
+            )  # type: ignore
 
             request_id = response["ResponseMetadata"]["RequestId"]
             if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
