@@ -108,7 +108,7 @@ class RoomIO:
         # room input setup
         if self._in_opts.text_enabled:
             self._room.register_text_stream_handler(
-                topic=TOPIC_CHAT, handler=self._on_user_text_input
+                topic=self._in_opts.text_input_topic, handler=self._on_user_text_input
             )
         if self._in_opts.audio_enabled:
             self._audio_input_handle = AudioStreamHandle(
