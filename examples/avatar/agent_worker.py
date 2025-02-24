@@ -82,7 +82,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     # wait for the participant to join the room and the avatar worker to connect
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
-    # connect the output audio to the agent
+    # connect the output audio to the avatar runner
     ds_output = DataStreamOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
     agent.output.audio = ds_output.audio
 

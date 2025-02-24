@@ -167,7 +167,6 @@ class RoomIO:
         input_participant = await self.wait_for_participant()
         self.set_participant(input_participant.identity)
 
-        # TODO(long): only set the available inputs/outputs or both?
         if self.audio_input:
             self._agent.input.audio = self.audio_input
         if self.video_input:
@@ -179,6 +178,13 @@ class RoomIO:
             self._agent.output.text = self.text_output
 
         self._agent.on("agent_state_changed", self._on_agent_state_changed)
+
+        self._room.local_participant.register_rpc_method(
+            "set_participant", self.on_set_participant
+        )
+        self._room.local_participant.register_rpc_method(
+            "unset_participant", self.on_unset_participant
+        )
 
     @property
     def audio_output(self) -> AudioSink | None:
@@ -254,6 +260,31 @@ class RoomIO:
 
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         return await self._participant_connected
+
+    # -- RPC methods --
+    # user can override these methods to handle RPC calls from the room
+
+    async def on_set_participant(self, data: rtc.RpcInvocationData) -> None:
+        target_identity = data.payload or data.caller_identity
+        logger.debug(
+            "set participant called",
+            extra={
+                "caller_identity": data.caller_identity,
+                "payload": data.payload,
+                "target_identity": target_identity,
+            },
+        )
+
+        self.set_participant(target_identity)
+
+    async def on_unset_participant(self, data: rtc.RpcInvocationData) -> None:
+        logger.debug(
+            "unset participant called",
+            extra={"caller_identity": data.caller_identity, "payload": data.payload},
+        )
+        self.unset_participant()
+
+    # -- end of RPC methods --
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         logger.debug(

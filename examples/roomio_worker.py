@@ -1,11 +1,11 @@
 import logging
 
 from dotenv import load_dotenv
-from livekit import rtc
 from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentTask, CallContext, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
+from livekit.agents.pipeline.room_io import RoomInputOptions, RoomOutputOptions
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("roomio-example")
@@ -52,7 +52,12 @@ async def entrypoint(ctx: JobContext):
     def on_agent_state_changed(state: AgentState):
         logger.info("agent_state_changed", extra={"state": state})
 
-    await agent.start(room=ctx.room)
+    await agent.start(
+        room=ctx.room,
+        # optionally override the default input and output options
+        room_input_options=RoomInputOptions(audio_enabled=True, text_enabled=True),
+        room_output_options=RoomOutputOptions(audio_enabled=True, text_enabled=True),
+    )
 
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
@@ -65,31 +70,6 @@ async def entrypoint(ctx: JobContext):
 
     if agent.output.audio is not None:
         agent.output.audio.on("playback_finished", on_playback_finished)
-
-    @ctx.room.local_participant.register_rpc_method("set_participant")
-    async def on_set_participant(data: rtc.RpcInvocationData) -> None:
-        logger.info(
-            "set_participant called",
-            extra={"caller_identity": data.caller_identity, "payload": data.payload},
-        )
-        if not agent.room_io:
-            logger.warning("room_io not set, skipping set_participant")
-            return
-
-        target_identity = data.payload or data.caller_identity
-        agent.room_io.set_participant(target_identity)
-
-    @ctx.room.local_participant.register_rpc_method("unset_participant")
-    async def on_unset_participant(data: rtc.RpcInvocationData) -> None:
-        logger.info(
-            "unset_participant called",
-            extra={"caller_identity": data.caller_identity, "payload": data.payload},
-        )
-        if not agent.room_io:
-            logger.warning("room_io not set, skipping unset_participant")
-            return
-
-        agent.room_io.set_participant(None)
 
 
 if __name__ == "__main__":

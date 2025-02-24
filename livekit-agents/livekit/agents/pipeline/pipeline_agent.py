@@ -249,10 +249,8 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = True
             self._on_agent_state_changed(AgentState.LISTENING)
 
-        if self.input.audio is None or (
-            self.output.audio is None and self.output.text is None
-        ):
-            logger.warning("agent started without input or output")
+        if self.output.audio is None and self.output.text is None:
+            logger.warning("agent started without audio or text output")
 
     async def aclose(self) -> None:
         if not self._started:
