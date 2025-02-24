@@ -320,6 +320,9 @@ class TaskActivity(RecognitionHooks):
             _, _, speech = speech
             speech.interrupt()
 
+        if self._rt_session is not None:
+            self._rt_session.interrupt()
+
     def _schedule_speech(self, speech: SpeechHandle, priority: int) -> None:
         if self._draining:
             raise RuntimeError("cannot schedule new speech, task is draining")

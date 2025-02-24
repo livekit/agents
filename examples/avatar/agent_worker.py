@@ -7,18 +7,12 @@ from functools import partial
 import httpx
 from dotenv import load_dotenv
 from livekit import api, rtc
-from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.pipeline import AgentTask, PipelineAgent
 from livekit.agents.pipeline.datastream_io import DataStreamOutput
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import (
-    ATTRIBUTE_PUBLISH_FOR,
-    RoomInput,
-    RoomInputOptions,
-    RoomTranscriptEventSink,
-)
-from livekit.agents.pipeline.transcription import TextSynchronizer
-from livekit.plugins import cartesia, deepgram, openai
+from livekit.agents.pipeline.room_io import ATTRIBUTE_PUBLISH_FOR, RoomOutputOptions
+from livekit.plugins import openai
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
@@ -84,28 +78,23 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
             # tts=cartesia.TTS(),
         )
     )
-    
-    @agent.on("agent_state_changed")
-    def on_agent_state_changed(state: AgentState):
-        logger.info("agent_state_changed", extra={"state": state})
-
-    room_input = RoomInput(ctx.room, options=RoomInputOptions(audio_sample_rate=24000))
-    ds_output = DataStreamOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
 
     # wait for the participant to join the room and the avatar worker to connect
-    await room_input.start(agent)
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
-    # connect the output audio to the agent
-    # agent.output.audio = ds_output.audio
+    # connect the output audio to the avatar runner
+    ds_output = DataStreamOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
+    agent.output.audio = ds_output.audio
 
-    # or connect the output audio with transcription sync
-    text_sink = RoomTranscriptEventSink(ctx.room, participant=AVATAR_IDENTITY)
-    text_sync = TextSynchronizer(ds_output.audio, text_sink)
-    agent.output.text = text_sync.text_sink
-    agent.output.audio = text_sync.audio_sink
-
-    await agent.start()
+    # start agent with room input and room text output
+    await agent.start(
+        room=ctx.room,
+        room_output_options=RoomOutputOptions(
+            audio_enabled=False,
+            text_enabled=True,
+            agent_text_identity=AVATAR_IDENTITY,
+        ),
+    )
 
     @agent.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
