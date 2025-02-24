@@ -14,6 +14,7 @@ from google.genai._api_client import HttpOptions
 from google.genai.types import (
     Blob,
     Content,
+    FunctionDeclaration,
     GenerationConfig,
     LiveClientContent,
     LiveClientRealtimeInput,
@@ -25,6 +26,7 @@ from google.genai.types import (
     VoiceConfig,
 )
 
+from ..._utils import _build_gemini_ctx, _build_tool
 from ...log import logger
 from .api_proto import (
     ClientEvents,
@@ -194,38 +196,9 @@ class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
-
         self._fnc_ctx = llm.FunctionContext.empty()
-        self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-
         self._msg_ch = utils.aio.Chan[ClientEvents]()
-
-        tools = []
-        # if self._fnc_ctx is not None:
-        #     functions = _build_tools(self._fnc_ctx)
-        #     tools.append(Tool(function_declarations=functions))
-
-        self._config = LiveConnectConfig(
-            response_modalities=self._opts.response_modalities,
-            generation_config=GenerationConfig(
-                candidate_count=self._opts.candidate_count,
-                temperature=self._opts.temperature,
-                max_output_tokens=self._opts.max_output_tokens,
-                top_p=self._opts.top_p,
-                top_k=self._opts.top_k,
-                presence_penalty=self._opts.presence_penalty,
-                frequency_penalty=self._opts.frequency_penalty,
-            ),
-            system_instruction=self._opts.instructions,
-            speech_config=SpeechConfig(
-                voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(
-                        voice_name=self._opts.voice
-                    )
-                )
-            ),
-            tools=tools,
-        )
+        self._tools: list[FunctionDeclaration] = []
         self._client = genai.Client(
             http_options=HttpOptions(api_version="v1alpha"),
             api_key=self._opts.api_key,
@@ -244,6 +217,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._is_interrupted = False
         self._active_response_id = None
         self._session = None
+        self._update_chat_ctx_lock = asyncio.Lock()
+        self._update_fnc_ctx_lock = asyncio.Lock()
 
         # if self._opts.enable_user_audio_transcription:
         #     self._transcriber = TranscriberSession(
@@ -262,14 +237,27 @@ class RealtimeSession(llm.RealtimeSession):
         pass
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        # No-op for Gemini
-        pass
+        async with self._update_chat_ctx_lock:
+            turns, _ = _build_gemini_ctx(chat_ctx, id(self))
+            self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
 
     async def update_fnc_ctx(
         self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
     ) -> None:
-        # No-op for Gemini
-        pass
+        async with self._update_fnc_ctx_lock:
+            if isinstance(fnc_ctx, list):
+                fnc_ctx = llm.FunctionContext(fnc_ctx)
+
+            retained_functions: list[llm.AIFunction] = []
+            tools: list[FunctionDeclaration] = []
+
+            for ai_fnc in fnc_ctx.ai_functions.values():
+                tool_desc = _build_tool(ai_fnc)
+                tools.append(tool_desc)
+                retained_functions.append(ai_fnc)
+
+            self._fnc_ctx = llm.FunctionContext(retained_functions)
+            self._tools = tools
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -294,7 +282,6 @@ class RealtimeSession(llm.RealtimeSession):
         fut = asyncio.Future()
 
         ctx = [Content(parts=[Part(text=instructions or ".")])]
-
         self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
 
         return fut
@@ -319,8 +306,30 @@ class RealtimeSession(llm.RealtimeSession):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
+        config = LiveConnectConfig(
+            response_modalities=self._opts.response_modalities,
+            generation_config=GenerationConfig(
+                candidate_count=self._opts.candidate_count,
+                temperature=self._opts.temperature,
+                max_output_tokens=self._opts.max_output_tokens,
+                top_p=self._opts.top_p,
+                top_k=self._opts.top_k,
+                presence_penalty=self._opts.presence_penalty,
+                frequency_penalty=self._opts.frequency_penalty,
+            ),
+            system_instruction=self._opts.instructions,
+            speech_config=SpeechConfig(
+                voice_config=VoiceConfig(
+                    prebuilt_voice_config=PrebuiltVoiceConfig(
+                        voice_name=self._opts.voice
+                    )
+                )
+            ),
+            tools=self._tools,
+        )
+
         async with self._client.aio.live.connect(
-            model=self._opts.model, config=self._config
+            model=self._opts.model, config=config
         ) as session:
             self._session = session
 

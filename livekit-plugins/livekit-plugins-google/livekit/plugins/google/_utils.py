@@ -71,19 +71,16 @@ def _build_parameters(arguments: Dict[str, Any]) -> types.Schema | None:
     return None
 
 
-def _build_tools(fnc_ctx: Any) -> List[types.FunctionDeclaration]:
-    function_declarations: List[types.FunctionDeclaration] = []
-    for fnc_info in fnc_ctx.ai_functions.values():
-        parameters = _build_parameters(fnc_info.arguments)
+def _build_tool(ai_function: llm.AIFunction) -> types.FunctionDeclaration:
+    parameters = _build_parameters(ai_function.arguments)
 
-        func_decl = types.FunctionDeclaration(
-            name=fnc_info.name,
-            description=fnc_info.description,
-            parameters=parameters,
-        )
+    func_decl = types.FunctionDeclaration(
+        name=ai_function.name,
+        description=ai_function.description,
+        parameters=parameters,
+    )
 
-        function_declarations.append(func_decl)
-    return function_declarations
+    return func_decl
 
 
 def _build_gemini_ctx(
