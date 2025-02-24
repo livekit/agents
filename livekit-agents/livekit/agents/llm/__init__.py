@@ -47,6 +47,7 @@ __all__ = [
     "LLM",
     "LLMStream",
     "ChatContext",
+    "ChatRole",
     "ChatMessage",
     "ChatContent",
     "FunctionCall",
@@ -82,5 +83,4 @@ __all__ = [
     "GenerationCreatedEvent",
     "ErrorEvent",
     "MessageGeneration",
-    "ChatRole",
 ]
