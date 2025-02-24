@@ -1,6 +1,4 @@
-import asyncio
 import logging
-import datetime
 import aiohttp
 import os
 from enum import Enum
@@ -12,7 +10,6 @@ from livekit.agents import (
     JobContext,
     WorkerOptions,
     cli,
-    llm,
     NotGivenOr,
     NOT_GIVEN,
 )
@@ -99,19 +96,20 @@ class Scheduler(AgentTask):
             "Authorization": "Bearer " + os.getenv("CAL_API_KEY"),
         }
         async with aiohttp.ClientSession() as session:
-            data = {}
+            params = {}
             if request.value == "get_appts":
                 payload = {"attendeeName": self.agent.userdata.name}
-                async with session.post(
-                    "https://api.cal.com/v2/bookings", params=payload, headers=headers
-                ) as response:
-                    data = await response.json()
+                params = {
+                    "url":"https://api.cal.com/v2/bookings",
+                    "params": payload,
+                    "headers": headers
+                }
 
             if request.value == "cancel":
-                async with session.post(
-                    "https://api.cal.com/v2/bookings/{uid}/cancel", headers=headers
-                ) as response:
-                    data = await response.json()
+                params = {
+                    "url": "https://api.cal.com/v2/bookings/{uid}/cancel",
+                    "headers": headers
+                }
 
             if request.value == "schedule":
                 attendee_details = {
@@ -125,14 +123,34 @@ class Scheduler(AgentTask):
                     "attendee": attendee_details,
                     "bookingFieldsResponses": {"notes": note},
                 }
-                async with session.post(
-                    "https://api.cal.com/v2/bookings", json=payload, headers=headers
-                ) as response:
-                    data = await response.json()
+                params = {
+                    "url": "https://api.cal.com/v2/bookings",
+                    "json": payload,
+                    "headers": headers
+                }
 
+            if request.value == "reschedule":
+                payload = { "start": time }
+                params = {
+                    "url": "https://api.cal.com/v2/bookings/{uid}/reschedule",
+                    "headers": headers,
+                    "json": payload
+                }
+
+            if request.value == 'get_appt':
+                params = {
+                    "url": "https://api.cal.com/v2/bookings/{uid}",
+                    "headers": headers,
+                }
             else:
-                raise Exception("API Request Failed")
-            return data
+                raise Exception(f"APIRequest not valid: {request}")
+            try:
+                async with session.post(**params) as response:
+                    data = await response.json()
+                return data
+            except Exception as e:
+                print(f"Error occurred: {e}")
+            
 
     @ai_function()
     async def schedule(self, description: str, date: str) -> None:
@@ -148,6 +166,8 @@ class Scheduler(AgentTask):
             sp = await self.agent.generate_reply(
                 instructions="Tell the user you were able to schedule the appointment successfully."
             )
+        else:
+            raise Exception("Error occurred when attempting to schedule")
 
     @ai_function()
     async def cancel(self) -> None:
@@ -168,11 +188,26 @@ class Scheduler(AgentTask):
             )
 
     @ai_function()
-    async def reschedule(self) -> None:
-        """Reschedules an existing appointment"""
-        ...
-        # check for existing appt -> confirm correct appt -> adjust time -> schedule new, cancel old
-
+    async def reschedule(self, new_time: str) -> None:
+        """Reschedules an existing appointment
+        Args:
+            new_time (str): New time for the appointment to be rescheduled to, in ISO 8601 format in UTC timezone.
+        """
+        response = await self.send_request(request=APIRequests.GET_APPTS)
+        if response.data:
+            sp = await self.agent.generate_reply(
+                f"Rescheduling the appointment found on {response.data.start} for {response.data.title} to {new_time}."
+            )
+            confirmation = await self.send_request(
+                request=APIRequests.RESCHEDULE, uid=response.data.uid, time=new_time
+            )
+            if confirmation.status == "success":
+                return Receptionist(), "You're all set, transferring you back to Alloy."
+        else:
+            sp = await self.agent.generate_reply(
+                "There are no appointments under your name, would you like to schedule one?"
+            )
+            
     @ai_function()
     async def get_email(self, email: str) -> None:
         """Records the user's email.
@@ -192,10 +227,28 @@ class Messenger(AgentTask):
 
     async def on_enter(self) -> None:
         self.agent.say(
-            f"Alright {self.agent.userdata.name}, please state your message whenever you're ready."
+            f"Alright {self.agent.userdata.name}, please state your phone number and then your message."
         )
 
-    # either directly use the transcript or function calling
+    @ai_function()
+    async def get_phone_number(self, phone_number: str) -> None:
+        """ Records the user's phone number.
+
+        Args:
+            phone_number (str): The user's phone number
+        """
+        self.agent.userdata.phone = phone_number
+    
+    @ai_function()
+    async def record_message(self, message: str) -> None:
+        """ Records the user's message to be left for the office.
+
+        Args:
+            message (str): The user's message to be left for the office
+        """
+        self.agent.userdata.message = message
+        # send to supabase
+        return Receptionist(), f"Got it {self.agent.userdata.name}, transferring you to Alloy!"
 
 
 load_dotenv()
