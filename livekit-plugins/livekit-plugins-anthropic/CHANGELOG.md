@@ -1,5 +1,17 @@
 # livekit-plugins-anthropic
 
+## 0.2.11
+
+### Patch Changes
+
+- Add cache support for Anthropic - [#1478](https://github.com/livekit/agents/pull/1478) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.2.10
+
+### Patch Changes
+
+- Added an additional field in LLM capabilities class to check if model providers support function call history within chat context without needing function definitions. - [#1441](https://github.com/livekit/agents/pull/1441) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.2.9
 
 ### Patch Changes

@@ -21,22 +21,22 @@ jobs:
         os: [
             # disabled Intel Macs due to pytorch 2.3+ not supporting it
             # macos-14-large,
-            macos-14,
-            windows-2019,
-            ubuntu-20.04,
-            namespace-profile-default-arm64,
+            macos-latest,
+            windows-latest,
+            ubuntu-latest,
+            ubuntu-24.04-arm,
           ]
         python_version: ["3.9", "3.12"]
         test_group: ["base"]
         include:
           # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             python_version: "3.12"
             test_group: llm
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             python_version: "3.12"
             test_group: stt
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             python_version: "3.12"
             test_group: tts
 
@@ -65,25 +65,24 @@ jobs:
           cache: "pip"
 
       - name: Install ffmpeg (Linux)
-        if: ${{ matrix.os == 'ubuntu-20.04' || matrix.os == 'namespace-profile-default-arm64' }}
+        if: ${{ startsWith(matrix.os, 'ubuntu') }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
       - name: Install libssl 1.1 (Linux 22.04)
-        if: ${{ matrix.os == 'namespace-profile-default-arm64' }}
+        if: ${{ matrix.os == 'ubuntu-24.04-arm' }}
         run: |
           wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
           wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
           sudo dpkg -i libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
           sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
 
-
       - name: Install ffmpeg (macOS)
         if: ${{ startsWith(matrix.os, 'macos') }}
         run: brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
-        if: ${{ matrix.os == 'windows-2019' }}
+        if: ${{ startsWith(matrix.os, 'windows') }}
         run: choco install ffmpeg
 
       - name: Install packages
@@ -124,7 +123,7 @@ jobs:
 
           case "${{ matrix.test_group }}" in
             base)
-              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_build_func_desc.py test_create_func.py"
+              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_build_func_desc.py test_create_func.py test_connection_pool.py"
               ;;
             llm)
               test_files="test_llm.py"

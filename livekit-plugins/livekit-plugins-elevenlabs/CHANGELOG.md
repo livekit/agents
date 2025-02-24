@@ -1,5 +1,11 @@
 # livekit-plugins-elevenlabs
 
+## 0.7.13
+
+### Patch Changes
+
+- 11labs: ensure websocket connection is closed properly - [#1468](https://github.com/livekit/agents/pull/1468) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.7.12
 
 ### Patch Changes

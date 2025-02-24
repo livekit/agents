@@ -14,7 +14,8 @@
 
 import asyncio
 import io
-from typing import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
+from typing import AsyncIterator, Optional
 
 from livekit.agents.utils import aio
 
@@ -89,7 +90,10 @@ class AudioStreamDecoder:
     is designed to decode a single stream.
     """
 
-    def __init__(self):
+    _max_workers: int = 10
+    _executor: Optional[ThreadPoolExecutor] = None
+
+    def __init__(self, *, sample_rate: int = 48000, num_channels: int = 1):
         try:
             import av  # noqa
         except ImportError:
@@ -97,18 +101,29 @@ class AudioStreamDecoder:
                 "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"
             )
 
+        self._sample_rate = sample_rate
+        self._layout = "mono"
+        if num_channels == 2:
+            self._layout = "stereo"
+        elif num_channels != 1:
+            raise ValueError(f"Invalid number of channels: {num_channels}")
+
         self._output_ch = aio.Chan[rtc.AudioFrame]()
         self._closed = False
         self._started = False
-        self._output_finished = False
         self._input_buf = StreamBuffer()
         self._loop = asyncio.get_event_loop()
+        if self.__class__._executor is None:
+            # each decoder instance will submit jobs to the shared pool
+            self.__class__._executor = ThreadPoolExecutor(
+                max_workers=self.__class__._max_workers
+            )
 
     def push(self, chunk: bytes):
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True
-            self._loop.run_in_executor(None, self._decode_loop)
+            self._loop.run_in_executor(self.__class__._executor, self._decode_loop)
 
     def end_input(self):
         self._input_buf.end_input()
@@ -119,8 +134,8 @@ class AudioStreamDecoder:
         resampler = av.AudioResampler(
             # convert to signed 16-bit little endian
             format="s16",
-            layout="mono",
-            rate=audio_stream.rate,
+            layout=self._layout,
+            rate=self._sample_rate,
         )
         try:
             # TODO: handle error where audio stream isn't found
@@ -136,24 +151,32 @@ class AudioStreamDecoder:
                         rtc.AudioFrame(
                             data=data,
                             num_channels=nchannels,
-                            sample_rate=resampled_frame.sample_rate,
-                            samples_per_channel=resampled_frame.samples / nchannels,
+                            sample_rate=int(resampled_frame.sample_rate),
+                            samples_per_channel=int(
+                                resampled_frame.samples / nchannels
+                            ),
                         )
                     )
         finally:
-            self._output_finished = True
+            self._output_ch.close()
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
 
     async def __anext__(self) -> rtc.AudioFrame:
-        if self._output_finished and self._output_ch.empty():
+        try:
+            return await self._output_ch.recv()
+        except aio.ChanClosed:
             raise StopAsyncIteration
-        return await self._output_ch.__anext__()
 
     async def aclose(self):
         if self._closed:
             return
         self._closed = True
+        self.end_input()
         self._input_buf.close()
-        self._output_ch.close()
+        # wait for decode loop to finish
+        try:
+            await self._output_ch.recv()
+        except aio.ChanClosed:
+            pass
