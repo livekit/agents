@@ -14,7 +14,6 @@ from wave_viz import WaveformVisualizer
 
 logger = logging.getLogger("avatar-example")
 
-
 class MyVideoGenerator:
     def __init__(self, media_options: MediaOptions):
         self.media_options = media_options

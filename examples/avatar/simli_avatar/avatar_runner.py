@@ -13,7 +13,7 @@ from simli import SimliClient, SimliConfig
 sys.path.insert(0, str(Path(__file__).parent))
 
 logger = logging.getLogger("avatar-example")
-
+logging.getLogger("livekit.rtc").setLevel(logging.WARNING)
 
 class SimliVideoGenerator(VideoGenerator):
     def __init__(self, media_options: MediaOptions):
@@ -38,7 +38,7 @@ class SimliVideoGenerator(VideoGenerator):
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
         # resample audio frame if necessary
-        print(frame)
+        # print(frame)
         if isinstance(frame, rtc.AudioFrame):
             if self._audio_resampler is None and (
                 frame.sample_rate != 16000 or frame.num_channels != 1
