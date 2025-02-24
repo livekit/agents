@@ -83,15 +83,10 @@ class TTS(tts.TTS):
         self._api_key = api_key
         self._base_url = base_url
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._closing_ws = False
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
-
-    @property
-    def _is_closing_ws(self) -> bool:
-        return self._closing_ws
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
@@ -100,7 +95,6 @@ class TTS(tts.TTS):
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
         }
-        self._closing_ws = False
         return await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._base_url, websocket=True),
@@ -110,7 +104,6 @@ class TTS(tts.TTS):
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        self._closing_ws = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -335,12 +328,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if self._deepgram_tts._is_closing_ws:
-                        raise APIStatusError(
-                            "Deepgram websocket connection closed unexpectedly",
-                            request_id=request_id,
-                        )
-                    return
+                    raise APIStatusError(
+                        "Deepgram websocket connection closed unexpectedly",
+                        request_id=request_id,
+                    )
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     data = msg.data

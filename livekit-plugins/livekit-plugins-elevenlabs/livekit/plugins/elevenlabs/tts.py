@@ -170,47 +170,23 @@ class TTS(tts.TTS):
             language=language,
         )
         self._session = http_session
-        self._closing_ws = False
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
-    @property
-    def _is_closing_ws(self) -> bool:
-        return self._closing_ws
-
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        retries = 3
-        delay = 5
-        for attempt in range(retries):
-            try:
-                session = self._ensure_session()
-                ws = await asyncio.wait_for(
-                    session.ws_connect(
-                        _stream_url(self._opts),
-                        headers={AUTHORIZATION_HEADER: self._opts.api_key},
-                    ),
-                    self._conn_options.timeout,
-                )
-                self._closing_ws = False
-                return ws
-            except Exception as e:
-                if attempt < retries - 1:
-                    logger.warning(
-                        f"failed to connect to 11labs on attempt {attempt + 1}/{retries}. retrying in {delay}s",
-                        exc_info=e,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    raise Exception(
-                        f"failed to connect to 11labs after {retries} retries"
-                    ) from e
-        raise Exception(f"failed to connect to 11labs after {retries} retries")
+        session = self._ensure_session()
+        return await asyncio.wait_for(
+            session.ws_connect(
+                _stream_url(self._opts),
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+            ),
+            self._conn_options.timeout,
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        self._closing_ws = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -511,12 +487,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        if not self._elevenlabs_tts._is_closing_ws:
-                            raise APIStatusError(
-                                "11labs connection closed unexpectedly, not all tokens have been consumed",
-                                request_id=request_id,
-                            )
-                        return
+                        raise APIStatusError(
+                            "11labs connection closed unexpectedly, not all tokens have been consumed",
+                            request_id=request_id,
+                        )
 
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         logger.warning("unexpected 11labs message type %s", msg.type)
