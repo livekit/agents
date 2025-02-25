@@ -2,9 +2,7 @@ import re
 
 
 # rule based segmentation based on https://stackoverflow.com/a/31505798, works surprisingly well
-def split_sentences(
-    text: str, min_sentence_len: int = 20
-) -> list[tuple[str, int, int]]:
+def split_sentences(text: str, min_sentence_len: int = 20) -> list[tuple[str, int, int]]:
     """
     the text may not contain substrings "<prd>" or "<stop>"
     """

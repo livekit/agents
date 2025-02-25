@@ -106,9 +106,7 @@ class LLM(llm.LLM):
             )
         )
         self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
-        self._location = location or os.environ.get(
-            "GOOGLE_CLOUD_LOCATION", "us-central1"
-        )
+        self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY", None)
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
@@ -162,8 +160,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
     ) -> "LLMStream":
         if tool_choice is None:
             tool_choice = self._opts.tool_choice
@@ -208,9 +205,7 @@ class LLMStream(llm.LLMStream):
         frequency_penalty: float | None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]],
     ) -> None:
-        super().__init__(
-            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
-        )
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm
@@ -250,17 +245,14 @@ class LLMStream(llm.LLMStream):
                             function_calling_config=types.FunctionCallingConfig(
                                 mode="ANY",
                                 allowed_function_names=[
-                                    fnc.name
-                                    for fnc in self._fnc_ctx.ai_functions.values()
+                                    fnc.name for fnc in self._fnc_ctx.ai_functions.values()
                                 ],
                             )
                         )
                     elif self._tool_choice == "auto":
                         # model can call any function
                         tool_config = types.ToolConfig(
-                            function_calling_config=types.FunctionCallingConfig(
-                                mode="AUTO"
-                            )
+                            function_calling_config=types.FunctionCallingConfig(mode="AUTO")
                         )
                     elif self._tool_choice == "none":
                         # model cannot call any function
@@ -358,9 +350,7 @@ class LLMStream(llm.LLMStream):
                 retryable=retryable,
             ) from e
 
-    def _parse_part(
-        self, id: str, index: int, part: types.Part
-    ) -> llm.ChatChunk | None:
+    def _parse_part(self, id: str, index: int, part: types.Part) -> llm.ChatChunk | None:
         if part.function_call:
             return self._try_build_function(id, index, part)
 
@@ -374,9 +364,7 @@ class LLMStream(llm.LLMStream):
             ],
         )
 
-    def _try_build_function(
-        self, id: str, index: int, part: types.Part
-    ) -> llm.ChatChunk | None:
+    def _try_build_function(self, id: str, index: int, part: types.Part) -> llm.ChatChunk | None:
         if part.function_call is None:
             logger.warning("gemini llm: no function call in the response")
             return None
@@ -389,9 +377,7 @@ class LLMStream(llm.LLMStream):
             part.function_call.id = utils.shortuuid()
 
         if self._fnc_ctx is None:
-            logger.warning(
-                "google stream tried to run function without function context"
-            )
+            logger.warning("google stream tried to run function without function context")
             return None
 
         fnc_info = _create_ai_function_info(

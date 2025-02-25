@@ -141,8 +141,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
@@ -158,8 +157,7 @@ class LLM(llm.LLM):
                 # caching last tool will cache all the tools if caching is enabled
                 cache_ctrl = (
                     CACHE_CONTROL_EPHEMERAL
-                    if (i == len(fnc_ctx.ai_functions) - 1)
-                    and self._opts.caching == "ephemeral"
+                    if (i == len(fnc_ctx.ai_functions) - 1) and self._opts.caching == "ephemeral"
                     else None
                 )
                 fncs_desc.append(
@@ -220,16 +218,12 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        anthropic_stream: Awaitable[
-            anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]
-        ],
+        anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
         fnc_ctx: llm.FunctionContext | None,
         conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(
-            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
-        )
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._awaitable_anthropic_stream = anthropic_stream
         self._anthropic_stream: (
             anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None
@@ -287,17 +281,13 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_event(
-        self, event: anthropic.types.RawMessageStreamEvent
-    ) -> llm.ChatChunk | None:
+    def _parse_event(self, event: anthropic.types.RawMessageStreamEvent) -> llm.ChatChunk | None:
         if event.type == "message_start":
             self._request_id = event.message.id
             self._input_tokens = event.message.usage.input_tokens
             self._output_tokens = event.message.usage.output_tokens
             if event.message.usage.cache_creation_input_tokens:
-                self._cache_creation_tokens = (
-                    event.message.usage.cache_creation_input_tokens
-                )
+                self._cache_creation_tokens = event.message.usage.cache_creation_input_tokens
             if event.message.usage.cache_read_input_tokens:
                 self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
@@ -325,11 +315,7 @@ class LLMStream(llm.LLMStream):
 
                 return llm.ChatChunk(
                     request_id=self._request_id,
-                    choices=[
-                        llm.Choice(
-                            delta=llm.ChoiceDelta(content=text, role="assistant")
-                        )
-                    ],
+                    choices=[llm.Choice(delta=llm.ChoiceDelta(content=text, role="assistant"))],
                 )
             elif delta.type == "input_json_delta":
                 assert self._fnc_raw_arguments is not None
@@ -352,9 +338,7 @@ class LLMStream(llm.LLMStream):
                     request_id=self._request_id,
                     choices=[
                         llm.Choice(
-                            delta=llm.ChoiceDelta(
-                                role="assistant", tool_calls=[fnc_info]
-                            ),
+                            delta=llm.ChoiceDelta(role="assistant", tool_calls=[fnc_info]),
                         )
                     ],
                 )
@@ -399,9 +383,7 @@ def _merge_messages(
             combined_messages.append(m)
             continue
         last_message = combined_messages[-1]
-        if not isinstance(last_message["content"], list) or not isinstance(
-            m["content"], list
-        ):
+        if not isinstance(last_message["content"], list) or not isinstance(m["content"], list):
             logger.error("message content is not a list")
             continue
 
@@ -460,18 +442,14 @@ def _build_anthropic_message(
         elif isinstance(msg.content, list):
             for cnt in msg.content:
                 if isinstance(cnt, str) and cnt:
-                    content: anthropic.types.TextBlockParam = (
-                        anthropic.types.TextBlockParam(
-                            text=cnt,
-                            type="text",
-                            cache_control=cache_ctrl,
-                        )
+                    content: anthropic.types.TextBlockParam = anthropic.types.TextBlockParam(
+                        text=cnt,
+                        type="text",
+                        cache_control=cache_ctrl,
                     )
                     a_content.append(content)
                 elif isinstance(cnt, llm.ChatImage):
-                    a_content.append(
-                        _build_anthropic_image_content(cnt, cache_key, cache_ctrl)
-                    )
+                    a_content.append(_build_anthropic_image_content(cnt, cache_key, cache_ctrl))
         if msg.tool_calls is not None:
             for fnc in msg.tool_calls:
                 tool_use = anthropic.types.ToolUseBlockParam(
@@ -540,9 +518,7 @@ def _build_anthropic_image_content(
                 "cache_control": cache_ctrl,
             }
         except (ValueError, IndexError) as e:
-            raise ValueError(
-                f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}"
-            )
+            raise ValueError(f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}")
     elif isinstance(image.image, rtc.VideoFrame):  # image is a VideoFrame
         if cache_key not in image._cache:
             # inside our internal implementation, we allow to put extra metadata to
@@ -568,9 +544,7 @@ def _build_anthropic_image_content(
             "cache_control": cache_ctrl,
         }
 
-    raise ValueError(
-        "LiveKit Anthropic Plugin: ChatImage must be an rtc.VideoFrame or a data URL"
-    )
+    raise ValueError("LiveKit Anthropic Plugin: ChatImage must be an rtc.VideoFrame or a data URL")
 
 
 def _build_function_description(

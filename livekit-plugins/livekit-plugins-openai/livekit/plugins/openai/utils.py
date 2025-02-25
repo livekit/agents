@@ -22,9 +22,7 @@ def get_base_url(base_url: Optional[str]) -> str:
     return base_url
 
 
-def to_chat_ctx(
-    chat_ctx: llm.ChatContext, cache_key: Any
-) -> list[ChatCompletionMessageParam]:
+def to_chat_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> list[ChatCompletionMessageParam]:
     return [to_chat_item(msg, cache_key) for msg in chat_ctx.items]
 
 
@@ -69,9 +67,7 @@ def to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessagePara
         }
 
 
-def to_image_content(
-    image: llm.ImageContent, cache_key: Any
-) -> ChatCompletionContentPartParam:
+def to_image_content(image: llm.ImageContent, cache_key: Any) -> ChatCompletionContentPartParam:
     if isinstance(image.image, str):
         return {
             "type": "image_url",

@@ -33,7 +33,6 @@ from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .events import CallContext
     from .pipeline_agent import PipelineAgent
     from .task import AgentTask
 
@@ -157,9 +156,7 @@ def perform_text_forwarding(
 ) -> tuple[asyncio.Task, _TextOutput, asyncio.Future]:
     out = _TextOutput(text="")
     first_text_fut = asyncio.Future()
-    task = asyncio.create_task(
-        _text_forwarding_task(text_output, llm_output, out, first_text_fut)
-    )
+    task = asyncio.create_task(_text_forwarding_task(text_output, llm_output, out, first_text_fut))
     return task, out, first_text_fut
 
 
@@ -233,9 +230,7 @@ def perform_tool_executions(
     asyncio.Task,
     list[tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]],
 ]:
-    out: list[
-        tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]
-    ] = []
+    out: list[tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]] = []
     task = asyncio.create_task(
         _execute_tools_task(
             agent=agent,
@@ -277,9 +272,7 @@ async def _execute_tools_task(
                 continue
 
             try:
-                function_model = llm_utils.function_arguments_to_pydantic_model(
-                    ai_function
-                )
+                function_model = llm_utils.function_arguments_to_pydantic_model(ai_function)
                 parsed_args = function_model.model_validate_json(fnc_call.arguments)
             except ValidationError:
                 logger.exception(
@@ -530,9 +523,7 @@ The ID of the instructions message in the chat context. (only for stateless LLMs
 """
 
 
-def update_instructions(
-    chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool
-) -> None:
+def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool) -> None:
     """
     Update the instruction message in the chat context or insert a new one if missing.
 

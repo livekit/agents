@@ -179,12 +179,8 @@ class AudioRecognition:
         async def _bounce_eou_task() -> None:
             await asyncio.sleep(self._min_endpointing_delay)
 
-            if turn_detector is not None and turn_detector.supports_language(
-                self._last_language
-            ):
-                end_of_turn_probability = await turn_detector.predict_end_of_turn(
-                    chat_ctx
-                )
+            if turn_detector is not None and turn_detector.supports_language(self._last_language):
+                end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
                 tracing.Tracing.log_event(
                     "end of user turn probability",
                     {"probability": end_of_turn_probability},
@@ -193,9 +189,7 @@ class AudioRecognition:
                 if end_of_turn_probability > unlikely_threshold:
                     await asyncio.sleep(self.UNLIKELY_END_OF_TURN_EXTRA_DELAY)
 
-            tracing.Tracing.log_event(
-                "end of user turn", {"transcript": self._audio_transcript}
-            )
+            tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
             self._hooks.on_end_of_turn(self._audio_transcript)
             self._audio_transcript = ""
 
@@ -222,9 +216,7 @@ class AudioRecognition:
 
         if isinstance(node, AsyncIterable):
             async for ev in node:
-                assert isinstance(ev, stt.SpeechEvent), (
-                    "STT node must yield SpeechEvent"
-                )
+                assert isinstance(ev, stt.SpeechEvent), "STT node must yield SpeechEvent"
                 await self._on_stt_event(ev)
 
     async def _vad_task(

@@ -46,9 +46,7 @@ class AgentTask:
             from .. import stt as speech_to_text
 
             if not vad:
-                raise ValueError(
-                    "VAD is required when streaming is not supported by the STT"
-                )
+                raise ValueError("VAD is required when streaming is not supported by the STT")
 
             stt = speech_to_text.StreamAdapter(
                 stt=stt,
@@ -151,9 +149,7 @@ class AgentTask:
             async for chunk in stream:
                 yield chunk
 
-    async def tts_node(
-        self, text: AsyncIterable[str]
-    ) -> Optional[AsyncIterable[rtc.AudioFrame]]:
+    async def tts_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[rtc.AudioFrame]]:
         activity = self.__get_activity_or_raise()
         assert activity.tts is not None, "tts_node called but no TTS node is available"
 
@@ -221,9 +217,7 @@ class InlineTask(AgentTask, Generic[TaskResult_T]):
 
     async def __await_impl(self):
         if self.__started:
-            raise RuntimeError(
-                f"{self.__class__.__name__} is not re-entrant, await only once"
-            )
+            raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
 
         self.__started = True
 

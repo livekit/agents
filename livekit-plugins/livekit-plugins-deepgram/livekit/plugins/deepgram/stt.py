@@ -57,9 +57,7 @@ class AudioEnergyFilter:
         SILENCE = 2
         END = 3
 
-    def __init__(
-        self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD
-    ):
+    def __init__(self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD):
         self._cooldown_seconds = min_silence
         self._cooldown = min_silence
         self._state = self.State.SILENCE
@@ -166,9 +164,7 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=interim_results
-            )
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
         )
         self._base_url = base_url
 
@@ -357,9 +353,7 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         base_url: str,
     ) -> None:
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")
@@ -464,9 +458,7 @@ class SpeechStream(stt.SpeechStream):
                         AudioEnergyFilter.State.SPEAKING,
                     ):
                         if last_frame:
-                            frames.extend(
-                                audio_bstream.write(last_frame.data.tobytes())
-                            )
+                            frames.extend(audio_bstream.write(last_frame.data.tobytes()))
                             last_frame = None
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif state == AudioEnergyFilter.State.END:
@@ -507,9 +499,7 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="deepgram connection closed unexpectedly"
-                    )
+                    raise APIStatusError(message="deepgram connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -563,9 +553,7 @@ class SpeechStream(stt.SpeechStream):
             "vad_events": True,
             "sample_rate": self._opts.sample_rate,
             "channels": self._opts.num_channels,
-            "endpointing": False
-            if self._opts.endpointing_ms == 0
-            else self._opts.endpointing_ms,
+            "endpointing": False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms,
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
         }
@@ -634,9 +622,7 @@ class SpeechStream(stt.SpeechStream):
             if len(alts) > 0 and alts[0].text:
                 if not self._speaking:
                     self._speaking = True
-                    start_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.START_OF_SPEECH
-                    )
+                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     self._event_ch.send_nowait(start_event)
 
                 if is_final_transcript:
@@ -659,9 +645,7 @@ class SpeechStream(stt.SpeechStream):
             # a non-empty transcript (deepgram doesn't have a SpeechEnded event)
             if is_endpoint and self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                )
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
@@ -669,9 +653,7 @@ class SpeechStream(stt.SpeechStream):
             logger.warning("received unexpected message from deepgram %s", data)
 
 
-def live_transcription_to_speech_data(
-    language: str, data: dict
-) -> List[stt.SpeechData]:
+def live_transcription_to_speech_data(language: str, data: dict) -> List[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
     return [

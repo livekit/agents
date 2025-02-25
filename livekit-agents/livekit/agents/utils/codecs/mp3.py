@@ -71,9 +71,7 @@ class Mp3StreamDecoder:
                 plane = frame.planes[0]
                 ptr = plane.buffer_ptr
                 size = plane.buffer_size
-                byte_array_pointer = ctypes.cast(
-                    ptr, ctypes.POINTER(ctypes.c_char * size)
-                )
+                byte_array_pointer = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_char * size))
                 result.append(
                     rtc.AudioFrame(
                         data=bytes(byte_array_pointer.contents),

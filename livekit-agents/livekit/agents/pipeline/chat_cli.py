@@ -94,9 +94,7 @@ class _AudioSink(io.AudioSink):
         if self._capturing:
             self._flush_complete.clear()
             self._capturing = False
-            to_wait = max(
-                0.0, self._pushed_duration - (time.monotonic() - self._capture_start)
-            )
+            to_wait = max(0.0, self._pushed_duration - (time.monotonic() - self._capture_start))
             self._dispatch_handle = self._cli._loop.call_later(
                 to_wait, self._dispatch_playback_finished
             )
@@ -113,18 +111,14 @@ class _AudioSink(io.AudioSink):
 
             self._flush_complete.set()
             self._pushed_duration = 0.0
-            played_duration = min(
-                time.monotonic() - self._capture_start, self._pushed_duration
-            )
+            played_duration = min(time.monotonic() - self._capture_start, self._pushed_duration)
             self.on_playback_finished(
                 playback_position=played_duration,
                 interrupted=played_duration + 1.0 < self._pushed_duration,
             )
 
     def _dispatch_playback_finished(self) -> None:
-        self.on_playback_finished(
-            playback_position=self._pushed_duration, interrupted=False
-        )
+        self.on_playback_finished(playback_position=self._pushed_duration, interrupted=False)
         self._flush_complete.set()
         self._pushed_duration = 0.0
 
@@ -322,9 +316,7 @@ class ChatCLI:
             await asyncio.sleep(max(0, next_frame - time.perf_counter()))
 
     def _print_audio_mode(self):
-        amplitude_db = _normalize_db(
-            self._micro_db, db_min=INPUT_DB_MIN, db_max=INPUT_DB_MAX
-        )
+        amplitude_db = _normalize_db(self._micro_db, db_min=INPUT_DB_MIN, db_max=INPUT_DB_MAX)
         nb_bar = round(amplitude_db * MAX_AUDIO_BAR)
 
         color_code = 31 if amplitude_db > 0.75 else 33 if amplitude_db > 0.5 else 32

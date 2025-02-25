@@ -137,9 +137,7 @@ class TTS(tts.TTS):
             opts=self._opts,
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> "SynthesizeStream":
+    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> "SynthesizeStream":
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -187,9 +185,7 @@ class ChunkedStream(tts.ChunkedStream):
                             )
                         )
             for frame in bstream.flush():
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(request_id=request_id, frame=frame)
-                )
+                self._event_ch.send_nowait(tts.SynthesizedAudio(request_id=request_id, frame=frame))
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -295,6 +291,4 @@ def _validate_kwargs(kwargs: dict) -> None:
     valid_keys = {field.name for field in fields(TTSOptions)}
     invalid_keys = set(kwargs.keys()) - valid_keys
     if invalid_keys:
-        raise ValueError(
-            f"Invalid parameters: {invalid_keys}. Allowed parameters: {valid_keys}"
-        )
+        raise ValueError(f"Invalid parameters: {invalid_keys}. Allowed parameters: {valid_keys}")

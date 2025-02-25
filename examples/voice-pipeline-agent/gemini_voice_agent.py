@@ -56,9 +56,7 @@ async def entrypoint(ctx: JobContext):
 
     @fnc_ctx.ai_callable()
     async def get_weather(
-        location: Annotated[
-            str, llm.TypeInfo(description="The location to get the weather for")
-        ],
+        location: Annotated[str, llm.TypeInfo(description="The location to get the weather for")],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
         return f"The weather in {location} is sunny."

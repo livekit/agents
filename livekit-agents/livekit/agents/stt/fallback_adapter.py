@@ -93,9 +93,7 @@ class FallbackAdapter(
             )
         except asyncio.TimeoutError:
             if recovering:
-                logger.warning(
-                    f"{stt.label} recovery timed out", extra={"streamed": False}
-                )
+                logger.warning(f"{stt.label} recovery timed out", extra={"streamed": False})
                 raise
 
             logger.warning(
@@ -165,9 +163,7 @@ class FallbackAdapter(
                 except Exception:
                     return
 
-            stt_status.recovering_synthesize_task = asyncio.create_task(
-                _recover_stt_task(stt)
-            )
+            stt_status.recovering_synthesize_task = asyncio.create_task(_recover_stt_task(stt))
 
     async def _recognize_impl(
         self,
@@ -201,9 +197,7 @@ class FallbackAdapter(
                             AvailabilityChangedEvent(stt=stt, available=False),
                         )
 
-            self._try_recovery(
-                stt=stt, buffer=buffer, language=language, conn_options=conn_options
-            )
+            self._try_recovery(stt=stt, buffer=buffer, language=language, conn_options=conn_options)
 
         raise APIConnectionError(
             "all STTs failed (%s) after %s seconds"
@@ -220,9 +214,7 @@ class FallbackAdapter(
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
-        return await super().recognize(
-            buffer, language=language, conn_options=conn_options
-        )
+        return await super().recognize(buffer, language=language, conn_options=conn_options)
 
     def stream(
         self,
@@ -230,9 +222,7 @@ class FallbackAdapter(
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
-        return FallbackRecognizeStream(
-            stt=self, language=language, conn_options=conn_options
-        )
+        return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
 
     async def aclose(self) -> None:
         for stt_status in self._status:
@@ -259,9 +249,7 @@ class FallbackRecognizeStream(RecognizeStream):
     async def _run(self) -> None:
         start_time = time.time()
 
-        all_failed = all(
-            not stt_status.available for stt_status in self._fallback_adapter._status
-        )
+        all_failed = all(not stt_status.available for stt_status in self._fallback_adapter._status)
         if all_failed:
             logger.error("all STTs are unavailable, retrying..")
 
@@ -356,10 +344,7 @@ class FallbackRecognizeStream(RecognizeStream):
         stt_status = self._fallback_adapter._status[
             self._fallback_adapter._stt_instances.index(stt)
         ]
-        if (
-            stt_status.recovering_stream_task is None
-            or stt_status.recovering_stream_task.done()
-        ):
+        if stt_status.recovering_stream_task is None or stt_status.recovering_stream_task.done():
             stream = stt.stream(
                 language=self._language,
                 conn_options=dataclasses.replace(
@@ -410,7 +395,5 @@ class FallbackRecognizeStream(RecognizeStream):
                     )
                     raise
 
-            stt_status.recovering_stream_task = task = asyncio.create_task(
-                _recover_stt_task()
-            )
+            stt_status.recovering_stream_task = task = asyncio.create_task(_recover_stt_task())
             task.add_done_callback(lambda _: self._recovering_streams.remove(stream))

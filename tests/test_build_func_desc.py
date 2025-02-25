@@ -44,8 +44,8 @@ def test_description_building(arg_typ: type, oai_type: str):
         },
     )
     assert (
-        _oai_api.build_oai_function_description(fi)["function"]["parameters"][
-            "properties"
-        ]["foo"]["type"]
+        _oai_api.build_oai_function_description(fi)["function"]["parameters"]["properties"]["foo"][
+            "type"
+        ]
         == oai_type
     )

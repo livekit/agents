@@ -15,9 +15,7 @@ class SpeechHandle:
     SPEECH_PRIORITY_HIGH = 10
     """Priority for important messages that should be played before others."""
 
-    def __init__(
-        self, *, speech_id: str, allow_interruptions: bool, step_index: int
-    ) -> None:
+    def __init__(self, *, speech_id: str, allow_interruptions: bool, step_index: int) -> None:
         self._id = speech_id
         self._step_index = step_index
         self._allow_interruptions = allow_interruptions

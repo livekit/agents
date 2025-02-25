@@ -126,12 +126,8 @@ class TaskActivity(RecognitionHooks):
             if isinstance(self.llm, llm.RealtimeModel):
                 self._rt_session = self.llm.session()
                 self._rt_session.on("generation_created", self._on_generation_created)
-                self._rt_session.on(
-                    "input_speech_started", self._on_input_speech_started
-                )
-                self._rt_session.on(
-                    "input_speech_stopped", self._on_input_speech_stopped
-                )
+                self._rt_session.on("input_speech_started", self._on_input_speech_started)
+                self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
                 self._rt_session.on(
                     "input_audio_transcription_completed",
                     self._on_input_audio_transcription_completed,
@@ -141,9 +137,7 @@ class TaskActivity(RecognitionHooks):
                     self._on_input_audio_transcription_failed,
                 )
                 try:
-                    await self._rt_session.update_instructions(
-                        self._agent_task.instructions
-                    )
+                    await self._rt_session.update_instructions(self._agent_task.instructions)
                 except llm.RealtimeError:
                     logger.exception("failed to update the instructions")
 
@@ -173,9 +167,7 @@ class TaskActivity(RecognitionHooks):
             tk = _TaskActivityContextVar.set(self)
             from .task import _authorize_inline_task
 
-            on_enter_task = asyncio.create_task(
-                self._agent_task.on_enter(), name="_task_on_enter"
-            )
+            on_enter_task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
             _authorize_inline_task(on_enter_task)
             await on_enter_task
             _TaskActivityContextVar.reset(tk)
@@ -189,9 +181,7 @@ class TaskActivity(RecognitionHooks):
             tk = _TaskActivityContextVar.set(self)
             from .task import _authorize_inline_task
 
-            on_exit_task = asyncio.create_task(
-                self._agent_task.on_exit(), name="_task_on_exit"
-            )
+            on_exit_task = asyncio.create_task(self._agent_task.on_exit(), name="_task_on_exit")
             _authorize_inline_task(on_exit_task)
             await on_exit_task
             _TaskActivityContextVar.reset(tk)
@@ -367,9 +357,7 @@ class TaskActivity(RecognitionHooks):
                 )
             )
 
-    def _on_input_audio_transcription_completed(
-        self, ev: llm.InputTranscriptionCompleted
-    ) -> None:
+    def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
         log_event("input_audio_transcription_completed")
         self.on_final_transcript(
             stt.SpeechEvent(
@@ -378,9 +366,7 @@ class TaskActivity(RecognitionHooks):
             )
         )
 
-    def _on_input_audio_transcription_failed(
-        self, ev: llm.InputTranscriptionFailed
-    ) -> None:
+    def _on_input_audio_transcription_failed(self, ev: llm.InputTranscriptionFailed) -> None:
         log_event("input_audio_transcription_failed")
         self.on_final_transcript(
             stt.SpeechEvent(
@@ -399,9 +385,7 @@ class TaskActivity(RecognitionHooks):
             # user_initiated generations are directly handled inside _realtime_reply_task
             return
 
-        handle = SpeechHandle.create(
-            allow_interruptions=self._agent.options.allow_interruptions
-        )
+        handle = SpeechHandle.create(allow_interruptions=self._agent.options.allow_interruptions)
         task = asyncio.create_task(
             self._realtime_generation_task(
                 speech_handle=handle,
@@ -585,9 +569,7 @@ class TaskActivity(RecognitionHooks):
 
         if instructions is not None:
             try:
-                update_instructions(
-                    chat_ctx, instructions=instructions, add_if_missing=True
-                )
+                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
             except ValueError:
                 logger.exception("failed to update the instructions")
 
@@ -815,15 +797,11 @@ class TaskActivity(RecognitionHooks):
                     )
                     forward_tasks.append(forward_task)
                     first_frame_fut.add_done_callback(
-                        lambda _: self._agent._on_agent_state_changed(
-                            AgentState.SPEAKING
-                        )
+                        lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
                     )
                 else:
                     first_text_fut.add_done_callback(
-                        lambda _: self._agent._on_agent_state_changed(
-                            AgentState.SPEAKING
-                        )
+                        lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
                     )
 
                 outputs.append((text_out, audio_out))

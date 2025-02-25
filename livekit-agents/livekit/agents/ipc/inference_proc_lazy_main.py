@@ -62,9 +62,7 @@ class _InferenceProc:
         # create an instance of each runner (the ctor must not requires any argument)
         self._runners = {name: runner() for name, runner in runners.items()}
 
-    def initialize(
-        self, init_req: proto.InitializeRequest, client: _ProcClient
-    ) -> None:
+    def initialize(self, init_req: proto.InitializeRequest, client: _ProcClient) -> None:
         self._client = client
 
         for runner in self._runners.values():
@@ -91,9 +89,7 @@ class _InferenceProc:
             logger.warning("unknown inference method", extra={"method": msg.method})
 
         try:
-            data = await loop.run_in_executor(
-                None, self._runners[msg.method].run, msg.data
-            )
+            data = await loop.run_in_executor(None, self._runners[msg.method].run, msg.data)
             await self._client.send(
                 proto.InferenceResponse(
                     request_id=msg.request_id,

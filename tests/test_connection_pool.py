@@ -42,9 +42,7 @@ async def test_get_reuses_connection():
         assert conn is conn1, "Expected conn to be the same connection as conn1"
 
     conn2 = await pool.get()
-    assert conn1 is conn2, (
-        "Expected the same connection to be reused when it hasn't expired."
-    )
+    assert conn1 is conn2, "Expected the same connection to be reused when it hasn't expired."
 
 
 @pytest.mark.asyncio
@@ -59,9 +57,7 @@ async def test_get_creates_new_connection_when_none_available():
     # Not putting conn1 back means the available pool is empty,
     # so calling get() again should create a new connection.
     conn2 = await pool.get()
-    assert conn1 is not conn2, (
-        "Expected a new connection when no available connection exists."
-    )
+    assert conn1 is not conn2, "Expected a new connection when no available connection exists."
 
 
 @pytest.mark.asyncio
@@ -95,9 +91,7 @@ async def test_get_expired():
     conn = await pool.get()
     pool.put(conn)
     # Artificially set the connection's timestamp in the past to simulate expiration.
-    pool._connections[conn] = (
-        time.time() - 2
-    )  # 2 seconds ago (max_session_duration is 1)
+    pool._connections[conn] = time.time() - 2  # 2 seconds ago (max_session_duration is 1)
 
     conn2 = await pool.get()
     assert conn2 is not conn, "Expected a new connection to be returned."

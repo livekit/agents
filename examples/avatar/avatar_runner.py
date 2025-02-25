@@ -27,9 +27,7 @@ class MyVideoGenerator:
         # NOTE: Audio frames and video frames have different frequencies,
         #       so we accumulate audio samples in a buffer before
         #       generating corresponding video frames
-        self._audio_buffer = np.zeros(
-            (0, self.media_options.audio_channels), dtype=np.int16
-        )
+        self._audio_buffer = np.zeros((0, self.media_options.audio_channels), dtype=np.int16)
         self._audio_samples_per_frame = int(
             self.media_options.audio_sample_rate / self.media_options.video_fps
         )
@@ -79,9 +77,7 @@ class MyVideoGenerator:
 
     async def stream(
         self,
-    ) -> AsyncIterator[
-        tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]] | AudioFlushSentinel
-    ]:
+    ) -> AsyncIterator[tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]] | AudioFlushSentinel]:
         # initialize background canvas
         background = np.zeros(
             (self.media_options.video_height, self.media_options.video_width, 4),
@@ -89,9 +85,7 @@ class MyVideoGenerator:
         )
         background.fill(255)
 
-        wave_visualizer = WaveformVisualizer(
-            sample_rate=self.media_options.audio_sample_rate
-        )
+        wave_visualizer = WaveformVisualizer(sample_rate=self.media_options.audio_sample_rate)
 
         def _generate_idle_frame() -> rtc.VideoFrame:
             idle_frame = background.copy()
@@ -123,9 +117,7 @@ class MyVideoGenerator:
                     [n_fill_samples, self._audio_buffer.shape[1]],
                     dtype=self._audio_buffer.dtype,
                 )
-            self._audio_buffer = np.concatenate(
-                [self._audio_buffer, audio_samples], axis=0
-            )
+            self._audio_buffer = np.concatenate([self._audio_buffer, audio_samples], axis=0)
 
             # generate video frames with audio in buffer
             while len(self._audio_buffer) >= samples_per_frame:
@@ -171,9 +163,7 @@ class MyVideoGenerator:
         self._av_sync = av_sync
 
     def _reset_audio_buffer(self) -> None:
-        self._audio_buffer = np.zeros(
-            (0, self.media_options.audio_channels), dtype=np.int16
-        )
+        self._audio_buffer = np.zeros((0, self.media_options.audio_channels), dtype=np.int16)
 
     def _np_to_video_frame(self, image: np.ndarray) -> rtc.VideoFrame:
         return rtc.VideoFrame(
@@ -199,18 +189,14 @@ async def main(room: rtc.Room):
             audio_channels=1,
         )
         video_generator = MyVideoGenerator(media_options)
-        runner = AvatarRunner(
-            room, video_generator=video_generator, media_options=media_options
-        )
+        runner = AvatarRunner(room, video_generator=video_generator, media_options=media_options)
         video_generator.set_av_sync(runner.av_sync)
         await runner.start()
 
         # Set up disconnect handler
         async def handle_disconnect(participant: rtc.RemoteParticipant):
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
-                logging.info(
-                    "Agent %s disconnected, stopping worker...", participant.identity
-                )
+                logging.info("Agent %s disconnected, stopping worker...", participant.identity)
                 stop_event.set()
 
         room.on(

@@ -49,9 +49,7 @@ class ImageContent(BaseModel):
         event.frame,
         EncodeOptions(
             format="PNG",
-            resize_options=ResizeOptions(
-                width=512, height=512, strategy="scale_aspect_fit"
-            ),
+            resize_options=ResizeOptions(width=512, height=512, strategy="scale_aspect_fit"),
         ),
     )
     chat_image = ChatImage(
