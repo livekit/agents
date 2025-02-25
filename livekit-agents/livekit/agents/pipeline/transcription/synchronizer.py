@@ -306,7 +306,7 @@ class TextSynchronizer:
     def __init__(
         self,
         audio_sink: AudioSink,
-        text_sink: TextSink | None,
+        text_sink: TextSink,
         *,
         sync_options: NotGivenOr[TextSyncOptions] = NOT_GIVEN,
     ) -> None:
@@ -336,8 +336,6 @@ class TextSynchronizer:
     async def _forward_event(self) -> None:
         while not self._closed:
             async for segment in self._synchronizer:
-                if not self._base_text_sink:
-                    continue
                 if self._current_segment_id != segment.id:
                     self._base_text_sink.flush()
                     self._current_segment_id = segment.id
@@ -363,6 +361,7 @@ class TextSynchronizer:
         await utils.aio.cancel_and_wait(self._main_task)
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
+        self._base_text_sink.flush()
 
 
 class _AudioSync(AudioSink):

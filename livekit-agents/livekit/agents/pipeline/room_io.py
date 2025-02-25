@@ -92,8 +92,8 @@ class RoomIO:
 
         # room output
         self._audio_output: Optional[RoomAudioSink] = None
-        self._user_text_output: Optional[TextSink] = None
-        self._agent_text_output: Optional[TextSink] = None
+        self._user_text_output: Optional[ParallelTextSink] = None
+        self._agent_text_output: Optional[ParallelTextSink] = None
         self._text_synchronizer: Optional[TextSynchronizer] = None
 
         self._tasks: set[asyncio.Task] = set()
@@ -381,7 +381,7 @@ class RoomIO:
 
     def _create_text_sink(
         self, participant_identity: str | None, is_delta_stream: bool, topic: str | None
-    ) -> TextSink:
+    ) -> ParallelTextSink:
         return ParallelTextSink(
             RoomTranscriptEventSink(
                 room=self._room,
@@ -671,6 +671,7 @@ class DataStreamTextSink(TextSink):
 
         self._topic = topic or TOPIC_CHAT
         self._text_writer: rtc.TextStreamWriter | None = None
+        self._writer_lock = asyncio.Lock()
 
         self._latest_text = ""
         self._current_id = utils.shortuuid("SG_")
@@ -691,13 +692,7 @@ class DataStreamTextSink(TextSink):
         if identity == self._participant_identity:
             return
 
-        if self._text_writer:
-            current_writer = self._text_writer
-            self._text_writer = None
-            task = asyncio.create_task(current_writer.aclose())
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-
+        self.flush()
         self._participant_identity = identity
         self._latest_text = ""
         self._current_id = utils.shortuuid("SG_")
@@ -727,9 +722,10 @@ class DataStreamTextSink(TextSink):
         try:
             if self._is_delta_stream:
                 # for delta streams, create writer if needed
-                if not self._text_writer:
-                    self._text_writer = await _create_writer()
-                await self._text_writer.write(text)
+                async with self._writer_lock:
+                    if not self._text_writer:
+                        self._text_writer = await _create_writer()
+                    await self._text_writer.write(text)
             else:
                 # for non-delta streams, always create a new writer
                 if self._text_writer:
@@ -764,7 +760,8 @@ class DataStreamTextSink(TextSink):
                 if self._is_delta_stream:
                     # for delta streams, close the existing writer
                     if current_writer:
-                        await current_writer.aclose(attributes=attributes)
+                        async with self._writer_lock:
+                            await current_writer.aclose(attributes=attributes)
                 else:
                     # for non-delta streams, create a final writer
                     writer = await self._room.local_participant.stream_text(
