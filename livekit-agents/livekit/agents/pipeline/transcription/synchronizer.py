@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import time
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import AsyncIterator, Callable
 
 from livekit import rtc
 
@@ -48,7 +48,7 @@ class _TextData:
     forwarded_sentences: int = 0
 
 
-class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
+class _TextAudioSynchronizer:
     """Synchronizes text with audio playback timing."""
 
     def __init__(self, options: TextSyncOptions):
@@ -59,6 +59,7 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
 
         self._closed = False
         self._close_future = asyncio.Future[None]()
+        self._event_ch = utils.aio.Chan[rtc.TranscriptionSegment]()
 
         self._playing_seg_index = -1
         self._finished_seg_index = -1
@@ -71,7 +72,6 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
         self._text_data: _TextData | None = None
         self._audio_data: _AudioData | None = None
 
-        self._played_text = ""
         self._main_task: asyncio.Task | None = None
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -105,8 +105,7 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
         self._check_not_closed()
 
         if self._audio_data is None:
-            # Create empty audio data if none exists
-            self.push_audio(rtc.AudioFrame(bytes(), 24000, 1, 0))
+            return
 
         assert self._audio_data is not None
         self._audio_data.done = True
@@ -117,7 +116,7 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
         self._check_not_closed()
 
         if self._text_data is None:
-            self.push_text("")
+            return
 
         assert self._text_data is not None
         self._text_data.done = True
@@ -136,11 +135,6 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
         """Notify that audio playout has finished for current segment."""
         self._check_not_closed()
         self._finished_seg_index += 1
-
-    @property
-    def played_text(self) -> str:
-        """Currently played text."""
-        return self._played_text
 
     async def aclose(self) -> None:
         """Close the syncer and stop processing."""
@@ -161,6 +155,13 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
 
         if self._main_task is not None:
             await self._main_task
+        self._event_ch.close()
+
+    async def __anext__(self) -> rtc.TranscriptionSegment:
+        return await self._event_ch.__anext__()
+
+    def __aiter__(self) -> AsyncIterator[rtc.TranscriptionSegment]:
+        return self
 
     @utils.log_exceptions(logger=logger)
     async def _main_loop(self) -> None:
@@ -220,7 +221,6 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
         words = self._opts.split_words(sentence)
         processed_words: list[str] = []
 
-        og_text = self._played_text
         sent_text = ""
         for word, start_pos, end_pos in words:
             if segment_index <= self._finished_seg_index:
@@ -254,8 +254,7 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
             first_delay = min(delay / 2, 2 / speed)
             await self._sleep_if_not_closed(first_delay)
 
-            self.emit(
-                "text_updated",
+            self._event_ch.send_nowait(
                 rtc.TranscriptionSegment(
                     id=seg_id,
                     text=text[len(sent_text) :],
@@ -265,14 +264,12 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
                     language=self._opts.language,
                 ),
             )
-            self._played_text = f"{og_text} {text}"
             sent_text = text
 
             await self._sleep_if_not_closed(delay - first_delay)
             text_data.forwarded_hyphens += word_hyphens
 
-        self.emit(
-            "text_updated",
+        self._event_ch.send_nowait(
             rtc.TranscriptionSegment(
                 id=seg_id,
                 text=sentence[len(sent_text) :],
@@ -282,7 +279,6 @@ class _TextAudioSynchronizer(rtc.EventEmitter[Literal["text_updated"]]):
                 language=self._opts.language,
             ),
         )
-        self._played_text = f"{og_text} {sentence}"
         sent_text = sentence
 
         await self._sleep_if_not_closed(self._opts.new_sentence_delay)
@@ -315,14 +311,17 @@ class TextSynchronizer:
         sync_options: NotGivenOr[TextSyncOptions] = NOT_GIVEN,
     ) -> None:
         super().__init__()
+        self._closed = False
         self._sync_options = sync_options or TextSyncOptions()
-        self._synchronizer = self._new_synchronizer()
-        self._tasks: set[asyncio.Task] = set()
+        self._synchronizer = _TextAudioSynchronizer(options=self._sync_options)
 
         self._base_text_sink = text_sink
         self._text_sink = _TextSink(self)
         self._audio_sink = _AudioSync(audio_sink, self)
         self._current_segment_id: str | None = None
+
+        self._tasks: set[asyncio.Task] = set()
+        self._main_task = asyncio.create_task(self._forward_event())
 
     @property
     def audio_sink(self) -> "_AudioSync":
@@ -334,42 +333,34 @@ class TextSynchronizer:
         """Get the text sink wrapper"""
         return self._text_sink
 
-    def _segment_playout_started(self) -> None:
-        self._synchronizer.segment_playout_started()
+    async def _forward_event(self) -> None:
+        while not self._closed:
+            async for segment in self._synchronizer:
+                if not self._base_text_sink:
+                    continue
+                if self._current_segment_id != segment.id:
+                    self._base_text_sink.flush()
+                    self._current_segment_id = segment.id
+
+                await self._base_text_sink.capture_text(segment.text)
+                if segment.final:
+                    self._base_text_sink.flush()
 
     def _flush(self) -> None:
         """Close the old transcription segment and create a new one"""
-        task = asyncio.create_task(self._synchronizer.aclose())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-        self._synchronizer = self._new_synchronizer()
-
-    def _new_synchronizer(self) -> _TextAudioSynchronizer:
-        synchronizer = _TextAudioSynchronizer(options=self._sync_options)
-        synchronizer.on("text_updated", self._on_text_updated)
-        return synchronizer
-
-    def _on_text_updated(self, segment: rtc.TranscriptionSegment) -> None:
-        if not self._base_text_sink:
-            return
-        if self._current_segment_id != segment.id:
-            self._base_text_sink.flush()
-            self._current_segment_id = segment.id
-
-        async def _capture_text():
-            await self._base_text_sink.capture_text(segment.text)
-            if segment.final:
-                self._base_text_sink.flush()
-
-        task = asyncio.create_task(_capture_text())
+        current_synchronizer = self._synchronizer
+        self._synchronizer = _TextAudioSynchronizer(options=self._sync_options)
+        # close the old synchronizer
+        task = asyncio.create_task(current_synchronizer.aclose())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
     async def aclose(self) -> None:
         """Close the forwarder and cleanup resources"""
+        self._closed = True
         await self._synchronizer.aclose()
-        # Cancel and wait for all pending tasks
+
+        await utils.aio.cancel_and_wait(self._main_task)
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
 
@@ -395,7 +386,7 @@ class _AudioSync(AudioSink):
         await self._base_sink.capture_frame(frame)
 
         if not self._capturing:
-            self._parent._segment_playout_started()
+            self._parent._synchronizer.segment_playout_started()
             self._capturing = True
             self._interrupted = False
 

@@ -671,6 +671,10 @@ class DataStreamTextSink(TextSink):
 
         self._topic = topic or TOPIC_CHAT
         self._text_writer: rtc.TextStreamWriter | None = None
+
+        self._latest_text = ""
+        self._current_id = utils.shortuuid("SG_")
+        self._is_capturing = False
         self.set_participant(participant)
 
     def set_participant(
@@ -683,8 +687,11 @@ class DataStreamTextSink(TextSink):
             if isinstance(participant, rtc.Participant)
             else participant
         )
-        if identity != self._participant_identity and self._text_writer:
-            # close the previous stream if the participant has changed
+
+        if identity == self._participant_identity:
+            return
+
+        if self._text_writer:
             current_writer = self._text_writer
             self._text_writer = None
             task = asyncio.create_task(current_writer.aclose())
@@ -697,6 +704,10 @@ class DataStreamTextSink(TextSink):
         self._is_capturing = False
 
     async def capture_text(self, text: str) -> None:
+        """Capture text and publish it to the stream
+
+        Note: This method assumes it won't be called concurrently with flush()
+        """
         if self._participant_identity is None:
             return
 
@@ -715,67 +726,59 @@ class DataStreamTextSink(TextSink):
 
         try:
             if self._is_delta_stream:
-                # reuse existing writer for delta streams
-                writer = self._text_writer or await _create_writer()
+                # for delta streams, create writer if needed
                 if not self._text_writer:
-                    self._text_writer = writer
+                    self._text_writer = await _create_writer()
+                await self._text_writer.write(text)
             else:
-                # always create new writer for non-delta streams
+                # for non-delta streams, always create a new writer
                 if self._text_writer:
                     logger.error("non-delta stream should not have an active writer")
                     await self._text_writer.aclose()
                     self._text_writer = None
+
                 writer = await _create_writer()
-
-            await writer.write(text)
-            if writer is not self._text_writer:
+                await writer.write(text)
                 await writer.aclose()
-
         except Exception:
             logger.exception("Failed to publish transcription to stream")
 
     def flush(self) -> None:
+        """Flush the current text stream, marking it as complete
+
+        Note: This method assumes it won't be called concurrently with capture_text()
+        """
         if not self._is_capturing or self._participant_identity is None:
             return
 
         self._is_capturing = False
 
-        async def _close_writer(
-            writer: rtc.TextStreamWriter | None,
-            text: str,
-            stream_id: str,
-            participant_identity: str | None,
-        ):
-            attributes = {
-                ATTRIBUTE_TRANSCRIPTION_FINAL: "true",
-            }
-            if not self._is_delta_stream:
-                if writer:
-                    logger.error("non-delta stream writer not closed")
-                    await writer.aclose()
-                writer = await self._room.local_participant.stream_text(
-                    topic=self._topic,
-                    stream_id=stream_id,
-                    sender_identity=participant_identity,
-                    attributes=attributes,
-                )
-                await writer.write(text)
-                await writer.aclose(attributes=attributes)
-            else:
-                if not writer:
-                    return
-                await writer.aclose(attributes=attributes)
-
         current_writer = self._text_writer
+        current_text = self._latest_text
+        current_id = self._current_id
         self._text_writer = None
-        task = asyncio.create_task(
-            _close_writer(
-                current_writer,
-                self._latest_text,
-                self._current_id,
-                self._participant_identity,
-            )
-        )
+
+        async def _close_writer():
+            attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
+            try:
+                if self._is_delta_stream:
+                    # for delta streams, close the existing writer
+                    if current_writer:
+                        await current_writer.aclose(attributes=attributes)
+                else:
+                    # for non-delta streams, create a final writer
+                    writer = await self._room.local_participant.stream_text(
+                        topic=self._topic,
+                        stream_id=current_id,
+                        sender_identity=self._participant_identity,
+                        attributes=attributes,
+                    )
+                    await writer.write(current_text)
+                    await writer.aclose(attributes=attributes)
+            except Exception:
+                logger.exception("Failed to flush text stream")
+
+        task = asyncio.create_task(_close_writer())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
