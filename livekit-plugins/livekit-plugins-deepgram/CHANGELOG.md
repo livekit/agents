@@ -1,5 +1,13 @@
 # livekit-plugins-deepgram
 
+## 0.6.20
+
+### Patch Changes
+
+- fix(deepgram): fix STT keyterm parameter - [#1535](https://github.com/livekit/agents/pull/1535) ([@wdhwg001](https://github.com/wdhwg001))
+
+- use connection pool for deepgram tts - [#1523](https://github.com/livekit/agents/pull/1523) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.6.19
 
 ### Patch Changes

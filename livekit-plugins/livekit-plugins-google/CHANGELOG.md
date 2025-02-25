@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.10.6
+
+### Patch Changes
+
+- feat: connection pooling. speeds up generation with STT/TTS providers - [#1538](https://github.com/livekit/agents/pull/1538) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.10.5
 
 ### Patch Changes

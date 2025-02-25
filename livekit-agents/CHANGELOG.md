@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.16
+
+### Patch Changes
+
+- feat: connection pooling. speeds up generation with STT/TTS providers - [#1538](https://github.com/livekit/agents/pull/1538) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.12.15
 
 ### Patch Changes
