@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any, Literal, MutableSet, Union
 
@@ -67,7 +68,7 @@ class LLM(llm.LLM):
         See https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html for more details on the the AWS Bedrock Runtime API.
 
         Args:
-            model (TEXT_MODEL, optional): The model name to use. Defaults to "anthropic.claude-3-5-sonnet-20241022-v2:0".
+            model (TEXT_MODEL, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html). Defaults to 'anthropic.claude-3-5-sonnet-20240620-v1:0'.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
@@ -87,8 +88,13 @@ class LLM(llm.LLM):
             api_key, api_secret, region
         )
 
+        self._model = model or os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
+        if not self._model:
+            raise ValueError(
+                "model or inference profile arn must be set using the argument or by setting the BEDROCK_INFERENCE_PROFILE_ARN environment variable."
+            )
         self._opts = LLMOptions(
-            model=model,
+            model=self._model,
             temperature=temperature,
             tool_choice=tool_choice,
             max_output_tokens=max_output_tokens,
