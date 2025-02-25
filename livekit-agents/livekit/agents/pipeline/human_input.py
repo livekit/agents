@@ -88,13 +88,10 @@ class HumanInput(utils.EventEmitter[EventTypes]):
                 if self._recognize_atask is not None:
                     self._recognize_atask.cancel()
 
-                stream = rtc.AudioStream(track, sample_rate=16000)
-                if self._noise_cancellation is not None:
-                    filter_name, filter_params = self._noise_cancellation
-                    stream.add_filter(filter_name, **filter_params)
-
                 self._recognize_atask = asyncio.create_task(
-                    self._recognize_task(stream)
+                    self._recognize_task(rtc.AudioStream(track, 
+                                                         sample_rate=16000, 
+                                                         noise_cancellation=self._noise_cancellation))
                 )
                 break
 
