@@ -1,6 +1,10 @@
 # LiveKit Plugins AWS
 
-Agent Framework plugin for services from AWS Services. Currently supports STT and TTS.
+Agent Framework plugin for services from AWS.
+
+- aws polly for tts
+- aws transcribe for stt
+- aws bedrock for llm
 
 ## Installation
 
