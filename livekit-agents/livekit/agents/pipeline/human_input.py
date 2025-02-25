@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+from typing import Literal, Any
 
 from livekit import rtc
 
@@ -28,6 +28,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         stt: speech_to_text.STT,
         participant: rtc.RemoteParticipant,
         transcription: bool,
+        noise_cancellation: tuple[str, dict[str, Any]] | None = None,
     ) -> None:
         super().__init__()
         self._room, self._vad, self._stt, self._participant, self._transcription = (
@@ -37,6 +38,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
             participant,
             transcription,
         )
+        self._noise_cancellation = noise_cancellation
         self._subscribed_track: rtc.RemoteAudioTrack | None = None
         self._recognize_atask: asyncio.Task[None] | None = None
 
@@ -86,8 +88,13 @@ class HumanInput(utils.EventEmitter[EventTypes]):
                 if self._recognize_atask is not None:
                     self._recognize_atask.cancel()
 
+                stream = rtc.AudioStream(track, sample_rate=16000)
+                if self._noise_cancellation is not None:
+                    filter_name, filter_params = self._noise_cancellation
+                    stream.add_filter(filter_name, **filter_params)
+
                 self._recognize_atask = asyncio.create_task(
-                    self._recognize_task(rtc.AudioStream(track, sample_rate=16000))
+                    self._recognize_task(stream)
                 )
                 break
 
