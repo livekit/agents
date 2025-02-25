@@ -161,6 +161,7 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: Optional[APIConnectOptions] = None,
+        segment_id: str | None = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
@@ -168,6 +169,7 @@ class TTS(tts.TTS):
             conn_options=conn_options,
             opts=self._opts,
             client=self._ensure_client(),
+            segment_id=segment_id,
         )
 
 
@@ -180,9 +182,11 @@ class ChunkedStream(tts.ChunkedStream):
         opts: _TTSOptions,
         client: texttospeech.TextToSpeechAsyncClient,
         conn_options: Optional[APIConnectOptions] = None,
+        segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client
+        self._segment_id = segment_id or utils.shortuuid()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -204,18 +208,27 @@ class ChunkedStream(tts.ChunkedStream):
                 for frame in decoder.decode_chunk(response.audio_content):
                     for frame in bstream.write(frame.data.tobytes()):
                         self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(request_id=request_id, frame=frame)
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=self._segment_id,
+                                frame=frame,
+                            )
                         )
 
                 for frame in bstream.flush():
                     self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(request_id=request_id, frame=frame)
+                        tts.SynthesizedAudio(
+                            request_id=request_id,
+                            segment_id=self._segment_id,
+                            frame=frame,
+                        )
                     )
             else:
                 data = response.audio_content[44:]  # skip WAV header
                 self._event_ch.send_nowait(
                     tts.SynthesizedAudio(
                         request_id=request_id,
+                        segment_id=self._segment_id,
                         frame=rtc.AudioFrame(
                             data=data,
                             sample_rate=self._opts.audio_config.sample_rate_hertz,
