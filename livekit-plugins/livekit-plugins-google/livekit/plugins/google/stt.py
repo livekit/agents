@@ -61,7 +61,7 @@ class STTOptions:
     interim_results: bool
     punctuate: bool
     spoken_punctuation: bool
-    model: SpeechModels
+    model: SpeechModels | str
     sample_rate: int
     keywords: List[tuple[str, float]] | None
 
@@ -93,7 +93,7 @@ class STT(stt.STT):
         interim_results: bool = True,
         punctuate: bool = True,
         spoken_punctuation: bool = False,
-        model: SpeechModels = "chirp_2",
+        model: SpeechModels | str = "latest_long",
         location: str = "us-central1",
         sample_rate: int = 16000,
         credentials_info: dict | None = None,
@@ -106,6 +106,19 @@ class STT(stt.STT):
         Credentials must be provided, either by using the ``credentials_info`` dict, or reading
         from the file specified in ``credentials_file`` or via Application Default Credentials as
         described in https://cloud.google.com/docs/authentication/application-default-credentials
+
+        args:
+            languages(LanguageCode): list of language codes to recognize (default: "en-US")
+            detect_language(bool): whether to detect the language of the audio (default: True)
+            interim_results(bool): whether to return interim results (default: True)
+            punctuate(bool): whether to punctuate the audio (default: True)
+            spoken_punctuation(bool): whether to use spoken punctuation (default: False)
+            model(SpeechModels): the model to use for recognition default: "latest_long"
+            location(str): the location to use for recognition default: "us-central1"
+            sample_rate(int): the sample rate of the audio default: 16000
+            credentials_info(dict): the credentials info to use for recognition (default: None)
+            credentials_file(str): the credentials file to use for recognition (default: None)
+            keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
         """
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)

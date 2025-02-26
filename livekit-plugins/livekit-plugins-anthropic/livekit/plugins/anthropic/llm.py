@@ -171,7 +171,7 @@ class LLM(llm.LLM):
 
             opts["tools"] = fncs_desc
             if tool_choice is not None:
-                anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
+                anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if isinstance(tool_choice, ToolChoice):
                     if tool_choice.type == "function":
                         anthropic_tool_choice = {
@@ -181,9 +181,13 @@ class LLM(llm.LLM):
                 elif isinstance(tool_choice, str):
                     if tool_choice == "required":
                         anthropic_tool_choice = {"type": "any"}
-            if parallel_tool_calls is not None and parallel_tool_calls is False:
-                anthropic_tool_choice["disable_parallel_tool_use"] = True
-            opts["tool_choice"] = anthropic_tool_choice
+                    elif tool_choice == "none":
+                        opts["tools"] = []
+                        anthropic_tool_choice = None
+            if anthropic_tool_choice is not None:
+                if parallel_tool_calls is False:
+                    anthropic_tool_choice["disable_parallel_tool_use"] = True
+                opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message: anthropic.types.TextBlockParam = _latest_system_message(
             chat_ctx, caching=self._opts.caching

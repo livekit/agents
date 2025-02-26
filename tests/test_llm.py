@@ -9,7 +9,7 @@ from typing import Annotated, Callable, Literal, Optional, Union
 import pytest
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
-from livekit.plugins import anthropic, google, openai
+from livekit.plugins import anthropic, aws, google, openai
 from livekit.rtc import VideoBufferType, VideoFrame
 
 
@@ -101,7 +101,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
     pytest.param(lambda: anthropic.LLM(), id="anthropic"),
     pytest.param(lambda: google.LLM(), id="google"),
     pytest.param(lambda: google.LLM(vertexai=True), id="google-vertexai"),
-    # .param(lambda: aws.LLM(), id="aws"),
+    pytest.param(lambda: aws.LLM(), id="aws"),
 ]
 
 
@@ -348,9 +348,7 @@ async def test_tool_choice_options(
     print(calls)
 
     call_names = {call.call_info.function_info.name for call in calls}
-    if tool_choice == "none" and isinstance(input_llm, anthropic.LLM):
-        assert True
-    else:
+    if tool_choice == "none":
         assert call_names == expected_calls, (
             f"Test '{description}' failed: Expected calls {expected_calls}, but got {call_names}"
         )
