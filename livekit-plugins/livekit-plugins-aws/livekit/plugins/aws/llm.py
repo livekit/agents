@@ -213,11 +213,13 @@ class LLMStream(llm.LLMStream):
                     self._additional_request_fields
                 )
 
-            inference_config = _strip_nones({
-                "maxTokens": self._max_output_tokens,
-                "temperature": self._temperature,
-                "topP": self._top_p,
-            })
+            inference_config = _strip_nones(
+                {
+                    "maxTokens": self._max_output_tokens,
+                    "temperature": self._temperature,
+                    "topP": self._top_p,
+                }
+            )
             response = self._client.converse_stream(
                 modelId=self._model,
                 messages=messages,
