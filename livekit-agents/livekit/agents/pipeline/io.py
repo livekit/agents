@@ -163,47 +163,48 @@ class AgentInput:
         self._video_changed = video_changed
         self._audio_changed = audio_changed
 
-        self._paused_video_stream: VideoStream | None = None
-        self._paused_audio_stream: AudioStream | None = None
-        self._task_consume_audio: asyncio.Task | None = None
-        self._task_consume_video: asyncio.Task | None = None
+        self._inactive_video_stream: VideoStream | None = None
+        self._inactive_audio_stream: AudioStream | None = None
+        self._consume_video_task: asyncio.Task | None = None
+        self._consume_audio_task: asyncio.Task | None = None
 
-    def toggle_audio(self, enable: bool) -> None:
-        if enable:
-            if self._audio_stream is None and self._paused_audio_stream is not None:
-                self.audio = self._paused_audio_stream
-                logger.debug("input audio stream resumed")
-            elif self._paused_audio_stream is None:
-                logger.warning("no audio stream to resume")
-        else:
-            if self._audio_stream is not None:
-                self._paused_audio_stream = self._audio_stream
-                self.audio = None
-                if self._task_consume_audio:
-                    self._task_consume_audio.cancel()
-                self._task_consume_audio = asyncio.create_task(
-                    self._consume_stream(self._paused_audio_stream)
-                )
-                logger.debug("input audio stream paused")
+    def set_audio_enabled(self, enable: bool) -> bool:
+        if enable and not self._audio_stream and self._inactive_audio_stream:
+            self.audio = self._inactive_audio_stream
+            return True
 
-    def toggle_video(self, enable: bool) -> None:
-        if enable:
-            if self._video_stream is None and self._paused_video_stream is not None:
-                self.video = self._paused_video_stream
-                self._paused_video_stream = None
-                logger.debug("input video stream resumed")
-            elif self._paused_video_stream is None:
-                logger.warning("no video stream to resume")
-        else:
-            if self._video_stream is not None:
-                self._paused_video_stream = self._video_stream
-                self.video = None
-                if self._task_consume_video:
-                    self._task_consume_video.cancel()
-                self._task_consume_video = asyncio.create_task(
-                    self._consume_stream(self._paused_video_stream)
-                )
-                logger.debug("input video stream paused")
+        if not enable and self._audio_stream:
+            self._inactive_audio_stream = self._audio_stream
+            self.audio = None
+
+            # consume the stream in the background
+            if self._consume_audio_task:
+                self._consume_audio_task.cancel()
+            self._consume_audio_task = asyncio.create_task(
+                self._consume_stream(self._inactive_audio_stream)
+            )
+            return True
+
+        return False
+
+    def set_video_enabled(self, enable: bool) -> bool:
+        if enable and not self._video_stream and self._inactive_video_stream:
+            self.video = self._inactive_video_stream
+            return True
+
+        if not enable and self._video_stream:
+            self._inactive_video_stream = self._video_stream
+            self.video = None
+
+            # consume the stream in the background
+            if self._consume_video_task:
+                self._consume_video_task.cancel()
+            self._consume_video_task = asyncio.create_task(
+                self._consume_stream(self._inactive_video_stream)
+            )
+            return True
+
+        return False
 
     @property
     def video(self) -> VideoStream | None:
@@ -213,10 +214,11 @@ class AgentInput:
     def video(self, stream: VideoStream | None) -> None:
         self._video_stream = stream
         if stream is not None:
-            self._paused_video_stream = None
-            if self._task_consume_video:
-                self._task_consume_video.cancel()
-                self._task_consume_video = None
+            # reset the inactive stream
+            self._inactive_video_stream = None
+            if self._consume_video_task:
+                self._consume_video_task.cancel()
+                self._consume_video_task = None
         self._video_changed()
 
     @property
@@ -227,21 +229,32 @@ class AgentInput:
     def audio(self, stream: AudioStream | None) -> None:
         self._audio_stream = stream
         if stream is not None:
-            self._paused_audio_stream = None
-            if self._task_consume_audio:
-                self._task_consume_audio.cancel()
-                self._task_consume_audio = None
+            # reset the inactive stream
+            self._inactive_audio_stream = None
+            if self._consume_audio_task:
+                self._consume_audio_task.cancel()
+                self._consume_audio_task = None
         self._audio_changed()
 
     async def _consume_stream(self, stream: AudioStream | VideoStream) -> None:
         async for frame in stream:
             pass
 
+    def close(self) -> None:
+        if self._consume_audio_task:
+            self._consume_audio_task.cancel()
+        if self._consume_video_task:
+            self._consume_video_task.cancel()
 
-class AgentOutput:
+        self._consume_audio_task = None
+        self._consume_video_task = None
+
+
+class AgentOutput(rtc.EventEmitter[Literal["video_changed", "audio_changed", "text_changed"]]):
     def __init__(
         self, video_changed: Callable, audio_changed: Callable, text_changed: Callable
     ) -> None:
+        super().__init__()
         self._video_sink: VideoSink | None = None
         self._audio_sink: AudioSink | None = None
         self._text_sink: TextSink | None = None
@@ -249,51 +262,46 @@ class AgentOutput:
         self._audio_changed = audio_changed
         self._text_changed = text_changed
 
-        self._paused_video_sink: VideoSink | None = None
-        self._paused_audio_sink: AudioSink | None = None
-        self._paused_text_sink: TextSink | None = None
+        # used to pause/resume streams
+        self._inactive_video_sink: VideoSink | None = None
+        self._inactive_audio_sink: AudioSink | None = None
+        self._inactive_text_sink: TextSink | None = None
 
-    def toggle_video(self, enable: bool) -> None:
-        if enable:
-            if self._video_sink is None and self._paused_video_sink is not None:
-                self.video = self._paused_video_sink
-                self._paused_video_sink = None
-                logger.debug("output video sink resumed")
-            elif self._paused_video_sink is None:
-                logger.warning("no video sink to resume")
-        else:
-            if self._video_sink is not None:
-                self._paused_video_sink = self._video_sink
-                self.video = None
-                logger.debug("output video sink paused")
+    def set_video_enabled(self, enable: bool) -> bool:
+        if enable and not self._video_sink and self._inactive_video_sink:
+            self.video = self._inactive_video_sink
+            return True
 
-    def toggle_audio(self, enable: bool) -> None:
-        if enable:
-            if self._audio_sink is None and self._paused_audio_sink is not None:
-                self.audio = self._paused_audio_sink
-                self._paused_audio_sink = None
-                logger.debug("output audio sink resumed")
-            elif self._paused_audio_sink is None:
-                logger.warning("no audio sink to resume")
-        else:
-            if self._audio_sink is not None:
-                self._paused_audio_sink = self._audio_sink
-                self.audio = None
-                logger.debug("output audio sink paused")
+        if not enable and self._video_sink:
+            self._inactive_video_sink = self._video_sink
+            self.video = None
+            return True
 
-    def toggle_text(self, enable: bool) -> None:
-        if enable:
-            if self._text_sink is None and self._paused_text_sink is not None:
-                self.text = self._paused_text_sink
-                self._paused_text_sink = None
-                logger.debug("output text sink resumed")
-            elif self._paused_text_sink is None:
-                logger.warning("no text sink to resume")
-        else:
-            if self._text_sink is not None:
-                self._paused_text_sink = self._text_sink
-                self.text = None
-                logger.debug("output text sink paused")
+        return False
+
+    def set_audio_enabled(self, enable: bool) -> bool:
+        if enable and not self._audio_sink and self._inactive_audio_sink:
+            self.audio = self._inactive_audio_sink
+            return True
+
+        if not enable and self._audio_sink:
+            self._inactive_audio_sink = self._audio_sink
+            self.audio = None
+            return True
+
+        return False
+
+    def set_text_enabled(self, enable: bool) -> bool:
+        if enable and not self._text_sink and self._inactive_text_sink:
+            self.text = self._inactive_text_sink
+            return True
+
+        if not enable and self._text_sink:
+            self._inactive_text_sink = self._text_sink
+            self.text = None
+            return True
+
+        return False
 
     @property
     def video(self) -> VideoSink | None:
@@ -302,6 +310,9 @@ class AgentOutput:
     @video.setter
     def video(self, sink: VideoSink | None) -> None:
         self._video_sink = sink
+        if sink is not None:
+            self._inactive_video_sink = None
+        self.emit("video_changed", sink)
         self._video_changed()
 
     @property
@@ -311,6 +322,9 @@ class AgentOutput:
     @audio.setter
     def audio(self, sink: AudioSink | None) -> None:
         self._audio_sink = sink
+        if sink is not None:
+            self._inactive_audio_sink = None
+        self.emit("audio_changed", sink)
         self._audio_changed()
 
     @property
@@ -320,4 +334,7 @@ class AgentOutput:
     @text.setter
     def text(self, sink: TextSink | None) -> None:
         self._text_sink = sink
+        if sink is not None:
+            self._inactive_text_sink = None
+        self.emit("text_changed", sink)
         self._text_changed()

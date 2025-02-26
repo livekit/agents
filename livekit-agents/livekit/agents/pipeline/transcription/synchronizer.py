@@ -315,11 +315,12 @@ class TextSynchronizer:
         self._tasks: set[asyncio.Task] = set()
         self._main_task = asyncio.create_task(self._forward_event())
 
-    def toggle_sync(self, enable: bool) -> None:
-        original_enabled = self._sync_enabled
+    def set_sync_enabled(self, enable: bool) -> None:
+        if self._sync_enabled == enable:
+            return
+
         self._sync_enabled = enable
-        if original_enabled != enable:
-            self._flush()
+        self._flush()
 
     @property
     def audio_sink(self) -> "_AudioSync":

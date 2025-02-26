@@ -6,7 +6,6 @@ from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cl
 from livekit.agents.llm import ai_function
 from livekit.agents.pipeline import AgentTask, CallContext, PipelineAgent
 from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomInputOptions, RoomOutputOptions
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("roomio-example")
@@ -53,50 +52,37 @@ async def entrypoint(ctx: JobContext):
     def on_agent_state_changed(state: AgentState):
         logger.info("agent_state_changed", extra={"state": state})
 
-    await agent.start(
-        room=ctx.room,
-        # optionally override the default input and output options
-        room_input_options=RoomInputOptions(audio_enabled=True, text_enabled=True),
-        room_output_options=RoomOutputOptions(
-            audio_enabled=True,
-            text_enabled=True,
-            agent_text_sync_with_audio=True,
-        ),
-    )
+    await agent.start(room=ctx.room)
 
-    @ctx.room.local_participant.register_rpc_method("toggle_input_audio")
-    async def toggle_input_audio(data: rtc.RpcInvocationData) -> None:
-        enable = data.payload.lower() == "true"
-        agent.input.toggle_audio(enable)
+    @ctx.room.local_participant.register_rpc_method("toggle_audio_input")
+    async def toggle_audio_input(data: rtc.RpcInvocationData) -> None:
+        enable = data.payload.lower() == "on"
+        if agent.input.set_audio_enabled(enable):
+            logger.info("toggled audio input", extra={"enable": enable})
 
-    @ctx.room.local_participant.register_rpc_method("toggle_output_audio")
-    async def toggle_output_audio(data: rtc.RpcInvocationData) -> None:
-        enable = data.payload.lower() == "true"
-        agent.output.toggle_audio(enable)
+    @ctx.room.local_participant.register_rpc_method("toggle_audio_output")
+    async def toggle_audio_output(data: rtc.RpcInvocationData) -> None:
+        enable = data.payload.lower() == "on"
+        if agent.output.set_audio_enabled(enable):
+            logger.info("toggled audio output", extra={"enable": enable})
 
-        if agent.room_io:
-            text_sync_enable = agent.output.audio and agent.output.text
-            agent.room_io.toggle_text_audio_sync(text_sync_enable)
-
-    @ctx.room.local_participant.register_rpc_method("toggle_output_text")
-    async def toggle_output_text(data: rtc.RpcInvocationData) -> None:
-        enable = data.payload.lower() == "true"
-        agent.output.toggle_text(enable)
-
-        if agent.room_io:
-            audio_sync_enable = agent.output.audio and agent.output.text
-            agent.room_io.toggle_text_audio_sync(audio_sync_enable)
-
-    def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
-        logger.info(
-            "playback_finished",
-            extra={
-                "playback_position": ev.playback_position,
-                "interrupted": ev.interrupted,
-            },
-        )
+    @ctx.room.local_participant.register_rpc_method("toggle_text_output")
+    async def toggle_text_output(data: rtc.RpcInvocationData) -> None:
+        enable = data.payload.lower() == "on"
+        if agent.output.set_text_enabled(enable):
+            logger.info("toggled text output", extra={"enable": enable})
 
     if agent.output.audio is not None:
+
+        def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
+            logger.info(
+                "playback_finished",
+                extra={
+                    "playback_position": ev.playback_position,
+                    "interrupted": ev.interrupted,
+                },
+            )
+
         agent.output.audio.on("playback_finished", on_playback_finished)
 
 

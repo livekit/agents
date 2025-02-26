@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterator, Generic, Optional, TypeVar
+from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar
 
 from livekit import rtc
 
@@ -35,10 +35,6 @@ class RoomInputOptions:
     """Number of audio channels"""
     text_input_topic: str | None = TOPIC_CHAT
     """Topic for text input"""
-    _audio_queue_capacity: int = 0
-    """Capacity of the internal audio queue, 0 means unlimited"""
-    _video_queue_capacity: int = 0
-    """Capacity of the internal video queue, 0 means unlimited"""
 
 
 @dataclass(frozen=True)
@@ -115,13 +111,9 @@ class RoomIO:
                 room=self._room,
                 sample_rate=self._in_opts.audio_sample_rate,
                 num_channels=self._in_opts.audio_num_channels,
-                capacity=self._in_opts._audio_queue_capacity,
             )
         if self._in_opts.video_enabled:
-            self._video_input_handle = VideoStreamHandle(
-                room=self._room,
-                capacity=self._in_opts._video_queue_capacity,
-            )
+            self._video_input_handle = VideoStreamHandle(room=self._room)
 
         # room output setup
         if self._out_opts.audio_enabled:
@@ -158,6 +150,8 @@ class RoomIO:
                         audio_sink=audio_output,
                         text_sink=self._agent_text_output,
                     )
+                    self._agent.output.on("audio_changed", self._on_agent_output_changed)
+                    self._agent.output.on("text_changed", self._on_agent_output_changed)
 
         if self._audio_output:
             await self._audio_output.start()
@@ -196,13 +190,13 @@ class RoomIO:
         return self._agent_text_output
 
     @property
-    def audio_input(self) -> AsyncIterator[rtc.AudioFrame] | None:
+    def audio_input(self) -> AsyncIterable[rtc.AudioFrame] | None:
         if not self._audio_input_handle:
             return None
         return self._audio_input_handle.stream
 
     @property
-    def video_input(self) -> AsyncIterator[rtc.VideoFrame] | None:
+    def video_input(self) -> AsyncIterable[rtc.VideoFrame] | None:
         if not self._video_input_handle:
             return None
         return self._video_input_handle.stream
@@ -367,6 +361,11 @@ class RoomIO:
 
         self._update_state_task = asyncio.create_task(_set_state())
 
+    def _on_agent_output_changed(self, sink: AudioSink | TextSink | None) -> None:
+        if self._text_synchronizer:
+            enable = self._agent.output.audio and self._agent.output.text
+            self._text_synchronizer.set_sync_enabled(enable)
+
     def _update_user_text_sink(self, participant_identity: str | None) -> None:
         if not self._user_text_output:
             return
@@ -400,6 +399,11 @@ class RoomIO:
             await self._audio_input_handle.aclose()
         if self._video_input_handle:
             await self._video_input_handle.aclose()
+
+        if self._text_synchronizer:
+            self._agent.output.off("audio_changed", self._on_agent_output_changed)
+            self._agent.output.off("text_changed", self._on_agent_output_changed)
+            await self._text_synchronizer.aclose()
 
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)
@@ -768,9 +772,10 @@ T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
 class BaseStreamHandle(Generic[T]):
     """Base class for handling audio/video streams from a participant"""
 
-    def __init__(self, room: rtc.Room, name: str = "") -> None:
+    def __init__(self, room: rtc.Room, *, capacity: int = 0, name: str = "") -> None:
         self._room = room
         self._name = name
+        self._closed = False
 
         self._participant_identity: Optional[str] = None
         self._stream: Optional[rtc.VideoStream | rtc.AudioStream] = None
@@ -779,11 +784,13 @@ class BaseStreamHandle(Generic[T]):
 
         self._tasks: set[asyncio.Task] = set()
         self._room.on("track_subscribed", self._on_track_subscribed)
-        self._continuous_stream = self._read_stream()
+
+        self._data_ch = utils.aio.Chan[T](maxsize=capacity)
+        self._forward_stream_atask = asyncio.create_task(self._forward_stream_task())
 
     @property
-    def stream(self) -> AsyncIterator[T] | None:
-        return self._continuous_stream
+    def stream(self) -> utils.aio.Chan[T]:
+        return self._data_ch
 
     def set_participant(self, participant_identity: str | None) -> None:
         """Start streaming from the participant"""
@@ -807,11 +814,14 @@ class BaseStreamHandle(Generic[T]):
                     self._on_track_subscribed(publication.track, publication, participant)
 
     async def aclose(self) -> None:
+        self._closed = True
         if self._stream:
             await self._stream.aclose()
             self._stream = None
             self._track = None
             self._stream_ready.clear()
+        await utils.aio.cancel_and_wait(self._forward_stream_atask)
+        self._data_ch.close()
 
     def _create_stream(self, track: rtc.Track) -> Optional[rtc.VideoStream | rtc.AudioStream]:
         raise NotImplementedError()
@@ -830,8 +840,8 @@ class BaseStreamHandle(Generic[T]):
         self._track = None
         self._stream_ready.clear()
 
-    async def _read_stream(self) -> AsyncIterator[T]:
-        while True:
+    async def _forward_stream_task(self) -> None:
+        while not self._closed:
             if self._stream is None:
                 await self._stream_ready.wait()
                 continue
@@ -846,7 +856,7 @@ class BaseStreamHandle(Generic[T]):
             )
             try:
                 async for event in stream:
-                    yield event.frame
+                    await self._data_ch.send(event.frame)
 
                 logger.debug(
                     "stream ended",
@@ -889,7 +899,7 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
         num_channels: int = 1,
         capacity: int = 0,
     ) -> None:
-        super().__init__(room=room, name="audio")
+        super().__init__(room=room, capacity=capacity, name="audio")
         self.sample_rate = sample_rate
         self.num_channels = num_channels
         self.capacity = capacity
@@ -905,7 +915,7 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
 
 class VideoStreamHandle(BaseStreamHandle[rtc.VideoFrame]):
     def __init__(self, room: rtc.Room, *, capacity: int = 0) -> None:
-        super().__init__(room=room, name="video")
+        super().__init__(room=room, capacity=capacity, name="video")
         self.capacity = capacity
 
     def _create_stream(self, track: rtc.Track) -> rtc.VideoStream:
