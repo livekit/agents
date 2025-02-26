@@ -128,17 +128,19 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
+        self._streams: list[SynthesizeStream] = []
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
-        return await asyncio.wait_for(
-            session.ws_connect(url), self._conn_options.timeout
-        )
+        ws = await asyncio.wait_for(session.ws_connect(url), self._conn_options.timeout)
+        ws._is_closing = False
+        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        ws._is_closing = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -193,11 +195,19 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> "SynthesizeStream":
-        return SynthesizeStream(
+        stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
             opts=self._opts,
         )
+        self._streams.append(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in self._streams:
+            await stream.aclose()
+        self._streams = []
+        await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -336,6 +346,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    if getattr(ws, "_is_closing", False):
+                        break
                     raise APIStatusError(
                         "Cartesia connection closed unexpectedly",
                         request_id=request_id,

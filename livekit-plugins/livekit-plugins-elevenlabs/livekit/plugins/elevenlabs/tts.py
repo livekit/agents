@@ -19,7 +19,6 @@ import base64
 import dataclasses
 import json
 import os
-import weakref
 from dataclasses import dataclass
 from typing import Any, List, Literal, Optional
 
@@ -174,19 +173,22 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
-        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._streams: list[SynthesizeStream] = []
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        return await asyncio.wait_for(
+        ws = await asyncio.wait_for(
             session.ws_connect(
                 _stream_url(self._opts),
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ),
             self._conn_options.timeout,
         )
+        ws._is_closing = False
+        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        ws._is_closing = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -239,8 +241,14 @@ class TTS(tts.TTS):
         self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> "SynthesizeStream":
         stream = SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
-        self._streams.add(stream)
+        self._streams.append(stream)
         return stream
+
+    async def aclose(self) -> None:
+        for stream in self._streams:
+            await stream.aclose()
+        self._streams = []
+        await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -486,6 +494,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
+                        if getattr(ws_conn, "_is_closing", False):
+                            break
                         raise APIStatusError(
                             "11labs connection closed unexpectedly, not all tokens have been consumed",
                             request_id=request_id,
