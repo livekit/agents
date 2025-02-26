@@ -706,6 +706,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._agent_reply_task = asyncio.create_task(
             self._synthesize_answer_task(self._agent_reply_task, new_handle)
         )
+        self._agent_reply_task.add_done_callback(
+            lambda t: new_handle.cancel() if t.cancelled() else None)
 
     @utils.log_exceptions(logger=logger)
     async def _synthesize_answer_task(
