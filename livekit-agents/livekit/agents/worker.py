@@ -169,7 +169,7 @@ class WorkerOptions:
 
     """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
-        dev_default=0, prod_default=3
+        dev_default=3, prod_default=3
     )
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0

@@ -168,6 +168,19 @@ class SupervisedProc(ABC):
             assert isinstance(init_res, proto.InitializeResponse), (
                 "first message must be InitializeResponse"
             )
+
+            if init_res.error:
+                self._initialize_fut.set_exception(
+                    RuntimeError(f"process initialization failed: {init_res.error}")
+                )
+                logger.error(
+                    f"process initialization failed: {init_res.error}",
+                    extra=self.logging_extra(),
+                )
+                raise RuntimeError(f"process initialization failed: {init_res.error}")
+            else:
+                self._initialize_fut.set_result(None)
+
         except asyncio.TimeoutError:
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("process initialization timed out")
@@ -180,8 +193,6 @@ class SupervisedProc(ABC):
         except Exception as e:  # should be channel.ChannelClosed most of the time
             self._initialize_fut.set_exception(e)
             raise
-        else:
-            self._initialize_fut.set_result(None)
 
     async def aclose(self) -> None:
         """attempt to gracefully close the supervised process"""
