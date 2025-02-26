@@ -135,13 +135,13 @@ def _build_image(image: llm.ChatImage, cache_key: Any) -> dict:
                     strategy="scale_aspect_fit",
                 )
             encoded_data = utils.images.encode(image.image, opts)
-            image._cache[cache_key] = base64.b64encode(encoded_data).decode("utf-8")
+            image._cache[cache_key] = encoded_data
 
         return {
             "image": {
                 "format": "jpeg",
                 "source": {
-                    "bytes": image._cache[cache_key].encode("utf-8"),
+                    "bytes": image._cache[cache_key],
                 },
             }
         }

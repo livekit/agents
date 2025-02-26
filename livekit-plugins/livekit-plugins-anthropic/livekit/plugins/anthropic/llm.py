@@ -181,6 +181,9 @@ class LLM(llm.LLM):
                 elif isinstance(tool_choice, str):
                     if tool_choice == "required":
                         anthropic_tool_choice = {"type": "any"}
+                    elif tool_choice == "none":
+                        opts["tools"] = []
+                        anthropic_tool_choice = None
             if parallel_tool_calls is not None and parallel_tool_calls is False:
                 anthropic_tool_choice["disable_parallel_tool_use"] = True
             opts["tool_choice"] = anthropic_tool_choice
@@ -378,9 +381,9 @@ def _latest_system_message(
         if isinstance(latest_system_message.content, str):
             latest_system_str = latest_system_message.content
         elif isinstance(latest_system_message.content, list):
-            latest_system_str = " ".join(
-                [c for c in latest_system_message.content if isinstance(c, str)]
-            )
+            latest_system_str = " ".join([
+                c for c in latest_system_message.content if isinstance(c, str)
+            ])
     system_text_block = anthropic.types.TextBlockParam(
         text=latest_system_str,
         type="text",

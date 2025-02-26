@@ -203,7 +203,7 @@ class LLMStream(llm.LLMStream):
                 elif self._tool_choice == "auto":
                     tool_config["toolChoice"] = {"auto": {}}
                 else:
-                    raise ValueError("aws bedrock llm: invalid tool choice")
+                    tools = []
 
                 opts["toolConfig"] = tool_config
 
@@ -281,16 +281,16 @@ class LLMStream(llm.LLMStream):
         return None
 
     def _try_build_function(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
-        if not self._tool_call_id:
+        if self._tool_call_id is None:
             logger.warning("aws bedrock llm: no tool call id in the response")
             return None
-        if not self._fnc_name:
+        if self._fnc_name is None:
             logger.warning("aws bedrock llm: no function name in the response")
             return None
-        if not self._fnc_raw_arguments:
+        if self._fnc_raw_arguments is None:
             logger.warning("aws bedrock llm: no function arguments in the response")
             return None
-        if not self._fnc_ctx:
+        if self._fnc_ctx is None:
             logger.warning(
                 "aws bedrock llm: stream tried to run function without function context"
             )
