@@ -184,9 +184,9 @@ class LLM(llm.LLM):
                     elif tool_choice == "none":
                         opts["tools"] = []
                         anthropic_tool_choice = None
-            if parallel_tool_calls is False and anthropic_tool_choice is not None:
-                anthropic_tool_choice["disable_parallel_tool_use"] = True
             if anthropic_tool_choice is not None:
+                if parallel_tool_calls is False:
+                    anthropic_tool_choice["disable_parallel_tool_use"] = True
                 opts["tool_choice"] = anthropic_tool_choice
 
         latest_system_message: anthropic.types.TextBlockParam = _latest_system_message(
