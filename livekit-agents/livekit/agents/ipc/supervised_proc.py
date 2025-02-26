@@ -118,7 +118,7 @@ class SupervisedProc(ABC):
             log_listener.start()
 
             self._proc = self._create_process(mp_cch, mp_log_cch)
-            self._proc.start()
+            await self._loop.run_in_executor(None, self._proc.start)
             mp_log_cch.close()
             mp_cch.close()
 
