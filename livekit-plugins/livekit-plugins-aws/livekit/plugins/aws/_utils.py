@@ -134,8 +134,7 @@ def _build_image(image: llm.ChatImage, cache_key: Any) -> dict:
                     height=image.inference_height,
                     strategy="scale_aspect_fit",
                 )
-            encoded_data = utils.images.encode(image.image, opts)
-            image._cache[cache_key] = encoded_data
+            image._cache[cache_key] = utils.images.encode(image.image, opts)
 
         return {
             "image": {
