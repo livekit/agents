@@ -186,7 +186,7 @@ class LLMStream(llm.LLMStream):
             messages, system_instruction = _build_aws_ctx(self._chat_ctx, id(self))
             messages = _merge_messages(messages)
 
-            def _get_tool_config(self) -> dict[str, Any] | None:
+            def _get_tool_config() -> dict[str, Any] | None:
                 if not (self._fnc_ctx and self._fnc_ctx.ai_functions):
                     return None
 
