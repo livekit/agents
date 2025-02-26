@@ -136,11 +136,11 @@ class TTS(tts.TTS):
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
         ws = await asyncio.wait_for(session.ws_connect(url), self._conn_options.timeout)
-        ws._is_closing = False
+        ws._is_closing = False  # type: ignore
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        ws._is_closing = True
+        ws._is_closing = True  # type: ignore
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
