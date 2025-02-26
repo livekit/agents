@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import weakref
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlencode
@@ -82,7 +81,8 @@ class TTS(tts.TTS):
         self._session = http_session
         self._api_key = api_key
         self._base_url = base_url
-        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._streams: list[SynthesizeStream] = []
+        self._closing_connection = False
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -95,6 +95,7 @@ class TTS(tts.TTS):
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
         }
+        self._closing_connection = False
         return await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._base_url, websocket=True),
@@ -104,6 +105,7 @@ class TTS(tts.TTS):
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        self._closing_connection = True
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -158,8 +160,14 @@ class TTS(tts.TTS):
             api_key=self._api_key,
             opts=self._opts,
         )
-        self._streams.add(stream)
+        self._streams.append(stream)
         return stream
+
+    async def aclose(self) -> None:
+        for stream in self._streams:
+            await stream.aclose()
+        self._streams = []
+        await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -327,10 +335,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError(
-                        "Deepgram websocket connection closed unexpectedly",
-                        request_id=request_id,
-                    )
+                    if not self._closing_connection:
+                        raise APIStatusError(
+                            "Deepgram websocket connection closed unexpectedly",
+                            request_id=request_id,
+                        )
+                    return
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     data = msg.data
