@@ -27,9 +27,7 @@ def _text_to_chunks(text: str) -> list[str]:
     return chunks
 
 
-async def _playout_task(
-    playout_q: asyncio.Queue, audio_source: rtc.AudioSource
-) -> None:
+async def _playout_task(playout_q: asyncio.Queue, audio_source: rtc.AudioSource) -> None:
     """Playout audio frames from the queue to the audio source"""
     while True:
         frame = await playout_q.get()
@@ -42,9 +40,7 @@ async def _playout_task(
 async def entrypoint(job: JobContext):
     # use another voice for this demo
     # you can get a list of the voices using 'await tts_11labs.list_voices()'
-    voice = elevenlabs.Voice(
-        id="ODq5zmih8GrVes37Dizd", name="Patrick", category="premade"
-    )
+    voice = elevenlabs.Voice(id="ODq5zmih8GrVes37Dizd", name="Patrick", category="premade")
 
     tts_11labs = elevenlabs.TTS(model_id="eleven_multilingual_v2", voice=voice)
 
@@ -67,14 +63,10 @@ async def entrypoint(job: JobContext):
         await source.capture_frame(output.frame)
 
     await asyncio.sleep(1)
-    streamed_text = (
-        "Bonjour, ceci est un autre example avec la méthode utilisant un websocket."
-    )
+    streamed_text = "Bonjour, ceci est un autre example avec la méthode utilisant un websocket."
     logger.info('Streaming text "%s"', streamed_text)
     stream = tts_11labs.stream()
-    for chunk in _text_to_chunks(
-        streamed_text
-    ):  # split into chunk just for the demonstration
+    for chunk in _text_to_chunks(streamed_text):  # split into chunk just for the demonstration
         stream.push_text(chunk)
 
     stream.flush()

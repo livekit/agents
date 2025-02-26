@@ -142,8 +142,7 @@ class RoomIO:
 
             self._agent_text_output = self._create_text_sink(
                 participant_identity=(
-                    self._out_opts.agent_text_identity
-                    or self._room.local_participant.identity
+                    self._out_opts.agent_text_identity or self._room.local_participant.identity
                 ),
                 is_delta_stream=True,
                 topic=self._out_opts.text_output_topic,
@@ -179,9 +178,7 @@ class RoomIO:
 
         self._agent.on("agent_state_changed", self._on_agent_state_changed)
 
-        self._room.local_participant.register_rpc_method(
-            "set_participant", self.on_set_participant
-        )
+        self._room.local_participant.register_rpc_method("set_participant", self.on_set_participant)
         self._room.local_participant.register_rpc_method(
             "unset_participant", self.on_unset_participant
         )
@@ -311,10 +308,7 @@ class RoomIO:
             "participant disconnected",
             extra={"participant": participant.identity},
         )
-        if (
-            self._participant_identity is None
-            or self._participant_identity != participant.identity
-        ):
+        if self._participant_identity is None or self._participant_identity != participant.identity:
             return
 
         self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
@@ -335,9 +329,7 @@ class RoomIO:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    def _on_user_text_input(
-        self, reader: rtc.TextStreamReader, participant_identity: str
-    ) -> None:
+    def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         if participant_identity != self._participant_identity:
             return
 
@@ -362,9 +354,7 @@ class RoomIO:
         @utils.log_exceptions(logger=logger)
         async def _set_state() -> None:
             if self._room.isconnected():
-                await self._room.local_participant.set_attributes(
-                    {ATTRIBUTE_AGENT_STATE: state}
-                )
+                await self._room.local_participant.set_attributes({ATTRIBUTE_AGENT_STATE: state})
 
         if self._update_state_task is not None:
             self._update_state_task.cancel()
@@ -462,9 +452,7 @@ class RoomAudioSink(AudioSink):
         if self._publication:
             return
 
-        track = rtc.LocalAudioTrack.create_audio_track(
-            "assistant_voice", self._audio_source
-        )
+        track = rtc.LocalAudioTrack.create_audio_track("assistant_voice", self._audio_source)
         self._publication = await self._room.local_participant.publish_track(
             track=track,
             options=rtc.TrackPublishOptions(source=self._track_source),
@@ -496,9 +484,7 @@ class RoomAudioSink(AudioSink):
             pushed_duration, interrupted = self._pushed_duration, self._interrupted
             self._pushed_duration = None
             self._interrupted = False
-            self.on_playback_finished(
-                playback_position=pushed_duration, interrupted=interrupted
-            )
+            self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
         self._flush_task = asyncio.create_task(self._audio_source.wait_for_playout())
         self._flush_task.add_done_callback(_playback_finished)
@@ -542,11 +528,7 @@ class RoomTranscriptEventSink(TextSink):
         participant: rtc.Participant | str | None = None,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
-        identity = (
-            participant.identity
-            if isinstance(participant, rtc.Participant)
-            else participant
-        )
+        identity = participant.identity if isinstance(participant, rtc.Participant) else participant
         self._participant_identity = identity
 
         if identity is None:
@@ -578,9 +560,7 @@ class RoomTranscriptEventSink(TextSink):
             self._pushed_text += text
         else:
             self._pushed_text = text
-        await self._publish_transcription(
-            self._current_id, self._pushed_text, final=False
-        )
+        await self._publish_transcription(self._current_id, self._pushed_text, final=False)
 
     def flush(self) -> None:
         if self._participant_identity is None or not self._capturing:
@@ -638,9 +618,7 @@ class RoomTranscriptEventSink(TextSink):
             return
         self._track_id = track.sid
 
-    def _on_local_track_published(
-        self, track: rtc.LocalTrackPublication, _: rtc.Track
-    ) -> None:
+    def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
         if (
             self._track_id is not None
             or self._participant_identity is None
@@ -683,11 +661,7 @@ class DataStreamTextSink(TextSink):
         participant: rtc.Participant | str | None,
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
-        identity = (
-            participant.identity
-            if isinstance(participant, rtc.Participant)
-            else participant
-        )
+        identity = participant.identity if isinstance(participant, rtc.Participant) else participant
 
         if identity == self._participant_identity:
             return
@@ -815,10 +789,7 @@ class BaseStreamHandle(Generic[T]):
         if self._participant_identity == participant_identity:
             return
 
-        if (
-            self._participant_identity
-            and self._participant_identity != participant_identity
-        ):
+        if self._participant_identity and self._participant_identity != participant_identity:
             self._close_current_stream()
 
         self._participant_identity = participant_identity
@@ -827,9 +798,7 @@ class BaseStreamHandle(Generic[T]):
         if participant:
             for publication in participant.track_publications.values():
                 if publication.track:
-                    self._on_track_subscribed(
-                        publication.track, publication, participant
-                    )
+                    self._on_track_subscribed(publication.track, publication, participant)
 
     async def aclose(self) -> None:
         if self._stream:
@@ -838,9 +807,7 @@ class BaseStreamHandle(Generic[T]):
             self._track = None
             self._stream_ready.clear()
 
-    def _create_stream(
-        self, track: rtc.Track
-    ) -> Optional[rtc.VideoStream | rtc.AudioStream]:
+    def _create_stream(self, track: rtc.Track) -> Optional[rtc.VideoStream | rtc.AudioStream]:
         raise NotImplementedError()
 
     def _close_current_stream(self) -> None:
@@ -893,10 +860,7 @@ class BaseStreamHandle(Generic[T]):
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        if (
-            not self._participant_identity
-            or self._participant_identity != participant.identity
-        ):
+        if not self._participant_identity or self._participant_identity != participant.identity:
             return
 
         if self._track and self._track.sid == track.sid:

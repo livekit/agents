@@ -51,7 +51,9 @@ async def test_decode_and_transcribe():
     await session.close()
 
     # Verify the transcription
-    expected_text = "the people that are crazy enough to think they can change the world are the ones who do"
+    expected_text = (
+        "the people that are crazy enough to think they can change the world are the ones who do"
+    )
     assert wer(final_text, expected_text) < 0.2
 
 

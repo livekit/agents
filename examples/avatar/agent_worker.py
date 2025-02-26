@@ -49,13 +49,9 @@ async def launch_avatar_worker(
     )
 
     logger.info(f"Sending connection info to avatar dispatcher {avatar_dispatcher_url}")
-    connection_info = AvatarConnectionInfo(
-        room_name=ctx.room.name, url=ctx._info.url, token=token
-    )
+    connection_info = AvatarConnectionInfo(room_name=ctx.room.name, url=ctx._info.url, token=token)
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            avatar_dispatcher_url, json=asdict(connection_info)
-        )
+        response = await client.post(avatar_dispatcher_url, json=asdict(connection_info))
         response.raise_for_status()
     logger.info("Avatar handshake completed")
 
@@ -109,9 +105,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--avatar-url", type=str, default="http://localhost:8089/launch"
-    )
+    parser.add_argument("--avatar-url", type=str, default="http://localhost:8089/launch")
     args, remaining_args = parser.parse_known_args()
     print(sys.argv, remaining_args)
     sys.argv = sys.argv[:1] + remaining_args

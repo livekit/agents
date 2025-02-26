@@ -108,9 +108,7 @@ def test_sync_channel():
 
 def _generate_fake_job() -> job.RunningJobInfo:
     return job.RunningJobInfo(
-        job=agent.Job(
-            id="fake_job_" + str(uuid.uuid4().hex), type=agent.JobType.JT_ROOM
-        ),
+        job=agent.Job(id="fake_job_" + str(uuid.uuid4().hex), type=agent.JobType.JT_ROOM),
         url="fake_url",
         token="fake_token",
         accept_arguments=job.JobAcceptArguments(name="", identity="", metadata=""),
@@ -354,9 +352,7 @@ async def test_shutdown_no_job():
 
     assert proc.exitcode == 0
     assert not proc.killed
-    assert start_args.shutdown_counter.value == 0, (
-        "shutdown_cb isn't called when there is no job"
-    )
+    assert start_args.shutdown_counter.value == 0, "shutdown_cb isn't called when there is no job"
 
 
 async def test_job_slow_shutdown():

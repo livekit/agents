@@ -60,9 +60,7 @@ setuptools.setup(
         "typing-extensions~=4.12",
     ],
     extras_require={
-        ':sys_platform=="win32"': [
-            "colorama"
-        ],  # fix logs color on windows (devmode only)
+        ':sys_platform=="win32"': ["colorama"],  # fix logs color on windows (devmode only)
         "codecs": ["av>=12.0.0", "numpy>=1.26.0"],
         "images": ["pillow>=10.3.0"],
     },

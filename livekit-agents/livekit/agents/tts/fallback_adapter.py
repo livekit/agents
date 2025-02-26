@@ -105,12 +105,8 @@ class FallbackAdapter(
         for t in tts:
             resampler = None
             if sample_rate != t.sample_rate:
-                logger.info(
-                    f"resampling {t.label} from {t.sample_rate}Hz to {sample_rate}Hz"
-                )
-                resampler = rtc.AudioResampler(
-                    input_rate=t.sample_rate, output_rate=sample_rate
-                )
+                logger.info(f"resampling {t.label} from {t.sample_rate}Hz to {sample_rate}Hz")
+                resampler = rtc.AudioResampler(input_rate=t.sample_rate, output_rate=sample_rate)
 
             self._status.append(
                 _TTSStatus(available=True, recovering_task=None, resampler=resampler)
@@ -188,9 +184,7 @@ class FallbackChunkedStream(ChunkedStream):
 
         except asyncio.TimeoutError:
             if recovering:
-                logger.warning(
-                    f"{tts.label} recovery timed out", extra={"streamed": False}
-                )
+                logger.warning(f"{tts.label} recovery timed out", extra={"streamed": False})
                 raise
 
             logger.warning(
@@ -265,9 +259,7 @@ class FallbackChunkedStream(ChunkedStream):
                 try:
                     request_id: str | None = None
                     resampler = tts_status.resampler
-                    async for synthesized_audio in self._try_synthesize(
-                        tts=tts, recovering=False
-                    ):
+                    async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
                         audio_duration += synthesized_audio.frame.duration
                         request_id = synthesized_audio.request_id
 
@@ -303,10 +295,7 @@ class FallbackChunkedStream(ChunkedStream):
                         )
 
                     if self._tts._no_fallback_after_audio_duration is not None:
-                        if (
-                            audio_duration
-                            >= self._tts._no_fallback_after_audio_duration
-                        ):
+                        if audio_duration >= self._tts._no_fallback_after_audio_duration:
                             logger.warning(
                                 f"{tts.label} already synthesized {audio_duration}s of audio, ignoring fallback"
                             )
@@ -330,9 +319,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         tts: FallbackAdapter,
         conn_options: Optional[APIConnectOptions] = None,
     ):
-        super().__init__(
-            tts=tts, conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS
-        )
+        super().__init__(tts=tts, conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS)
         self._fallback_adapter = tts
 
         self._total_segments: list[list[str]] = []
@@ -408,18 +395,12 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     except StopAsyncIteration:
                         break
 
-            if (
-                audio_duration == 0.0
-                and input_sent_fut.done()
-                and input_sent_fut.result()
-            ):
+            if audio_duration == 0.0 and input_sent_fut.done() and input_sent_fut.result():
                 raise APIConnectionError("no audio received")
 
         except asyncio.TimeoutError:
             if recovering:
-                logger.warning(
-                    f"{tts.label} recovery timed out", extra={"streamed": True}
-                )
+                logger.warning(f"{tts.label} recovery timed out", extra={"streamed": True})
                 raise
 
             logger.warning(
@@ -429,9 +410,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
             raise
         except APIError as e:
             if recovering:
-                logger.warning(
-                    f"{tts.label} recovery failed", exc_info=e, extra={"streamed": True}
-                )
+                logger.warning(f"{tts.label} recovery failed", exc_info=e, extra={"streamed": True})
                 raise
 
             logger.warning(
@@ -462,9 +441,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
     async def _run(self) -> None:
         start_time = time.time()
 
-        all_failed = all(
-            not tts_status.available for tts_status in self._fallback_adapter._status
-        )
+        all_failed = all(not tts_status.available for tts_status in self._fallback_adapter._status)
         if all_failed:
             logger.error("all TTSs are unavailable, retrying..")
 
@@ -480,9 +457,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 if isinstance(data, str) and data:
                     self._current_segment_text.append(data)
 
-                elif (
-                    isinstance(data, self._FlushSentinel) and self._current_segment_text
-                ):
+                elif isinstance(data, self._FlushSentinel) and self._current_segment_text:
                     self._total_segments.append(self._current_segment_text)
                     self._pending_segments_chunks.append(self._current_segment_text)
                     self._current_segment_text = []
@@ -498,9 +473,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 if tts_status.available or all_failed:
                     audio_duration = 0.0
                     try:
-                        new_input_ch = aio.Chan[
-                            Union[str, SynthesizeStream._FlushSentinel]
-                        ]()
+                        new_input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
 
                         for text in self._pending_segments_chunks:
                             for chunk in text:
@@ -531,9 +504,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             audio_duration += synthesized_audio.frame.duration
 
                             if resampler is not None:
-                                for resampled_frame in resampler.push(
-                                    synthesized_audio.frame
-                                ):
+                                for resampled_frame in resampler.push(synthesized_audio.frame):
                                     self._event_ch.send_nowait(
                                         dataclasses.replace(
                                             synthesized_audio, frame=resampled_frame
@@ -571,10 +542,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                                 AvailabilityChangedEvent(tts=tts, available=False),
                             )
 
-                        if (
-                            self._fallback_adapter._no_fallback_after_audio_duration
-                            is not None
-                        ):
+                        if self._fallback_adapter._no_fallback_after_audio_duration is not None:
                             if (
                                 audio_duration
                                 >= self._fallback_adapter._no_fallback_after_audio_duration

@@ -125,9 +125,7 @@ class RealtimeSession(
     ) -> None: ...  # can raise RealtimeError on Timeout
 
     @abstractmethod
-    async def update_fnc_ctx(
-        self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
-    ) -> None: ...
+    async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]) -> None: ...
 
     @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
@@ -137,9 +135,7 @@ class RealtimeSession(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
-    ) -> asyncio.Future[
-        GenerationCreatedEvent
-    ]: ...  # can raise RealtimeError on Timeout
+    ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
 
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod

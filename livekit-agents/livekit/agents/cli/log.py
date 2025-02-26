@@ -60,9 +60,7 @@ _RESERVED_ATTRS: Tuple[str, ...] = (
 
 def _merge_record_extra(record: logging.LogRecord, target: Dict[Any, Any]):
     for key, value in record.__dict__.items():
-        if key not in _RESERVED_ATTRS and not (
-            hasattr(key, "startswith") and key.startswith("_")
-        ):
+        if key not in _RESERVED_ATTRS and not (hasattr(key, "startswith") and key.startswith("_")):
             target[key] = value
 
 
@@ -136,9 +134,7 @@ class JsonFormatter(logging.Formatter):
         log_record.update(message_dict)
         _merge_record_extra(record, log_record)
 
-        log_record["timestamp"] = datetime.fromtimestamp(
-            record.created, tz=timezone.utc
-        )
+        log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
         return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
@@ -188,9 +184,7 @@ class ColoredFormatter(logging.Formatter):
         args.update(self._esc_codes)
 
         if extra:
-            args["extra"] = json.dumps(
-                extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=True
-            )
+            args["extra"] = json.dumps(extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
         for field in self._required_fields:
             if field in extra:

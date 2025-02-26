@@ -20,9 +20,7 @@ class VideoGenerator(Protocol):
 
     async def stream(
         self,
-    ) -> AsyncIterator[
-        tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]] | AudioFlushSentinel
-    ]:
+    ) -> AsyncIterator[tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]] | AudioFlushSentinel]:
         """Continuously yield video frames, idle frames are yielded when no audio is available"""
 
 
@@ -93,21 +91,15 @@ class AvatarRunner:
         self._audio_receiver.on("clear_buffer", _on_clear_buffer)
 
         # Publish tracks
-        audio_track = rtc.LocalAudioTrack.create_audio_track(
-            "avatar_audio", self._audio_source
-        )
-        video_track = rtc.LocalVideoTrack.create_video_track(
-            "avatar_video", self._video_source
-        )
-        audio_options = rtc.TrackPublishOptions(
-            source=rtc.TrackSource.SOURCE_MICROPHONE
-        )
+        audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self._audio_source)
+        video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self._video_source)
+        audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
-        self._avatar_audio_publication = (
-            await self._room.local_participant.publish_track(audio_track, audio_options)
+        self._avatar_audio_publication = await self._room.local_participant.publish_track(
+            audio_track, audio_options
         )
-        self._avatar_video_publication = (
-            await self._room.local_participant.publish_track(video_track, video_options)
+        self._avatar_video_publication = await self._room.local_participant.publish_track(
+            video_track, video_options
         )
 
         # Start processing

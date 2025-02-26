@@ -26,9 +26,7 @@ class _ProcClient:
         mp_cch: socket.socket,
         log_cch: socket.socket | None,
         initialize_fnc: Callable[[InitializeRequest, "_ProcClient"], None],
-        main_task_fnc: Callable[
-            [aio.ChanReceiver[Message]], Coroutine[None, None, None]
-        ],
+        main_task_fnc: Callable[[aio.ChanReceiver[Message]], Coroutine[None, None, None]],
     ) -> None:
         self._mp_cch = mp_cch
         self._log_cch = log_cch
@@ -117,9 +115,7 @@ class _ProcClient:
                     if isinstance(msg, PingRequest):
                         await asend_message(
                             self._acch,
-                            PongResponse(
-                                last_timestamp=msg.timestamp, timestamp=time_ms()
-                            ),
+                            PongResponse(last_timestamp=msg.timestamp, timestamp=time_ms()),
                         )
 
                     ipc_ch.send_nowait(msg)
@@ -135,9 +131,7 @@ class _ProcClient:
             read_task = asyncio.create_task(_read_ipc_task(), name="ipc_read")
             health_check_task: asyncio.Task | None = None
             if self._init_req.ping_interval > 0:
-                health_check_task = asyncio.create_task(
-                    _self_health_check(), name="health_check"
-                )
+                health_check_task = asyncio.create_task(_self_health_check(), name="health_check")
             main_task = asyncio.create_task(
                 self._main_task_fnc(ipc_ch), name="main_task_entrypoint"
             )

@@ -179,9 +179,7 @@ class RealtimeModel:
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
                 )
 
-        instructions_content = (
-            Content(parts=[Part(text=instructions)]) if instructions else None
-        )
+        instructions_content = Content(parts=[Part(text=instructions)]) if instructions else None
 
         self._rt_sessions: list[GeminiRealtimeSession] = []
         self._opts = ModelOptions(
@@ -278,9 +276,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             system_instruction=self._opts.instructions,
             speech_config=SpeechConfig(
                 voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(
-                        voice_name=self._opts.voice
-                    )
+                    prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
                 )
             ),
             tools=tools,
@@ -292,18 +288,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             project=self._opts.project,
             location=self._opts.location,
         )
-        self._main_atask = asyncio.create_task(
-            self._main_task(), name="gemini-realtime-session"
-        )
+        self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
         if self._opts.enable_user_audio_transcription:
-            self._transcriber = TranscriberSession(
-                client=self._client, model=self._opts.model
-            )
+            self._transcriber = TranscriberSession(client=self._client, model=self._opts.model)
             self._transcriber.on("input_speech_done", self._on_input_speech_done)
         if self._opts.enable_agent_audio_transcription:
-            self._agent_transcriber = ModelTranscriber(
-                client=self._client, model=self._opts.model
-            )
+            self._agent_transcriber = ModelTranscriber(client=self._client, model=self._opts.model)
             self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
         # init dummy task
         self._init_sync_task = asyncio.create_task(asyncio.sleep(0))
@@ -347,9 +337,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
     def create_response(
         self,
-        on_duplicate: Literal[
-            "cancel_existing", "cancel_new", "keep_both"
-        ] = "keep_both",
+        on_duplicate: Literal["cancel_existing", "cancel_new", "keep_both"] = "keep_both",
     ) -> None:
         turns, _ = _build_gemini_ctx(self._chat_ctx, id(self))
         ctx = [self._opts.instructions] + turns if self._opts.instructions else turns
@@ -435,8 +423,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                         data=part.inline_data.data,
                                         sample_rate=24000,
                                         num_channels=1,
-                                        samples_per_channel=len(part.inline_data.data)
-                                        // 2,
+                                        samples_per_channel=len(part.inline_data.data) // 2,
                                     )
                                     if self._opts.enable_agent_audio_transcription:
                                         content.audio.append(frame)

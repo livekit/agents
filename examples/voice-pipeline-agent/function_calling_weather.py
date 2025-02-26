@@ -29,18 +29,14 @@ class AssistantFnc(llm.FunctionContext):
     @llm.ai_callable()
     async def get_weather(
         self,
-        location: Annotated[
-            str, llm.TypeInfo(description="The location to get the weather for")
-        ],
+        location: Annotated[str, llm.TypeInfo(description="The location to get the weather for")],
         latitude: Annotated[
             str,
             llm.TypeInfo(description="The latitude of location to get the weather for"),
         ],
         longitude: Annotated[
             str,
-            llm.TypeInfo(
-                description="The longitude of location to get the weather for"
-            ),
+            llm.TypeInfo(description="The longitude of location to get the weather for"),
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location.
@@ -52,10 +48,7 @@ class AssistantFnc(llm.FunctionContext):
         # Option 2: you can prompt the agent to return a text response when it's making a function call
         agent = AgentCallContext.get_current().agent
 
-        if (
-            not agent.chat_ctx.messages
-            or agent.chat_ctx.messages[-1].role != "assistant"
-        ):
+        if not agent.chat_ctx.messages or agent.chat_ctx.messages[-1].role != "assistant":
             # skip if assistant already said something
             filler_messages = [
                 "Let me check the weather in {location} for you.",
@@ -84,9 +77,7 @@ class AssistantFnc(llm.FunctionContext):
                     }
                     logger.info(f"weather data: {weather_data}")
                 else:
-                    raise Exception(
-                        f"Failed to get weather data, status code: {response.status}"
-                    )
+                    raise Exception(f"Failed to get weather data, status code: {response.status}")
 
         # (optional) To wait for the speech to finish before giving results of the function call
         # await speech_handle.join()

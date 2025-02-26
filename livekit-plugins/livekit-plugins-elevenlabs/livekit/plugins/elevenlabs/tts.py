@@ -74,9 +74,7 @@ DEFAULT_VOICE = Voice(
     id="EXAVITQu4vr4xnSDxMaL",
     name="Bella",
     category="premade",
-    settings=VoiceSettings(
-        stability=0.71, similarity_boost=0.5, style=0.0, use_speaker_boost=True
-    ),
+    settings=VoiceSettings(stability=0.71, similarity_boost=0.5, style=0.0, use_speaker_boost=True),
 )
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
@@ -214,9 +212,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> "SynthesizeStream":
+    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> "SynthesizeStream":
         return SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -244,9 +240,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate, num_channels=1
-        )
+        bstream = utils.audio.AudioByteStream(sample_rate=self._opts.sample_rate, num_channels=1)
 
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice.settings))
@@ -397,9 +391,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             voice_settings=_strip_nones(dataclasses.asdict(self._opts.voice.settings))
             if self._opts.voice.settings
             else None,
-            generation_config=dict(
-                chunk_length_schedule=self._opts.chunk_length_schedule
-            ),
+            generation_config=dict(chunk_length_schedule=self._opts.chunk_length_schedule),
         )
         await ws_conn.send_str(json.dumps(init_pkt))
         eos_sent = False

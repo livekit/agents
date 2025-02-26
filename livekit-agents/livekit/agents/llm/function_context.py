@@ -76,9 +76,7 @@ def ai_function(
     description: str | None = None,
 ) -> Callable[[Callable], AIFunction]:
     def deco(func) -> AIFunction:
-        info = _AIFunctionInfo(
-            name=name or func.__name__, description=description or func.__doc__
-        )
+        info = _AIFunctionInfo(name=name or func.__name__, description=description or func.__doc__)
         setattr(func, "__livekit_agents_ai_callable", info)
         return func
 

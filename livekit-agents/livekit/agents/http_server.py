@@ -6,9 +6,7 @@ from aiohttp import web
 
 
 class HttpServer:
-    def __init__(
-        self, host: str, port: int, loop: asyncio.AbstractEventLoop | None = None
-    ) -> None:
+    def __init__(self, host: str, port: int, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._host = host
         self._port = port

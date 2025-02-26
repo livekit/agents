@@ -80,9 +80,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts = tts or None
 
         # configurable IO
-        self._input = io.AgentInput(
-            self._on_video_input_changed, self._on_audio_input_changed
-        )
+        self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
         self._output = io.AgentOutput(
             self._on_video_output_changed,
             self._on_audio_output_changed,
@@ -104,9 +102,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._agent_task = task
         else:
             if instructions is None:
-                raise ValueError(
-                    "instructions must be provided if no agent task is given"
-                )
+                raise ValueError("instructions must be provided if no agent task is given")
 
             self._agent_task = AgentTask(instructions=instructions)
 
@@ -227,12 +223,8 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(
                     room=room,
                     agent=self,
-                    input_options=(
-                        room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
-                    ),
-                    output_options=(
-                        room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
-                    ),
+                    input_options=(room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS),
+                    output_options=(room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS),
                 )
                 await self._room_io.start()
 

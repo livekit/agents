@@ -47,9 +47,7 @@ class FallbackAdapter(
 
         super().__init__(
             capabilities=LLMCapabilities(
-                supports_choices_on_int=all(
-                    t.capabilities.supports_choices_on_int for t in llm
-                ),
+                supports_choices_on_int=all(t.capabilities.supports_choices_on_int for t in llm),
                 requires_persistent_functions=all(
                     t.capabilities.requires_persistent_functions for t in llm
                 ),
@@ -62,8 +60,7 @@ class FallbackAdapter(
         self._retry_interval = retry_interval
 
         self._status = [
-            _LLMStatus(available=True, recovering_task=None)
-            for _ in self._llm_instances
+            _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
         ]
 
     def chat(
@@ -75,8 +72,7 @@ class FallbackAdapter(
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
     ) -> "LLMStream":
         return FallbackLLMStream(
             llm=self,
@@ -101,12 +97,9 @@ class FallbackLLMStream(LLMStream):
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
     ) -> None:
-        super().__init__(
-            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
-        )
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._fallback_adapter = llm
         self._temperature = temperature
         self._n = n
@@ -233,9 +226,7 @@ class FallbackLLMStream(LLMStream):
     async def _run(self) -> None:
         start_time = time.time()
 
-        all_failed = all(
-            not llm_status.available for llm_status in self._fallback_adapter._status
-        )
+        all_failed = all(not llm_status.available for llm_status in self._fallback_adapter._status)
         if all_failed:
             logger.error("all LLMs are unavailable, retrying..")
 
@@ -244,9 +235,7 @@ class FallbackLLMStream(LLMStream):
             if llm_status.available or all_failed:
                 chunk_sent = False
                 try:
-                    async for result in self._try_generate(
-                        llm=llm, check_recovery=False
-                    ):
+                    async for result in self._try_generate(llm=llm, check_recovery=False):
                         chunk_sent = True
                         self._event_ch.send_nowait(result)
 

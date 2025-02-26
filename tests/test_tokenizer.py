@@ -67,9 +67,7 @@ async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer):
         assert ev.token == EXPECTED_MIN_20[i]
 
 
-WORDS_TEXT = (
-    "This is a test. Blabla another test! multiple consecutive spaces:     done"
-)
+WORDS_TEXT = "This is a test. Blabla another test! multiple consecutive spaces:     done"
 WORDS_EXPECTED = [
     "This",
     "is",
@@ -217,9 +215,7 @@ REPLACE_REPLACEMENTS = {
 
 
 def test_replace_words():
-    replaced = tokenize.utils.replace_words(
-        text=REPLACE_TEXT, replacements=REPLACE_REPLACEMENTS
-    )
+    replaced = tokenize.utils.replace_words(text=REPLACE_TEXT, replacements=REPLACE_REPLACEMENTS)
     assert replaced == REPLACE_EXPECTED
 
 
