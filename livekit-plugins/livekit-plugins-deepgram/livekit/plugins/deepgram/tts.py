@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import weakref
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlencode
@@ -82,7 +81,7 @@ class TTS(tts.TTS):
         self._session = http_session
         self._api_key = api_key
         self._base_url = base_url
-        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._streams: list[SynthesizeStream] = []
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -95,15 +94,18 @@ class TTS(tts.TTS):
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
         }
-        return await asyncio.wait_for(
+        ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._base_url, websocket=True),
                 headers={"Authorization": f"Token {self._api_key}"},
             ),
             self._conn_options.timeout,
         )
+        ws._is_closing = False  # type: ignore
+        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        ws._is_closing = True  # type: ignore
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -158,8 +160,14 @@ class TTS(tts.TTS):
             api_key=self._api_key,
             opts=self._opts,
         )
-        self._streams.add(stream)
+        self._streams.append(stream)
         return stream
+
+    async def aclose(self) -> None:
+        for stream in self._streams:
+            await stream.aclose()
+        self._streams = []
+        await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -327,6 +335,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    if getattr(ws, "_is_closing", False):
+                        break
                     raise APIStatusError(
                         "Deepgram websocket connection closed unexpectedly",
                         request_id=request_id,
