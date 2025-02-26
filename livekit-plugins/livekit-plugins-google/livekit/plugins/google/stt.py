@@ -61,7 +61,7 @@ class STTOptions:
     interim_results: bool
     punctuate: bool
     spoken_punctuation: bool
-    model: SpeechModels
+    model: SpeechModels | str
     sample_rate: int
     keywords: List[tuple[str, float]] | None
 
