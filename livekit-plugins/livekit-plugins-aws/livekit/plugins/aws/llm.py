@@ -192,7 +192,7 @@ class LLMStream(llm.LLMStream):
 
             if self._fnc_ctx and self._fnc_ctx.ai_functions:
                 tools = _build_tools(self._fnc_ctx)
-                tool_config: dict[str, Any] = {"tools": tools}
+                tool_config: dict[str, Any] | None = {"tools": tools}
 
                 if isinstance(self._tool_choice, ToolChoice):
                     tool_config["toolChoice"] = {
@@ -203,7 +203,7 @@ class LLMStream(llm.LLMStream):
                 elif self._tool_choice == "auto":
                     tool_config["toolChoice"] = {"auto": {}}
                 else:
-                    tools = []
+                    tool_config = None
 
                 opts["toolConfig"] = tool_config
 
@@ -224,7 +224,7 @@ class LLMStream(llm.LLMStream):
                 messages=messages,
                 system=[system_instruction],
                 inferenceConfig=inference_config,
-                **opts,
+                **_strip_nones(opts),
             )  # type: ignore
 
             request_id = response["ResponseMetadata"]["RequestId"]
