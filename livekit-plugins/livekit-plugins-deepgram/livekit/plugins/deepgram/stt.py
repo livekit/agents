@@ -229,6 +229,9 @@ class STT(stt.STT):
         if config.language:
             recognize_config["language"] = config.language
 
+        logger.info(f"Additional config: {self._opts.additional_config}")
+        logger.info(f"Recognizing with configs: {recognize_config}")
+
         try:
             async with self._ensure_session().post(
                 url=_to_deepgram_url(recognize_config, self._base_url, websocket=False),
@@ -344,6 +347,8 @@ class STT(stt.STT):
 
         for key, value in config.additional_config.items():
             setattr(config, key, value)
+
+        logger.info(f"Sanitized config: {config}")
 
         return config
 
