@@ -161,7 +161,7 @@ class TTS(tts.TTS):
             api_key=self._api_key,
             opts=self._opts,
         )
-        self._streams.append(stream)
+        self._streams.add(stream)
         return stream
 
     async def aclose(self) -> None:

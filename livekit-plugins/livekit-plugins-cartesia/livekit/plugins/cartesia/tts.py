@@ -201,7 +201,7 @@ class TTS(tts.TTS):
             pool=self._pool,
             opts=self._opts,
         )
-        self._streams.append(stream)
+        self._streams.add(stream)
         return stream
 
     async def aclose(self) -> None:
