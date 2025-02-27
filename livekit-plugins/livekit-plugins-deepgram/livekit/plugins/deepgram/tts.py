@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlencode
@@ -81,7 +82,7 @@ class TTS(tts.TTS):
         self._session = http_session
         self._api_key = api_key
         self._base_url = base_url
-        self._streams: list[SynthesizeStream] = []
+        self._streams = weakref.WeakSet[SynthesizeStream]()
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -164,9 +165,9 @@ class TTS(tts.TTS):
         return stream
 
     async def aclose(self) -> None:
-        for stream in self._streams:
+        for stream in list(self._streams):
             await stream.aclose()
-        self._streams = []
+        self._streams.clear()
         await self._pool.aclose()
 
 
