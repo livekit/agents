@@ -219,8 +219,6 @@ class TTS(tts.TTS):
         self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
         self._opts.language = language or self._opts.language
-        for stream in self._streams:
-            stream.force_reconnect()
 
     def synthesize(
         self,
@@ -380,36 +378,25 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for word_stream in self._segments_ch:
                 await self._run_ws(word_stream, request_id)
 
-        while True:
-            wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-            tasks = [
-                asyncio.create_task(_tokenize_input()),
-                asyncio.create_task(_process_segments()),
-            ]
-            try:
-                done, _ = await asyncio.wait(
-                    [
-                        asyncio.gather(*tasks),
-                        wait_reconnect_task,
-                    ],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )  # type: ignore
-                if wait_reconnect_task not in done:
-                    break
-                self._reconnect_event.clear()
-            except asyncio.TimeoutError as e:
-                raise APITimeoutError() from e
-            except aiohttp.ClientResponseError as e:
-                raise APIStatusError(
-                    message=e.message,
-                    status_code=e.status,
-                    request_id=request_id,
-                    body=None,
-                ) from e
-            except Exception as e:
-                raise APIConnectionError() from e
-            finally:
-                await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+        tasks = [
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_process_segments()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=request_id,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
         self,

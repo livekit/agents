@@ -261,20 +261,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._base_url = base_url
         self._api_key = api_key
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
-        self._reconnect_event = asyncio.Event()
-
-    def update_options(
-        self,
-        *,
-        model: str | None = None,
-        sample_rate: int | None = None,
-    ) -> None:
-        if model is not None:
-            self._opts.model = model
-        if sample_rate is not None:
-            self._opts.sample_rate = sample_rate
-
-        self._reconnect_event.set()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -361,14 +347,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.debug("Unknown message type: %s", resp)
 
-        async def _connection_timeout():
-            # Deepgram has a 60-minute timeout period for websocket connections
-            await asyncio.sleep(3300)
-            logger.warning(
-                "Deepgram TTS maximum connection time reached. Reconnecting..."
-            )
-            self._reconnect_event.set()
-
         while True:
             async with self._pool.connection() as ws:
                 tasks = [
@@ -376,21 +354,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     asyncio.create_task(_run_segments(ws)),
                     asyncio.create_task(recv_task(ws)),
                 ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                connection_timeout_task = asyncio.create_task(_connection_timeout())
 
                 try:
-                    done, _ = await asyncio.wait(
-                        [
-                            asyncio.gather(*tasks),
-                            wait_reconnect_task,
-                            connection_timeout_task,
-                        ],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
-                    if wait_reconnect_task not in done:
-                        break
-                    self._reconnect_event.clear()
+                    await asyncio.gather(*tasks)
+
                 except asyncio.TimeoutError as e:
                     raise APITimeoutError() from e
                 except aiohttp.ClientResponseError as e:
@@ -403,9 +370,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 except Exception as e:
                     raise APIConnectionError() from e
                 finally:
-                    await utils.aio.gracefully_cancel(
-                        *tasks, wait_reconnect_task, connection_timeout_task
-                    )
+                    await utils.aio.gracefully_cancel(*tasks)
 
 
 def _to_deepgram_url(

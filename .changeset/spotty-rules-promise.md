@@ -2,6 +2,7 @@
 "livekit-plugins-elevenlabs": patch
 "livekit-plugins-cartesia": patch
 "livekit-plugins-deepgram": patch
+"livekit-plugins-playai": patch
 ---
 
-Add per-connection flag for graceful shutdown and add tts aclose
+remove update options from tts synthesis stream
