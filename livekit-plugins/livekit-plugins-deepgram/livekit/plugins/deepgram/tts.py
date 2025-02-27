@@ -102,11 +102,9 @@ class TTS(tts.TTS):
             ),
             self._conn_options.timeout,
         )
-        ws._is_closing = False  # type: ignore
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        ws._is_closing = True  # type: ignore
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -336,8 +334,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if getattr(ws, "_is_closing", False):
-                        break
                     raise APIStatusError(
                         "Deepgram websocket connection closed unexpectedly",
                         request_id=request_id,

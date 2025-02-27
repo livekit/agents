@@ -185,11 +185,9 @@ class TTS(tts.TTS):
             ),
             self._conn_options.timeout,
         )
-        ws._is_closing = False  # type: ignore
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        ws._is_closing = True  # type: ignore
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -495,8 +493,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        if getattr(ws_conn, "_is_closing", False):
-                            break
                         raise APIStatusError(
                             "11labs connection closed unexpectedly, not all tokens have been consumed",
                             request_id=request_id,
