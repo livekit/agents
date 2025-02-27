@@ -346,10 +346,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts)
         self._opts, self._pool = opts, pool
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
-        self._reconnect_event = asyncio.Event()
-
-    def force_reconnect(self) -> None:
-        self._reconnect_event.set()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
