@@ -282,11 +282,12 @@ class LLMStream(llm.LLMStream):
                 system_instruction=system_instruction,
                 **opts,
             )
-            async for response in await self._client.aio.models.generate_content_stream(
+            stream = await self._client.aio.models.generate_content_stream(
                 model=self._model,
                 contents=cast(types.ContentListUnion, turns),
                 config=config,
-            ):
+            )  # type: ignore
+            async for response in stream:
                 if response.prompt_feedback:
                     raise APIStatusError(
                         response.prompt_feedback.json(),

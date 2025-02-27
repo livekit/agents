@@ -120,7 +120,6 @@ def _build_gemini_ctx(
                 parts.append(
                     types.Part(
                         function_call=types.FunctionCall(
-                            id=fnc.tool_call_id,
                             name=fnc.function_info.name,
                             args=fnc.arguments,
                         )
@@ -133,7 +132,6 @@ def _build_gemini_ctx(
                     parts.append(
                         types.Part(
                             function_response=types.FunctionResponse(
-                                id=msg.tool_call_id,
                                 name=msg.name,
                                 response=msg.content,
                             )
@@ -143,7 +141,6 @@ def _build_gemini_ctx(
                     parts.append(
                         types.Part(
                             function_response=types.FunctionResponse(
-                                id=msg.tool_call_id,
                                 name=msg.name,
                                 response={"result": msg.content},
                             )
