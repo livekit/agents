@@ -207,6 +207,7 @@ class TTS(tts.TTS):
             await stream.aclose()
         self._streams.clear()
         await self._pool.aclose()
+        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
