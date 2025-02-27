@@ -127,11 +127,9 @@ class TTS(tts.TTS):
             self._opts.model = model
         if sample_rate is not None:
             self._opts.sample_rate = sample_rate
-        for stream in self._streams:
-            stream.update_options(
-                model=model,
-                sample_rate=sample_rate,
-            )
+        # deepgram sets options upon connection, so we need to invalidate the pool
+        # to get a new connection with the updated options
+        self._pool.invalidate()
 
     def synthesize(
         self,
