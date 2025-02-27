@@ -167,7 +167,9 @@ class EOUModel:
                         )
                         break
 
-        MAX_HISTORY_TURNS = 25 # Probably not necessary since we truncate with tokenizer
+        MAX_HISTORY_TURNS = (
+            25  # Probably not necessary since we truncate with tokenizer
+        )
         messages = messages[-MAX_HISTORY_TURNS:]
 
         json_data = json.dumps({"chat_ctx": messages}).encode()
