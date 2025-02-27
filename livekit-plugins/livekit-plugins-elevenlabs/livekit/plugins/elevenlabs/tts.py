@@ -507,7 +507,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.error("unexpected 11labs message %s", data)
 
-                    if alignment := data.get("alignment"):
+                    if alignment := data.get("normalizedAlignment"):
                         received_text += "".join(alignment.get("chars", [])).replace(
                             " ", ""
                         )
@@ -580,7 +580,7 @@ def _stream_url(opts: _TTSOptions) -> str:
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
         f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
-        f"enable_ssml_parsing={enable_ssml}&sync_alignment=true"
+        f"enable_ssml_parsing={enable_ssml}"
     )
     if language is not None:
         url += f"&language_code={language}"
