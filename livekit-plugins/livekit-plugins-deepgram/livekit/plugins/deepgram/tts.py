@@ -153,8 +153,6 @@ class TTS(tts.TTS):
         stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
-            base_url=self._base_url,
-            api_key=self._api_key,
             opts=self._opts,
         )
         self._streams.add(stream)
@@ -248,25 +246,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         tts: TTS,
-        base_url: str,
-        api_key: str,
         opts: _TTSOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ):
         super().__init__(tts=tts)
         self._opts = opts
         self._pool = pool
-        self._base_url = base_url
-        self._api_key = api_key
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-        audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
 
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
@@ -287,14 +276,44 @@ class SynthesizeStream(tts.SynthesizeStream):
         @utils.log_exceptions(logger=logger)
         async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
             async for word_stream in self._segments_ch:
-                async for word in word_stream:
-                    speak_msg = {"type": "Speak", "text": f"{word.token} "}
-                    self._mark_started()
-                    await ws.send_str(json.dumps(speak_msg))
+                await self._run_ws(word_stream, request_id)
 
-                # Always flush after a segment
-                flush_msg = {"type": "Flush"}
-                await ws.send_str(json.dumps(flush_msg))
+        tasks = [
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_run_segments()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=request_id,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
+
+    async def _run_ws(self, word_stream: tokenize.WordStream, request_id: str):
+        segment_id = utils.shortuuid()
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate,
+            num_channels=NUM_CHANNELS,
+        )
+
+        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+            async for word in word_stream:
+                speak_msg = {"type": "Speak", "text": f"{word.token} "}
+                self._mark_started()
+                await ws.send_str(json.dumps(speak_msg))
+
+            # Always flush after a segment
+            flush_msg = {"type": "Flush"}
+            await ws.send_str(json.dumps(flush_msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             last_frame: rtc.AudioFrame | None = None
@@ -347,14 +366,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async with self._pool.connection() as ws:
             tasks = [
-                asyncio.create_task(_tokenize_input()),
-                asyncio.create_task(_run_segments(ws)),
+                asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
             ]
-
             try:
                 await asyncio.gather(*tasks)
-
             except asyncio.TimeoutError as e:
                 raise APITimeoutError() from e
             except aiohttp.ClientResponseError as e:

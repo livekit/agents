@@ -406,7 +406,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             # 11labs protocol expects the first message to be an "init msg"
             init_pkt = dict(
                 text=" ",
-                try_trigger_generation=True,
                 voice_settings=_strip_nones(
                     dataclasses.asdict(self._opts.voice.settings)
                 )
@@ -436,12 +435,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                             xml_content = []
                         else:
                             continue
-                    # try_trigger_generation=True is a bad practice, we expose
-                    # chunk_length_schedule instead
-                    data_pkt = dict(
-                        text=f"{text} ",  # must always end with a space
-                        try_trigger_generation=False,
-                    )
+
+                    data_pkt = dict(text=f"{text} ")  # must always end with a space
                     self._mark_started()
                     await ws_conn.send_str(json.dumps(data_pkt))
                 if xml_content:
@@ -512,7 +507,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.error("unexpected 11labs message %s", data)
 
-                    if alignment := data.get("normalizedAlignment"):
+                    if alignment := data.get("alignment"):
                         received_text += "".join(alignment.get("chars", [])).replace(
                             " ", ""
                         )
@@ -585,7 +580,7 @@ def _stream_url(opts: _TTSOptions) -> str:
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
         f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
-        f"enable_ssml_parsing={enable_ssml}"
+        f"enable_ssml_parsing={enable_ssml}&sync_alignment=true"
     )
     if language is not None:
         url += f"&language_code={language}"
