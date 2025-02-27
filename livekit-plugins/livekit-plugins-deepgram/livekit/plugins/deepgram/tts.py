@@ -274,7 +274,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
-        async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
+        async def _run_segments():
             async for word_stream in self._segments_ch:
                 await self._run_ws(word_stream, request_id)
 
