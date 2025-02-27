@@ -66,6 +66,7 @@ class LLMOptions:
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
     store: bool | None = None
     metadata: dict[str, str] | None = None
+    max_tokens: int | None = None
 
 
 class LLM(llm.LLM):
@@ -82,6 +83,7 @@ class LLM(llm.LLM):
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
         store: bool | None = None,
         metadata: dict[str, str] | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -104,6 +106,7 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
             store=store,
             metadata=metadata,
+            max_tokens=max_tokens,
         )
         self._client = client or openai.AsyncClient(
             api_key=api_key,
@@ -359,6 +362,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        max_tokens: int | None = None,
     ) -> LLM:
         """
         Create a new instance of Groq LLM.
@@ -376,6 +380,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            max_tokens=max_tokens,
         )
 
     @staticmethod
@@ -686,6 +691,7 @@ class LLMStream(llm.LLMStream):
                 else None,
                 "temperature": self._temperature,
                 "metadata": self._llm._opts.metadata,
+                "max_tokens": self._llm._opts.max_tokens,
                 "store": self._llm._opts.store,
                 "n": self._n,
                 "stream": True,

@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Optional
 
 import httpx
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -143,7 +143,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
@@ -160,7 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: APIConnectOptions,
+        conn_options: Optional[APIConnectOptions] = None,
         opts: _TTSOptions,
         client: openai.AsyncClient,
     ) -> None:
