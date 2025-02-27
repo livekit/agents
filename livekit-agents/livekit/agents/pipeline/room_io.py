@@ -124,6 +124,23 @@ class RoomIO:
             )
 
         # room output setup
+        def _create_text_sink(
+            participant_identity: str | None, is_delta_stream: bool, topic: str | None
+        ) -> tuple[RoomTranscriptEventSink, DataStreamTextSink]:
+            return (
+                RoomTranscriptEventSink(
+                    room=self._room,
+                    participant=participant_identity,
+                    is_delta_stream=is_delta_stream,
+                ),
+                DataStreamTextSink(
+                    room=self._room,
+                    participant=participant_identity,
+                    topic=topic,
+                    is_delta_stream=is_delta_stream,
+                ),
+            )
+
         if self._out_opts.audio_enabled:
             self._audio_output = RoomAudioSink(
                 room=self._room,
@@ -133,21 +150,25 @@ class RoomIO:
             )
 
         if self._out_opts.text_enabled:
-            self._user_text_output = self._create_text_sink(
-                participant_identity=self._participant_identity,
-                is_delta_stream=False,
-                topic=self._out_opts.text_output_topic,
+            self._user_text_output = ParallelTextSink(
+                *_create_text_sink(
+                    participant_identity=self._participant_identity,
+                    is_delta_stream=False,
+                    topic=self._out_opts.text_output_topic,
+                )
             )
             self._agent.on("user_transcript_updated", self._on_user_transcript_updated)
 
-            self._agent_text_output = self._create_text_sink(
+            agent_tr_event_sink, agent_ds_text_sink = _create_text_sink(
                 participant_identity=(
                     self._out_opts.agent_text_identity or self._room.local_participant.identity
                 ),
                 is_delta_stream=True,
                 topic=self._out_opts.text_output_topic,
             )
-            if self._out_opts.agent_text_sync_with_audio:
+            if not self._out_opts.agent_text_sync_with_audio:
+                self._agent_text_output = ParallelTextSink(agent_tr_event_sink, agent_ds_text_sink)
+            else:
                 audio_output = self._audio_output or self._agent.output.audio
                 if not audio_output:
                     logger.warning(
@@ -156,7 +177,8 @@ class RoomIO:
                 else:
                     self._text_synchronizer = TextSynchronizer(
                         audio_sink=audio_output,
-                        text_sink=self._agent_text_output,
+                        sentence_text_sink=agent_tr_event_sink,
+                        speech_text_sink=agent_ds_text_sink,
                     )
 
         if self._audio_output:
@@ -368,23 +390,6 @@ class RoomIO:
         for sink in self._user_text_output._sinks:
             assert isinstance(sink, (DataStreamTextSink, RoomTranscriptEventSink))
             sink.set_participant(participant_identity)
-
-    def _create_text_sink(
-        self, participant_identity: str | None, is_delta_stream: bool, topic: str | None
-    ) -> ParallelTextSink:
-        return ParallelTextSink(
-            RoomTranscriptEventSink(
-                room=self._room,
-                participant=participant_identity,
-                is_delta_stream=is_delta_stream,
-            ),
-            DataStreamTextSink(
-                room=self._room,
-                participant=participant_identity,
-                topic=topic,
-                is_delta_stream=is_delta_stream,
-            ),
-        )
 
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)

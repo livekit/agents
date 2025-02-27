@@ -63,7 +63,8 @@ class StreamPrinter:
                 print(f" [final={msg.final}]", end="", flush=True)
                 self._current_stream_id = None
             else:
-                chunk = msg.content.replace("\n", "\\n")
+                # chunk = msg.content.replace("\n", "\\n")
+                chunk = msg.content
                 print(chunk, end="", flush=True)
 
     async def stop(self):
