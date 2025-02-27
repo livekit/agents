@@ -11,12 +11,12 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 
 from google import genai
-from google.genai._api_client import HttpOptions
 from google.genai.types import (
     Blob,
     Content,
     FunctionResponse,
     GenerationConfig,
+    HttpOptions,
     LiveClientContent,
     LiveClientRealtimeInput,
     LiveClientToolResponse,
@@ -107,7 +107,7 @@ class RealtimeModel:
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = ["AUDIO"],
+        modalities: list[Modality] = [Modality.AUDIO],
         enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
