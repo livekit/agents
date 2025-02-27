@@ -470,7 +470,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_perplexity(
         *,
-        model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
+        model: str | PerplexityChatModels = "sonar",
         api_key: str | None = None,
         base_url: str | None = "https://api.perplexity.ai",
         client: openai.AsyncClient | None = None,
@@ -486,7 +486,7 @@ class LLM(llm.LLM):
         the ``PERPLEXITY_API_KEY`` environmental variable.
         """
         api_key = _get_api_key("PERPLEXITY_API_KEY", api_key)
-        return LLM(
+        perplexity_llm = LLM(
             model=model,
             api_key=api_key,
             base_url=base_url,
@@ -496,6 +496,8 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
         )
+        perplexity_llm._capabilities.single_message_per_turn = False
+        return perplexity_llm
 
     @staticmethod
     def with_together(
@@ -702,6 +704,10 @@ class LLMStream(llm.LLMStream):
             opts = _strip_nones(opts)
 
             messages = _build_oai_context(self._chat_ctx, id(self))
+
+            if self._llm._capabilities.single_message_per_turn and len(messages) > 0:
+                messages = self._merge_messages(messages)
+
             stream = await self._client.chat.completions.create(
                 messages=messages,
                 model=self._model,
@@ -821,6 +827,30 @@ class LLMStream(llm.LLMStream):
                 )
             ],
         )
+
+    def _merge_messages(
+        self,
+        messages: list[ChatCompletionMessageParam],
+    ) -> list[ChatCompletionMessageParam]:
+        def merge_content(c1: str, c2: str) -> str:
+            return c1 + c2
+
+        combined_messages: list[ChatCompletionMessageParam] = []
+        for msg in messages:
+            if not combined_messages or msg["role"] != combined_messages[-1]["role"]:
+                combined_messages.append(msg)
+            else:
+                combined_messages[-1]["content"] = merge_content(
+                    combined_messages[-1]["content"], msg["content"]
+                )
+
+        if combined_messages[0]["role"] == "system" and (
+            len(combined_messages) < 2 or combined_messages[1]["role"] != "user"
+        ):
+            combined_messages.insert(1, {"role": "user", "content": ""})
+        elif combined_messages[0]["role"] != "user":
+            combined_messages.insert(0, {"role": "user", "content": ""})
+        return combined_messages
 
 
 def _build_oai_context(
