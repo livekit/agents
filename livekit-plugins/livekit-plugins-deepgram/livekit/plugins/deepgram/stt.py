@@ -106,8 +106,8 @@ class STTOptions:
     keywords: list[Tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
+    additional_config: dict
     energy_filter: AudioEnergyFilter | bool = False
-
 
 class STT(stt.STT):
     def __init__(
@@ -131,6 +131,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
+        additional_config: dict = {},
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -196,6 +197,7 @@ class STT(stt.STT):
             keyterms=keyterms or [],
             profanity_filter=profanity_filter,
             energy_filter=energy_filter,
+            additional_config=additional_config,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -222,6 +224,7 @@ class STT(stt.STT):
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
+            **config.additional_config,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -338,6 +341,9 @@ class STT(stt.STT):
 
         if config.detect_language:
             config.language = None
+
+        for key, value in config.additional_config.items():
+            setattr(config, key, value)
 
         return config
 
@@ -733,6 +739,7 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
     elif not websocket and base_url.startswith("ws"):
         base_url = base_url.replace("ws", "http", 1)
 
+    logger.info(f"Connecting to Deepgram with configs: {opts}")
     return f"{base_url}?{urlencode(opts, doseq=True)}"
 
 
