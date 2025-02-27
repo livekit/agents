@@ -199,6 +199,7 @@ class STT(stt.STT):
             energy_filter=energy_filter,
             additional_config=additional_config,
         )
+        logger.info(f"Initialized STT with configs: {self._opts}")
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
