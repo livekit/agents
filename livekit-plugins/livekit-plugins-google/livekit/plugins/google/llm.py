@@ -286,8 +286,8 @@ class LLMStream(llm.LLMStream):
                 model=self._model,
                 contents=cast(types.ContentListUnion, turns),
                 config=config,
-            )  # type: ignore
-            async for response in stream:
+            )
+            async for response in stream:  # type: ignore
                 if response.prompt_feedback:
                     raise APIStatusError(
                         response.prompt_feedback.json(),
