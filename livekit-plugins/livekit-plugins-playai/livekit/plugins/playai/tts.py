@@ -129,12 +129,14 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: Optional[APIConnectOptions] = None,
+        segment_id: str | None = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
             input_text=text,
             conn_options=conn_options,
             opts=self._opts,
+            segment_id=segment_id,
         )
 
     def stream(
@@ -157,12 +159,14 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _Options,
         conn_options: Optional[APIConnectOptions] = None,
+        segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._client = tts._client
         self._opts = opts
         self._config = self._opts.tts_options
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
+        self._segment_id = segment_id or utils.shortuuid()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -184,11 +188,16 @@ class ChunkedStream(tts.ChunkedStream):
                             tts.SynthesizedAudio(
                                 request_id=request_id,
                                 frame=frame,
+                                segment_id=self._segment_id,
                             )
                         )
             for frame in bstream.flush():
                 self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(request_id=request_id, frame=frame)
+                    tts.SynthesizedAudio(
+                        request_id=request_id,
+                        frame=frame,
+                        segment_id=self._segment_id,
+                    )
                 )
         except Exception as e:
             raise APIConnectionError() from e
@@ -207,52 +216,55 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = opts
         self._config = self._opts.tts_options
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
-        self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
     async def _run(self) -> None:
-        request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-        bstream = utils.audio.AudioByteStream(
-            sample_rate=self._config.sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
-        last_frame: rtc.AudioFrame | None = None
-
-        def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
-            nonlocal last_frame
-            if last_frame is not None:
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        request_id=request_id,
-                        segment_id=segment_id,
-                        frame=last_frame,
-                        is_final=is_final,
-                    )
-                )
-                last_frame = None
-
-        input_task = asyncio.create_task(self._tokenize_input())
-
         try:
-            text_stream = await self._create_text_stream()
-            async for chunk in self._client.stream_tts_input(
-                text_stream=text_stream,
-                options=self._config,
-                voice_engine=self._opts.model,
-                protocol="ws",
-            ):
-                for frame in self._mp3_decoder.decode_chunk(chunk):
-                    for frame in bstream.write(frame.data.tobytes()):
-                        _send_last_frame(segment_id=segment_id, is_final=False)
+            input_task = asyncio.create_task(self._tokenize_input())
+            async for word_stream in self._segments_ch:
+                request_id = utils.shortuuid()
+                segment_id = utils.shortuuid()
+                mp3_decoder = utils.codecs.Mp3StreamDecoder()
+                bstream = utils.audio.AudioByteStream(
+                    sample_rate=self._config.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                )
+                last_frame: rtc.AudioFrame | None = None
+
+                def _send_last_frame(*, is_final: bool) -> None:
+                    nonlocal last_frame
+                    if last_frame is not None:
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=last_frame,
+                                is_final=is_final,
+                            )
+                        )
+                        last_frame = None
+
+                async def text_stream():
+                    async for word in word_stream:
+                        yield word.token
+
+                try:
+                    async for chunk in self._client.stream_tts_input(
+                        text_stream=text_stream(),
+                        options=self._config,
+                        voice_engine=self._opts.model,
+                        protocol="ws",
+                    ):
+                        for frame in mp3_decoder.decode_chunk(chunk):
+                            for frame in bstream.write(frame.data.tobytes()):
+                                _send_last_frame(is_final=False)
+                                last_frame = frame
+
+                    for frame in bstream.flush():
+                        _send_last_frame(is_final=False)
                         last_frame = frame
-
-            for frame in bstream.flush():
-                _send_last_frame(segment_id=segment_id, is_final=False)
-                last_frame = frame
-            _send_last_frame(segment_id=segment_id, is_final=True)
-
-        except Exception as e:
-            raise APIConnectionError() from e
+                    _send_last_frame(is_final=True)
+                except Exception as e:
+                    raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_task)
 

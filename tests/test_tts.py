@@ -119,43 +119,62 @@ async def test_stream(tts_factory):
 
     synthesize_transcript = make_test_synthesize()
 
-    pattern = [1, 2, 4]
-    text = synthesize_transcript
-    chunks = []
-    pattern_iter = iter(pattern * (len(text) // sum(pattern) + 1))
-
-    for chunk_size in pattern_iter:
-        if not text:
-            break
-        chunks.append(text[:chunk_size])
-        text = text[chunk_size:]
+    # Split the transcript into two segments
+    text_segments = [
+        synthesize_transcript[: len(synthesize_transcript) // 2],
+        synthesize_transcript[len(synthesize_transcript) // 2 :],
+    ]
 
     stream = tts.stream()
 
-    segments = set()
-    # for i in range(2): # TODO(theomonnom): we should test 2 segments
-    for chunk in chunks:
-        stream.push_text(chunk)
+    pattern = [1, 2, 4]
+    for i, text in enumerate(text_segments):
+        text_remaining = text
+        chunk_iter = iter(pattern * (len(text) // sum(pattern) + 1))
 
-    stream.flush()
-    # if i == 1:
-    stream.end_input()
+        while text_remaining:
+            size = next(chunk_iter)
+            stream.push_text(text_remaining[:size])
+            text_remaining = text_remaining[size:]
 
+        stream.flush()
+        if i == 1:
+            stream.end_input()
+
+    segment_ids = []
+    final_indices = {}
     frames = []
-    is_final = False
-    async for audio in stream:
-        is_final = audio.is_final
-        segments.add(audio.segment_id)
-        frames.append(audio.frame)
+    idx = 0
+    async for event in stream:
+        if event.frame is not None:
+            frames.append(event.frame)
+        if event.segment_id:
+            if event.segment_id not in segment_ids:
+                segment_ids.append(event.segment_id)
+            if event.is_final:
+                if event.segment_id in final_indices:
+                    raise AssertionError(
+                        f"Multiple final events for segment {event.segment_id}"
+                    )
+                final_indices[event.segment_id] = idx
+        idx += 1
+    await stream.aclose()
 
-    assert is_final, "final audio should be marked as final"
+    assert len(segment_ids) == 2, (
+        f"Expected 2 segments, got {len(segment_ids)}: {segment_ids}"
+    )
+    seg0, seg1 = segment_ids
 
-    await _assert_valid_synthesized_audio(
-        frames, tts, synthesize_transcript, WER_THRESHOLD
+    # Assert each segment has exactly one final event and ordering is correct.
+    assert seg0 in final_indices, f"No final event for segment {seg0}"
+    assert seg1 in final_indices, f"No final event for segment {seg1}"
+    assert final_indices[seg0] < final_indices[seg1], (
+        f"Segment {seg0} final event (index={final_indices[seg0]}) did not occur before "
+        f"segment {seg1} final event (index={final_indices[seg1]})."
     )
 
-    # assert len(segments) == 2
-    await stream.aclose()
+    expected_text = "".join(text_segments)
+    await _assert_valid_synthesized_audio(frames, tts, expected_text, WER_THRESHOLD)
 
 
 async def test_retry():

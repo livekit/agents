@@ -144,6 +144,7 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: Optional[APIConnectOptions] = None,
+        segment_id: str | None = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
@@ -151,6 +152,7 @@ class TTS(tts.TTS):
             conn_options=conn_options,
             opts=self._opts,
             client=self._client,
+            segment_id=segment_id,
         )
 
 
@@ -163,10 +165,12 @@ class ChunkedStream(tts.ChunkedStream):
         conn_options: Optional[APIConnectOptions] = None,
         opts: _TTSOptions,
         client: openai.AsyncClient,
+        segment_id: str | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._client = client
         self._opts = opts
+        self._segment_id = segment_id or utils.shortuuid()
 
     async def _run(self):
         oai_stream = self._client.audio.speech.with_streaming_response.create(
@@ -202,6 +206,7 @@ class ChunkedStream(tts.ChunkedStream):
                     tts.SynthesizedAudio(
                         frame=frame,
                         request_id=request_id,
+                        segment_id=self._segment_id,
                     )
                 )
             await decode_task

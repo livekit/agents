@@ -17,6 +17,7 @@ PUNCTUATIONS = ['!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-',
 class TokenData:
     segment_id: str = ""
     token: str = ""
+    is_final: bool = False
 
 
 class SentenceTokenizer(ABC):
