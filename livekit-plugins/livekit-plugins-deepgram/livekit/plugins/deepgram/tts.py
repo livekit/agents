@@ -345,30 +345,29 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.debug("Unknown message type: %s", resp)
 
-        while True:
-            async with self._pool.connection() as ws:
-                tasks = [
-                    asyncio.create_task(_tokenize_input()),
-                    asyncio.create_task(_run_segments(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
+        async with self._pool.connection() as ws:
+            tasks = [
+                asyncio.create_task(_tokenize_input()),
+                asyncio.create_task(_run_segments(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
 
-                try:
-                    await asyncio.gather(*tasks)
+            try:
+                await asyncio.gather(*tasks)
 
-                except asyncio.TimeoutError as e:
-                    raise APITimeoutError() from e
-                except aiohttp.ClientResponseError as e:
-                    raise APIStatusError(
-                        message=e.message,
-                        status_code=e.status,
-                        request_id=request_id,
-                        body=None,
-                    ) from e
-                except Exception as e:
-                    raise APIConnectionError() from e
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError() from e
+            except aiohttp.ClientResponseError as e:
+                raise APIStatusError(
+                    message=e.message,
+                    status_code=e.status,
+                    request_id=request_id,
+                    body=None,
+                ) from e
+            except Exception as e:
+                raise APIConnectionError() from e
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
 
 
 def _to_deepgram_url(
