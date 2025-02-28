@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -128,6 +129,7 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
@@ -193,11 +195,20 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> "SynthesizeStream":
-        return SynthesizeStream(
+        stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
             opts=self._opts,
         )
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        await self._pool.aclose()
+        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
