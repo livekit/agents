@@ -393,7 +393,8 @@ def _latest_system_message(
             type="text",
             cache_control=CACHE_CONTROL_EPHEMERAL if caching == "ephemeral" else None,
         )
-    return system_text_block
+        return system_text_block
+    return None
 
 
 def _merge_messages(
