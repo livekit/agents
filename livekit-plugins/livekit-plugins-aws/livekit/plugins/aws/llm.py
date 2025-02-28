@@ -223,7 +223,7 @@ class LLMStream(llm.LLMStream):
             response = self._client.converse_stream(
                 modelId=self._model,
                 messages=messages,
-                system=[system_instruction],
+                system=[system_instruction] if system_instruction else None,
                 inferenceConfig=inference_config,
                 **_strip_nones(opts),
             )  # type: ignore

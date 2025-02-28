@@ -189,8 +189,8 @@ class LLM(llm.LLM):
                     anthropic_tool_choice["disable_parallel_tool_use"] = True
                 opts["tool_choice"] = anthropic_tool_choice
 
-        latest_system_message: anthropic.types.TextBlockParam = _latest_system_message(
-            chat_ctx, caching=self._opts.caching
+        latest_system_message: anthropic.types.TextBlockParam | None = (
+            _latest_system_message(chat_ctx, caching=self._opts.caching)
         )
         anthropic_ctx = _build_anthropic_context(
             chat_ctx.messages,
@@ -201,7 +201,7 @@ class LLM(llm.LLM):
 
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1024),
-            system=[latest_system_message],
+            system=[latest_system_message] if latest_system_message else None,
             messages=collaped_anthropic_ctx,
             model=self._opts.model,
             temperature=temperature or anthropic.NOT_GIVEN,
@@ -370,7 +370,7 @@ class LLMStream(llm.LLMStream):
 
 def _latest_system_message(
     chat_ctx: llm.ChatContext, caching: Literal["ephemeral"] | None = None
-) -> anthropic.types.TextBlockParam:
+) -> anthropic.types.TextBlockParam | None:
     latest_system_message: llm.ChatMessage | None = None
     for m in chat_ctx.messages:
         if m.role == "system":
@@ -385,11 +385,12 @@ def _latest_system_message(
             latest_system_str = " ".join(
                 [c for c in latest_system_message.content if isinstance(c, str)]
             )
-    system_text_block = anthropic.types.TextBlockParam(
-        text=latest_system_str,
-        type="text",
-        cache_control=CACHE_CONTROL_EPHEMERAL if caching == "ephemeral" else None,
-    )
+    if latest_system_str:
+        system_text_block = anthropic.types.TextBlockParam(
+            text=latest_system_str,
+            type="text",
+            cache_control=CACHE_CONTROL_EPHEMERAL if caching == "ephemeral" else None,
+        )
     return system_text_block
 
 
