@@ -192,6 +192,8 @@ class LLM(llm.LLM):
         latest_system_message: anthropic.types.TextBlockParam | None = (
             _latest_system_message(chat_ctx, caching=self._opts.caching)
         )
+        if latest_system_message:
+            opts["system"] = latest_system_message
         anthropic_ctx = _build_anthropic_context(
             chat_ctx.messages,
             id(self),
@@ -201,7 +203,6 @@ class LLM(llm.LLM):
 
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1024),
-            system=[latest_system_message] if latest_system_message else None,
             messages=collaped_anthropic_ctx,
             model=self._opts.model,
             temperature=temperature or anthropic.NOT_GIVEN,
