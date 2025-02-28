@@ -28,6 +28,7 @@ class _TokenizerOptions:
     language: str
     min_sentence_len: int
     stream_context_len: int
+    retain_format: bool
 
 
 class SentenceTokenizer(tokenizer.SentenceTokenizer):
@@ -37,18 +38,22 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
         language: str = "english",
         min_sentence_len: int = 20,
         stream_context_len: int = 10,
+        retain_format: bool = False,
     ) -> None:
         self._config = _TokenizerOptions(
             language=language,
             min_sentence_len=min_sentence_len,
             stream_context_len=stream_context_len,
+            retain_format=retain_format,
         )
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         return [
             tok[0]
             for tok in _basic_sent.split_sentences(
-                text, min_sentence_len=self._config.min_sentence_len
+                text,
+                min_sentence_len=self._config.min_sentence_len,
+                retain_format=self._config.retain_format,
             )
         ]
 
@@ -57,6 +62,7 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
             tokenizer=functools.partial(
                 _basic_sent.split_sentences,
                 min_sentence_len=self._config.min_sentence_len,
+                retain_format=self._config.retain_format,
             ),
             min_token_len=self._config.min_sentence_len,
             min_ctx_len=self._config.stream_context_len,

@@ -9,14 +9,15 @@ nltk.NltkPlugin().download_files()
 
 TEXT = (
     "Hi! "
-    "LiveKit is a platform for live audio and video applications and services. "
+    "LiveKit is a platform for live audio and video applications and services. \n\n"
     "R.T.C stands for Real-Time Communication... again R.T.C. "
     "Mr. Theo is testing the sentence tokenizer. "
-    "This is a test. Another test. "
-    "A short sentence. "
+    "\nThis is a test. Another test. "
+    "A short sentence.\n"
     "A longer sentence that is longer than the previous sentence. "
     "f(x) = x * 2.54 + 42. "
-    "Hey! Hi! Hello! "
+    "Hey!\n Hi! Hello! "
+    "\n\n"
 )
 
 EXPECTED_MIN_20 = [
@@ -29,21 +30,35 @@ EXPECTED_MIN_20 = [
     "Hey! Hi! Hello!",
 ]
 
+EXPECTED_MIN_20_RETAIN_FORMAT = [
+    "Hi! LiveKit is a platform for live audio and video applications and services.",
+    " \n\nR.T.C stands for Real-Time Communication... again R.T.C.",
+    " Mr. Theo is testing the sentence tokenizer.",
+    " \nThis is a test. Another test.",
+    " A short sentence.\nA longer sentence that is longer than the previous sentence.",
+    " f(x) = x * 2.54 + 42.",
+    " Hey!\n Hi! Hello! \n\n",
+]
+
 SENT_TOKENIZERS = [
-    nltk.SentenceTokenizer(min_sentence_len=20),
-    basic.SentenceTokenizer(min_sentence_len=20),
+    (nltk.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20),
+    (basic.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20),
+    (
+        basic.SentenceTokenizer(min_sentence_len=20, retain_format=True),
+        EXPECTED_MIN_20_RETAIN_FORMAT,
+    ),
 ]
 
 
-@pytest.mark.parametrize("tokenizer", SENT_TOKENIZERS)
-def test_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer):
+@pytest.mark.parametrize("tokenizer, expected", SENT_TOKENIZERS)
+def test_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, expected: list[str]):
     segmented = tokenizer.tokenize(text=TEXT)
-    for i, segment in enumerate(EXPECTED_MIN_20):
+    for i, segment in enumerate(expected):
         assert segment == segmented[i]
 
 
-@pytest.mark.parametrize("tokenizer", SENT_TOKENIZERS)
-async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer):
+@pytest.mark.parametrize("tokenizer, expected", SENT_TOKENIZERS)
+async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, expected: list[str]):
     # divide text by chunks of arbitrary length (1-4)
     pattern = [1, 2, 4]
     text = TEXT
@@ -62,9 +77,9 @@ async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer):
 
     stream.end_input()
 
-    for i in range(len(EXPECTED_MIN_20)):
+    for i in range(len(expected)):
         ev = await stream.__anext__()
-        assert ev.token == EXPECTED_MIN_20[i]
+        assert ev.token == expected[i]
 
 
 WORDS_TEXT = "This is a test. Blabla another test! multiple consecutive spaces:     done"

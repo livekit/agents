@@ -28,3 +28,7 @@ def find_micro_track_id(room: rtc.Room, identity: str) -> str:
 
 def segment_uuid() -> str:
     return shortuuid("SG_")
+
+
+def speech_uuid() -> str:
+    return shortuuid("SP_")
