@@ -584,7 +584,9 @@ class SpeechStream(stt.SpeechStream):
             else self._opts.endpointing_ms,
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
+            **self._opts.additional_config,
         }
+        logger.info(f"Connecting to Deepgram stream with configs: {live_config}")
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
         if self._opts.keyterms:
