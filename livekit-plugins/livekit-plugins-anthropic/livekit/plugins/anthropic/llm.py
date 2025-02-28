@@ -169,7 +169,7 @@ class LLM(llm.LLM):
 
             opts["tools"] = fncs_desc
             if tool_choice is not None:
-                anthropic_tool_choice: dict[str, Any] = {"type": "auto"}
+                anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if isinstance(tool_choice, ToolChoice):
                     if tool_choice.type == "function":
                         anthropic_tool_choice = {
@@ -179,13 +179,20 @@ class LLM(llm.LLM):
                 elif isinstance(tool_choice, str):
                     if tool_choice == "required":
                         anthropic_tool_choice = {"type": "any"}
-            if parallel_tool_calls is not None and parallel_tool_calls is False:
-                anthropic_tool_choice["disable_parallel_tool_use"] = True
-            opts["tool_choice"] = anthropic_tool_choice
+                    elif tool_choice == "none":
+                        opts["tools"] = []
+                        anthropic_tool_choice = None
+            if anthropic_tool_choice is not None:
+                if parallel_tool_calls is False:
+                    anthropic_tool_choice["disable_parallel_tool_use"] = True
+                opts["tool_choice"] = anthropic_tool_choice
 
-        latest_system_message: anthropic.types.TextBlockParam = _latest_system_message(
-            chat_ctx, caching=self._opts.caching
+        latest_system_message: anthropic.types.TextBlockParam | None = (
+            _latest_system_message(chat_ctx, caching=self._opts.caching)
         )
+        if latest_system_message:
+            opts["system"] = [latest_system_message]
+
         anthropic_ctx = _build_anthropic_context(
             chat_ctx.messages,
             id(self),
@@ -195,7 +202,6 @@ class LLM(llm.LLM):
 
         stream = self._client.messages.create(
             max_tokens=opts.get("max_tokens", 1024),
-            system=[latest_system_message],
             messages=collaped_anthropic_ctx,
             model=self._opts.model,
             temperature=temperature or anthropic.NOT_GIVEN,
@@ -350,7 +356,7 @@ class LLMStream(llm.LLMStream):
 
 def _latest_system_message(
     chat_ctx: llm.ChatContext, caching: Literal["ephemeral"] | None = None
-) -> anthropic.types.TextBlockParam:
+) -> anthropic.types.TextBlockParam | None:
     latest_system_message: llm.ChatMessage | None = None
     for m in chat_ctx.messages:
         if m.role == "system":
@@ -365,12 +371,14 @@ def _latest_system_message(
             latest_system_str = " ".join(
                 [c for c in latest_system_message.content if isinstance(c, str)]
             )
-    system_text_block = anthropic.types.TextBlockParam(
-        text=latest_system_str,
-        type="text",
-        cache_control=CACHE_CONTROL_EPHEMERAL if caching == "ephemeral" else None,
-    )
-    return system_text_block
+    if latest_system_str:
+        system_text_block = anthropic.types.TextBlockParam(
+            text=latest_system_str,
+            type="text",
+            cache_control=CACHE_CONTROL_EPHEMERAL if caching == "ephemeral" else None,
+        )
+        return system_text_block
+    return None
 
 
 def _merge_messages(
