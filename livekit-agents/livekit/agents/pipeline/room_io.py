@@ -362,9 +362,12 @@ class RoomIO:
         self._update_state_task = asyncio.create_task(_set_state())
 
     def _on_agent_output_changed(self, sink: AudioSink | TextSink | None) -> None:
-        if self._text_synchronizer:
-            enable = self._agent.output.audio and self._agent.output.text
-            self._text_synchronizer.set_sync_enabled(enable)
+        if not self._text_synchronizer:
+            return
+
+        using_room_audio = self._agent.output.audio is self.audio_output
+        using_room_text = self._agent.output.text is self.text_output
+        self._text_synchronizer.set_sync_enabled(using_room_audio and using_room_text)
 
     def _update_user_text_sink(self, participant_identity: str | None) -> None:
         if not self._user_text_output:
