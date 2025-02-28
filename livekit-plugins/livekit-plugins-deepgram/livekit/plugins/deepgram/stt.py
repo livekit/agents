@@ -199,7 +199,6 @@ class STT(stt.STT):
             energy_filter=energy_filter,
             additional_config=additional_config,
         )
-        logger.info(f"Initialized STT with configs: {self._opts}")
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -218,8 +217,6 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
-        logger.info(f"Additional config: {self._opts.additional_config}")
-
         recognize_config = {
             "model": str(config.model),
             "punctuate": config.punctuate,
@@ -232,11 +229,7 @@ class STT(stt.STT):
         if config.language:
             recognize_config["language"] = config.language
 
-        logger.info(f"Recognizing with configs: {recognize_config}")
-        logger.info(f"Additional self._opts: {self._opts.additional_config}")
-
         try:
-            logger.info(f"Calling Deepgram API with configs: {recognize_config}")
             async with self._ensure_session().post(
                 url=_to_deepgram_url(recognize_config, self._base_url, websocket=False),
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
@@ -344,7 +337,6 @@ class STT(stt.STT):
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
-        logger.info(f"Sanitizing config: {config}")
         config.language = language or config.language
 
         if config.detect_language:
@@ -352,8 +344,6 @@ class STT(stt.STT):
 
         for key, value in config.additional_config.items():
             setattr(config, key, value)
-
-        logger.info(f"Sanitized config: {config}")
 
         return config
 
@@ -586,7 +576,7 @@ class SpeechStream(stt.SpeechStream):
             "profanity_filter": self._opts.profanity_filter,
             **self._opts.additional_config,
         }
-        logger.info(f"Connecting to Deepgram stream with configs: {live_config}")
+
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
         if self._opts.keyterms:
@@ -736,7 +726,6 @@ def prerecorded_transcription_to_speech_event(
 def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
     # don't modify the original opts
     opts = opts.copy()
-    logger.info(f"Converting opts to Deepgram URL with configs: {opts}")
     if opts.get("keywords"):
         # convert keywords to a list of "keyword:intensifier"
         opts["keywords"] = [
@@ -752,7 +741,7 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
     elif not websocket and base_url.startswith("ws"):
         base_url = base_url.replace("ws", "http", 1)
 
-    logger.info(f"Connecting to Deepgram with configs: {opts}")
+    logger.info(f"Calling Deepgram with configs: {opts}")
     return f"{base_url}?{urlencode(opts, doseq=True)}"
 
 
