@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar
+from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar, Union
 
 from livekit import rtc
 
@@ -766,15 +766,17 @@ class DataStreamTextSink(TextSink):
 
 # -- Input Streams --
 
-T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
+T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
 
 
 class BaseStreamHandle(Generic[T]):
     """Base class for handling audio/video streams from a participant"""
 
-    def __init__(self, room: rtc.Room, *, capacity: int = 0, name: str = "") -> None:
+    def __init__(
+        self, room: rtc.Room, *, track_source: rtc.TrackSource.ValueType, capacity: int = 0
+    ) -> None:
         self._room = room
-        self._name = name
+        self._track_source = track_source
         self._closed = False
 
         self._participant_identity: Optional[str] = None
@@ -791,6 +793,19 @@ class BaseStreamHandle(Generic[T]):
     @property
     def stream(self) -> utils.aio.Chan[T]:
         return self._data_ch
+
+    @property
+    def track_source_name(self) -> str:
+        if self._track_source == rtc.TrackSource.SOURCE_MICROPHONE:
+            return "microphone"
+        elif self._track_source == rtc.TrackSource.SOURCE_CAMERA:
+            return "camera"
+        elif self._track_source == rtc.TrackSource.SOURCE_SCREENSHARE:
+            return "screen"
+        elif self._track_source == rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO:
+            return "screen_audio"
+        else:
+            return "unknown"
 
     def set_participant(self, participant_identity: str | None) -> None:
         """Start streaming from the participant"""
@@ -851,7 +866,7 @@ class BaseStreamHandle(Generic[T]):
                 "start reading stream",
                 extra={
                     "participant": self._participant_identity,
-                    "stream_name": self._name,
+                    "stream_source": self.track_source_name,
                 },
             )
             try:
@@ -862,13 +877,13 @@ class BaseStreamHandle(Generic[T]):
                     "stream ended",
                     extra={
                         "participant": self._participant_identity,
-                        "stream_name": self._name,
+                        "stream_source": self.track_source_name,
                     },
                 )
                 if stream is self._stream:
                     self._close_current_stream()
             except Exception:
-                logger.exception(f"Error reading {self._name} stream")
+                logger.exception(f"Error reading stream from {self.track_source_name}")
 
     def _on_track_subscribed(
         self,
@@ -880,6 +895,9 @@ class BaseStreamHandle(Generic[T]):
             return
 
         if self._track and self._track.sid == track.sid:
+            return
+
+        if publication.source != self._track_source:
             return
 
         new_stream = self._create_stream(track)
@@ -899,7 +917,9 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
         num_channels: int = 1,
         capacity: int = 0,
     ) -> None:
-        super().__init__(room=room, capacity=capacity, name="audio")
+        super().__init__(
+            room=room, capacity=capacity, track_source=rtc.TrackSource.SOURCE_MICROPHONE
+        )
         self.sample_rate = sample_rate
         self.num_channels = num_channels
         self.capacity = capacity
@@ -915,7 +935,7 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
 
 class VideoStreamHandle(BaseStreamHandle[rtc.VideoFrame]):
     def __init__(self, room: rtc.Room, *, capacity: int = 0) -> None:
-        super().__init__(room=room, capacity=capacity, name="video")
+        super().__init__(room=room, capacity=capacity, track_source=rtc.TrackSource.SOURCE_CAMERA)
         self.capacity = capacity
 
     def _create_stream(self, track: rtc.Track) -> rtc.VideoStream:
