@@ -762,9 +762,14 @@ T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
 class BaseStreamHandle(Generic[T]):
     """Base class for handling audio/video streams from a participant"""
 
-    def __init__(self, room: rtc.Room, name: str = "") -> None:
+    def __init__(self, room: rtc.Room, *, track_kind: rtc.TrackKind.ValueType) -> None:
         self._room = room
-        self._name = name
+        self._track_kind = track_kind
+        self._track_name = "unknown"
+        if track_kind == rtc.TrackKind.KIND_AUDIO:
+            self._track_name = "audio"
+        elif track_kind == rtc.TrackKind.KIND_VIDEO:
+            self._track_name = "video"
 
         self._participant_identity: Optional[str] = None
         self._stream: Optional[rtc.VideoStream | rtc.AudioStream] = None
@@ -835,7 +840,7 @@ class BaseStreamHandle(Generic[T]):
                 "start reading stream",
                 extra={
                     "participant": self._participant_identity,
-                    "stream_name": self._name,
+                    "stream_name": self._track_name,
                 },
             )
             try:
@@ -846,13 +851,13 @@ class BaseStreamHandle(Generic[T]):
                     "stream ended",
                     extra={
                         "participant": self._participant_identity,
-                        "stream_name": self._name,
+                        "stream_name": self._track_name,
                     },
                 )
                 if stream is self._stream:
                     self._close_current_stream()
             except Exception:
-                logger.exception(f"Error reading {self._name} stream")
+                logger.exception(f"Error reading {self._track_name} stream")
 
     def _on_track_subscribed(
         self,
@@ -864,6 +869,9 @@ class BaseStreamHandle(Generic[T]):
             return
 
         if self._track and self._track.sid == track.sid:
+            return
+
+        if publication.kind != self._track_kind:
             return
 
         new_stream = self._create_stream(track)
@@ -883,7 +891,7 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
         num_channels: int = 1,
         capacity: int = 0,
     ) -> None:
-        super().__init__(room=room, name="audio")
+        super().__init__(room=room, track_kind=rtc.TrackKind.KIND_AUDIO)
         self.sample_rate = sample_rate
         self.num_channels = num_channels
         self.capacity = capacity
@@ -899,7 +907,7 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
 
 class VideoStreamHandle(BaseStreamHandle[rtc.VideoFrame]):
     def __init__(self, room: rtc.Room, *, capacity: int = 0) -> None:
-        super().__init__(room=room, name="video")
+        super().__init__(room=room, track_kind=rtc.TrackKind.KIND_VIDEO)
         self.capacity = capacity
 
     def _create_stream(self, track: rtc.Track) -> rtc.VideoStream:
