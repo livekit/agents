@@ -193,7 +193,8 @@ class LLM(llm.LLM):
             _latest_system_message(chat_ctx, caching=self._opts.caching)
         )
         if latest_system_message:
-            opts["system"] = latest_system_message
+            opts["system"] = [latest_system_message]
+
         anthropic_ctx = _build_anthropic_context(
             chat_ctx.messages,
             id(self),

@@ -213,7 +213,7 @@ class LLMStream(llm.LLMStream):
                     self._additional_request_fields
                 )
             if system_instruction:
-                opts["system"] = system_instruction
+                opts["system"] = [system_instruction]
 
             inference_config = _strip_nones(
                 {
