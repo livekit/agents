@@ -19,6 +19,7 @@ import base64
 import dataclasses
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import Any, List, Literal, Optional
 
@@ -179,6 +180,24 @@ class TTS(tts.TTS):
             inactivity_timeout=inactivity_timeout,
         )
         self._session = http_session
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+        )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        return await asyncio.wait_for(
+            session.ws_connect(
+                _stream_url(self._opts),
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+            ),
+            self._conn_options.timeout,
+        )
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -224,13 +243,19 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> "SynthesizeStream":
-        return SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            opts=self._opts,
-            session=self._ensure_session(),
-        )
+    def stream(
+        self, *, conn_options: Optional[APIConnectOptions] = None
+    ) -> "SynthesizeStream":
+        stream = SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        await self._pool.aclose()
+        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -322,15 +347,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         tts: TTS,
-        session: aiohttp.ClientSession,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
         opts: _TTSOptions,
-        conn_options: Optional[APIConnectOptions] = None,
     ):
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._opts, self._session = opts, session
+        super().__init__(tts=tts)
+        self._opts, self._pool = opts, pool
         self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
 
     async def _run(self) -> None:
+        request_id = utils.shortuuid()
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
         @utils.log_exceptions(logger=logger)
@@ -348,183 +373,177 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif isinstance(input, self._FlushSentinel):
                     if word_stream is not None:
                         word_stream.end_input()
-
                     word_stream = None
-
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
-        async def _run():
+        async def _process_segments():
             async for word_stream in self._segments_ch:
-                await self._run_ws(word_stream)
+                await self._run_ws(word_stream, request_id)
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
-            asyncio.create_task(_run()),
+            asyncio.create_task(_process_segments()),
         ]
         try:
             await asyncio.gather(*tasks)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=request_id,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
         self,
         word_stream: tokenize.WordStream,
-        max_retry: int = 3,
+        request_id: str,
     ) -> None:
-        ws_conn: aiohttp.ClientWebSocketResponse | None = None
-        for try_i in range(max_retry):
-            retry_delay = 5
-            try:
-                if try_i > 0:
-                    await asyncio.sleep(retry_delay)
+        async with self._pool.connection() as ws_conn:
+            segment_id = utils.shortuuid()
+            expected_text = ""  # accumulate all tokens sent
 
-                ws_conn = await self._session.ws_connect(
-                    _stream_url(self._opts),
-                    headers={AUTHORIZATION_HEADER: self._opts.api_key},
+            # 11labs protocol expects the first message to be an "init msg"
+            init_pkt = dict(
+                text=" ",
+                voice_settings=_strip_nones(
+                    dataclasses.asdict(self._opts.voice.settings)
                 )
-                break
-            except Exception as e:
-                logger.warning(
-                    f"failed to connect to 11labs, retrying in {retry_delay}s",
-                    exc_info=e,
-                )
-
-        if ws_conn is None:
-            raise Exception(f"failed to connect to 11labs after {max_retry} retries")
-
-        request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-
-        # 11labs protocol expects the first message to be an "init msg"
-        init_pkt = dict(
-            text=" ",
-            try_trigger_generation=True,
-            voice_settings=_strip_nones(dataclasses.asdict(self._opts.voice.settings))
-            if self._opts.voice.settings
-            else None,
-            generation_config=dict(chunk_length_schedule=self._opts.chunk_length_schedule),
-        )
-        await ws_conn.send_str(json.dumps(init_pkt))
-        eos_sent = False
-
-        async def send_task():
-            nonlocal eos_sent
-
-            xml_content = []
-            async for data in word_stream:
-                text = data.token
-
-                # send the xml phoneme in one go
-                if (
-                    self._opts.enable_ssml_parsing
-                    and data.token.startswith("<phoneme")
-                    or xml_content
-                ):
-                    xml_content.append(text)
-                    if data.token.find("</phoneme>") > -1:
-                        text = self._opts.word_tokenizer.format_words(xml_content)
-                        xml_content = []
-                    else:
-                        continue
-
-                # try_trigger_generation=True is a bad practice, we expose
-                # chunk_length_schedule instead
-                data_pkt = dict(
-                    text=f"{text} ",  # must always end with a space
-                    try_trigger_generation=False,
-                )
-                self._mark_started()
-                await ws_conn.send_str(json.dumps(data_pkt))
-
-            if xml_content:
-                logger.warning("11labs stream ended with incomplete xml content")
-
-            # no more token, mark eos
-            eos_pkt = dict(text="")
-            await ws_conn.send_str(json.dumps(eos_pkt))
-            eos_sent = True
-
-        async def recv_task():
-            nonlocal eos_sent
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
+                if self._opts.voice.settings
+                else None,
+                generation_config=dict(
+                    chunk_length_schedule=self._opts.chunk_length_schedule
+                ),
             )
+            await ws_conn.send_str(json.dumps(init_pkt))
 
-            last_frame: rtc.AudioFrame | None = None
+            async def send_task():
+                nonlocal expected_text
+                xml_content = []
+                async for data in word_stream:
+                    text = data.token
+                    expected_text += text
+                    # send the xml phoneme in one go
+                    if (
+                        self._opts.enable_ssml_parsing
+                        and data.token.startswith("<phoneme")
+                        or xml_content
+                    ):
+                        xml_content.append(text)
+                        if text.find("</phoneme>") > -1:
+                            text = self._opts.word_tokenizer.format_words(xml_content)
+                            xml_content = []
+                        else:
+                            continue
 
-            def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
-                nonlocal last_frame
-                if last_frame is not None:
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id,
-                            segment_id=segment_id,
-                            frame=last_frame,
-                            is_final=is_final,
+                    data_pkt = dict(text=f"{text} ")  # must always end with a space
+                    self._mark_started()
+                    await ws_conn.send_str(json.dumps(data_pkt))
+                if xml_content:
+                    logger.warning("11labs stream ended with incomplete xml content")
+                await ws_conn.send_str(json.dumps({"flush": True}))
+
+            async def recv_task():
+                nonlocal expected_text
+                received_text = ""
+                audio_bstream = utils.audio.AudioByteStream(
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=1,
+                )
+                last_frame: rtc.AudioFrame | None = None
+
+                def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
+                    nonlocal last_frame
+                    if last_frame is not None:
+                        self._event_ch.send_nowait(
+                            tts.SynthesizedAudio(
+                                request_id=request_id,
+                                segment_id=segment_id,
+                                frame=last_frame,
+                                is_final=is_final,
+                            )
                         )
-                    )
+                        last_frame = None
 
-                    last_frame = None
-
-            while True:
-                msg = await ws_conn.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    if not eos_sent:
+                while True:
+                    msg = await ws_conn.receive()
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
                         raise APIStatusError(
                             "11labs connection closed unexpectedly, not all tokens have been consumed",
                             request_id=request_id,
                         )
-                    return
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected 11labs message type %s", msg.type)
-                    continue
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        logger.warning("unexpected 11labs message type %s", msg.type)
+                        continue
 
-                data = json.loads(msg.data)
-                encoding = _encoding_from_format(self._opts.encoding)
-                if data.get("audio"):
-                    b64data = base64.b64decode(data["audio"])
-                    if encoding == "mp3":
-                        for frame in self._mp3_decoder.decode_chunk(b64data):
-                            for frame in audio_bstream.write(frame.data.tobytes()):
+                    data = json.loads(msg.data)
+                    encoding = _encoding_from_format(self._opts.encoding)
+                    if data.get("audio"):
+                        b64data = base64.b64decode(data["audio"])
+                        if encoding == "mp3":
+                            for frame in self._mp3_decoder.decode_chunk(b64data):
+                                for frame in audio_bstream.write(frame.data.tobytes()):
+                                    _send_last_frame(
+                                        segment_id=segment_id, is_final=False
+                                    )
+                                    last_frame = frame
+                        else:
+                            for frame in audio_bstream.write(b64data):
                                 _send_last_frame(segment_id=segment_id, is_final=False)
                                 last_frame = frame
-
-                    else:
-                        for frame in audio_bstream.write(b64data):
+                    elif data.get("isFinal"):
+                        for frame in audio_bstream.flush():
                             _send_last_frame(segment_id=segment_id, is_final=False)
                             last_frame = frame
+                        _send_last_frame(segment_id=segment_id, is_final=True)
+                        break
+                    elif data.get("error"):
+                        logger.error("11labs reported an error: %s", data["error"])
+                    else:
+                        logger.error("unexpected 11labs message %s", data)
 
-                elif data.get("isFinal"):
-                    for frame in audio_bstream.flush():
-                        _send_last_frame(segment_id=segment_id, is_final=False)
-                        last_frame = frame
+                    if alignment := data.get("normalizedAlignment"):
+                        received_text += "".join(alignment.get("chars", [])).replace(
+                            " ", ""
+                        )
+                        if received_text == expected_text:
+                            for frame in audio_bstream.flush():
+                                _send_last_frame(segment_id=segment_id, is_final=False)
+                                last_frame = frame
+                            _send_last_frame(segment_id=segment_id, is_final=True)
+                            break
 
-                    _send_last_frame(segment_id=segment_id, is_final=True)
-
-                    pass
-                elif data.get("error"):
-                    logger.error("11labs reported an error: %s", data["error"])
-                else:
-                    logger.error("unexpected 11labs message %s", data)
-
-        tasks = [
-            asyncio.create_task(send_task()),
-            asyncio.create_task(recv_task()),
-        ]
-
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
-            if ws_conn is not None:
-                await ws_conn.close()
+            tasks = [
+                asyncio.create_task(send_task()),
+                asyncio.create_task(recv_task()),
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError() from e
+            except aiohttp.ClientResponseError as e:
+                raise APIStatusError(
+                    message=e.message,
+                    status_code=e.status,
+                    request_id=request_id,
+                    body=None,
+                ) from e
+            except Exception as e:
+                raise APIConnectionError() from e
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
 
 
 def _dict_to_voices_list(data: dict[str, Any]):

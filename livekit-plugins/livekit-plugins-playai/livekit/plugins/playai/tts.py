@@ -112,17 +112,16 @@ class TTS(tts.TTS):
             updates["voice"] = voice
         if language is not None:
             updates["language"] = Language(language)
-        tts_kwargs = {k: v for k, v in kwargs.items()}
+        updates.update(kwargs)
 
-        self._config = _update_options(self._config, **updates, **tts_kwargs)
+        _validate_kwargs(updates)
+
+        for key, value in updates.items():
+            if value is not None:
+                setattr(self._config, key, value)
 
         if model is not None:
             self._opts.model = model
-
-        for stream in self._streams:
-            stream._config = _update_options(stream._config, **updates, **tts_kwargs)
-            if model is not None:
-                stream._opts.model = model
 
     def synthesize(
         self,
@@ -277,14 +276,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     yield word.token
 
         return text_stream()
-
-
-def _update_options(config: TTSOptions, **kwargs) -> TTSOptions:
-    _validate_kwargs(kwargs)
-    for k, v in kwargs.items():
-        if v is not None:
-            setattr(config, k, v)
-    return config
 
 
 def _validate_kwargs(kwargs: dict) -> None:
