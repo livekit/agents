@@ -107,7 +107,7 @@ class Scheduler(AgentTask):
 
             if request.value == "cancel":
                 params = {
-                    "url": "https://api.cal.com/v2/bookings/{uid}/cancel",
+                    "url": f"https://api.cal.com/v2/bookings/{uid}/cancel",
                     "headers": headers
                 }
 
@@ -117,6 +117,7 @@ class Scheduler(AgentTask):
                     "email": self.agent.userdata.email,
                     "timeZone": "America/Los_Angeles",
                 }
+                # Devs must replace the eventTypeId with the correct Id
                 payload = {
                     "start": time,
                     "eventTypeId": 1,
@@ -132,14 +133,14 @@ class Scheduler(AgentTask):
             if request.value == "reschedule":
                 payload = { "start": time }
                 params = {
-                    "url": "https://api.cal.com/v2/bookings/{uid}/reschedule",
+                    "url": f"https://api.cal.com/v2/bookings/{uid}/reschedule",
                     "headers": headers,
                     "json": payload
                 }
 
             if request.value == 'get_appt':
                 params = {
-                    "url": "https://api.cal.com/v2/bookings/{uid}",
+                    "url": f"https://api.cal.com/v2/bookings/{uid}",
                     "headers": headers,
                 }
             else:
