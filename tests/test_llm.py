@@ -132,6 +132,36 @@ async def test_chat(llm_factory: Callable[[], llm.LLM]):
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
+async def test_llm_chat_with_consecutive_messages(
+    llm_factory: callable,
+):
+    input_llm = llm_factory()
+
+    chat_ctx = ChatContext()
+    chat_ctx.append(
+        text="Hello, How can I help you today?",
+        role="assistant",
+    )
+    chat_ctx.append(text="I see that you have a busy day ahead.", role="assistant")
+    chat_ctx.append(
+        text="Actually, I need some help with my recent order.", role="user"
+    )
+    chat_ctx.append(text="I want to cancel my order.", role="user")
+    chat_ctx.append(text="Sure, let me check your order details.", role="assistant")
+
+    stream = input_llm.chat(chat_ctx=chat_ctx)
+    collected_text = ""
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+        content = chunk.choices[0].delta.content
+        if content:
+            collected_text += content
+
+    assert len(collected_text) > 0, "Expected a non-empty response from the LLM chat"
+
+
+@pytest.mark.parametrize("llm_factory", LLMS)
 async def test_basic_fnc_calls(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     fnc_ctx = FncCtx()
