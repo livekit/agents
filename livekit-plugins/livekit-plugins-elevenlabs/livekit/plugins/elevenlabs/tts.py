@@ -58,6 +58,7 @@ def _encoding_from_format(output_format: TTSEncoding) -> _Encoding:
 @dataclass
 class VoiceSettings:
     stability: float  # [0.0 - 1.0]
+    speed: float  # [0.8 - 1.2]
     similarity_boost: float  # [0.0 - 1.0]
     style: float | None = None  # [0.0 - 1.0]
     use_speaker_boost: bool | None = False
@@ -76,7 +77,7 @@ DEFAULT_VOICE = Voice(
     name="Bella",
     category="premade",
     settings=VoiceSettings(
-        stability=0.71, similarity_boost=0.5, style=0.0, use_speaker_boost=True
+        stability=0.71, speed=1.0, similarity_boost=0.5, style=0.0, use_speaker_boost=True
     ),
 )
 
