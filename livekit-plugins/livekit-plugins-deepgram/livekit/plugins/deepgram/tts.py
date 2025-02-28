@@ -95,14 +95,13 @@ class TTS(tts.TTS):
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
         }
-        ws = await asyncio.wait_for(
+        return await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._base_url, websocket=True),
                 headers={"Authorization": f"Token {self._api_key}"},
             ),
             self._conn_options.timeout,
         )
-        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()

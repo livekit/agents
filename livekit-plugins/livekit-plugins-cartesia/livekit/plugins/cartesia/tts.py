@@ -136,8 +136,9 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
-        ws = await asyncio.wait_for(session.ws_connect(url), self._conn_options.timeout)
-        return ws
+        return await asyncio.wait_for(
+            session.ws_connect(url), self._conn_options.timeout
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()

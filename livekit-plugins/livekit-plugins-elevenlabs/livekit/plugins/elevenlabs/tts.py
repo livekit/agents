@@ -178,14 +178,13 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        ws = await asyncio.wait_for(
+        return await asyncio.wait_for(
             session.ws_connect(
                 _stream_url(self._opts),
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ),
             self._conn_options.timeout,
         )
-        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()
