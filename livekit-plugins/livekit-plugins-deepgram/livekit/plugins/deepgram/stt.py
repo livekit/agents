@@ -231,6 +231,7 @@ class STT(stt.STT):
             recognize_config["language"] = config.language
 
         logger.info(f"Additional config: {self._opts.additional_config}")
+        logger.info(f"Additional config: {self._opts.additional_config}")
         logger.info(f"Recognizing with configs: {recognize_config}")
 
         try:
