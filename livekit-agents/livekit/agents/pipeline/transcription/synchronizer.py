@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import time
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Callable
+from typing import AsyncIterator, Callable, Optional
 
 from livekit import rtc
 
@@ -75,14 +75,14 @@ class _TextAudioSynchronizer:
         self._finished_seg_index = -1
 
         self._text_q_changed = asyncio.Event()
-        self._text_q = list[_TextData | None]()
+        self._text_q = list[Optional[_TextData]]()
         self._audio_q_changed = asyncio.Event()
-        self._audio_q = list[_AudioData | None]()
+        self._audio_q = list[Optional[_AudioData]]()
 
-        self._text_data: _TextData | None = None
-        self._audio_data: _AudioData | None = None
+        self._text_data: Optional[_TextData] = None
+        self._audio_data: Optional[_AudioData] = None
 
-        self._main_task: asyncio.Task | None = None
+        self._main_task: Optional[asyncio.Task] = None
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """Push an audio frame for the current segment."""
