@@ -83,7 +83,9 @@ async def entrypoint(ctx: JobContext):
             temperature=0.8,
             instructions="You are a helpful assistant, greet the user and help them with their trip planning",
             turn_detection=openai.realtime.ServerVadOptions(
-                threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
+                threshold=0.6,
+                prefix_padding_ms=200,
+                silence_duration_ms=500,
             ),
         ),
         fnc_ctx=fnc_ctx,
