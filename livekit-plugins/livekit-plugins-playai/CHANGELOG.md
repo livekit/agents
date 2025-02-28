@@ -1,5 +1,11 @@
 # livekit-plugins-playht
 
+## 1.0.8
+
+### Patch Changes
+
+- remove update options from tts synthesis stream - [#1546](https://github.com/livekit/agents/pull/1546) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 1.0.7
 
 ### Patch Changes
