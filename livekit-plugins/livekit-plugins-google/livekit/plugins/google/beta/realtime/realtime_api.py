@@ -479,12 +479,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                         logger.warning(
                             "function call cancelled",
                             extra={
-                                "function_call_ids": response.tool_call_cancellation.function_call_ids,
+                                "function_call_ids": response.tool_call_cancellation.ids,
                             },
                         )
                         self.emit(
                             "function_calls_cancelled",
-                            response.tool_call_cancellation.function_call_ids,
+                            response.tool_call_cancellation.ids,
                         )
 
         async with self._client.aio.live.connect(
