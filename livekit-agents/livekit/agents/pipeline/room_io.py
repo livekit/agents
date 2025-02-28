@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterator, Generic, Optional, TypeVar
+from typing import TYPE_CHECKING, AsyncIterator, Generic, Optional, TypeVar, Union
 
 from livekit import rtc
 
@@ -756,7 +756,7 @@ class DataStreamTextSink(TextSink):
 
 # -- Input Streams --
 
-T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
+T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
 
 
 class BaseStreamHandle(Generic[T]):
