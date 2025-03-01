@@ -147,7 +147,6 @@ async def test_llm_chat_with_consecutive_messages(
         text="Actually, I need some help with my recent order.", role="user"
     )
     chat_ctx.append(text="I want to cancel my order.", role="user")
-    chat_ctx.append(text="Sure, let me check your order details.", role="assistant")
 
     stream = input_llm.chat(chat_ctx=chat_ctx)
     collected_text = ""
