@@ -21,11 +21,11 @@ RUN adduser \
     --uid "${UID}" \
     appuser
 
-
-# Install gcc and other build dependencies.
+# Install gcc, g++ and other build dependencies.
 RUN apt-get update && \
     apt-get install -y \
     gcc \
+    g++ \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
