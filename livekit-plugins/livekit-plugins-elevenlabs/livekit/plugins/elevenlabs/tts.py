@@ -59,6 +59,7 @@ class VoiceSettings:
     stability: float  # [0.0 - 1.0]
     similarity_boost: float  # [0.0 - 1.0]
     style: float | None = None  # [0.0 - 1.0]
+    speed: float | None = 1.0  # [0.8 - 1.2]
     use_speaker_boost: bool | None = False
 
 
@@ -74,7 +75,13 @@ DEFAULT_VOICE = Voice(
     id="EXAVITQu4vr4xnSDxMaL",
     name="Bella",
     category="premade",
-    settings=VoiceSettings(stability=0.71, similarity_boost=0.5, style=0.0, use_speaker_boost=True),
+    settings=VoiceSettings(
+        stability=0.71,
+        speed=1.0,
+        similarity_boost=0.5,
+        style=0.0,
+        use_speaker_boost=True,
+    ),
 )
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
