@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 1.0.1
+
+### Patch Changes
+
+- feat: add max_tokens option to LLM and LLMStream classes - [#1576](https://github.com/livekit/agents/pull/1576) ([@davidzhao](https://github.com/davidzhao))
+
 ## 1.0.0
 
 ### Major Changes
