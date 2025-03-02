@@ -268,10 +268,6 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate, num_channels=1
-        )
-
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice.settings))
             if self._opts.voice.settings
