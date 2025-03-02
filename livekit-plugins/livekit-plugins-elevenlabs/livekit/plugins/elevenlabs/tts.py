@@ -37,7 +37,7 @@ from livekit.agents import (
 from .log import logger
 from .models import TTSEncoding, TTSModels
 
-_DefaultEncoding = "mp3_44100"
+_DefaultEncoding: TTSEncoding = "mp3_44100"
 
 
 def _sample_rate_from_format(output_format: TTSEncoding) -> int:

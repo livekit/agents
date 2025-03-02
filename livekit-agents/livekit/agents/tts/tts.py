@@ -442,8 +442,8 @@ class AudioFrameEmitter:
         self,
         *,
         event_ch: aio.Chan[SynthesizedAudio],
-        request_id: Optional[str] = None,
-        segment_id: Optional[str] = None,
+        request_id: str,
+        segment_id: str = "",
     ) -> None:
         self._event_ch = event_ch
         self._frame: rtc.AudioFrame | None = None
