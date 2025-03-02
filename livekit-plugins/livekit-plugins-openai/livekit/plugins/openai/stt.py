@@ -39,7 +39,7 @@ class _STTOptions:
     language: str
     detect_language: bool
     model: WhisperModels | str
-
+    prompt: str | None = None
 
 class STT(stt.STT):
     def __init__(
@@ -48,6 +48,7 @@ class STT(stt.STT):
         language: str = "en",
         detect_language: bool = False,
         model: WhisperModels | str = "whisper-1",
+        prompt: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
@@ -69,6 +70,7 @@ class STT(stt.STT):
             language=language,
             detect_language=detect_language,
             model=model,
+            prompt=prompt,
         )
 
         self._client = client or openai.AsyncClient(
@@ -91,9 +93,12 @@ class STT(stt.STT):
         *,
         model: WhisperModels | GroqAudioModels | None = None,
         language: str | None = None,
+        prompt: str | None = None,
     ) -> None:
         self._opts.model = model or self._opts.model
         self._opts.language = language or self._opts.language
+        if prompt is not None:
+            self._opts.prompt = prompt
 
     @staticmethod
     def with_groq(
@@ -104,6 +109,7 @@ class STT(stt.STT):
         client: openai.AsyncClient | None = None,
         language: str = "en",
         detect_language: bool = False,
+        prompt: str = "Always spell 'Grok' as 'Groq'",
     ) -> STT:
         """
         Create a new instance of Groq STT.
@@ -123,6 +129,7 @@ class STT(stt.STT):
             client=client,
             language=language,
             detect_language=detect_language,
+            prompt=prompt,
         )
 
     def _sanitize_options(self, *, language: str | None = None) -> _STTOptions:
@@ -148,6 +155,7 @@ class STT(stt.STT):
                 ),
                 model=self._opts.model,
                 language=config.language,
+                prompt=self._opts.prompt,
                 # verbose_json returns language and other details
                 response_format="verbose_json",
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
