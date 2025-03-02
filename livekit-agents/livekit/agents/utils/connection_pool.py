@@ -113,7 +113,7 @@ class ConnectionPool(Generic[T]):
         # check max session duration
         session_valid = (
             self._max_session_duration is None
-            or now - connected_at_time <= self._max_session_duration - buffer
+            or now - connected_at_time <= self._max_session_duration
         )
 
         # check last activity timeout
