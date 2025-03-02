@@ -202,7 +202,6 @@ class ChunkedStream(tts.ChunkedStream):
             async for frame in decoder:
                 emitter.push(frame)
             emitter.flush()
-            await decode_task
         except openai.APITimeoutError:
             raise APITimeoutError()
         except openai.APIStatusError as e:
