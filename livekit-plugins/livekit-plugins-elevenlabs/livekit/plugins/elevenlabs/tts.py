@@ -103,7 +103,7 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer
     chunk_length_schedule: list[int]
     enable_ssml_parsing: bool
-    inactivity_timeout: float
+    inactivity_timeout: int
 
 
 class TTS(tts.TTS):
@@ -116,7 +116,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         encoding: TTSEncoding = "mp3_22050_32",
         streaming_latency: int = 3,
-        inactivity_timeout: float = WS_INACTIVITY_TIMEOUT,
+        inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
         ),
@@ -137,7 +137,7 @@ class TTS(tts.TTS):
             base_url (str | None): Custom base URL for the API. Optional.
             encoding (TTSEncoding): Audio encoding format. Defaults to "mp3_22050_32".
             streaming_latency (int): Latency in seconds for streaming. Defaults to 3.
-            inactivity_timeout (float): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
+            inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
