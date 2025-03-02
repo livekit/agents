@@ -514,16 +514,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             except asyncio.TimeoutError as e:
                 raise APITimeoutError() from e
             except aiohttp.ClientResponseError as e:
-                logger.info(f"11labs error: {e}")
                 raise APIStatusError(
                     message=e.message,
                     status_code=e.status,
                     request_id=request_id,
                     body=None,
                 ) from e
+            except APIStatusError:
+                raise
             except Exception as e:
-                if isinstance(e, APIStatusError):
-                    raise
                 raise APIConnectionError() from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
