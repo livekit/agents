@@ -81,6 +81,29 @@ class TTS(tts.TTS):
         self._api_key = api_key
         self._base_url = base_url
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+            max_session_duration=3600,  # 1 hour
+        )
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        config = {
+            "encoding": self._opts.encoding,
+            "model": self._opts.model,
+            "sample_rate": self._opts.sample_rate,
+        }
+        return await asyncio.wait_for(
+            session.ws_connect(
+                _to_deepgram_url(config, self._base_url, websocket=True),
+                headers={"Authorization": f"Token {self._api_key}"},
+            ),
+            self._conn_options.timeout,
+        )
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
