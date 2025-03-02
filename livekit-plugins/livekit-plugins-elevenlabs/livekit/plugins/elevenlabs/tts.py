@@ -87,6 +87,7 @@ DEFAULT_VOICE = Voice(
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
+WS_INACTIVITY_TIMEOUT = 300
 
 
 @dataclass
@@ -102,6 +103,7 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer
     chunk_length_schedule: list[int]
     enable_ssml_parsing: bool
+    inactivity_timeout: float
 
 
 class TTS(tts.TTS):
@@ -114,6 +116,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         encoding: TTSEncoding = "mp3_22050_32",
         streaming_latency: int = 3,
+        inactivity_timeout: float = WS_INACTIVITY_TIMEOUT,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
         ),
@@ -134,6 +137,7 @@ class TTS(tts.TTS):
             base_url (str | None): Custom base URL for the API. Optional.
             encoding (TTSEncoding): Audio encoding format. Defaults to "mp3_22050_32".
             streaming_latency (int): Latency in seconds for streaming. Defaults to 3.
+            inactivity_timeout (float): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
@@ -173,11 +177,13 @@ class TTS(tts.TTS):
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
             language=language,
+            inactivity_timeout=inactivity_timeout,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
+            max_session_duration=inactivity_timeout,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -407,27 +413,19 @@ class SynthesizeStream(tts.SynthesizeStream):
             segment_id = utils.shortuuid()
             expected_text = ""  # accumulate all tokens sent
 
-            try:
-                # 11labs protocol expects the first message to be an "init msg"
-                init_pkt = dict(
-                    text=" ",
-                    voice_settings=_strip_nones(
-                        dataclasses.asdict(self._opts.voice.settings)
-                    )
-                    if self._opts.voice.settings
-                    else None,
-                    generation_config=dict(
-                        chunk_length_schedule=self._opts.chunk_length_schedule
-                    ),
+            # 11labs protocol expects the first message to be an "init msg"
+            init_pkt = dict(
+                text=" ",
+                voice_settings=_strip_nones(
+                    dataclasses.asdict(self._opts.voice.settings)
                 )
-                await ws_conn.send_str(json.dumps(init_pkt))
-            except ConnectionResetError as e:
-                self._pool.remove(ws_conn)
-                logger.warning(
-                    "websocket connection reset; retrying...",
-                    exc_info=e,
-                )
-                raise APIConnectionError() from e
+                if self._opts.voice.settings
+                else None,
+                generation_config=dict(
+                    chunk_length_schedule=self._opts.chunk_length_schedule
+                ),
+            )
+            await ws_conn.send_str(json.dumps(init_pkt))
 
             async def send_task():
                 nonlocal expected_text
@@ -589,10 +587,11 @@ def _stream_url(opts: _TTSOptions) -> str:
     latency = opts.streaming_latency
     enable_ssml = str(opts.enable_ssml_parsing).lower()
     language = opts.language
+    inactivity_timeout = opts.inactivity_timeout
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
         f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
-        f"enable_ssml_parsing={enable_ssml}"
+        f"enable_ssml_parsing={enable_ssml}&inactivity_timeout={inactivity_timeout}"
     )
     if language is not None:
         url += f"&language_code={language}"
