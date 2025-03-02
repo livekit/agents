@@ -409,6 +409,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id: str,
     ) -> None:
         async with self._pool.connection() as ws_conn:
+            self._pool.touch(ws_conn)
             segment_id = utils.shortuuid()
             expected_text = ""  # accumulate all tokens sent
 
@@ -425,6 +426,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ),
             )
             await ws_conn.send_str(json.dumps(init_pkt))
+            self._pool.touch(ws_conn)
 
             async def send_task():
                 nonlocal expected_text
@@ -448,9 +450,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data_pkt = dict(text=f"{text} ")  # must always end with a space
                     self._mark_started()
                     await ws_conn.send_str(json.dumps(data_pkt))
+                    self._pool.touch(ws_conn)
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
                 await ws_conn.send_str(json.dumps({"flush": True}))
+                self._pool.touch(ws_conn)
 
             async def recv_task():
                 nonlocal expected_text
@@ -476,6 +480,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 while True:
                     msg = await ws_conn.receive()
+                    self._pool.touch(ws_conn)
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSE,
