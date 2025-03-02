@@ -175,7 +175,7 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=inactivity_timeout,
-            touch_on_get=True,
+            mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -304,7 +304,7 @@ class ChunkedStream(tts.ChunkedStream):
                         decoder.end_input()
 
                 decode_task = asyncio.create_task(_decode_loop())
-                emitter = tts.AudioFrameEmitter(
+                emitter = tts.SynthesizedAudioEmitter(
                     event_ch=self._event_ch,
                     request_id=request_id,
                 )
@@ -446,7 +446,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             # consumes from decoder and generates events
             @utils.log_exceptions(logger=logger)
             async def generate_task():
-                emitter = tts.AudioFrameEmitter(
+                emitter = tts.SynthesizedAudioEmitter(
                     event_ch=self._event_ch,
                     request_id=request_id,
                     segment_id=segment_id,

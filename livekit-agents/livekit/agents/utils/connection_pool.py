@@ -24,7 +24,7 @@ class ConnectionPool(Generic[T]):
         self,
         *,
         max_session_duration: Optional[float] = None,
-        touch_on_get: bool = False,
+        mark_refreshed_on_get: bool = False,
         connect_cb: Optional[Callable[[], Awaitable[T]]] = None,
         close_cb: Optional[Callable[[T], Awaitable[None]]] = None,
     ) -> None:
@@ -32,12 +32,12 @@ class ConnectionPool(Generic[T]):
 
         Args:
             max_session_duration: Maximum duration in seconds before forcing reconnection
-            touch_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
+            mark_refreshed_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
             connect_cb: Optional async callback to create new connections
             close_cb: Optional async callback to close connections
         """
         self._max_session_duration = max_session_duration
-        self._touch_on_get = touch_on_get
+        self._mark_refreshed_on_get = mark_refreshed_on_get
         self._connect_cb = connect_cb
         self._close_cb = close_cb
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
@@ -98,7 +98,7 @@ class ConnectionPool(Generic[T]):
                 self._max_session_duration is None
                 or now - self._connections[conn] <= self._max_session_duration
             ):
-                if self._touch_on_get:
+                if self._mark_refreshed_on_get:
                     self._connections[conn] = now
                 return conn
             # connection expired; mark it for resetting.

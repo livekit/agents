@@ -432,7 +432,7 @@ class SynthesizeStream(ABC):
         await self.aclose()
 
 
-class AudioFrameEmitter:
+class SynthesizedAudioEmitter:
     """Utility for buffering and emitting audio frames with metadata to a channel.
 
     This class helps TTS implementers to correctly handle is_final logic when streaming responses.
