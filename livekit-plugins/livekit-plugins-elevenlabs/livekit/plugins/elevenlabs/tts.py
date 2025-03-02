@@ -77,6 +77,7 @@ DEFAULT_VOICE = Voice(
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
+WS_INACTIVITY_TIMEOUT = 300
 
 
 @dataclass
@@ -92,6 +93,7 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer
     chunk_length_schedule: list[int]
     enable_ssml_parsing: bool
+    inactivity_timeout: int
 
 
 class TTS(tts.TTS):
@@ -103,6 +105,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         base_url: str | None = None,
         streaming_latency: int = 3,
+        inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False  # punctuation can help for intonation
         ),
@@ -122,6 +125,7 @@ class TTS(tts.TTS):
             api_key (str | None): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (str | None): Custom base URL for the API. Optional.
             streaming_latency (int): Latency in seconds for streaming. Defaults to 3.
+            inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
@@ -161,6 +165,7 @@ class TTS(tts.TTS):
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
             language=language,
+            inactivity_timeout=inactivity_timeout,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -564,10 +569,11 @@ def _stream_url(opts: _TTSOptions) -> str:
     latency = opts.streaming_latency
     enable_ssml = str(opts.enable_ssml_parsing).lower()
     language = opts.language
+    inactivity_timeout = opts.inactivity_timeout
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
         f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
-        f"enable_ssml_parsing={enable_ssml}"
+        f"enable_ssml_parsing={enable_ssml}&inactivity_timeout={inactivity_timeout}"
     )
     if language is not None:
         url += f"&language_code={language}"
