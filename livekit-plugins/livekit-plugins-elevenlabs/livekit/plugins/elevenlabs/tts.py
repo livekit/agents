@@ -183,7 +183,6 @@ class TTS(tts.TTS):
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
-            max_session_duration=inactivity_timeout,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
