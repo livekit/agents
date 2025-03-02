@@ -407,19 +407,27 @@ class SynthesizeStream(tts.SynthesizeStream):
             segment_id = utils.shortuuid()
             expected_text = ""  # accumulate all tokens sent
 
-            # 11labs protocol expects the first message to be an "init msg"
-            init_pkt = dict(
-                text=" ",
-                voice_settings=_strip_nones(
-                    dataclasses.asdict(self._opts.voice.settings)
+            try:
+                # 11labs protocol expects the first message to be an "init msg"
+                init_pkt = dict(
+                    text=" ",
+                    voice_settings=_strip_nones(
+                        dataclasses.asdict(self._opts.voice.settings)
+                    )
+                    if self._opts.voice.settings
+                    else None,
+                    generation_config=dict(
+                        chunk_length_schedule=self._opts.chunk_length_schedule
+                    ),
                 )
-                if self._opts.voice.settings
-                else None,
-                generation_config=dict(
-                    chunk_length_schedule=self._opts.chunk_length_schedule
-                ),
-            )
-            await ws_conn.send_str(json.dumps(init_pkt))
+                await ws_conn.send_str(json.dumps(init_pkt))
+            except ConnectionResetError as e:
+                self._pool.remove(ws_conn)
+                logger.warning(
+                    "websocket connection reset; retrying...",
+                    exc_info=e,
+                )
+                raise APIConnectionError() from e
 
             async def send_task():
                 nonlocal expected_text
