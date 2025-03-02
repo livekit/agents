@@ -21,7 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Optional
 
 import aiohttp
 from livekit.agents import (
@@ -106,9 +106,7 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         streaming_latency: int = 3,
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
-            ignore_punctuation=False  # punctuation can help for intonation
-        ),
+        word_tokenizer: Optional[tokenize.WordTokenizer] = None,
         enable_ssml_parsing: bool = False,
         chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
@@ -153,6 +151,11 @@ class TTS(tts.TTS):
                 "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"
             )
 
+        if word_tokenizer is None:
+            word_tokenizer = tokenize.basic.WordTokenizer(
+                ignore_punctuation=False  # punctuation can help for intonation
+            )
+
         self._opts = _TTSOptions(
             voice=voice,
             model=model,
@@ -171,7 +174,7 @@ class TTS(tts.TTS):
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
-            max_session_duration=10,
+            max_session_duration=inactivity_timeout,
             touch_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
