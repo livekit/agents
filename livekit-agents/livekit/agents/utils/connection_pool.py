@@ -94,21 +94,21 @@ class ConnectionPool(Generic[T]):
             An active connection object
         """
         await self._drain_to_close()
-        now = time.monotonic()
 
         # try to reuse an available connection that hasn't expired
         while self._available:
             conn = self._available.pop()
-            if self._is_connection_valid(conn, now):
+            if self._is_connection_valid(conn):
                 return conn
             # connection expired; mark it for resetting.
             self.remove(conn)
 
         return await self._connect()
 
-    def _is_connection_valid(self, conn: T, now: float, buffer: float = 10.0) -> bool:
+    def _is_connection_valid(self, conn: T, buffer: float = 10.0) -> bool:
         last_activity_time = self._last_activity[conn]
         connected_at_time = self._connections[conn]
+        now = time.monotonic()
 
         # check max session duration
         session_valid = (
