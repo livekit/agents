@@ -61,7 +61,7 @@ class WorkerLauncher:
         # Launch new worker process
         cmd = [
             sys.executable,
-            str(THIS_DIR / "avatar_runner.py"),
+            str(THIS_DIR / "avatar_runner_bithuman.py"),
             "--url",
             connection_info.url,
             "--token",
