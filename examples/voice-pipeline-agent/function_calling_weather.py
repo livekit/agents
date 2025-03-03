@@ -13,7 +13,7 @@ from livekit.agents import (
     llm,
     metrics,
 )
-from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -51,9 +51,9 @@ class AssistantFnc(llm.FunctionContext):
         # that it might take awhile:
         # Option 1: you can use .say filler message immediately after the call is triggered
         # Option 2: you can prompt the agent to return a text response when it's making a function call
-        agent = AgentCallContext.get_current().agent
 
         # uncomment for option 1
+        # agent = AgentCallContext.get_current().agent
         # filler_messages = [
         #     "Let me check the weather in {location} for you.",
         #     "Let me see what the weather is like in {location} right now.",
