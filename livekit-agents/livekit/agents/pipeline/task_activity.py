@@ -26,8 +26,16 @@ from .generation import (
     perform_tool_executions,
     perform_tts_inference,
     update_instructions,
+    truncate_message,
+)
+from .events import (
+    UserInputTranscribedEvent,
+    UserStartedSpeakingEvent,
+    UserStoppedSpeakingEvent,
+    MetricsCollectedEvent,
 )
 from .speech_handle import SpeechHandle
+from ..metrics import AgentMetrics
 
 
 def log_event(event: str, **kwargs) -> None:
@@ -40,17 +48,18 @@ if TYPE_CHECKING:
 
 
 _TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")
+_SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
 
 # https://github.com/python/cpython/pull/31837
-def create_task() -> asyncio.Task:
-    tk = _TaskActivityContextVar.set(self)
-    from .task import _authorize_inline_task
+# def create_task() -> asyncio.Task:
+#     tk = _TaskActivityContextVar.set(self)
+#     from .task import _authorize_inline_task
 
-    task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
-    _authorize_inline_task(task)
-    _TaskActivityContextVar.reset(tk)
-    return task
+#     task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
+#     _authorize_inline_task(task)
+#     _TaskActivityContextVar.reset(tk)
+#     return task
 
 
 # NOTE: TaskActivity isn't exposed to the public API
@@ -132,10 +141,6 @@ class TaskActivity(RecognitionHooks):
                     "input_audio_transcription_completed",
                     self._on_input_audio_transcription_completed,
                 )
-                self._rt_session.on(
-                    "input_audio_transcription_failed",
-                    self._on_input_audio_transcription_failed,
-                )
                 try:
                     await self._rt_session.update_instructions(self._agent_task.instructions)
                 except llm.RealtimeError:
@@ -161,9 +166,22 @@ class TaskActivity(RecognitionHooks):
                 except ValueError:
                     logger.exception("failed to update the instructions")
 
+            # metrics
+            if isinstance(self.llm, llm.LLM):
+                self.llm.on("metrics_collected", self._on_metrics_collected)
+
+            if isinstance(self.stt, stt.STT):
+                self.stt.on("metrics_collected", self._on_metrics_collected)
+
+            if isinstance(self.tts, tts.TTS):
+                self.tts.on("metrics_collected", self._on_metrics_collected)
+
+            if isinstance(self.vad, vad.VAD):
+                self.vad.on("metrics_collected", self._on_metrics_collected)
+
             self._started = True
 
-            # execute on_enter
+            # on_enter callback
             tk = _TaskActivityContextVar.set(self)
             from .task import _authorize_inline_task
 
@@ -260,9 +278,7 @@ class TaskActivity(RecognitionHooks):
             raise ValueError("another reply is already in progress")
 
         log_event(
-            "generate_reply",
-            user_input=user_input or None,
-            instructions=instructions or None,
+            "generate_reply", user_input=user_input or None, instructions=instructions or None
         )
 
         handle = SpeechHandle.create(
@@ -343,6 +359,11 @@ class TaskActivity(RecognitionHooks):
 
     # -- Realtime Session events --
 
+    def _on_metrics_collected(self, ev: AgentMetrics) -> None:
+        if speech_handle := _SpeechHandleContextVar.get(None):
+            ev.speech_id = speech_handle.id
+            self._agent.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
+
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
         self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
@@ -359,20 +380,9 @@ class TaskActivity(RecognitionHooks):
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
         log_event("input_audio_transcription_completed")
-        self.on_final_transcript(
-            stt.SpeechEvent(
-                stt.SpeechEventType.FINAL_TRANSCRIPT,
-                alternatives=[stt.SpeechData(text=ev.transcript, language="")],
-            )
-        )
-
-    def _on_input_audio_transcription_failed(self, ev: llm.InputTranscriptionFailed) -> None:
-        log_event("input_audio_transcription_failed")
-        self.on_final_transcript(
-            stt.SpeechEvent(
-                stt.SpeechEventType.FINAL_TRANSCRIPT,
-                alternatives=[stt.SpeechData(text="", language="")],
-            )
+        self._agent.emit(
+            "user_input_transcribed",
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
         )
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
@@ -400,12 +410,10 @@ class TaskActivity(RecognitionHooks):
     # region recognition hooks
 
     def on_start_of_speech(self, ev: vad.VADEvent) -> None:
-        pass
-        # self.emit("user_started_speaking", events.UserStartedSpeakingEvent())
+        self._agent.emit("user_started_speaking", UserStartedSpeakingEvent())
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        pass
-        # self.emit("user_stopped_speaking", events.UserStoppedSpeakingEvent())
+        self._agent.emit("user_stopped_speaking", UserStoppedSpeakingEvent())
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if ev.speech_duration > self._agent.options.min_interruption_duration:
@@ -421,12 +429,18 @@ class TaskActivity(RecognitionHooks):
                 self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
-        self._agent._on_user_transcript(ev)
+        self._agent.emit(
+            "user_input_transcribed",
+            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=False),
+        )
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
-        self._agent._on_user_transcript(ev)
+        self._agent.emit(
+            "user_input_transcribed",
+            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
+        )
 
-    def on_end_of_turn(self, new_transcript: str) -> None:
+    async def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:
         #  - check if there is no current generation happening
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
@@ -458,6 +472,13 @@ class TaskActivity(RecognitionHooks):
             )
             return
 
+        await self._agent_task.on_end_of_turn(
+            self._agent_task.chat_ctx,
+            llm.ChatMessage(
+                role="user", content=[new_transcript]
+            ),  # TODO(theomonnom): This doesn't allow edits yet
+        )
+
         self.generate_reply(user_input=new_transcript)
 
     def retrieve_chat_ctx(self) -> llm.ChatContext:
@@ -473,6 +494,8 @@ class TaskActivity(RecognitionHooks):
         audio: AsyncIterable[rtc.AudioFrame] | None,
         add_to_chat_ctx: bool,
     ) -> None:
+        _SpeechHandleContextVar.set(speech_handle)
+
         text_output = self._agent.output.text
         audio_output = self._agent.output.audio
 
@@ -488,43 +511,38 @@ class TaskActivity(RecognitionHooks):
 
         tasks = []
         if text_output is not None:
-            forward_text, _, first_text_fut = perform_text_forwarding(
+            forward_text, text_out = perform_text_forwarding(
                 text_output=text_output, llm_output=_read_text()
             )
             tasks.append(forward_text)
             if audio_output is None:
                 # update the agent state based on text if no audio output
-                first_text_fut.add_done_callback(
-                    lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
+                text_out.first_text_fut.add_done_callback(
+                    lambda _: self._agent._update_agent_state(AgentState.SPEAKING)
                 )
 
-        if audio is None:
-            # generate audio using TTS
-            tts_task: asyncio.Task | None = None
-            tts_gen_data: _TTSGenerationData | None = None
-            if audio_output is not None:
+        if audio_output is not None:
+            if audio is None:
+                # generate audio using TTS
                 tts_task, tts_gen_data = perform_tts_inference(
                     node=self._agent_task.tts_node, input=_read_text()
                 )
                 tasks.append(tts_task)
 
-                forward_task, _, first_frame_fut = perform_audio_forwarding(
+                forward_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output, tts_output=tts_gen_data.audio_ch
                 )
                 tasks.append(forward_task)
-                first_frame_fut.add_done_callback(
-                    lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
-                )
-        else:
-            # use the provided audio
-            if audio_output is not None:
-                forward_task, _, first_frame_fut = perform_audio_forwarding(
+            else:
+                # use the provided audio
+                forward_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output, tts_output=audio
                 )
                 tasks.append(forward_task)
-                first_frame_fut.add_done_callback(
-                    lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
-                )
+
+            audio_out.first_frame_fut.add_done_callback(
+                lambda _: self._agent._update_agent_state(AgentState.SPEAKING)
+            )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
 
@@ -553,6 +571,8 @@ class TaskActivity(RecognitionHooks):
         user_input: str | None = None,
         instructions: str | None = None,
     ) -> None:
+        _SpeechHandleContextVar.set(speech_handle)
+
         log_event(
             "generation started",
             speech_id=speech_handle.id,
@@ -573,7 +593,7 @@ class TaskActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        self._agent._on_agent_state_changed(AgentState.THINKING)
+        self._agent._update_agent_state(AgentState.THINKING)
         tasks = []
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent_task.llm_node,
@@ -599,7 +619,7 @@ class TaskActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             return
 
-        forward_task, text_out, first_text_fut = perform_text_forwarding(
+        forward_task, text_out = perform_text_forwarding(
             text_output=text_output, llm_output=llm_output
         )
         tasks.append(forward_task)
@@ -607,16 +627,16 @@ class TaskActivity(RecognitionHooks):
         if audio_output is not None:
             assert tts_gen_data is not None
             # TODO(theomonnom): should the audio be added to the chat_context too?
-            forward_task, _, first_frame_fut = perform_audio_forwarding(
+            forward_task, audio_out = perform_audio_forwarding(
                 audio_output=audio_output, tts_output=tts_gen_data.audio_ch
             )
             tasks.append(forward_task)
-            first_frame_fut.add_done_callback(
-                lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
+            audio_out.first_frame_fut.add_done_callback(
+                lambda _: self._agent._update_agent_state(AgentState.SPEAKING)
             )
         else:
-            first_text_fut.add_done_callback(
-                lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
+            text_out.first_text_fut.add_done_callback(
+                lambda _: self._agent._update_agent_state(AgentState.SPEAKING)
             )
 
         # start to execute tools (only after play())
@@ -636,7 +656,7 @@ class TaskActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
             if not speech_handle.interrupted:
-                self._agent._on_agent_state_changed(AgentState.LISTENING)
+                self._agent._update_agent_state(AgentState.LISTENING)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -652,10 +672,12 @@ class TaskActivity(RecognitionHooks):
                     speech_id=speech_handle.id,
                 )
 
-                # TODO(theomonnom): calculate the played text based on playback_ev.playback_position
-                msg = chat_ctx.add_message(role="assistant", content=text_out.text)
+                truncated_text = truncate_message(
+                    message=text_out.text, played_duration=playback_ev.playback_position
+                )
+                msg = chat_ctx.add_message(role="assistant", content=truncated_text)
                 self._agent_task._chat_ctx.items.append(msg)
-                self._agent._on_agent_state_changed(AgentState.LISTENING)
+                self._agent._update_agent_state(AgentState.LISTENING)
 
             return
 
@@ -728,6 +750,8 @@ class TaskActivity(RecognitionHooks):
         user_input: str | None,
         instructions: str | None,
     ) -> None:
+        _SpeechHandleContextVar.set(speech_handle)  # not needed, but here for completeness
+
         assert self._rt_session is not None, "rt_session is not available"
 
         if user_input is not None:
@@ -751,6 +775,8 @@ class TaskActivity(RecognitionHooks):
         speech_handle: SpeechHandle,
         generation_ev: llm.GenerationCreatedEvent,
     ) -> None:
+        _SpeechHandleContextVar.set(speech_handle)
+
         assert self._rt_session is not None, "rt_session is not available"
 
         log_event(
@@ -786,22 +812,24 @@ class TaskActivity(RecognitionHooks):
                 audio_out = None
 
                 if text_output is not None:
-                    forward_task, text_out, first_text_fut = perform_text_forwarding(
+                    forward_task, text_out = perform_text_forwarding(
                         text_output=text_output, llm_output=msg.text_stream
                     )
+
                     forward_tasks.append(forward_task)
 
+                    if text_out is not None:
+                        text_out.first_text_fut.add_done_callback(
+                            lambda _: self._agent._update_agent_state(AgentState.SPEAKING)
+                        )
+
                 if audio_output is not None:
-                    forward_task, audio_out, first_frame_fut = perform_audio_forwarding(
+                    forward_task, audio_out = perform_audio_forwarding(
                         audio_output=audio_output, tts_output=msg.audio_stream
                     )
                     forward_tasks.append(forward_task)
-                    first_frame_fut.add_done_callback(
-                        lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
-                    )
-                else:
-                    first_text_fut.add_done_callback(
-                        lambda _: self._agent._on_agent_state_changed(AgentState.SPEAKING)
+                    audio_out.first_frame_fut.add_done_callback(
+                        lambda _: self._agent._update_agent_state(AgentState.SPEAKING)
                     )
 
                 outputs.append((text_out, audio_out))
@@ -834,7 +862,7 @@ class TaskActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
             if not speech_handle.interrupted:
-                self._agent._on_agent_state_changed(AgentState.LISTENING)
+                self._agent._update_agent_state(AgentState.LISTENING)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -848,7 +876,7 @@ class TaskActivity(RecognitionHooks):
                     playback_position=playback_ev.playback_position,
                     speech_id=speech_handle.id,
                 )
-                self._agent._on_agent_state_changed(AgentState.LISTENING)
+                self._agent._update_agent_state(AgentState.LISTENING)
 
             # TODO(theomonnom): truncate message (+ OAI serverside mesage)
             return

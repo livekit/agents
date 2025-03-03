@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar, Literal, Union
 
-from ..llm import FunctionCall
+from ..llm import FunctionCall, ChatMessage
+from ..metrics import AgentMetrics
+from ..types import AgentState
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from .pipeline_agent import PipelineAgent
@@ -43,11 +46,62 @@ class CallContext(Generic[Userdata_T]):
         return self.agent.userdata
 
 
-@dataclass
-class UserStartedSpeakingEvent:
-    pass
+EventTypes = Literal[
+    "user_started_speaking",
+    "user_stopped_speaking",
+    "user_input_transcribed",
+    "agent_started_speaking",
+    "agent_stopped_speaking",
+    "agent_state_changed",
+    "conversation_item_added",
+    "metrics_collected",
+]
 
 
-@dataclass
-class UserStoppedSpeakingEvent:
-    pass
+class UserStartedSpeakingEvent(BaseModel):
+    type: Literal["user_started_speaking"] = "user_started_speaking"
+
+
+class UserStoppedSpeakingEvent(BaseModel):
+    type: Literal["user_stopped_speaking"] = "user_stopped_speaking"
+
+
+class UserInputTranscribedEvent(BaseModel):
+    type: Literal["user_input_transcribed"] = "user_input_transcribed"
+    transcript: str
+    is_final: bool
+
+
+class AgentStartedSpeakingEvent(BaseModel):
+    type: Literal["agent_started_speaking"] = "agent_started_speaking"
+
+
+class AgentStoppedSpeakingEvent(BaseModel):
+    type: Literal["agent_stopped_speaking"] = "agent_stopped_speaking"
+
+
+class AgentStateChangedEvent(BaseModel):
+    type: Literal["agent_state_changed"] = "agent_state_changed"
+    state: AgentState
+
+
+class MetricsCollectedEvent(BaseModel):
+    type: Literal["metrics_collected"] = "metrics_collected"
+    metrics: AgentMetrics
+
+
+class ConversationItemAddedEvent(BaseModel):
+    type: Literal["conversation_item_added"] = "conversation_item_added"
+    message: ChatMessage
+
+
+AgentEvent = Union[
+    UserStartedSpeakingEvent,
+    UserStoppedSpeakingEvent,
+    UserInputTranscribedEvent,
+    AgentStartedSpeakingEvent,
+    AgentStoppedSpeakingEvent,
+    AgentStateChangedEvent,
+    MetricsCollectedEvent,
+    ConversationItemAddedEvent,
+]

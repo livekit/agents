@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html>
   <head>
@@ -168,7 +167,9 @@
 
           // Create a wrapper span for the event name/time
           const titleLine = document.createElement("span");
-          titleLine.textContent = `${new Date(e.timestamp * 1000).toLocaleTimeString()} - ${e.name}`;
+          titleLine.textContent = `${new Date(
+            e.timestamp * 1000
+          ).toLocaleTimeString()} - ${e.name}`;
           li.appendChild(titleLine);
 
           // Only show the collapsible "Data" button if e.data is not null
@@ -181,7 +182,8 @@
 
             // Collapsible content block (hidden by default)
             const dataContent = document.createElement("div");
-            dataContent.className = "collapsible-content nested-collapsible-content";
+            dataContent.className =
+              "collapsible-content nested-collapsible-content";
             dataContent.style.display = "none";
 
             // Pretty-print JSON with 2-space indentation
@@ -515,4 +517,3 @@
     </script>
   </body>
 </html>
-
