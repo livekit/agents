@@ -337,7 +337,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             media_chunks=[Blob(data=data, mime_type=mime_type)],
         )
         self._queue_msg(realtime_input)
-        
+
     DEFAULT_ENCODE_OPTIONS = images.EncodeOptions(
         format="JPEG",
         quality=75,
@@ -346,7 +346,11 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         ),
     )
 
-    def push_video(self, frame: rtc.VideoFrame, encode_options: images.EncodeOptions = DEFAULT_ENCODE_OPTIONS) -> None:
+    def push_video(
+        self,
+        frame: rtc.VideoFrame,
+        encode_options: images.EncodeOptions = DEFAULT_ENCODE_OPTIONS,
+    ) -> None:
         """Push a video frame to the Gemini Multimodal Live session.
 
         Args:
@@ -361,8 +365,10 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             encode_options,
         )
         mime_type = (
-            "image/jpeg" if encode_options.format == "JPEG"
-            else "image/png" if encode_options.format == "PNG"
+            "image/jpeg"
+            if encode_options.format == "JPEG"
+            else "image/png"
+            if encode_options.format == "PNG"
             else "image/jpeg"
         )
         self._push_media_chunk(encoded_data, mime_type)
