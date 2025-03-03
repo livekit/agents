@@ -26,6 +26,7 @@ from .generation import (
     perform_tool_executions,
     perform_tts_inference,
     update_instructions,
+    truncate_message,
 )
 from .events import (
     UserInputTranscribedEvent,
@@ -671,8 +672,10 @@ class TaskActivity(RecognitionHooks):
                     speech_id=speech_handle.id,
                 )
 
-                # TODO(theomonnom): calculate the played text based on playback_ev.playback_position
-                msg = chat_ctx.add_message(role="assistant", content=text_out.text)
+                truncated_text = truncate_message(
+                    message=text_out.text, played_duration=playback_ev.playback_position
+                )
+                msg = chat_ctx.add_message(role="assistant", content=truncated_text)
                 self._agent_task._chat_ctx.items.append(msg)
                 self._agent._update_agent_state(AgentState.LISTENING)
 
