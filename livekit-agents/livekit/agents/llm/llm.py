@@ -38,6 +38,8 @@ from .function_context import AIFunction
 class CompletionUsage(BaseModel):
     completion_tokens: int
     prompt_tokens: int
+    cache_creation_tokens: int
+    cache_read_tokens: int
     total_tokens: int
 
 
