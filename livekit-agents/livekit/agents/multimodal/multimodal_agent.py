@@ -15,7 +15,6 @@ from typing import (
 )
 
 import aiohttp
-
 from livekit import rtc
 from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
