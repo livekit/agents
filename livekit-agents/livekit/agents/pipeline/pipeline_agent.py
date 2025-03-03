@@ -137,7 +137,7 @@ class _ImplOptions:
     before_tts_cb: BeforeTTSCallback
     plotting: bool
     transcription: AgentTranscriptionOptions
-
+    should_subscribe_to_audio: Callable[[rtc.RemoteTrackPublication], bool] | bool
 
 @dataclass(frozen=True)
 class AgentTranscriptionOptions:
@@ -201,6 +201,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         loop: asyncio.AbstractEventLoop | None = None,
         # backward compatibility
         will_synthesize_assistant_reply: WillSynthesizeAssistantReply | None = None,
+        should_subscribe_to_audio: Callable[[rtc.RemoteTrackPublication], bool] | bool
     ) -> None:
         """
         Create a new VoicePipelineAgent.
@@ -255,6 +256,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             transcription=transcription,
             before_llm_cb=before_llm_cb,
             before_tts_cb=before_tts_cb,
+            should_subscribe_to_audio=should_subscribe_to_audio,
         )
         self._plotter = AssistantPlotter(self._loop)
 
@@ -559,6 +561,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             stt=self._stt,
             participant=participant,
             transcription=self._opts.transcription.user_transcription,
+            should_subscribe_to_audio=self._opts.should_subscribe_to_audio,
         )
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:
