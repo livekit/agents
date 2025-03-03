@@ -27,7 +27,12 @@ from .generation import (
     perform_tts_inference,
     update_instructions,
 )
-from .events import UserInputTranscribedEvent, UserStartedSpeakingEvent, MetricsCollectedEvent
+from .events import (
+    UserInputTranscribedEvent,
+    UserStartedSpeakingEvent,
+    UserStoppedSpeakingEvent,
+    MetricsCollectedEvent,
+)
 from .speech_handle import SpeechHandle
 from ..metrics import AgentMetrics
 
@@ -407,8 +412,7 @@ class TaskActivity(RecognitionHooks):
         self._agent.emit("user_started_speaking", UserStartedSpeakingEvent())
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        pass
-        # self.emit("user_stopped_speaking", events.UserStoppedSpeakingEvent())
+        self._agent.emit("user_stopped_speaking", UserStoppedSpeakingEvent())
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if ev.speech_duration > self._agent.options.min_interruption_duration:
