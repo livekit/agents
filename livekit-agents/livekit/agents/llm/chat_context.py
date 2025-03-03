@@ -98,6 +98,7 @@ class ChatMessage(BaseModel):
     type: Literal["message"] = "message"
     role: ChatRole
     content: list[ChatContent]
+    interrupted: bool = False
     hash: Optional[bytes] = None
 
 
@@ -155,10 +156,7 @@ class ChatContext:
         return message
 
     def get_by_id(self, item_id: str) -> ChatItem | None:
-        # ideally, get_by_id should be O(1)
-        for item in self.items:
-            if item.id == item_id:
-                return item
+        return next((item for item in self.items if item.id == item_id), None)
 
     def copy(self) -> "ChatContext":
         return ChatContext(self.items.copy())
