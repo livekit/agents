@@ -45,4 +45,4 @@ TTS_LANGUAGE = Literal[
     "de-CH",
 ]
 
-TTS_OUTPUT_FORMAT = Literal["pcm", "mp3"]
+TTS_OUTPUT_FORMAT = Literal["mp3"]

@@ -11,12 +11,12 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
 
 from google import genai
-from google.genai._api_client import HttpOptions
 from google.genai.types import (
     Blob,
     Content,
     FunctionResponse,
     GenerationConfig,
+    HttpOptions,
     LiveClientContent,
     LiveClientRealtimeInput,
     LiveClientToolResponse,
@@ -107,7 +107,7 @@ class RealtimeModel:
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = ["AUDIO"],
+        modalities: list[Modality] = [Modality.AUDIO],
         enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
@@ -258,6 +258,8 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._fnc_ctx = fnc_ctx
         self._fnc_tasks = utils.aio.TaskSet()
         self._is_interrupted = False
+        self._playout_complete = asyncio.Event()
+        self._playout_complete.set()
 
         tools = []
         if self._fnc_ctx is not None:
@@ -316,6 +318,10 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
         self._send_ch.close()
         await self._main_atask
+
+    @property
+    def playout_complete(self) -> asyncio.Event | None:
+        return self._playout_complete
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -479,12 +485,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                         logger.warning(
                             "function call cancelled",
                             extra={
-                                "function_call_ids": response.tool_call_cancellation.function_call_ids,
+                                "function_call_ids": response.tool_call_cancellation.ids,
                             },
                         )
                         self.emit(
                             "function_calls_cancelled",
-                            response.tool_call_cancellation.function_call_ids,
+                            response.tool_call_cancellation.ids,
                         )
 
         async with self._client.aio.live.connect(

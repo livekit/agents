@@ -70,7 +70,11 @@ def proc_main(args: ProcStartArgs) -> None:
 
     pid = current_process().pid
     logger.info("initializing job process", extra={"pid": pid})
-    client.initialize()
+    try:
+        client.initialize()
+    except Exception:
+        return  # initialization failed, exit
+
     logger.info("job process initialized", extra={"pid": pid})
 
     client.run()

@@ -121,6 +121,11 @@ class _RealtimeAPISession(Protocol):
         self, item_id: str, content_index: int, audio_end_ms: int
     ) -> None: ...
 
+    @property
+    def playout_complete(self) -> asyncio.Event | None:
+        """Event that is set when the playout is done"""
+        pass
+
 
 @dataclass(frozen=True)
 class AgentTranscriptionOptions:
@@ -435,10 +440,16 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         )
 
         def _on_playout_started() -> None:
+            if self._session.playout_complete is not None:
+                self._session.playout_complete.clear()
+
             self.emit("agent_started_speaking")
             self._update_state("speaking")
 
         def _on_playout_stopped(interrupted: bool) -> None:
+            if self._session.playout_complete is not None:
+                self._session.playout_complete.set()
+
             self.emit("agent_stopped_speaking")
             self._update_state("listening")
 

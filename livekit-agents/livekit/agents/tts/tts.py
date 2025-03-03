@@ -430,3 +430,48 @@ class SynthesizeStream(ABC):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+class SynthesizedAudioEmitter:
+    """Utility for buffering and emitting audio frames with metadata to a channel.
+
+    This class helps TTS implementers to correctly handle is_final logic when streaming responses.
+    """
+
+    def __init__(
+        self,
+        *,
+        event_ch: aio.Chan[SynthesizedAudio],
+        request_id: str,
+        segment_id: str = "",
+    ) -> None:
+        self._event_ch = event_ch
+        self._frame: rtc.AudioFrame | None = None
+        self._request_id = request_id
+        self._segment_id = segment_id
+
+    def push(self, frame: Optional[rtc.AudioFrame]):
+        """Emits any buffered frame and stores the new frame for later emission.
+
+        The buffered frame is emitted as not final.
+        """
+        self._emit_frame(is_final=False)
+        self._frame = frame
+
+    def _emit_frame(self, is_final: bool = False):
+        """Sends the buffered frame to the event channel if one exists."""
+        if self._frame is None:
+            return
+        self._event_ch.send_nowait(
+            SynthesizedAudio(
+                frame=self._frame,
+                request_id=self._request_id,
+                segment_id=self._segment_id,
+                is_final=is_final,
+            )
+        )
+        self._frame = None
+
+    def flush(self):
+        """Emits any buffered frame as final."""
+        self._emit_frame(is_final=True)

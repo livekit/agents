@@ -18,11 +18,11 @@ import asyncio
 import base64
 import json
 import os
+import weakref
 from dataclasses import dataclass
 from typing import Any, Optional
 
 import aiohttp
-from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -128,6 +128,7 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
@@ -193,11 +194,20 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> "SynthesizeStream":
-        return SynthesizeStream(
+        stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
             opts=self._opts,
         )
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        await self._pool.aclose()
+        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -240,19 +250,17 @@ class ChunkedStream(tts.ChunkedStream):
                 ),
             ) as resp:
                 resp.raise_for_status()
+                emitter = tts.SynthesizedAudioEmitter(
+                    event_ch=self._event_ch,
+                    request_id=request_id,
+                )
                 async for data, _ in resp.content.iter_chunks():
                     for frame in bstream.write(data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                frame=frame,
-                            )
-                        )
+                        emitter.push(frame)
 
                 for frame in bstream.flush():
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(request_id=request_id, frame=frame)
-                    )
+                    emitter.push(frame)
+                emitter.flush()
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
@@ -312,22 +320,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
             )
-
-            last_frame: rtc.AudioFrame | None = None
-
-            def _send_last_frame(*, segment_id: str, is_final: bool) -> None:
-                nonlocal last_frame
-                if last_frame is not None:
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(
-                            request_id=request_id,
-                            segment_id=segment_id,
-                            frame=last_frame,
-                            is_final=is_final,
-                        )
-                    )
-
-                    last_frame = None
+            emitter = tts.SynthesizedAudioEmitter(
+                event_ch=self._event_ch,
+                request_id=request_id,
+            )
 
             while True:
                 msg = await ws.receive()
@@ -347,18 +343,16 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data = json.loads(msg.data)
                 segment_id = data.get("context_id")
+                emitter._segment_id = segment_id
 
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
                     for frame in audio_bstream.write(b64data):
-                        _send_last_frame(segment_id=segment_id, is_final=False)
-                        last_frame = frame
+                        emitter.push(frame)
                 elif data.get("done"):
                     for frame in audio_bstream.flush():
-                        _send_last_frame(segment_id=segment_id, is_final=False)
-                        last_frame = frame
-
-                    _send_last_frame(segment_id=segment_id, is_final=True)
+                        emitter.push(frame)
+                    emitter.flush()
                     if segment_id == request_id:
                         # we're not going to receive more frames, end stream
                         break

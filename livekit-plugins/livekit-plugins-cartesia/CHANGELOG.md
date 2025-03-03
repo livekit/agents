@@ -1,5 +1,13 @@
 # livekit-plugins-cartesia
 
+## 0.4.8
+
+### Patch Changes
+
+- feat: connection pooling. speeds up generation with STT/TTS providers - [#1538](https://github.com/livekit/agents/pull/1538) ([@davidzhao](https://github.com/davidzhao))
+
+- remove update options from tts synthesis stream - [#1546](https://github.com/livekit/agents/pull/1546) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.4.7
 
 ### Patch Changes
