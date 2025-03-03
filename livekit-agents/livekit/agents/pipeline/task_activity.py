@@ -46,14 +46,14 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 
 
 # https://github.com/python/cpython/pull/31837
-def create_task() -> asyncio.Task:
-    tk = _TaskActivityContextVar.set(self)
-    from .task import _authorize_inline_task
+# def create_task() -> asyncio.Task:
+#     tk = _TaskActivityContextVar.set(self)
+#     from .task import _authorize_inline_task
 
-    task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
-    _authorize_inline_task(task)
-    _TaskActivityContextVar.reset(tk)
-    return task
+#     task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
+#     _authorize_inline_task(task)
+#     _TaskActivityContextVar.reset(tk)
+#     return task
 
 
 # NOTE: TaskActivity isn't exposed to the public API
