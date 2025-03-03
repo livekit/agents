@@ -37,26 +37,31 @@ def wer(hypothesis: str, reference: str) -> float:
     )
 
 
-def read_mp3_file(path) -> rtc.AudioFrame:
-    mp3 = utils.codecs.Mp3StreamDecoder()
+async def read_mp3_file(path) -> rtc.AudioFrame:
+    decoder = utils.codecs.AudioStreamDecoder(
+        sample_rate=48000,
+        num_channels=1,
+    )
     frames: list[rtc.AudioFrame] = []
     with open(path, "rb") as file:
         while True:
             chunk = file.read(4096)
             if not chunk:
                 break
-
-            frames.extend(mp3.decode_chunk(chunk))
+            decoder.push(chunk)
+        decoder.end_input()
+    async for frame in decoder:
+        frames.append(frame)
 
     return rtc.combine_audio_frames(frames)  # merging just for ease of use
 
 
-def make_test_speech(
+async def make_test_speech(
     *,
     chunk_duration_ms: int | None = None,
     sample_rate: int | None = None,  # resample if not None
 ) -> Tuple[list[rtc.AudioFrame], str]:
-    input_audio = read_mp3_file(TEST_AUDIO_FILEPATH)
+    input_audio = await read_mp3_file(TEST_AUDIO_FILEPATH)
 
     if sample_rate is not None and input_audio.sample_rate != sample_rate:
         resampler = rtc.AudioResampler(

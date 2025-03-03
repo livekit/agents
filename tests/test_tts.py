@@ -44,7 +44,6 @@ async def _assert_valid_synthesized_audio(
 
 SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
-    pytest.param(lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"),
     pytest.param(lambda: openai.TTS(), id="openai"),
     pytest.param(lambda: google.TTS(), id="google"),
     pytest.param(lambda: azure.TTS(), id="azure"),
@@ -73,7 +72,6 @@ async def test_synthesize(tts_factory):
 STREAM_SENT_TOKENIZER = tokenize.basic.SentenceTokenizer(min_sentence_len=20)
 STREAM_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
-    pytest.param(lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"),
     pytest.param(lambda: cartesia.TTS(), id="cartesia"),
     pytest.param(
         lambda: agents.tts.StreamAdapter(

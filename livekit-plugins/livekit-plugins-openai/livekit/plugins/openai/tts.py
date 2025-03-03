@@ -195,16 +195,13 @@ class ChunkedStream(tts.ChunkedStream):
         decode_task = asyncio.create_task(_decode_loop())
 
         try:
+            emitter = tts.AudioFrameEmitter(
+                event_ch=self._event_ch,
+                request_id=request_id,
+            )
             async for frame in decoder:
-                if self._event_ch.closed:
-                    break
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        frame=frame,
-                        request_id=request_id,
-                    )
-                )
-            await decode_task
+                emitter.push(frame)
+            emitter.flush()
         except openai.APITimeoutError:
             raise APITimeoutError()
         except openai.APIStatusError as e:
