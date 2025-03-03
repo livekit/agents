@@ -104,7 +104,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = "eleven_flash_v2_5",
         api_key: str | None = None,
         base_url: str | None = None,
-        streaming_latency: int = 3,
+        streaming_latency: int = 0,
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
         word_tokenizer: Optional[tokenize.WordTokenizer] = None,
         enable_ssml_parsing: bool = False,
@@ -122,7 +122,7 @@ class TTS(tts.TTS):
             model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
             api_key (str | None): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (str | None): Custom base URL for the API. Optional.
-            streaming_latency (int): Latency in seconds for streaming. Defaults to 3.
+            streaming_latency (int): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
@@ -444,11 +444,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     data_pkt = dict(text=f"{text} ")  # must always end with a space
                     self._mark_started()
-                    logger.debug("11labs sending text: %s", data_pkt)
                     await ws_conn.send_str(json.dumps(data_pkt))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
-                logger.debug("11labs sending flush")
                 await ws_conn.send_str(json.dumps({"flush": True}))
 
             # consumes from decoder and generates events
@@ -560,11 +558,13 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     voice_id = opts.voice.id
     model_id = opts.model
     output_format = opts.encoding
-    latency = opts.streaming_latency
-    return (
+    url = (
         f"{base_url}/text-to-speech/{voice_id}/stream?"
-        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}"
+        f"model_id={model_id}&output_format={output_format}"
     )
+    if opts.streaming_latency:
+        url += f"&optimize_streaming_latency={opts.streaming_latency}"
+    return url
 
 
 def _stream_url(opts: _TTSOptions) -> str:
@@ -572,15 +572,16 @@ def _stream_url(opts: _TTSOptions) -> str:
     voice_id = opts.voice.id
     model_id = opts.model
     output_format = opts.encoding
-    latency = opts.streaming_latency
     enable_ssml = str(opts.enable_ssml_parsing).lower()
     language = opts.language
     inactivity_timeout = opts.inactivity_timeout
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream-input?"
-        f"model_id={model_id}&output_format={output_format}&optimize_streaming_latency={latency}&"
+        f"model_id={model_id}&output_format={output_format}&"
         f"enable_ssml_parsing={enable_ssml}&inactivity_timeout={inactivity_timeout}"
     )
     if language is not None:
         url += f"&language_code={language}"
+    if opts.streaming_latency:
+        url += f"&optimize_streaming_latency={opts.streaming_latency}"
     return url

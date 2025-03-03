@@ -642,7 +642,6 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(start_event)
 
                 if is_final_transcript:
-                    logger.debug(f"deepgram received final transcript: {alts[0].text}")
                     final_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=request_id,
