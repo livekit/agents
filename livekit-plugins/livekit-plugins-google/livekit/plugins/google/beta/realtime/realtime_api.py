@@ -9,6 +9,7 @@ from typing import AsyncIterable, Literal
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _create_ai_function_info
+from livekit.agents.utils import images
 
 from google import genai
 from google.genai.types import (
@@ -331,13 +332,47 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._fnc_ctx = value
 
+    def push_media_chunk(self, data: bytes, mime_type: str) -> None:
+        """Push a raw media chunk to the Gemini Multimodal Live session.
+
+        Args:
+            data (bytes): The data to push.
+            mime_type (str): The MIME type of the data.
+        """
+        realtime_input = LiveClientRealtimeInput(
+            media_chunks=[Blob(data=data, mime_type=mime_type)],
+        )
+        self._queue_msg(realtime_input)
+
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        """Push a video frame to the Gemini Multimodal Live session.
+
+        Args:
+            frame (rtc.VideoFrame): The video frame to push.
+
+        Notes:
+        - This will be sent immediately so you should use a sampling frame rate that makes sense for your application and Gemini's constraints. 1 FPS is a good starting point.
+        - The default is to encode as a JPEG at 1024x1024. If you need more control, see `push_media_chunk`.
+        """
+        encoded_data = images.encode(
+            frame,
+            images.EncodeOptions(
+                format="JPEG",
+                quality=75,
+                resize_options=images.ResizeOptions(
+                    width=1024,
+                    height=1024,
+                    strategy="scale_aspect_fit",
+                ),
+            ),
+        )
+        self.push_media_chunk(encoded_data, "image/jpeg")
+
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._opts.enable_user_audio_transcription:
             self._transcriber._push_audio(frame)
-        realtime_input = LiveClientRealtimeInput(
-            media_chunks=[Blob(data=frame.data.tobytes(), mime_type="audio/pcm")],
-        )
-        self._queue_msg(realtime_input)
+
+        self.push_media_chunk(frame.data.tobytes(), "audio/pcm")
 
     def _queue_msg(self, msg: ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
