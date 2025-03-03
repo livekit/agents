@@ -187,8 +187,8 @@ class LLM(llm.LLM):
                     anthropic_tool_choice["disable_parallel_tool_use"] = True
                 opts["tool_choice"] = anthropic_tool_choice
 
-        latest_system_message: anthropic.types.TextBlockParam | None = (
-            _latest_system_message(chat_ctx, caching=self._opts.caching)
+        latest_system_message: anthropic.types.TextBlockParam | None = _latest_system_message(
+            chat_ctx, caching=self._opts.caching
         )
         if latest_system_message:
             opts["system"] = [latest_system_message]

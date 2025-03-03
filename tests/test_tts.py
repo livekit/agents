@@ -94,9 +94,7 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
     pytest.param(
-        lambda: agents.tts.StreamAdapter(
-            tts=aws.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
-        ),
+        lambda: agents.tts.StreamAdapter(tts=aws.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER),
         id="aws.stream",
     ),
 ]

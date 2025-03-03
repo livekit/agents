@@ -90,9 +90,7 @@ class TTS(tts.TTS):
             num_channels=TTS_NUM_CHANNELS,
         )
 
-        self._api_key, self._api_secret = _get_aws_credentials(
-            api_key, api_secret, speech_region
-        )
+        self._api_key, self._api_secret = _get_aws_credentials(api_key, api_secret, speech_region)
 
         self._opts = _TTSOptions(
             voice=voice,

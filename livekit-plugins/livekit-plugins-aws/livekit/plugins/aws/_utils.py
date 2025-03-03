@@ -14,9 +14,7 @@ from livekit.agents.llm.function_context import _is_optional_type
 __all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_credentials"]
 
 
-def _get_aws_credentials(
-    api_key: Optional[str], api_secret: Optional[str], region: Optional[str]
-):
+def _get_aws_credentials(api_key: Optional[str], api_secret: Optional[str], region: Optional[str]):
     region = region or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         raise ValueError(
@@ -147,9 +145,7 @@ def _build_image(image: llm.ChatImage, cache_key: Any) -> dict:
     raise ValueError(f"Unsupported image type: {type(image.image)}")
 
 
-def _build_aws_ctx(
-    chat_ctx: llm.ChatContext, cache_key: Any
-) -> Tuple[List[dict], Optional[dict]]:
+def _build_aws_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> Tuple[List[dict], Optional[dict]]:
     messages: List[dict] = []
     system: Optional[dict] = None
     current_role: Optional[str] = None

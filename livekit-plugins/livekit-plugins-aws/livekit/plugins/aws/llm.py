@@ -84,9 +84,7 @@ class LLM(llm.LLM):
                 requires_persistent_functions=True,
             )
         )
-        self._api_key, self._api_secret = _get_aws_credentials(
-            api_key, api_secret, region
-        )
+        self._api_key, self._api_secret = _get_aws_credentials(api_key, api_secret, region)
 
         self._model = model or os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
         if not self._model:
@@ -113,8 +111,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
     ) -> "LLMStream":
         if tool_choice is None:
             tool_choice = self._opts.tool_choice
@@ -157,9 +154,7 @@ class LLMStream(llm.LLMStream):
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]],
         additional_request_fields: dict[str, Any] | None,
     ) -> None:
-        super().__init__(
-            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
-        )
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._client = boto3.client(
             "bedrock-runtime",
             region_name=region_name,
@@ -209,9 +204,7 @@ class LLMStream(llm.LLMStream):
                 opts["toolConfig"] = tool_config
 
             if self._additional_request_fields:
-                opts["additionalModelRequestFields"] = _strip_nones(
-                    self._additional_request_fields
-                )
+                opts["additionalModelRequestFields"] = _strip_nones(self._additional_request_fields)
             if system_instruction:
                 opts["system"] = [system_instruction]
 
@@ -293,9 +286,7 @@ class LLMStream(llm.LLMStream):
             logger.warning("aws bedrock llm: no function arguments in the response")
             return None
         if self._fnc_ctx is None:
-            logger.warning(
-                "aws bedrock llm: stream tried to run function without function context"
-            )
+            logger.warning("aws bedrock llm: stream tried to run function without function context")
             return None
 
         fnc_info = _create_ai_function_info(
@@ -332,9 +323,7 @@ def _merge_messages(
             combined_messages.append(m)
             continue
         last_message = combined_messages[-1]
-        if not isinstance(last_message["content"], list) or not isinstance(
-            m["content"], list
-        ):
+        if not isinstance(last_message["content"], list) or not isinstance(m["content"], list):
             logger.error("message content is not a list")
             continue
 
