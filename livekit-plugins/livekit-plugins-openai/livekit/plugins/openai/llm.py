@@ -575,13 +575,13 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         fnc_ctx: list[AIFunction],
         conn_options: APIConnectOptions,
-        extra_kwargs: dict[str, Any] = {},
+        **kwargs,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._model = model
         self._client = client
         self._llm = llm
-        self._extra_kwargs = extra_kwargs
+        self._extra_kwargs = kwargs
 
     async def _run(self) -> None:
         # current function call that we're waiting for full completion (args are streamed)
