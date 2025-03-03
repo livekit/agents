@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.4.9
+
+### Patch Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.4.8
 
 ### Patch Changes
