@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import Any
+from typing import Any, Optional
 
 import boto3
 from livekit import rtc
