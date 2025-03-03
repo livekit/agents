@@ -121,6 +121,11 @@ class _RealtimeAPISession(Protocol):
         self, item_id: str, content_index: int, audio_end_ms: int
     ) -> None: ...
 
+    @property
+    def agent_silent(self) -> asyncio.Event | None:
+        """Event that is set when the playout is done"""
+        pass
+
 
 @dataclass(frozen=True)
 class AgentTranscriptionOptions:
@@ -282,6 +287,15 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 text_stream=message.text_stream,
                 audio_stream=message.audio_stream,
             )
+
+            if self._session.agent_silent is not None:
+                self._session.agent_silent.clear()
+                self._playing_handle._done_fut.add_done_callback(
+                    lambda _: self._session.agent_silent.set()
+                )
+                self._playing_handle._int_fut.add_done_callback(
+                    lambda _: self._session.agent_silent.set()
+                )
 
         @self._session.on("response_content_done")
         def _response_content_done(message: _ContentProto):
