@@ -258,6 +258,8 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._fnc_ctx = fnc_ctx
         self._fnc_tasks = utils.aio.TaskSet()
         self._is_interrupted = False
+        self._playout_complete = asyncio.Event()
+        self._playout_complete.set()
 
         tools = []
         if self._fnc_ctx is not None:
@@ -316,6 +318,10 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
         self._send_ch.close()
         await self._main_atask
+
+    @property
+    def playout_complete(self) -> asyncio.Event | None:
+        return self._playout_complete
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
