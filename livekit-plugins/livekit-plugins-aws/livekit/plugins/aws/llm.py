@@ -77,21 +77,21 @@ class LLM(llm.LLM):
         """
         Create a new instance of AWS Bedrock LLM.
 
-        `api_key` and `api_secret` must be set to your AWS Access Key ID and Secret Access Key, either via arguments or by setting the
-        `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables.
+        ``api_key``  and ``api_secret`` must be set to your AWS Access key id and secret access key, either using the argument or by setting the
+        ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` environmental variables.
 
         See https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html for more details on the AWS Bedrock Runtime API.
 
         Args:
-            model (str | TEXT_MODEL, optional): Model or inference profile ARN to use. Defaults to "anthropic.claude-3-5-sonnet-20240620-v1:0".
-            api_key (str, optional): AWS Access Key ID. Defaults to None.
-            api_secret (str, optional): AWS Secret Access Key. Defaults to None.
-            region (str, optional): AWS region for API requests. Defaults to "us-east-1".
-            temperature (float, optional): Sampling temperature. Defaults to NOT_GIVEN.
-            max_output_tokens (int, optional): Maximum output tokens. Defaults to NOT_GIVEN.
-            top_p (float, optional): Nucleus sampling probability. Defaults to NOT_GIVEN.
-            tool_choice (ToolChoice | Literal["auto", "required", "none"], optional): Tool usage preference. Defaults to NOT_GIVEN.
-            additional_request_fields (dict[str, Any], optional): Additional fields for the Bedrock API. Defaults to NOT_GIVEN.
+            model (TEXT_MODEL, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html). Defaults to 'anthropic.claude-3-5-sonnet-20240620-v1:0'.
+            api_key(str, optional): AWS access key id.
+            api_secret(str, optional): AWS secret access key
+            region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
+            top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
+            tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
+            additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
         """
         super().__init__()
         self._api_key, self._api_secret, self._region = _get_aws_credentials(
