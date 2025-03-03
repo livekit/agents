@@ -113,6 +113,7 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
           RIME_API_KEY: ${{ secrets.RIME_API_KEY }}
+          SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
           PYTEST_ADDOPTS: "--color=yes"
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
