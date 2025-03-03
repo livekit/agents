@@ -69,13 +69,9 @@ class STT(stt.STT):
         partial_results_stability: Optional[str] = None,
         language_model_name: Optional[str] = None,
     ):
-        super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
-        )
+        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
-        self._api_key, self._api_secret = _get_aws_credentials(
-            api_key, api_secret, speech_region
-        )
+        self._api_key, self._api_secret = _get_aws_credentials(api_key, api_secret, speech_region)
         self._config = STTOptions(
             speech_region=speech_region,
             language=language,
@@ -100,9 +96,7 @@ class STT(stt.STT):
         language: str | None,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError(
-            "Amazon Transcribe does not support single frame recognition"
-        )
+        raise NotImplementedError("Amazon Transcribe does not support single frame recognition")
 
     def stream(
         self,
@@ -124,9 +118,7 @@ class SpeechStream(stt.SpeechStream):
         opts: STTOptions,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._client = TranscribeStreamingClient(region=self._opts.speech_region)
 
@@ -151,9 +143,7 @@ class SpeechStream(stt.SpeechStream):
         async def input_generator():
             async for frame in self._input_ch:
                 if isinstance(frame, rtc.AudioFrame):
-                    await stream.input_stream.send_audio_event(
-                        audio_chunk=frame.data.tobytes()
-                    )
+                    await stream.input_stream.send_audio_event(audio_chunk=frame.data.tobytes())
             await stream.input_stream.end_stream()
 
         @utils.log_exceptions(logger=logger)
@@ -184,9 +174,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[
-                                _streaming_recognize_response_to_speech_data(resp)
-                            ],
+                            alternatives=[_streaming_recognize_response_to_speech_data(resp)],
                         )
                     )
 
@@ -194,16 +182,12 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[
-                                _streaming_recognize_response_to_speech_data(resp)
-                            ],
+                            alternatives=[_streaming_recognize_response_to_speech_data(resp)],
                         )
                     )
 
             if not resp.is_partial:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                )
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
 
 def _streaming_recognize_response_to_speech_data(resp: Result) -> stt.SpeechData:
