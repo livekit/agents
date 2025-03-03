@@ -240,7 +240,7 @@ class LLMStream(llm.LLMStream):
                         # specific function
                         tool_config = types.ToolConfig(
                             function_calling_config=types.FunctionCallingConfig(
-                                mode="ANY",
+                                mode=types.FunctionCallingConfigMode.ANY,
                                 allowed_function_names=[self._tool_choice.name],
                             )
                         )
@@ -248,7 +248,7 @@ class LLMStream(llm.LLMStream):
                         # model must call any function
                         tool_config = types.ToolConfig(
                             function_calling_config=types.FunctionCallingConfig(
-                                mode="ANY",
+                                mode=types.FunctionCallingConfigMode.ANY,
                                 allowed_function_names=[
                                     fnc.name
                                     for fnc in self._fnc_ctx.ai_functions.values()
@@ -259,14 +259,14 @@ class LLMStream(llm.LLMStream):
                         # model can call any function
                         tool_config = types.ToolConfig(
                             function_calling_config=types.FunctionCallingConfig(
-                                mode="AUTO"
+                                mode=types.FunctionCallingConfigMode.AUTO
                             )
                         )
                     elif self._tool_choice == "none":
                         # model cannot call any function
                         tool_config = types.ToolConfig(
                             function_calling_config=types.FunctionCallingConfig(
-                                mode="NONE",
+                                mode=types.FunctionCallingConfigMode.NONE,
                             )
                         )
                     opts["tool_config"] = tool_config
@@ -282,11 +282,12 @@ class LLMStream(llm.LLMStream):
                 system_instruction=system_instruction,
                 **opts,
             )
-            async for response in self._client.aio.models.generate_content_stream(
+            stream = await self._client.aio.models.generate_content_stream(
                 model=self._model,
                 contents=cast(types.ContentListUnion, turns),
                 config=config,
-            ):
+            )
+            async for response in stream:  # type: ignore
                 if response.prompt_feedback:
                     raise APIStatusError(
                         response.prompt_feedback.json(),

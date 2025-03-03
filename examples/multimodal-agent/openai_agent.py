@@ -81,7 +81,10 @@ async def entrypoint(ctx: JobContext):
         model=openai.realtime.RealtimeModel(
             voice="alloy",
             temperature=0.8,
-            instructions="You are a helpful assistant, greet the user and help them with their trip planning",
+            instructions=(
+                "You are a helpful assistant, greet the user and help them with their trip planning. "
+                "When performing function calls, let user know that you are checking the weather."
+            ),
             turn_detection=openai.realtime.ServerVadOptions(
                 threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
             ),

@@ -15,7 +15,9 @@ VAD = silero.VAD.load(
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_chunks_vad(sample_rate) -> None:
-    frames, _ = utils.make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)
+    frames, _ = await utils.make_test_speech(
+        chunk_duration_ms=10, sample_rate=sample_rate
+    )
     assert len(frames) > 1, "frames aren't chunked"
 
     stream = VAD.stream()
@@ -61,7 +63,7 @@ async def test_chunks_vad(sample_rate) -> None:
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_file_vad(sample_rate):
-    frames, _ = utils.make_test_speech(sample_rate=sample_rate)
+    frames, _ = await utils.make_test_speech(sample_rate=sample_rate)
     assert len(frames) == 1, "one frame should be the whole audio"
 
     stream = VAD.stream()
