@@ -26,8 +26,14 @@ from .generation import (
     perform_tool_executions,
     perform_tts_inference,
     update_instructions,
+    truncate_message,
 )
-from .events import UserInputTranscribedEvent, UserStartedSpeakingEvent, MetricsCollectedEvent
+from .events import (
+    UserInputTranscribedEvent,
+    UserStartedSpeakingEvent,
+    UserStoppedSpeakingEvent,
+    MetricsCollectedEvent,
+)
 from .speech_handle import SpeechHandle
 from ..metrics import AgentMetrics
 
@@ -407,8 +413,7 @@ class TaskActivity(RecognitionHooks):
         self._agent.emit("user_started_speaking", UserStartedSpeakingEvent())
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        pass
-        # self.emit("user_stopped_speaking", events.UserStoppedSpeakingEvent())
+        self._agent.emit("user_stopped_speaking", UserStoppedSpeakingEvent())
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if ev.speech_duration > self._agent.options.min_interruption_duration:
@@ -435,7 +440,7 @@ class TaskActivity(RecognitionHooks):
             UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
         )
 
-    def on_end_of_turn(self, new_transcript: str) -> None:
+    async def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:
         #  - check if there is no current generation happening
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
@@ -466,6 +471,13 @@ class TaskActivity(RecognitionHooks):
                 user_input=new_transcript,
             )
             return
+
+        await self._agent_task.on_end_of_turn(
+            self._agent_task.chat_ctx,
+            llm.ChatMessage(
+                role="user", content=[new_transcript]
+            ),  # TODO(theomonnom): This doesn't allow edits yet
+        )
 
         self.generate_reply(user_input=new_transcript)
 
@@ -660,8 +672,10 @@ class TaskActivity(RecognitionHooks):
                     speech_id=speech_handle.id,
                 )
 
-                # TODO(theomonnom): calculate the played text based on playback_ev.playback_position
-                msg = chat_ctx.add_message(role="assistant", content=text_out.text)
+                truncated_text = truncate_message(
+                    message=text_out.text, played_duration=playback_ev.playback_position
+                )
+                msg = chat_ctx.add_message(role="assistant", content=truncated_text)
                 self._agent_task._chat_ctx.items.append(msg)
                 self._agent._update_agent_state(AgentState.LISTENING)
 
