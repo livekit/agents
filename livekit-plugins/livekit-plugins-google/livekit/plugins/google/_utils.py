@@ -79,12 +79,6 @@ def to_chat_ctx(
     current_role: Optional[str] = None
     parts: list[types.Part] = []
 
-    def finalize_turn() -> None:
-        nonlocal parts, current_role
-        if current_role is not None and parts:
-            turns.append(types.Content(role=current_role, parts=parts))
-        parts = []
-
     for msg in chat_ctx.items:
         if msg.type == "message" and msg.role == "system":
             sys_parts = []
@@ -95,16 +89,18 @@ def to_chat_ctx(
             continue
 
         if msg.type == "message":
-            effective_role = "model" if msg.role == "assistant" else "user"
+            role = "model" if msg.role == "assistant" else "user"
         elif msg.type == "function_call":
-            effective_role = "model"
+            role = "model"
         elif msg.type == "function_call_output":
-            effective_role = "user"
+            role = "user"
 
         # if the effective role changed, finalize the previous turn.
-        if effective_role != current_role:
-            finalize_turn()
-            current_role = effective_role
+        if role != current_role:
+            if current_role is not None and parts:
+                turns.append(types.Content(role=current_role, parts=parts))
+            parts = []
+            current_role = role
 
         if msg.type == "message":
             for content in msg.content:
@@ -133,8 +129,8 @@ def to_chat_ctx(
                 )
             )
 
-    # finalize any remaining parts.
-    finalize_turn()
+    if current_role is not None and parts:
+        turns.append(types.Content(role=current_role, parts=parts))
     return turns, system_instruction
 
 

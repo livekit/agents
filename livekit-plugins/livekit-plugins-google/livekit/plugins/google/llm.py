@@ -215,7 +215,7 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
             conn_options=conn_options,
-            **extra,
+            extra_kwargs=extra,
         )
 
 
@@ -229,13 +229,13 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
         fnc_ctx: llm.FunctionContext | None,
-        **kwargs,
+        extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm
-        self._extra_kwargs = kwargs
+        self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
         retryable = True
