@@ -6,9 +6,10 @@ from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar, Uni
 
 from livekit import rtc
 
-from .. import stt, utils
+from .. import utils
 from ..log import logger
-from ..types import ATTRIBUTE_AGENT_STATE, AgentState
+from ..types import ATTRIBUTE_AGENT_STATE
+from .events import AgentStateChangedEvent, UserInputTranscribedEvent
 from .io import AudioSink, ParallelTextSink, TextSink
 from .transcription import TextSynchronizer, find_micro_track_id
 
@@ -130,7 +131,7 @@ class RoomIO:
                 is_delta_stream=False,
                 topic=self._out_opts.text_output_topic,
             )
-            self._agent.on("user_transcript_updated", self._on_user_transcript_updated)
+            self._agent.on("user_input_transcribed", self._on_user_input_transcribed)
 
             self._agent_text_output = self._create_text_sink(
                 participant_identity=(
@@ -313,16 +314,14 @@ class RoomIO:
 
         self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
 
-    def _on_user_transcript_updated(self, ev: stt.SpeechEvent) -> None:
+    def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_text_output is None:
             return
 
         async def _capture_text():
-            if ev.alternatives:
-                data = ev.alternatives[0]
-                await self._user_text_output.capture_text(data.text)
+            await self._user_text_output.capture_text(ev.transcript)
 
-            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+            if ev.is_final:
                 self._user_text_output.flush()
 
         task = asyncio.create_task(_capture_text())
@@ -350,11 +349,11 @@ class RoomIO:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    def _on_agent_state_changed(self, state: AgentState):
+    def _on_agent_state_changed(self, ev: AgentStateChangedEvent):
         @utils.log_exceptions(logger=logger)
         async def _set_state() -> None:
             if self._room.isconnected():
-                await self._room.local_participant.set_attributes({ATTRIBUTE_AGENT_STATE: state})
+                await self._room.local_participant.set_attributes({ATTRIBUTE_AGENT_STATE: ev.state})
 
         if self._update_state_task is not None:
             self._update_state_task.cancel()
