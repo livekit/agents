@@ -870,8 +870,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self._pending_responses: dict[str, RealtimeResponse] = {}
         self._active_response_id: str | None = None
         self._response_create_fut: asyncio.Future[None] | None = None
-        self._agent_silent = asyncio.Event()
-        self._agent_silent.set()
+        self._playout_complete = asyncio.Event()
+        self._playout_complete.set()
 
         self._session_id = "not-connected"
         self.session_update()  # initial session init
@@ -889,8 +889,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         await self._main_atask
 
     @property
-    def agent_silent(self) -> asyncio.Event:
-        return self._agent_silent
+    def playout_complete(self) -> asyncio.Event:
+        return self._playout_complete
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -1753,7 +1753,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         await called_fnc.task
 
         # wait for the audio to be played before creating the response
-        await self._agent_silent.wait()
+        await self._playout_complete.wait()
 
         tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
         logger.info(

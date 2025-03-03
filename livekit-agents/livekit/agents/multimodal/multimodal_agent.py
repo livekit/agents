@@ -122,7 +122,7 @@ class _RealtimeAPISession(Protocol):
     ) -> None: ...
 
     @property
-    def agent_silent(self) -> asyncio.Event | None:
+    def playout_complete(self) -> asyncio.Event | None:
         """Event that is set when the playout is done"""
         pass
 
@@ -288,12 +288,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 audio_stream=message.audio_stream,
             )
 
-            if self._session.agent_silent is not None:
-                self._session.agent_silent.clear()
+            if self._session.playout_complete is not None:
+                self._session.playout_complete.clear()
 
                 def _on_playout_done(fut: asyncio.Future[None]):
-                    if self._session.agent_silent is not None:
-                        self._session.agent_silent.set()
+                    if self._session.playout_complete is not None:
+                        self._session.playout_complete.set()
 
                 new_handle._done_fut.add_done_callback(_on_playout_done)
                 new_handle._int_fut.add_done_callback(_on_playout_done)
