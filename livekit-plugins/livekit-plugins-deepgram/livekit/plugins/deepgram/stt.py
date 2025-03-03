@@ -442,6 +442,7 @@ class SpeechStream(stt.SpeechStream):
             except Exception:
                 return
 
+        @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
 
@@ -494,6 +495,7 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
+        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
             while True:
@@ -640,6 +642,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(start_event)
 
                 if is_final_transcript:
+                    logger.debug(f"deepgram received final transcript: {alts[0].text}")
                     final_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=request_id,

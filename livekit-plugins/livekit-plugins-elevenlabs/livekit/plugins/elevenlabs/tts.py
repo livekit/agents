@@ -198,6 +198,11 @@ class TTS(tts.TTS):
 
         return self._session
 
+    async def prewarm(self) -> None:
+        async with self._pool.connection():
+            # open the connection and return it back to the pool
+            pass
+
     async def list_voices(self) -> List[Voice]:
         async with self._ensure_session().get(
             f"{self._opts.base_url}/voices",
@@ -355,12 +360,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                         # new segment (after flush for e.g)
                         word_stream = self._opts.word_tokenizer.stream()
                         self._segments_ch.send_nowait(word_stream)
-
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if word_stream is not None:
                         word_stream.end_input()
                     word_stream = None
+            if word_stream is not None:
+                word_stream.end_input()
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
@@ -438,9 +444,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     data_pkt = dict(text=f"{text} ")  # must always end with a space
                     self._mark_started()
+                    logger.debug("11labs sending text: %s", data_pkt)
                     await ws_conn.send_str(json.dumps(data_pkt))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
+                logger.debug("11labs sending flush")
                 await ws_conn.send_str(json.dumps({"flush": True}))
 
             # consumes from decoder and generates events

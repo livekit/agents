@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import random
 from typing import Annotated
@@ -11,9 +12,10 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     llm,
+    metrics,
 )
 from livekit.agents.pipeline import AgentCallContext, VoicePipelineAgent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, elevenlabs, openai, silero
 
 load_dotenv()
 
@@ -68,7 +70,7 @@ class AssistantFnc(llm.FunctionContext):
 
             # NOTE: set add_to_chat_ctx=True will add the message to the end
             #   of the chat context of the function call for answer synthesis
-            speech_handle = await agent.say(message, add_to_chat_ctx=True)  # noqa: F841
+            # speech_handle = await agent.say(message, add_to_chat_ctx=True)  # noqa: F841
 
         logger.info(f"getting weather for {latitude}, {longitude}")
         url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
@@ -82,11 +84,13 @@ class AssistantFnc(llm.FunctionContext):
                         "temperature": data["current"]["temperature_2m"],
                         "temperature_unit": "Celsius",
                     }
-                    logger.info(f"weather data: {weather_data}")
                 else:
                     raise Exception(
                         f"Failed to get weather data, status code: {response.status}"
                     )
+
+        await asyncio.sleep(3)
+        logger.info(f"weather data: {weather_data}")
 
         # (optional) To wait for the speech to finish before giving results of the function call
         # await speech_handle.join()
@@ -106,9 +110,9 @@ async def entrypoint(ctx: JobContext):
             "You are a weather assistant created by LiveKit. Your interface with users will be voice. "
             "You will provide weather information for a given location. "
             # when using option 1, you can suppress from the agent with prompt
-            "do not return any text while calling the function."
+            # "do not return any text while calling the function."
             # uncomment this to use option 2
-            # "when performing function calls, let user know that you are checking the weather."
+            "when performing function calls, let user know that you are checking the weather."
         ),
         role="system",
     )
@@ -116,16 +120,43 @@ async def entrypoint(ctx: JobContext):
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(),
+        llm=openai.LLM(model="gpt-4o"),
+        tts=elevenlabs.TTS(
+            model="eleven_flash_v2_5",
+            voice=elevenlabs.tts.Voice(
+                id="XrExE9yKIg1WjnnlVkGX",
+                name="Matilda",
+                category="premade",
+                settings=elevenlabs.tts.VoiceSettings(
+                    stability=0.8,
+                    similarity_boost=0.8,
+                    style=0.0,
+                    use_speaker_boost=True,
+                    # speed=0.95,
+                ),
+            ),
+            language="en",
+            enable_ssml_parsing=False,
+        ),
         fnc_ctx=fnc_ctx,
         chat_ctx=initial_chat_ctx,
     )
 
+    usage_collector = metrics.UsageCollector()
+
+    @agent.on("metrics_collected")
+    def _on_metrics_collected(mtrcs: metrics.AgentMetrics):
+        metrics.log_metrics(mtrcs)
+        usage_collector.collect(mtrcs)
+
+    async def log_usage():
+        summary = usage_collector.get_summary()
+        logger.info(f"Usage: ${summary}")
+
     # Start the assistant. This will automatically publish a microphone track and listen to the participant.
     agent.start(ctx.room, participant)
     await agent.say(
-        "Hello from the weather station. Would you like to know the weather? If so, tell me your location."
+        "Let me just check my system. Thank you for agreeing to pay $100. However, your payment must be between $418.63 and $1012.11."
     )
 
 
