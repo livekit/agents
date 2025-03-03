@@ -15,10 +15,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
-from livekit import rtc
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -31,7 +30,7 @@ from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
 
-from .models import AudioEncoding, Gender, SpeechLanguages
+from .models import Gender, SpeechLanguages
 
 
 @dataclass
@@ -47,7 +46,6 @@ class TTS(tts.TTS):
         language: SpeechLanguages | str = "en-US",
         gender: Gender | str = "neutral",
         voice_name: str = "",  # Not required
-        encoding: AudioEncoding | str = "linear16",
         sample_rate: int = 24000,
         pitch: int = 0,
         effects_profile_id: str = "",
@@ -66,7 +64,6 @@ class TTS(tts.TTS):
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
             voice_name (str, optional): Specific voice name. Default is an empty string.
-            encoding (AudioEncoding | str, optional): Audio encoding format (e.g., "linear16"). Default is "linear16".
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
             effects_profile_id (str): Optional identifier for selecting audio effects profiles to apply to the synthesized speech.
@@ -93,17 +90,10 @@ class TTS(tts.TTS):
             ssml_gender=_gender_from_str(gender),
         )
 
-        if encoding == "linear16" or encoding == "wav":
-            _audio_encoding = texttospeech.AudioEncoding.LINEAR16
-        elif encoding == "mp3":
-            _audio_encoding = texttospeech.AudioEncoding.MP3
-        else:
-            raise NotImplementedError(f"audio encoding {encoding} is not supported")
-
         self._opts = _TTSOptions(
             voice=voice,
             audio_config=texttospeech.AudioConfig(
-                audio_encoding=_audio_encoding,
+                audio_encoding=texttospeech.AudioEncoding.OGG_OPUS,
                 sample_rate_hertz=sample_rate,
                 pitch=pitch,
                 effects_profile_id=effects_profile_id,
@@ -160,7 +150,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
@@ -177,9 +167,9 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: APIConnectOptions,
         opts: _TTSOptions,
         client: texttospeech.TextToSpeechAsyncClient,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client
@@ -195,35 +185,24 @@ class ChunkedStream(tts.ChunkedStream):
                 timeout=self._conn_options.timeout,
             )
 
-            if self._opts.audio_config.audio_encoding == "mp3":
-                decoder = utils.codecs.Mp3StreamDecoder()
-                bstream = utils.audio.AudioByteStream(
-                    sample_rate=self._opts.audio_config.sample_rate_hertz,
-                    num_channels=1,
-                )
-                for frame in decoder.decode_chunk(response.audio_content):
-                    for frame in bstream.write(frame.data.tobytes()):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(request_id=request_id, frame=frame)
-                        )
+            # Create AudioStreamDecoder for OGG format
+            decoder = utils.codecs.AudioStreamDecoder(
+                sample_rate=self._opts.audio_config.sample_rate_hertz,
+                num_channels=1,
+            )
 
-                for frame in bstream.flush():
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(request_id=request_id, frame=frame)
-                    )
-            else:
-                data = response.audio_content[44:]  # skip WAV header
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        request_id=request_id,
-                        frame=rtc.AudioFrame(
-                            data=data,
-                            sample_rate=self._opts.audio_config.sample_rate_hertz,
-                            num_channels=1,
-                            samples_per_channel=len(data) // 2,  # 16-bit
-                        ),
-                    )
+            try:
+                decoder.push(response.audio_content)
+                decoder.end_input()
+                emitter = tts.SynthesizedAudioEmitter(
+                    event_ch=self._event_ch,
+                    request_id=request_id,
                 )
+                async for frame in decoder:
+                    emitter.push(frame)
+                emitter.flush()
+            finally:
+                await decoder.aclose()
 
         except DeadlineExceeded:
             raise APITimeoutError()

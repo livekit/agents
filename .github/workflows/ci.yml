@@ -81,4 +81,6 @@ jobs:
                -p livekit.plugins.anthropic \
                -p livekit.plugins.fal \
                -p livekit.plugins.playai \
-               -p livekit.plugins.assemblyai
+               -p livekit.plugins.assemblyai \
+               -p livekit.plugins.rime \
+               -p livekit.plugins.aws

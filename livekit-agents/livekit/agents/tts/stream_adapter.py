@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterable
+from typing import AsyncIterable, Optional
 
 from .. import tokenize, utils
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import APIConnectOptions
 from .tts import (
     TTS,
     ChunkedStream,
@@ -39,14 +39,14 @@ class StreamAdapter(TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "ChunkedStream":
         return self._tts.synthesize(text=text, conn_options=conn_options)
 
     def stream(
         self,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> "StreamAdapterWrapper":
         return StreamAdapterWrapper(
             tts=self,
@@ -61,9 +61,9 @@ class StreamAdapterWrapper(SynthesizeStream):
         self,
         *,
         tts: TTS,
-        conn_options: APIConnectOptions,
         wrapped_tts: TTS,
         sentence_tokenizer: tokenize.SentenceTokenizer,
+        conn_options: Optional[APIConnectOptions],
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._wrapped_tts = wrapped_tts
@@ -106,3 +106,4 @@ class StreamAdapterWrapper(SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+            await self._wrapped_tts.aclose()

@@ -1,4 +1,5 @@
 import logging
+from typing import Annotated
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -11,7 +12,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import google, openai, silero
+from livekit.plugins import google, silero
 
 load_dotenv()
 logger = logging.getLogger("voice-assistant")
@@ -51,14 +52,26 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"starting voice assistant for participant {participant.identity}")
 
+    fnc_ctx = llm.FunctionContext()
+
+    @fnc_ctx.ai_callable()
+    async def get_weather(
+        location: Annotated[
+            str, llm.TypeInfo(description="The location to get the weather for")
+        ],
+    ):
+        """Called when the user asks about the weather. This function will return the weather for the given location."""
+        return f"The weather in {location} is sunny."
+
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=google.STT(),
-        llm=openai.LLM.with_vertex(model="google/gemini-2.0-flash-exp"),
+        llm=google.LLM(),
         tts=google.TTS(
             voice_name="en-US-Journey-D",
         ),
         chat_ctx=initial_ctx,
+        fnc_ctx=fnc_ctx,
     )
 
     agent.start(ctx.room, participant)

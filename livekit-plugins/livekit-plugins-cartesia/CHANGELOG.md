@@ -1,5 +1,25 @@
 # livekit-plugins-cartesia
 
+## 0.4.8
+
+### Patch Changes
+
+- feat: connection pooling. speeds up generation with STT/TTS providers - [#1538](https://github.com/livekit/agents/pull/1538) ([@davidzhao](https://github.com/davidzhao))
+
+- remove update options from tts synthesis stream - [#1546](https://github.com/livekit/agents/pull/1546) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.4.7
+
+### Patch Changes
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.4.6
+
+### Patch Changes
+
+- update Cartesia plugin default model and voice id - [#1346](https://github.com/livekit/agents/pull/1346) ([@noahlt](https://github.com/noahlt))
+
 ## 0.4.5
 
 ### Patch Changes

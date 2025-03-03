@@ -53,13 +53,18 @@ class _ProcClient:
             cch = aio.duplex_unix._Duplex.open(self._mp_cch)
             first_req = recv_message(cch, IPC_MESSAGES)
 
-            assert isinstance(
-                first_req, InitializeRequest
-            ), "first message must be proto.InitializeRequest"
+            assert isinstance(first_req, InitializeRequest), (
+                "first message must be proto.InitializeRequest"
+            )
 
             self._init_req = first_req
-            self._initialize_fnc(self._init_req, self)
-            send_message(cch, InitializeResponse())
+            try:
+                self._initialize_fnc(self._init_req, self)
+                send_message(cch, InitializeResponse())
+            except Exception as e:
+                send_message(cch, InitializeResponse(error=str(e)))
+                raise
+
             self._initialized = True
             cch.detach()
         except aio.duplex_unix.DuplexClosed as e:

@@ -21,7 +21,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from urllib.parse import urlencode
 
 import aiohttp
@@ -104,6 +104,7 @@ class STTOptions:
     sample_rate: int
     num_channels: int
     keywords: list[Tuple[str, float]]
+    keyterms: list[str]
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
 
@@ -123,18 +124,45 @@ class STT(stt.STT):
         endpointing_ms: int = 25,
         # enable filler words by default to improve turn detector accuracy
         filler_words: bool = True,
-        keywords: list[Tuple[str, float]] = [],
+        keywords: list[Tuple[str, float]] | None = None,
+        keyterms: list[str] | None = None,
         profanity_filter: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
     ) -> None:
-        """
-        Create a new instance of Deepgram STT.
+        """Create a new instance of Deepgram STT.
 
-        ``api_key`` must be set to your Deepgram API key, either using the argument or by setting
-        the ``DEEPGRAM_API_KEY`` environmental variable.
+        Args:
+            model: The Deepgram model to use for speech recognition. Defaults to "nova-2-general".
+            language: The language code for recognition. Defaults to "en-US".
+            detect_language: Whether to enable automatic language detection. Defaults to False.
+            interim_results: Whether to return interim (non-final) transcription results. Defaults to True.
+            punctuate: Whether to add punctuations to the transcription. Defaults to True. Turn detector will work better with punctuations.
+            smart_format: Whether to apply smart formatting to numbers, dates, etc. Defaults to True.
+            sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
+            no_delay: When smart_format is used, ensures it does not wait for sequence to be complete before returning results. Defaults to True.
+            endpointing_ms: Time in milliseconds of silence to consider end of speech. Set to 0 to disable. Defaults to 25.
+            filler_words: Whether to include filler words (um, uh, etc.) in transcription. Defaults to True.
+            keywords: List of tuples containing keywords and their boost values for improved recognition.
+                     Each tuple should be (keyword: str, boost: float). Defaults to None.
+                     `keywords` does not work with Nova-3 models. Use `keyterms` instead.
+            keyterms: List of key terms to improve recognition accuracy. Defaults to None.
+                     `keyterms` is supported by Nova-3 models.
+            profanity_filter: Whether to filter profanity from the transcription. Defaults to False.
+            api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
+            http_session: Optional aiohttp ClientSession to use for requests.
+            base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
+            energy_filter: Audio energy filter configuration for voice activity detection.
+                         Can be a boolean or AudioEnergyFilter instance. Defaults to False.
+
+        Raises:
+            ValueError: If no API key is provided or found in environment variables.
+
+        Note:
+            The api_key must be set either through the constructor argument or by setting
+            the DEEPGRAM_API_KEY environmental variable.
         """
 
         super().__init__(
@@ -164,7 +192,8 @@ class STT(stt.STT):
             filler_words=filler_words,
             sample_rate=sample_rate,
             num_channels=1,
-            keywords=keywords,
+            keywords=keywords or [],
+            keyterms=keyterms or [],
             profanity_filter=profanity_filter,
             energy_filter=energy_filter,
         )
@@ -259,6 +288,7 @@ class STT(stt.STT):
         endpointing_ms: int | None = None,
         filler_words: bool | None = None,
         keywords: list[Tuple[str, float]] | None = None,
+        keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
     ):
         if language is not None:
@@ -281,6 +311,8 @@ class STT(stt.STT):
             self._opts.filler_words = filler_words
         if keywords is not None:
             self._opts.keywords = keywords
+        if keyterms is not None:
+            self._opts.keyterms = keyterms
         if profanity_filter is not None:
             self._opts.profanity_filter = profanity_filter
 
@@ -296,6 +328,7 @@ class STT(stt.STT):
                 endpointing_ms=endpointing_ms,
                 filler_words=filler_words,
                 keywords=keywords,
+                keyterms=keyterms,
                 profanity_filter=profanity_filter,
             )
 
@@ -365,6 +398,7 @@ class SpeechStream(stt.SpeechStream):
         endpointing_ms: int | None = None,
         filler_words: bool | None = None,
         keywords: list[Tuple[str, float]] | None = None,
+        keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
     ):
         if language is not None:
@@ -387,6 +421,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.filler_words = filler_words
         if keywords is not None:
             self._opts.keywords = keywords
+        if keyterms is not None:
+            self._opts.keyterms = keyterms
         if profanity_filter is not None:
             self._opts.profanity_filter = profanity_filter
 
@@ -517,7 +553,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        live_config = {
+        live_config: dict[str, Any] = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
             "smart_format": self._opts.smart_format,
@@ -531,9 +567,14 @@ class SpeechStream(stt.SpeechStream):
             if self._opts.endpointing_ms == 0
             else self._opts.endpointing_ms,
             "filler_words": self._opts.filler_words,
-            "keywords": self._opts.keywords,
             "profanity_filter": self._opts.profanity_filter,
         }
+        if self._opts.keywords:
+            live_config["keywords"] = self._opts.keywords
+        if self._opts.keyterms:
+            # the query param is `keyterm`
+            # See: https://developers.deepgram.com/docs/keyterm
+            live_config["keyterm"] = self._opts.keyterms
 
         if self._opts.language:
             live_config["language"] = self._opts.language
@@ -675,6 +716,8 @@ def prerecorded_transcription_to_speech_event(
 
 
 def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
+    # don't modify the original opts
+    opts = opts.copy()
     if opts.get("keywords"):
         # convert keywords to a list of "keyword:intensifier"
         opts["keywords"] = [
@@ -706,6 +749,9 @@ def _validate_model(
         "nova-2-medical",
         "nova-2-drivethru",
         "nova-2-automotive",
+        # nova-3 will support more languages, but english-only for now
+        "nova-3",
+        "nova-3-general",
     }
     if language not in ("en-US", "en") and model in en_only_models:
         logger.warning(

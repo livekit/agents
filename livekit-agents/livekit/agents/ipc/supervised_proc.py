@@ -118,7 +118,7 @@ class SupervisedProc(ABC):
             log_listener.start()
 
             self._proc = self._create_process(mp_cch, mp_log_cch)
-            self._proc.start()
+            await self._loop.run_in_executor(None, self._proc.start)
             mp_log_cch.close()
             mp_cch.close()
 
@@ -165,9 +165,22 @@ class SupervisedProc(ABC):
                 channel.arecv_message(self._pch, proto.IPC_MESSAGES),
                 timeout=self._opts.initialize_timeout,
             )
-            assert isinstance(
-                init_res, proto.InitializeResponse
-            ), "first message must be InitializeResponse"
+            assert isinstance(init_res, proto.InitializeResponse), (
+                "first message must be InitializeResponse"
+            )
+
+            if init_res.error:
+                self._initialize_fut.set_exception(
+                    RuntimeError(f"process initialization failed: {init_res.error}")
+                )
+                logger.error(
+                    f"process initialization failed: {init_res.error}",
+                    extra=self.logging_extra(),
+                )
+                raise RuntimeError(f"process initialization failed: {init_res.error}")
+            else:
+                self._initialize_fut.set_result(None)
+
         except asyncio.TimeoutError:
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("process initialization timed out")
@@ -180,8 +193,6 @@ class SupervisedProc(ABC):
         except Exception as e:  # should be channel.ChannelClosed most of the time
             self._initialize_fut.set_exception(e)
             raise
-        else:
-            self._initialize_fut.set_result(None)
 
     async def aclose(self) -> None:
         """attempt to gracefully close the supervised process"""

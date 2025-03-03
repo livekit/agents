@@ -351,11 +351,17 @@ class SpeechStream(stt.SpeechStream):
         # see this page:
         # https://www.assemblyai.com/docs/api-reference/streaming/realtime
         # for more information about the different types of events
-        if data["message_type"] == "SessionBegins":
+        if "error" in data:
+            logger.error("Received error from AssemblyAI: %s", data["error"])
+            return
+
+        message_type = data.get("message_type")
+
+        if message_type == "SessionBegins":
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
             self._event_ch.send_nowait(start_event)
 
-        elif data["message_type"] == "PartialTranscript":
+        elif message_type == "PartialTranscript":
             alts = live_transcription_to_speech_data(ENGLISH, data)
             if len(alts) > 0 and alts[0].text:
                 interim_event = stt.SpeechEvent(
@@ -364,7 +370,7 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(interim_event)
 
-        elif data["message_type"] == "FinalTranscript":
+        elif message_type == "FinalTranscript":
             alts = live_transcription_to_speech_data(ENGLISH, data)
             if len(alts) > 0 and alts[0].text:
                 final_event = stt.SpeechEvent(
@@ -378,7 +384,6 @@ class SpeechStream(stt.SpeechStream):
             if self._speech_duration > 0:
                 usage_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    # request_id="",
                     alternatives=[],
                     recognition_usage=stt.RecognitionUsage(
                         audio_duration=self._speech_duration
@@ -387,21 +392,19 @@ class SpeechStream(stt.SpeechStream):
                 self._event_ch.send_nowait(usage_event)
                 self._speech_duration = 0
 
-        elif data["message_type"] == "SessionTerminated":
+        elif message_type == "SessionTerminated":
             if closing_ws:
                 pass
             else:
                 raise Exception("AssemblyAI connection closed unexpectedly")
 
-        elif data["message_type"] == "SessionInformation":
+        elif message_type == "SessionInformation":
             logger.debug("AssemblyAI Session Information: %s", str(data))
-
-        elif data["message_type"] == "RealtimeError":
-            logger.error("Received unexpected error from AssemblyAI %s", data)
 
         else:
             logger.warning(
-                "Received unexpected error from AssemblyAI %s", data["message_type"]
+                "Received unexpected message type from AssemblyAI: %s",
+                message_type or "No message_type field",
             )
 
 

@@ -11,6 +11,7 @@ from livekit import agents
 from livekit.agents import APIConnectionError, tokenize, tts
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins import (
+    aws,
     azure,
     cartesia,
     deepgram,
@@ -18,6 +19,7 @@ from livekit.plugins import (
     google,
     openai,
     playai,
+    rime,
 )
 
 from .conftest import TEST_CONNECT_OPTIONS
@@ -37,22 +39,21 @@ async def _assert_valid_synthesized_audio(
 
     merged_frame = merge_frames(frames)
     assert merged_frame.sample_rate == tts.sample_rate, "sample rate should be the same"
-    assert (
-        merged_frame.num_channels == tts.num_channels
-    ), "num channels should be the same"
+    assert merged_frame.num_channels == tts.num_channels, (
+        "num channels should be the same"
+    )
 
 
 SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
-    pytest.param(
-        lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
-    ),
     pytest.param(lambda: openai.TTS(), id="openai"),
     pytest.param(lambda: google.TTS(), id="google"),
     pytest.param(lambda: azure.TTS(), id="azure"),
+    pytest.param(lambda: aws.TTS(), id="aws"),
     pytest.param(lambda: cartesia.TTS(), id="cartesia"),
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
+    pytest.param(lambda: rime.TTS(), id="rime"),
 ]
 
 
@@ -75,9 +76,6 @@ async def test_synthesize(tts_factory):
 STREAM_SENT_TOKENIZER = tokenize.basic.SentenceTokenizer(min_sentence_len=20)
 STREAM_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: elevenlabs.TTS(), id="elevenlabs"),
-    pytest.param(
-        lambda: elevenlabs.TTS(encoding="pcm_44100"), id="elevenlabs.pcm_44100"
-    ),
     pytest.param(lambda: cartesia.TTS(), id="cartesia"),
     pytest.param(
         lambda: agents.tts.StreamAdapter(
@@ -99,6 +97,12 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
     ),
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
+    pytest.param(
+        lambda: agents.tts.StreamAdapter(
+            tts=aws.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
+        ),
+        id="aws.stream",
+    ),
 ]
 
 

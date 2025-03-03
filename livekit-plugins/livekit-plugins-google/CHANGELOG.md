@@ -1,5 +1,75 @@
 # livekit-plugins-google
 
+## 0.10.6
+
+### Patch Changes
+
+- google stt: change default model to `latest_long` - [#1552](https://github.com/livekit/agents/pull/1552) ([@jayeshp19](https://github.com/jayeshp19))
+
+- feat: connection pooling. speeds up generation with STT/TTS providers - [#1538](https://github.com/livekit/agents/pull/1538) ([@davidzhao](https://github.com/davidzhao))
+
+- fix: functioncall cancellation ids in realtime - [#1572](https://github.com/livekit/agents/pull/1572) ([@jayeshp19](https://github.com/jayeshp19))
+
+- google-genai version bump & remove id feild from function call and function response - [#1559](https://github.com/livekit/agents/pull/1559) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.5
+
+### Patch Changes
+
+- fix(google): require min confidence score due to aggressive generation - [#1507](https://github.com/livekit/agents/pull/1507) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.10.4
+
+### Patch Changes
+
+- Gemini realtime : rollback default model to `gemini-2.0-flash-exp` - [#1489](https://github.com/livekit/agents/pull/1489) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.3
+
+### Patch Changes
+
+- Gemini Realtime: Transcribe model audio via gemini api & use latest model as default for google plugin - [#1446](https://github.com/livekit/agents/pull/1446) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Update to support passing chirp_2 location for other STT credentials - [#1098](https://github.com/livekit/agents/pull/1098) ([@brightsparc](https://github.com/brightsparc))
+
+- Added an additional field in LLM capabilities class to check if model providers support function call history within chat context without needing function definitions. - [#1441](https://github.com/livekit/agents/pull/1441) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.2
+
+### Patch Changes
+
+- gemini-realtime: fix input audio sample rate - [#1411](https://github.com/livekit/agents/pull/1411) ([@jayeshp19](https://github.com/jayeshp19))
+
+- chore: Replace ValueError with logger.warning for missing GOOGLE_APPLICATION_CREDENTIALS environment variable - [#1415](https://github.com/livekit/agents/pull/1415) ([@hironow](https://github.com/hironow))
+
+## 0.10.1
+
+### Patch Changes
+
+- fix: update default model to chirp2 in google stt & update generate_reply method in gemini realtime - [#1401](https://github.com/livekit/agents/pull/1401) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.10.0
+
+### Minor Changes
+
+- support gemini LLM - [#1382](https://github.com/livekit/agents/pull/1382) ([@jayeshp19](https://github.com/jayeshp19))
+
+### Patch Changes
+
+- fix: address breaking change from google-genai >= 0.3.0 - [#1383](https://github.com/livekit/agents/pull/1383) ([@jayeshp19](https://github.com/jayeshp19))
+
+- gemini improvements: exception handling, transcription & Ensure contents.parts is non-empty in gemini contex - [#1398](https://github.com/livekit/agents/pull/1398) ([@jayeshp19](https://github.com/jayeshp19))
+
+- support transcriber session for user/agent audio - [#1321](https://github.com/livekit/agents/pull/1321) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.9.1
+
+### Patch Changes
+
+- fetch fresh client on update location and small fix for max_session_duration (4 mins) - [#1342](https://github.com/livekit/agents/pull/1342) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix Google STT handling of session timeouts - [#1337](https://github.com/livekit/agents/pull/1337) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.9.0
 
 ### Minor Changes

@@ -4,15 +4,15 @@ import asyncio
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Union
+from typing import AsyncIterable, Literal, Optional, Union
 
 from livekit.agents._exceptions import APIConnectionError, APIError
 
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
-from .function_context import FunctionContext
-from .llm import LLM, ChatChunk, LLMStream, ToolChoice
+from .function_context import CalledFunction, FunctionCallInfo, FunctionContext
+from .llm import LLM, ChatChunk, LLMCapabilities, LLMStream, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -45,7 +45,16 @@ class FallbackAdapter(
         if len(llm) < 1:
             raise ValueError("at least one LLM instance must be provided.")
 
-        super().__init__()
+        super().__init__(
+            capabilities=LLMCapabilities(
+                supports_choices_on_int=all(
+                    t.capabilities.supports_choices_on_int for t in llm
+                ),
+                requires_persistent_functions=all(
+                    t.capabilities.requires_persistent_functions for t in llm
+                ),
+            )
+        )
 
         self._llm_instances = llm
         self._attempt_timeout = attempt_timeout
@@ -104,9 +113,44 @@ class FallbackLLMStream(LLMStream):
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
 
+        self._current_stream: Optional[LLMStream] = None
+
+    @property
+    def function_calls(self) -> list[FunctionCallInfo]:
+        if self._current_stream is None:
+            return []
+        return self._current_stream.function_calls
+
+    @property
+    def chat_ctx(self) -> ChatContext:
+        if self._current_stream is None:
+            return self._chat_ctx
+        return self._current_stream.chat_ctx
+
+    @property
+    def fnc_ctx(self) -> FunctionContext | None:
+        if self._current_stream is None:
+            return self._fnc_ctx
+        return self._current_stream.fnc_ctx
+
+    def execute_functions(self) -> list[CalledFunction]:
+        # this function is unused, but putting it in place for completeness
+        if self._current_stream is None:
+            return []
+        return self._current_stream.execute_functions()
+
     async def _try_generate(
-        self, *, llm: LLM, recovering: bool = False
+        self, *, llm: LLM, check_recovery: bool = False
     ) -> AsyncIterable[ChatChunk]:
+        """
+        Try to generate with the given LLM.
+
+        Args:
+            llm: The LLM instance to generate with
+            check_recovery: When True, indicates this is a background recovery check and the
+                          result will not be used. Recovery checks verify if a previously
+                          failed LLM has become available again.
+        """
         try:
             async with llm.chat(
                 chat_ctx=self._chat_ctx,
@@ -122,11 +166,15 @@ class FallbackLLMStream(LLMStream):
                     retry_interval=self._fallback_adapter._retry_interval,
                 ),
             ) as stream:
+                should_set_current = not check_recovery
                 async for chunk in stream:
+                    if should_set_current:
+                        should_set_current = False
+                        self._current_stream = stream
                     yield chunk
 
         except asyncio.TimeoutError:
-            if recovering:
+            if check_recovery:
                 logger.warning(f"{llm.label} recovery timed out")
                 raise
 
@@ -136,7 +184,7 @@ class FallbackLLMStream(LLMStream):
 
             raise
         except APIError as e:
-            if recovering:
+            if check_recovery:
                 logger.warning(
                     f"{llm.label} recovery failed",
                     exc_info=e,
@@ -149,7 +197,7 @@ class FallbackLLMStream(LLMStream):
             )
             raise
         except Exception:
-            if recovering:
+            if check_recovery:
                 logger.exception(
                     f"{llm.label} recovery unexpected error",
                 )
@@ -168,7 +216,7 @@ class FallbackLLMStream(LLMStream):
 
             async def _recover_llm_task(llm: LLM) -> None:
                 try:
-                    async for _ in self._try_generate(llm=llm, recovering=True):
+                    async for _ in self._try_generate(llm=llm, check_recovery=True):
                         pass
 
                     llm_status.available = True
@@ -196,11 +244,11 @@ class FallbackLLMStream(LLMStream):
             if llm_status.available or all_failed:
                 chunk_sent = False
                 try:
-                    async for synthesized_audio in self._try_generate(
-                        llm=llm, recovering=False
+                    async for result in self._try_generate(
+                        llm=llm, check_recovery=False
                     ):
                         chunk_sent = True
-                        self._event_ch.send_nowait(synthesized_audio)
+                        self._event_ch.send_nowait(result)
 
                     return
                 except Exception:  # exceptions already logged inside _try_synthesize

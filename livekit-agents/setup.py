@@ -63,9 +63,6 @@ setuptools.setup(
         ':sys_platform=="win32"': [
             "colorama"
         ],  # fix logs color on windows (devmode only)
-        ':sys_platform!="win32"': [
-            "aiodns~=3.2"
-        ],  # use default aiohttp resolver on windows
         "codecs": ["av>=12.0.0", "numpy>=1.26.0"],
         "images": ["pillow>=10.3.0"],
     },

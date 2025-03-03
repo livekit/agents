@@ -1,5 +1,89 @@
 # livekit-agents
 
+## 0.12.16
+
+### Patch Changes
+
+- feat: connection pooling. speeds up generation with STT/TTS providers - [#1538](https://github.com/livekit/agents/pull/1538) ([@davidzhao](https://github.com/davidzhao))
+
+- handle process initialization failure - [#1556](https://github.com/livekit/agents/pull/1556) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.12.15
+
+### Patch Changes
+
+- Revert "fix(cli): update main_file path to use current directory" - [#1509](https://github.com/livekit/agents/pull/1509) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.12.14
+
+### Patch Changes
+
+- openai tts: switch to using Opus encoding - [#1494](https://github.com/livekit/agents/pull/1494) ([@davidzhao](https://github.com/davidzhao))
+
+- improve exception logging - [#1490](https://github.com/livekit/agents/pull/1490) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix interrupting nested speech from before_llm_cb - [#1504](https://github.com/livekit/agents/pull/1504) ([@longcw](https://github.com/longcw))
+
+- add cache tokens in `CompletionUsage` dataclass - [#1478](https://github.com/livekit/agents/pull/1478) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.12.13
+
+### Patch Changes
+
+- Allow shutdown callbacks to take reason - [#1475](https://github.com/livekit/agents/pull/1475) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+## 0.12.12
+
+### Patch Changes
+
+- fix agent transcription could not be disabled - [#1448](https://github.com/livekit/agents/pull/1448) ([@davidzhao](https://github.com/davidzhao))
+
+- Added an additional field in LLM capabilities class to check if model providers support function call history within chat context without needing function definitions. - [#1441](https://github.com/livekit/agents/pull/1441) ([@jayeshp19](https://github.com/jayeshp19))
+
+- support agent.say inside the before_llm_cb - [#1460](https://github.com/livekit/agents/pull/1460) ([@longcw](https://github.com/longcw))
+
+## 0.12.11
+
+### Patch Changes
+
+- gemini-realtime: fix input audio sample rate - [#1411](https://github.com/livekit/agents/pull/1411) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fix(pipeline_agent): clear user transcript when before_llm_cb returns false - [#1423](https://github.com/livekit/agents/pull/1423) ([@s-hamdananwar](https://github.com/s-hamdananwar))
+
+- fix: fallbackadapter to correctly handle function calls - [#1429](https://github.com/livekit/agents/pull/1429) ([@davidzhao](https://github.com/davidzhao))
+
+- improved TTFB metrics for streaming TTS - [#1431](https://github.com/livekit/agents/pull/1431) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.12.10
+
+### Patch Changes
+
+- fix false positive interruption tripping up certain LLMs - [#1410](https://github.com/livekit/agents/pull/1410) ([@davidzhao](https://github.com/davidzhao))
+
+- fix: ensure llm.FallbackAdapter executes function calls - [#1409](https://github.com/livekit/agents/pull/1409) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.12.9
+
+### Patch Changes
+
+- add generate_reply api for multimodal agent - [#1359](https://github.com/livekit/agents/pull/1359) ([@longcw](https://github.com/longcw))
+
+- remove aiodns from livekit-agents - [#1368](https://github.com/livekit/agents/pull/1368) ([@theomonnom](https://github.com/theomonnom))
+
+## 0.12.8
+
+### Patch Changes
+
+- Fix not awaiting forward task in TTS forwarder, leading to warnings. - [#1339](https://github.com/livekit/agents/pull/1339) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+- reduces initial delay before model retries - [#1337](https://github.com/livekit/agents/pull/1337) ([@davidzhao](https://github.com/davidzhao))
+
+- fix the function calls without a text response are not added to chat ctx - [#1349](https://github.com/livekit/agents/pull/1349) ([@longcw](https://github.com/longcw))
+
+- add timeout for EOU inference requests made to the inference process - [#1315](https://github.com/livekit/agents/pull/1315) ([@theomonnom](https://github.com/theomonnom))
+
+- support disabling server VAD for OpenAI realtime model - [#1347](https://github.com/livekit/agents/pull/1347) ([@longcw](https://github.com/longcw))
+
 ## 0.12.7
 
 ### Patch Changes

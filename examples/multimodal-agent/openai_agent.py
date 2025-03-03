@@ -68,24 +68,23 @@ async def entrypoint(ctx: JobContext):
     #     fnc_ctx=fnc_ctx,
     # )
 
-    # create a chat context with chat history
+    # create a chat context with chat history, these will be synchronized with the server
+    # upon session establishment
     chat_ctx = llm.ChatContext()
-    chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
-    chat_ctx.append(
-        text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
-        role="assistant",
-    )
-    chat_ctx.append(text="What are the must-visit places in Paris?", role="user")
-    chat_ctx.append(
-        text="The must-visit places in Paris are the Eiffel Tower, Louvre Museum, Notre-Dame Cathedral, and Montmartre.",
-        role="assistant",
-    )
+    # chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
+    # chat_ctx.append(
+    #     text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
+    #     role="assistant",
+    # )
 
     agent = multimodal.MultimodalAgent(
         model=openai.realtime.RealtimeModel(
             voice="alloy",
             temperature=0.8,
-            instructions="You are a helpful assistant",
+            instructions=(
+                "You are a helpful assistant, greet the user and help them with their trip planning. "
+                "When performing function calls, let user know that you are checking the weather."
+            ),
             turn_detection=openai.realtime.ServerVadOptions(
                 threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
             ),
@@ -94,6 +93,7 @@ async def entrypoint(ctx: JobContext):
         chat_ctx=chat_ctx,
     )
     agent.start(ctx.room, participant)
+    agent.generate_reply()
 
     @agent.on("agent_speech_committed")
     @agent.on("agent_speech_interrupted")
