@@ -45,7 +45,7 @@ RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_recognize(stt_factory, sample_rate):
     async with stt_factory() as stt:
-        frames, transcript = make_test_speech(sample_rate=sample_rate)
+        frames, transcript = await make_test_speech(sample_rate=sample_rate)
 
         start_time = time.time()
         event = await stt.recognize(buffer=frames)
@@ -89,8 +89,10 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_stream(stt_factory, sample_rate):
     stt = stt_factory()
+    frames, transcript = await make_test_speech(
+        chunk_duration_ms=10, sample_rate=sample_rate
+    )
 
-    frames, transcript = make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)
     stream = stt.stream()
 
     async def _stream_input():

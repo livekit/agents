@@ -30,19 +30,13 @@ from livekit.agents import (
 )
 
 from .log import logger
-from .models import TTSEncoding, TTSModels
-
-ACCEPT_HEADER = {
-    "pcm": "audio/pcm",
-    "mp3": "audio/mp3",
-}
+from .models import TTSModels
 
 
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
     speaker: str
-    audio_format: TTSEncoding
     sample_rate: int
     speed_alpha: float
     reduce_latency: bool
@@ -62,8 +56,7 @@ class TTS(tts.TTS):
         *,
         model: TTSModels | str = "mist",
         speaker: str = "lagoon",
-        audio_format: TTSEncoding = "pcm",
-        sample_rate: int = 16000,
+        sample_rate: int = 22050,
         speed_alpha: float = 1.0,
         reduce_latency: bool = False,
         pause_between_brackets: bool = False,
@@ -71,24 +64,6 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        """
-        Create a new instance of Rime TTS.
-
-        ``api_key`` must be set to your Rime API key, either using the argument or by setting the
-        ``RIME_API_KEY`` environmental variable.
-
-        Args:
-            model: The TTS model to use. defaults to "mist"
-            speaker: The speaker to use. defaults to "lagoon"
-            audio_format: The audio format to use. defaults to "pcm"
-            sample_rate: The sample rate to use. defaults to 16000
-            speed_alpha: The speed alpha to use. defaults to 1.0
-            reduce_latency: Whether to reduce latency. defaults to False
-            pause_between_brackets: Whether to pause between brackets. defaults to False
-            phonemize_between_brackets: Whether to phonemize between brackets. defaults to False
-            api_key: The Rime API key to use.
-            http_session: The HTTP session to use. defaults to a new session
-        """
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
@@ -105,7 +80,6 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             speaker=speaker,
-            audio_format=audio_format,
             sample_rate=sample_rate,
             speed_alpha=speed_alpha,
             reduce_latency=reduce_latency,
@@ -167,13 +141,9 @@ class ChunkedStream(tts.ChunkedStream):
         self._api_key = api_key
 
     async def _run(self) -> None:
-        stream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate, num_channels=NUM_CHANNELS
-        )
-        self._mp3_decoder = utils.codecs.Mp3StreamDecoder()
         request_id = utils.shortuuid()
         headers = {
-            "accept": ACCEPT_HEADER[self._opts.audio_format],
+            "accept": "audio/mp3",
             "Authorization": f"Bearer {self._api_key}",
             "content-type": "application/json",
         }
@@ -187,6 +157,13 @@ class ChunkedStream(tts.ChunkedStream):
             "pauseBetweenBrackets": self._opts.pause_between_brackets,
             "phonemizeBetweenBrackets": self._opts.phonemize_between_brackets,
         }
+
+        decoder = utils.codecs.AudioStreamDecoder(
+            sample_rate=self._opts.sample_rate,
+            num_channels=NUM_CHANNELS,
+        )
+
+        decode_task: Optional[asyncio.Task] = None
         try:
             async with self._session.post(
                 DEFAULT_API_URL, headers=headers, json=payload
@@ -196,35 +173,22 @@ class ChunkedStream(tts.ChunkedStream):
                     logger.error("Rime returned non-audio data: %s", content)
                     return
 
-                if self._opts.audio_format == "mp3":
-                    async for chunk in response.content.iter_chunked(1024):
-                        for frame in self._mp3_decoder.decode_chunk(chunk):
-                            self._event_ch.send_nowait(
-                                tts.SynthesizedAudio(
-                                    request_id=request_id,
-                                    frame=frame,
-                                    segment_id=self._segment_id,
-                                )
-                            )
-                else:
-                    async for chunk in response.content.iter_chunked(1024):
-                        for frame in stream.write(chunk):
-                            self._event_ch.send_nowait(
-                                tts.SynthesizedAudio(
-                                    request_id=request_id,
-                                    frame=frame,
-                                    segment_id=self._segment_id,
-                                )
-                            )
+                async def _decode_loop():
+                    try:
+                        async for bytes_data, _ in response.content.iter_chunks():
+                            decoder.push(bytes_data)
+                    finally:
+                        decoder.end_input()
 
-                    for frame in stream.flush():
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                frame=frame,
-                                segment_id=self._segment_id,
-                            )
-                        )
+                decode_task = asyncio.create_task(_decode_loop())
+                emitter = tts.SynthesizedAudioEmitter(
+                    event_ch=self._event_ch,
+                    request_id=request_id,
+                    segment_id=self._segment_id,
+                )
+                async for frame in decoder:
+                    emitter.push(frame)
+                emitter.flush()
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -237,3 +201,7 @@ class ChunkedStream(tts.ChunkedStream):
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
+        finally:
+            if decode_task:
+                await utils.aio.gracefully_cancel(decode_task)
+            await decoder.aclose()
