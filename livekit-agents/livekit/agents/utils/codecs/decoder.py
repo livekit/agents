@@ -17,6 +17,7 @@ import io
 from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Optional
 
+from livekit.agents.log import logger
 from livekit.agents.utils import aio
 
 try:
@@ -56,6 +57,8 @@ class StreamBuffer:
 
         with self._data_available:
             while True:
+                if self._buffer.closed:
+                    return b""
                 self._buffer.seek(0)  # Rewind for reading
                 data = self._buffer.read(size)
 
@@ -157,6 +160,8 @@ class AudioStreamDecoder:
                             ),
                         )
                     )
+        except Exception:
+            logger.exception("Error decoding audio")
         finally:
             self._output_ch.close()
 
