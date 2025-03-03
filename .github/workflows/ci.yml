@@ -83,4 +83,5 @@ jobs:
                -p livekit.plugins.playai \
                -p livekit.plugins.assemblyai \
                -p livekit.plugins.rime \
-               -p livekit.plugins.aws
+               -p livekit.plugins.aws \
+               -p livekit.plugins.speechmatics
