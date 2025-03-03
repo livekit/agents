@@ -15,6 +15,7 @@ from typing import (
 )
 
 import aiohttp
+
 from livekit import rtc
 from livekit.agents import llm, stt, tokenize, transcription, utils, vad
 from livekit.agents.llm import ChatMessage
@@ -280,23 +281,13 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 hyphenate_word=self._opts.transcription.hyphenate_word,
             )
 
-            self._playing_handle = new_handle = self._agent_playout.play(
+            self._playing_handle = self._agent_playout.play(
                 item_id=message.item_id,
                 content_index=message.content_index,
                 transcription_fwd=tr_fwd,
                 text_stream=message.text_stream,
                 audio_stream=message.audio_stream,
             )
-
-            if self._session.playout_complete is not None:
-                self._session.playout_complete.clear()
-
-                def _on_playout_done(fut: asyncio.Future[None]):
-                    if self._session.playout_complete is not None:
-                        self._session.playout_complete.set()
-
-                new_handle._done_fut.add_done_callback(_on_playout_done)
-                new_handle._int_fut.add_done_callback(_on_playout_done)
 
         @self._session.on("response_content_done")
         def _response_content_done(message: _ContentProto):
@@ -450,10 +441,16 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         )
 
         def _on_playout_started() -> None:
+            if self._session.playout_complete is not None:
+                self._session.playout_complete.clear()
+
             self.emit("agent_started_speaking")
             self._update_state("speaking")
 
         def _on_playout_stopped(interrupted: bool) -> None:
+            if self._session.playout_complete is not None:
+                self._session.playout_complete.set()
+
             self.emit("agent_stopped_speaking")
             self._update_state("listening")
 
