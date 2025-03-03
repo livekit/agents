@@ -163,8 +163,7 @@ def to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
                     height=image.inference_height,
                     strategy="scale_aspect_fit",
                 )
-            encoded_data = utils.images.encode(image.image, opts)
-            image._cache[cache_key] = base64.b64encode(encoded_data).decode("utf-8")
+            image._cache[cache_key] = utils.images.encode(image.image, opts)
 
         return types.Part.from_bytes(data=image._cache[cache_key], mime_type="image/jpeg")
     raise ValueError(f"Unsupported image type: {type(image.image)}")

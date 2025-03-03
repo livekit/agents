@@ -113,6 +113,10 @@ class AgentTask:
         """Called when the task is exited"""
         pass
 
+    # -- Pipeline nodes --
+    # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
+    # constructor of the PipelineAgent
+
     async def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame]
     ) -> Optional[AsyncIterable[stt.SpeechEvent]]:
