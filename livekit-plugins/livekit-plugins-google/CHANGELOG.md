@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.10.7
+
+### Patch Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.10.6
 
 ### Patch Changes

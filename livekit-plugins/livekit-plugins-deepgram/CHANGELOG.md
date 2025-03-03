@@ -1,5 +1,15 @@
 # livekit-plugins-deepgram
 
+## 0.7.0
+
+### Minor Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+### Patch Changes
+
+- set mex session duration to 1 hour in deepgram connection pool - [#1582](https://github.com/livekit/agents/pull/1582) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.6.20
 
 ### Patch Changes
