@@ -371,11 +371,9 @@ class TaskActivity(RecognitionHooks):
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         log_event("input_speech_stopped")
         if ev.user_transcription_enabled:
-            self.on_interim_transcript(
-                stt.SpeechEvent(
-                    stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(text="", language="")],
-                )
+            self._agent.emit(
+                "user_input_transcribed",
+                UserInputTranscribedEvent(transcript="", is_final=False),
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:

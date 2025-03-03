@@ -239,6 +239,10 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._forward_audio_atask is not None:
             await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
+        if self._room_io:
+            await self._room_io.aclose()
+        self._input.close()
+
     @property
     def options(self) -> PipelineOptions:
         return self._opts
