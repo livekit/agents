@@ -332,47 +332,46 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
         self._fnc_ctx = value
 
-    def push_media_chunk(self, data: bytes, mime_type: str) -> None:
-        """Push a raw media chunk to the Gemini Multimodal Live session.
-
-        Args:
-            data (bytes): The data to push.
-            mime_type (str): The MIME type of the data.
-        """
+    def _push_media_chunk(self, data: bytes, mime_type: str) -> None:
         realtime_input = LiveClientRealtimeInput(
             media_chunks=[Blob(data=data, mime_type=mime_type)],
         )
         self._queue_msg(realtime_input)
+        
+    DEFAULT_ENCODE_OPTIONS = images.EncodeOptions(
+        format="JPEG",
+        quality=75,
+        resize_options=images.ResizeOptions(
+            width=1024, height=1024, strategy="scale_aspect_fit"
+        ),
+    )
 
-    def push_video(self, frame: rtc.VideoFrame) -> None:
+    def push_video(self, frame: rtc.VideoFrame, encode_options: images.EncodeOptions = DEFAULT_ENCODE_OPTIONS) -> None:
         """Push a video frame to the Gemini Multimodal Live session.
 
         Args:
             frame (rtc.VideoFrame): The video frame to push.
+            encode_options (images.EncodeOptions, optional): The encode options for the video frame. Defaults to 1024x1024 JPEG.
 
         Notes:
         - This will be sent immediately so you should use a sampling frame rate that makes sense for your application and Gemini's constraints. 1 FPS is a good starting point.
-        - The default is to encode as a JPEG at 1024x1024. If you need more control, see `push_media_chunk`.
         """
         encoded_data = images.encode(
             frame,
-            images.EncodeOptions(
-                format="JPEG",
-                quality=75,
-                resize_options=images.ResizeOptions(
-                    width=1024,
-                    height=1024,
-                    strategy="scale_aspect_fit",
-                ),
-            ),
+            encode_options,
         )
-        self.push_media_chunk(encoded_data, "image/jpeg")
+        mime_type = (
+            "image/jpeg" if encode_options.format == "JPEG"
+            else "image/png" if encode_options.format == "PNG"
+            else "image/jpeg"
+        )
+        self._push_media_chunk(encoded_data, mime_type)
 
     def _push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._opts.enable_user_audio_transcription:
             self._transcriber._push_audio(frame)
 
-        self.push_media_chunk(frame.data.tobytes(), "audio/pcm")
+        self._push_media_chunk(frame.data.tobytes(), "audio/pcm")
 
     def _queue_msg(self, msg: ClientEvents) -> None:
         self._send_ch.send_nowait(msg)
