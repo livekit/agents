@@ -105,6 +105,10 @@ class AgentTask:
         """
         return self.__get_activity_or_raise().agent
 
+    # -- Pipeline nodes --
+    # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
+    # constructor of the PipelineAgent
+
     async def on_enter(self) -> None:
         """Called when the task is entered"""
         pass
@@ -113,9 +117,13 @@ class AgentTask:
         """Called when the task is exited"""
         pass
 
-    # -- Pipeline nodes --
-    # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
-    # constructor of the PipelineAgent
+    async def on_end_of_turn(self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
+        """Called when the user has finished speaking, and the LLM is about to respond
+
+        This is a good opportunity to update the chat context or edit the new message before it is
+        sent to the LLM.
+        """
+        pass
 
     async def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame]

@@ -435,7 +435,7 @@ class TaskActivity(RecognitionHooks):
             UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
         )
 
-    def on_end_of_turn(self, new_transcript: str) -> None:
+    async def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:
         #  - check if there is no current generation happening
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
@@ -466,6 +466,13 @@ class TaskActivity(RecognitionHooks):
                 user_input=new_transcript,
             )
             return
+
+        await self._agent_task.on_end_of_turn(
+            self._agent_task.chat_ctx,
+            llm.ChatMessage(
+                role="user", content=[new_transcript]
+            ),  # TODO(theomonnom): This doesn't allow edits yet
+        )
 
         self.generate_reply(user_input=new_transcript)
 
