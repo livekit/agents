@@ -280,7 +280,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                 hyphenate_word=self._opts.transcription.hyphenate_word,
             )
 
-            self._playing_handle = self._agent_playout.play(
+            self._playing_handle = new_handle = self._agent_playout.play(
                 item_id=message.item_id,
                 content_index=message.content_index,
                 transcription_fwd=tr_fwd,
@@ -295,8 +295,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
                     if self._session.agent_silent is not None:
                         self._session.agent_silent.set()
 
-                self._playing_handle._done_fut.add_done_callback(_on_playout_done)
-                self._playing_handle._int_fut.add_done_callback(_on_playout_done)
+                new_handle._done_fut.add_done_callback(_on_playout_done)
+                new_handle._int_fut.add_done_callback(_on_playout_done)
 
         @self._session.on("response_content_done")
         def _response_content_done(message: _ContentProto):
