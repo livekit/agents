@@ -32,6 +32,7 @@ import openai
 
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
+from .log import logger
 
 OPENAI_TTS_SAMPLE_RATE = 48000
 OPENAI_TTS_CHANNELS = 1
@@ -184,6 +185,7 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=OPENAI_TTS_CHANNELS,
         )
 
+
         async def _decode_loop():
             try:
                 async with oai_stream as stream:
@@ -192,6 +194,7 @@ class ChunkedStream(tts.ChunkedStream):
             finally:
                 decoder.end_input()
 
+        logger.info("starting decode loop")
         decode_task = asyncio.create_task(_decode_loop())
 
         try:
@@ -214,5 +217,8 @@ class ChunkedStream(tts.ChunkedStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
+            logger.info("closing decode loop")
             await utils.aio.gracefully_cancel(decode_task)
+            logger.info("closing decoder")
             await decoder.aclose()
+            logger.info("closed decoder")

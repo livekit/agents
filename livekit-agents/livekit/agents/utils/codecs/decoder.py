@@ -40,14 +40,14 @@ class StreamBuffer:
         self._buffer = io.BytesIO()
         self._lock = threading.Lock()
         self._data_available = threading.Condition(self._lock)
-        self._eof = False  # EOF flag to signal no more writes
+        self._eof = False
 
     def write(self, data: bytes):
         """Write data to the buffer from a writer thread."""
-        with self._data_available:  # Lock and notify readers
-            self._buffer.seek(0, io.SEEK_END)  # Move to the end
+        with self._data_available:
+            self._buffer.seek(0, io.SEEK_END)
             self._buffer.write(data)
-            self._data_available.notify_all()  # Notify waiting readers
+            self._data_available.notify_all()
 
     def read(self, size: int = -1) -> bytes:
         """Read data from the buffer in a reader thread."""
@@ -59,21 +59,19 @@ class StreamBuffer:
             while True:
                 if self._buffer.closed:
                     return b""
-                self._buffer.seek(0)  # Rewind for reading
+                # always read from beginning
+                self._buffer.seek(0)
                 data = self._buffer.read(size)
 
-                # If data is available, return it
                 if data:
-                    # Shrink the buffer to remove already-read data
+                    # shrink the buffer to remove already-read data
                     remaining = self._buffer.read()
                     self._buffer = io.BytesIO(remaining)
                     return data
 
-                # If EOF is signaled and no data remains, return EOF
                 if self._eof:
                     return b""
 
-                # Wait for more data
                 self._data_available.wait()
 
     def end_input(self):
