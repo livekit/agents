@@ -24,7 +24,7 @@ from .events import EventTypes, AgentEvent, AgentStateChangedEvent
 
 
 @dataclass
-class PipelineOptions:
+class VoiceOptions:
     allow_interruptions: bool
     min_interruption_duration: float
     min_endpointing_delay: float
@@ -57,7 +57,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
-        self._opts = PipelineOptions(
+        self._opts = VoiceOptions(
             allow_interruptions=allow_interruptions,
             min_interruption_duration=min_interruption_duration,
             min_endpointing_delay=min_endpointing_delay,
@@ -161,7 +161,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None:
-        """Start the pipeline agent.
+        """Start the voice agent.
 
         Create a default RoomIO if the input or output audio is not already set.
         If the console flag is provided, start a ChatCLI.
@@ -260,7 +260,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._input.close()
 
     @property
-    def options(self) -> PipelineOptions:
+    def options(self) -> VoiceOptions:
         return self._opts
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
