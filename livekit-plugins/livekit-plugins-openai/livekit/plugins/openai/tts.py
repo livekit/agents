@@ -188,13 +188,17 @@ class ChunkedStream(tts.ChunkedStream):
 
         async def _decode_loop():
             try:
+                logger.info("starting decode loop")
+                first = True
                 async with oai_stream as stream:
                     async for data in stream.iter_bytes():
                         decoder.push(data)
+                        if first:
+                            first = False
+                            logger.info("pushed first frame")
             finally:
                 decoder.end_input()
 
-        logger.info("starting decode loop")
         decode_task = asyncio.create_task(_decode_loop())
 
         try:
@@ -205,6 +209,10 @@ class ChunkedStream(tts.ChunkedStream):
             async for frame in decoder:
                 emitter.push(frame)
             emitter.flush()
+
+            logger.info("flushed final frame")
+            # # task may not have been created yet,
+            # await decode_task
         except openai.APITimeoutError:
             raise APITimeoutError()
         except openai.APIStatusError as e:
