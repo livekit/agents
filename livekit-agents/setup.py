@@ -58,6 +58,7 @@ setuptools.setup(
         "psutil~=5.9",
         "aiohttp~=3.10",
         "typing-extensions~=4.12",
+        "sounddevice>=0.5",
     ],
     extras_require={
         ':sys_platform=="win32"': ["colorama"],  # fix logs color on windows (devmode only)
