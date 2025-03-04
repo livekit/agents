@@ -81,6 +81,7 @@ class StreamBuffer:
             self._data_available.notify_all()
 
     def close(self):
+        logger.info("closing buffer")
         self._buffer.close()
 
 
@@ -161,6 +162,7 @@ class AudioStreamDecoder:
         except Exception:
             logger.exception("Error decoding audio")
         finally:
+            logger.info("decode loop finally reached, closing output stream")
             self._output_ch.close()
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
@@ -175,11 +177,16 @@ class AudioStreamDecoder:
     async def aclose(self):
         if self._closed:
             return
+        logger.info("setting to closed")
         self._closed = True
+        logger.info("ending input")
         self.end_input()
+        logger.info("closing input buffer")
         self._input_buf.close()
         # wait for decode loop to finish
         try:
+            logger.info("waiting for output channel to close")
             await self._output_ch.recv()
         except aio.ChanClosed:
+            logger.info("received aio.ChanClosed")
             pass
