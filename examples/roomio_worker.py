@@ -4,9 +4,9 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
-from livekit.agents.pipeline import AgentTask, CallContext, PipelineAgent
-from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.plugins import cartesia, deepgram, openai
+from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
+from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.plugins import cartesia, deepgram, noise_cancellation, openai
 
 logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
@@ -22,6 +22,7 @@ class EchoTask(AgentTask):
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
             tts=cartesia.TTS(),
+            noise_cancellation=noise_cancellation.BVC(),
         )
 
     @ai_function
@@ -44,7 +45,7 @@ class AlloyTask(AgentTask):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    agent = PipelineAgent(
+    agent = VoiceAgent(
         task=AlloyTask(),
     )
 

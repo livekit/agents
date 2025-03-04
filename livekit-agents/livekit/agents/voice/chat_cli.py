@@ -4,19 +4,17 @@ import asyncio
 import sys
 import threading
 import time
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import click
 import numpy as np
 import sounddevice as sd
 from livekit import rtc
 
-from typing import TYPE_CHECKING
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
 from .voice_agent import VoiceAgent
-
 
 if TYPE_CHECKING:
     import sounddevice as sd
@@ -184,7 +182,8 @@ class ChatCLI:
 
             self._win_read_task = asyncio.create_task(win_reader())
         else:
-            import termios, tty
+            import termios
+            import tty
 
             fd = sys.stdin.fileno()
             old_settings = termios.tcgetattr(fd)

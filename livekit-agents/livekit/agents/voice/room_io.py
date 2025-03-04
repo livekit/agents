@@ -71,12 +71,13 @@ class RoomIO:
         link_to_participant: Optional[rtc.RemoteParticipant | str] = None,
         input_options: RoomInputOptions = DEFAULT_ROOM_INPUT_OPTIONS,
         output_options: RoomOutputOptions = DEFAULT_ROOM_OUTPUT_OPTIONS,
+        noise_cancellation: rtc.NoiseCancellationOptions | None = None,
     ) -> None:
         self._room = room
         self._agent = agent
         self._in_opts = input_options
         self._out_opts = output_options
-
+        self._noise_cancellation = noise_cancellation
         # room input
         self._participant_identity: Optional[str] = (
             link_to_participant.identity
@@ -112,6 +113,7 @@ class RoomIO:
                 room=self._room,
                 sample_rate=self._in_opts.audio_sample_rate,
                 num_channels=self._in_opts.audio_num_channels,
+                noise_cancellation=self._noise_cancellation,
             )
         if self._in_opts.video_enabled:
             self._video_input_handle = VideoStreamHandle(room=self._room)
@@ -918,6 +920,7 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
         sample_rate: int = 24000,
         num_channels: int = 1,
         capacity: int = 0,
+        noise_cancellation: rtc.NoiseCancellationOptions | None = None,
     ) -> None:
         super().__init__(
             room=room, capacity=capacity, track_source=rtc.TrackSource.SOURCE_MICROPHONE
@@ -925,6 +928,7 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
         self.sample_rate = sample_rate
         self.num_channels = num_channels
         self.capacity = capacity
+        self.noise_cancellation = noise_cancellation
 
     def _create_stream(self, track: rtc.Track) -> rtc.AudioStream:
         return rtc.AudioStream.from_track(
@@ -932,6 +936,7 @@ class AudioStreamHandle(BaseStreamHandle[rtc.AudioFrame]):
             sample_rate=self.sample_rate,
             num_channels=self.num_channels,
             capacity=self.capacity,
+            noise_cancellation=self.noise_cancellation,
         )
 
 
