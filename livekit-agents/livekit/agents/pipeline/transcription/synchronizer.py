@@ -316,6 +316,7 @@ class TextSynchronizer:
         self._closed = False
         self._sync_options = sync_options or TextSyncOptions()
         self._synchronizer = _TextAudioSynchronizer(options=self._sync_options)
+        self._sync_enabled = True
 
         # flush for each sentence
         self._sentence_text_sink = sentence_text_sink
@@ -327,6 +328,13 @@ class TextSynchronizer:
 
         self._tasks: set[asyncio.Task] = set()
         self._main_task = asyncio.create_task(self._forward_event())
+
+    def set_sync_enabled(self, enable: bool) -> None:
+        if self._sync_enabled == enable:
+            return
+
+        self._sync_enabled = enable
+        self._flush()
 
     @property
     def audio_sink(self) -> "_AudioSync":
@@ -409,6 +417,8 @@ class _AudioSync(AudioSink):
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
         await self._base_sink.capture_frame(frame)
+        if not self._parent._sync_enabled:
+            return
 
         if not self._capturing:
             self._parent._synchronizer.segment_playout_started()
@@ -420,6 +430,9 @@ class _AudioSync(AudioSink):
     def flush(self) -> None:
         super().flush()
         self._base_sink.flush()
+        if not self._parent._sync_enabled:
+            return
+
         self._capturing = False
         if not self._interrupted and not self._parent._synchronizer._closed:
             self._parent._synchronizer.mark_audio_segment_end()
@@ -430,6 +443,10 @@ class _AudioSync(AudioSink):
 
     def on_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
         super().on_playback_finished(playback_position=playback_position, interrupted=interrupted)
+
+        if not self._parent._sync_enabled:
+            return
+
         if not interrupted and not self._parent._synchronizer._closed:
             self._parent._synchronizer.segment_playout_finished()
         self._parent._flush()
@@ -446,7 +463,15 @@ class _TextSink(TextSink):
         self._parent = parent
 
     async def capture_text(self, text: str) -> None:
+        if not self._parent._sync_enabled:
+            await self._parent._base_text_sink.capture_text(text)
+            return
+
         self._parent._synchronizer.push_text(text)
 
     def flush(self) -> None:
+        if not self._parent._sync_enabled:
+            self._parent._base_text_sink.flush()
+            return
+
         self._parent._synchronizer.mark_text_segment_end()

@@ -4,6 +4,8 @@ import asyncio
 import copy
 from dataclasses import dataclass
 from typing import AsyncIterable, Generic, Literal, TypeVar
+from typing_extensions import override
+
 
 from livekit import rtc
 
@@ -17,18 +19,7 @@ from .audio_recognition import _TurnDetector
 from .speech_handle import SpeechHandle
 from .task import AgentTask
 from .task_activity import TaskActivity
-
-EventTypes = Literal[
-    "user_started_speaking",
-    "user_stopped_speaking",
-    "agent_started_speaking",
-    "agent_stopped_speaking",
-    "user_message_committed",
-    "agent_message_committed",
-    "agent_message_interrupted",
-    "user_transcript_updated",
-    "agent_state_changed",
-]
+from .events import EventTypes, AgentEvent, AgentStateChangedEvent
 
 
 @dataclass
@@ -106,9 +97,10 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._agent_task = AgentTask(instructions=instructions)
 
-        self._state: AgentState | None = None
         self._activity: TaskActivity | None = None
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
+
+        self._agent_state: AgentState | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -161,10 +153,6 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def current_task(self) -> AgentTask:
         return self._agent_task
 
-    # -- Pipeline nodes --
-    # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
-    # constructor of the PipelineAgent
-
     async def start(
         self,
         *,
@@ -184,7 +172,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         async with self._lock:
-            self._on_agent_state_changed(AgentState.INITIALIZING)
+            self._update_agent_state(AgentState.INITIALIZING)
 
             if is_given(room):
                 room_input_options = copy.deepcopy(room_input_options)
@@ -239,7 +227,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
 
             self._started = True
-            self._on_agent_state_changed(AgentState.LISTENING)
+            self._update_agent_state(AgentState.LISTENING)
 
         if self.output.audio is None and self.output.text is None:
             logger.warning("agent started without audio or text output")
@@ -251,16 +239,17 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._forward_audio_atask is not None:
             await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
-        if self._room_input:
-            await self._room_input.aclose()
+        if self._room_io:
+            await self._room_io.aclose()
+        self._input.close()
 
     @property
     def options(self) -> PipelineOptions:
         return self._opts
 
-    def emit(self, event: EventTypes, *args) -> None:
-        debug.Tracing.log_event(f'agent.on("{event}")')
-        return super().emit(event, *args)
+    def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
+        debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
+        return super().emit(event, ev)
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -338,17 +327,12 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._activity is not None:
                 self._activity.push_audio(frame)
 
-    @utils.log_exceptions(logger=logger)
-    def _on_user_transcript(self, ev: stt.SpeechEvent) -> None:
-        self.emit("user_transcript_updated", ev)
-
-    @utils.log_exceptions(logger=logger)
-    def _on_agent_state_changed(self, ev: AgentState) -> None:
-        if self._state == ev:
+    def _update_agent_state(self, state: AgentState) -> None:
+        if self._agent_state == state:
             return
 
-        self._state = ev
-        self.emit("agent_state_changed", ev)
+        self._agent_state = state
+        self.emit("agent_state_changed", AgentStateChangedEvent(state=state))
 
     # -- User changed input/output streams/sinks --
 

@@ -149,15 +149,15 @@ def perform_tts_inference(
 @dataclass
 class _TextOutput:
     text: str
+    first_text_fut: asyncio.Future
 
 
 def perform_text_forwarding(
     *, text_output: io.TextSink | None, llm_output: AsyncIterable[str]
-) -> tuple[asyncio.Task, _TextOutput, asyncio.Future]:
-    out = _TextOutput(text="")
-    first_text_fut = asyncio.Future()
-    task = asyncio.create_task(_text_forwarding_task(text_output, llm_output, out, first_text_fut))
-    return task, out, first_text_fut
+) -> tuple[asyncio.Task, _TextOutput]:
+    out = _TextOutput(text="", first_text_fut=asyncio.Future())
+    task = asyncio.create_task(_text_forwarding_task(text_output, llm_output, out))
+    return task, out
 
 
 @utils.log_exceptions(logger=logger)
@@ -165,15 +165,15 @@ async def _text_forwarding_task(
     text_output: io.TextSink | None,
     llm_output: AsyncIterable[str],
     out: _TextOutput,
-    first_text_fut: asyncio.Future,
 ) -> None:
     try:
         async for delta in llm_output:
             out.text += delta
             if text_output is not None:
                 await text_output.capture_text(delta)
-            if not first_text_fut.done():
-                first_text_fut.set_result(None)
+
+            if not out.first_text_fut.done():
+                out.first_text_fut.set_result(None)
     finally:
         if isinstance(llm_output, _ACloseable):
             await llm_output.aclose()
@@ -185,19 +185,17 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
+    first_frame_fut = asyncio.Future()
 
 
 def perform_audio_forwarding(
     *,
     audio_output: io.AudioSink,
     tts_output: AsyncIterable[rtc.AudioFrame],
-) -> tuple[asyncio.Task, _AudioOutput, asyncio.Future]:
+) -> tuple[asyncio.Task, _AudioOutput]:
     out = _AudioOutput(audio=[])
-    first_frame_fut = asyncio.Future()
-    task = asyncio.create_task(
-        _audio_forwarding_task(audio_output, tts_output, out, first_frame_fut)
-    )
-    return task, out, first_frame_fut
+    task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
+    return task, out
 
 
 @utils.log_exceptions(logger=logger)
@@ -205,14 +203,13 @@ async def _audio_forwarding_task(
     audio_output: io.AudioSink,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
-    first_frame_fut: asyncio.Future,
 ) -> None:
     try:
         async for frame in tts_output:
             out.audio.append(frame)
             await audio_output.capture_frame(frame)
-            if not first_frame_fut.done():
-                first_frame_fut.set_result(None)
+            if not out.first_frame_fut.done():
+                out.first_frame_fut.set_result(None)
     finally:
         if isinstance(tts_output, _ACloseable):
             await tts_output.aclose()
@@ -549,3 +546,24 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
                 content=[instructions],
             ),
         )
+
+
+STANDARD_SPEECH_RATE = 0.5  # words per second
+
+
+def truncate_message(*, message: str, played_duration: float) -> str:
+    # TODO(theomonnom): this is very naive
+    from ..tokenize import _basic_word
+
+    words = _basic_word.split_words(message, ignore_punctuation=False)
+    total_duration = len(words) * STANDARD_SPEECH_RATE
+
+    if total_duration <= played_duration:
+        return message
+
+    max_words = int(played_duration // STANDARD_SPEECH_RATE)
+    if max_words < 1:
+        return ""
+
+    _, _, end_pos = words[max_words - 1]
+    return message[:end_pos]
