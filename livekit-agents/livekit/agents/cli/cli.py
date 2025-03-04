@@ -152,7 +152,6 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
 
-        chat_name = utils.shortuuid("chat_cli_")
         args = proto.CliArgs(
             opts=opts,
             log_level="INFO",
@@ -163,7 +162,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
             drain_timeout=0,
             register=False,
             simulate_job=proto.SimulateJobArgs(
-                room=chat_name,
+                room="mock-console",
             ),
         )
         run_worker(args)

@@ -508,7 +508,6 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _connection_task(self) -> None:
-        print("connection task")
         assert self._http_session is not None
 
         retry_count = 0
@@ -586,8 +585,6 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
         closing_ws = False
-
-        print("running ws")
 
         async def _load_task():
             """periodically update worker status"""
