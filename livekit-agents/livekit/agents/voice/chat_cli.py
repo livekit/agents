@@ -10,13 +10,17 @@ from typing import Literal
 
 import click
 import numpy as np
-import sounddevice as sd
 from livekit import rtc
 
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
 from .voice_agent import VoiceAgent
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import sounddevice as sd
 
 MAX_AUDIO_BAR = 30
 INPUT_DB_MIN = -70.0
@@ -186,6 +190,8 @@ class ChatCLI:
             self._loop.remove_reader(fd)
 
     def _update_microphone(self, *, enable: bool) -> None:
+        import sounddevice as sd
+
         input_device, _ = sd.default.device
         if input_device is not None and enable:
             device_info = sd.query_devices(input_device)
@@ -208,6 +214,8 @@ class ChatCLI:
             self._agent.input.audio = None
 
     def _update_speaker(self, *, enable: bool) -> None:
+        import sounddevice as sd
+
         _, output_device = sd.default.device
         if output_device is not None and enable:
             self._output_stream = sd.OutputStream(
