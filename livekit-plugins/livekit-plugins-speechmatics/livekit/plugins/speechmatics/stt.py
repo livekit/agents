@@ -306,8 +306,9 @@ def live_transcription_to_speech_data(data: dict) -> List[stt.SpeechData]:
         )
 
         for alt in result.get("alternatives", []):
+            # newlines should not be in transcript
             content, confidence, language = (
-                alt.get("content", "").strip(),
+                alt.get("content", "").strip().replace("\n", ""),
                 alt.get("confidence", 1.0),
                 alt.get("language", "en"),
             )
