@@ -314,6 +314,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._http_server.app.add_subapp("/debug", tracing._create_tracing_app(self))
 
         self._conn_task: asyncio.Task[None] | None = None
+        self._load_task: asyncio.Task[None] | None = None
 
         self._worker_load: float = 0.0
         self._worker_load_graph = tracing.Tracing.add_graph(
@@ -379,9 +380,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                 self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
                 self._worker_load_graph.plot(time.time(), self._worker_load)
 
-        tasks = [
-            asyncio.create_task(_load_task(), name="load_task"),
-        ]
+        tasks = []
+        self._load_task = asyncio.create_task(_load_task(), name="load_task")
+        tasks.append(self._load_task)
 
         if self._register:
             self._conn_task = asyncio.create_task(self._connection_task(), name="worker_conn_task")
@@ -475,6 +476,9 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         if self._conn_task is not None:
             await utils.aio.cancel_and_wait(self._conn_task)
+
+        if self._load_task is not None:
+            await utils.aio.cancel_and_wait(self._load_task)
 
         await self._proc_pool.aclose()
 
