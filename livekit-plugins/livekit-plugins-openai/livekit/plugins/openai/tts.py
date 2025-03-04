@@ -185,7 +185,6 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=OPENAI_TTS_CHANNELS,
         )
 
-
         async def _decode_loop():
             try:
                 logger.info("starting decode loop")

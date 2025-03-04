@@ -62,7 +62,6 @@ class StreamBuffer:
                     return b""
                 # always read from beginning
                 self._buffer.seek(0)
-                logger.info("sb - reading from buffer")
                 data = self._buffer.read(size)
 
                 if data:
@@ -76,7 +75,6 @@ class StreamBuffer:
                     logger.info("sb - eof")
                     return b""
 
-                logger.info("sb - waiting for data")
                 self._data_available.wait()
 
     def end_input(self):
@@ -181,16 +179,14 @@ class AudioStreamDecoder:
         try:
             return await self._output_ch.recv()
         except aio.ChanClosed:
+            logger.info("output_ch received aio.ChanClosed")
             raise StopAsyncIteration
 
     async def aclose(self):
         if self._closed:
             return
-        logger.info("setting to closed")
         self._closed = True
-        logger.info("ending input")
         self.end_input()
-        logger.info("closing input buffer")
         self._input_buf.close()
         # wait for decode loop to finish
         try:
