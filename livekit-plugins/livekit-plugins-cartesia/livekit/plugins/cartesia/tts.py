@@ -148,10 +148,8 @@ class TTS(tts.TTS):
 
         return self._session
 
-    async def prewarm(self) -> None:
-        async with self._pool.connection():
-            # open the connection and return it back to the pool
-            pass
+    def prewarm(self) -> None:
+        self._pool.prewarm()
 
     def update_options(
         self,

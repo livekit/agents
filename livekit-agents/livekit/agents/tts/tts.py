@@ -98,7 +98,7 @@ class TTS(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
         )
 
-    async def prewarm(self) -> None:
+    def prewarm(self) -> None:
         """Pre-warm connection to the TTS service"""
         pass
 
