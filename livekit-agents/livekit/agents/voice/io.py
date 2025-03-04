@@ -35,13 +35,6 @@ TTSNode = Callable[
         Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
     ],
 ]
-TranscriptionNode = Callable[
-    [AsyncIterable[str]],
-    Union[
-        Optional[AsyncIterable[str]],
-        Awaitable[Optional[AsyncIterable[str]]],
-    ],
-]
 
 
 AudioStream = AsyncIterable[rtc.AudioFrame]

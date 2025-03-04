@@ -147,31 +147,6 @@ def perform_tts_inference(
 
 
 @dataclass
-class _TranscribeGenerationData:
-    text_ch: aio.Chan[str]
-
-
-def perform_text_transcription(
-    *, node: io.TranscriptionNode, input: AsyncIterable[str]
-) -> Tuple[asyncio.Task, _TranscribeGenerationData]:
-    text_ch = aio.Chan()
-
-    async def _inference_task():
-        tr_node = node(input)
-        if asyncio.iscoroutine(tr_node):
-            tr_node = await tr_node
-
-        source = tr_node if isinstance(tr_node, AsyncIterable) else input
-        async for delta in source:
-            text_ch.send_nowait(delta)
-
-    tr_task = asyncio.create_task(_inference_task())
-    tr_task.add_done_callback(lambda _: text_ch.close())
-
-    return tr_task, _TranscribeGenerationData(text_ch=text_ch)
-
-
-@dataclass
 class _TextOutput:
     text: str
     first_text_fut: asyncio.Future

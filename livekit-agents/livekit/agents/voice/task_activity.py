@@ -30,7 +30,6 @@ from .generation import (
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
-    perform_text_transcription,
     perform_tool_executions,
     perform_tts_inference,
     truncate_message,
@@ -511,12 +510,9 @@ class TaskActivity(RecognitionHooks):
         tasks = []
         if tr_output is not None:
             tr_source = _read_text()
-            tr_task, tr_gen_data = perform_text_transcription(
-                node=self._agent_task.transcription_node, input=tr_source
-            )
-            tasks.append(tr_task)
-            tr_source = tr_gen_data.text_ch
-
+            tr_node = self._agent_task.transcription_node(tr_source)
+            if tr_node is not None:
+                tr_source = tr_node
             forward_text, text_out = perform_text_forwarding(
                 text_output=tr_output, source=tr_source
             )
@@ -626,13 +622,9 @@ class TaskActivity(RecognitionHooks):
             return
 
         tr_source = llm_output
-        if text_output is not None:
-            tr_task, tr_gen_data = perform_text_transcription(
-                node=self._agent_task.transcription_node, input=tr_source
-            )
-            tasks.append(tr_task)
-            tr_source = tr_gen_data.text_ch
-
+        tr_node = self._agent_task.transcription_node(tr_source)
+        if tr_node is not None:
+            tr_source = tr_node
         forward_task, text_out = perform_text_forwarding(text_output=text_output, source=tr_source)
         tasks.append(forward_task)
 
@@ -825,12 +817,9 @@ class TaskActivity(RecognitionHooks):
 
                 if text_output is not None:
                     tr_source = msg.text_stream
-                    tr_task, tr_gen_data = perform_text_transcription(
-                        node=self._agent_task.transcription_node, input=tr_source
-                    )
-                    forward_tasks.append(tr_task)
-                    tr_source = tr_gen_data.text_ch
-
+                    tr_node = self._agent_task.transcription_node(tr_source)
+                    if tr_node is not None:
+                        tr_source = tr_node
                     forward_task, text_out = perform_text_forwarding(
                         text_output=text_output, source=tr_source
                     )
