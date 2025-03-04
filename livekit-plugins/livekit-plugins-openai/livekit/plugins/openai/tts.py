@@ -217,6 +217,4 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(decode_task)
-            logger.info("closing decoder")
             await decoder.aclose()
-            logger.info("closed decoder")
