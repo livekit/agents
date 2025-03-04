@@ -42,6 +42,7 @@ from openai.types.beta.realtime import (
 )
 from openai.types.beta.realtime.response_create_event import Response
 
+from ..utils import build_legacy_openai_schema
 from .log import logger
 
 # When a response is created with the OpenAI Realtime API, those events are sent in this order:
@@ -275,7 +276,7 @@ class RealtimeSession(llm.RealtimeSession):
             retained_functions: list[llm.AIFunction] = []
 
             for ai_fnc in fnc_ctx.ai_functions.values():
-                tool_desc = llm.utils.build_legacy_openai_schema(ai_fnc, internally_tagged=True)
+                tool_desc = build_legacy_openai_schema(ai_fnc, internally_tagged=True)
                 try:
                     session_tool = session_update_event.SessionTool.model_validate(tool_desc)
                     tools.append(session_tool)
