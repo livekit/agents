@@ -251,7 +251,7 @@ class ChatCLI:
                 channels=1,
                 device=output_device,
                 samplerate=24000,
-                blocksize=240,
+                blocksize=2400,  # 100ms
             )
             self._output_stream.start()
             self._agent.output.audio = self._audio_sink

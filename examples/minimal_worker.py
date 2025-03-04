@@ -19,7 +19,7 @@ async def entrypoint(ctx: JobContext):
         # llm=openai.realtime.RealtimeModel(base_url="http://localhost:1234/v1"),
         llm=openai.realtime.RealtimeModel(),
     )
-    await agent.start()
+    await agent.start(room=ctx.room)
 
 
 if __name__ == "__main__":
