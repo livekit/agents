@@ -11,11 +11,18 @@ from typing import (
 
 from livekit import rtc
 
-from .. import debug, llm, stt, tts, utils, vad
+from .. import debug, llm, stt, transcription, tts, utils, vad
 from ..log import logger
+from ..metrics import AgentMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
+from .events import (
+    MetricsCollectedEvent,
+    UserInputTranscribedEvent,
+    UserStartedSpeakingEvent,
+    UserStoppedSpeakingEvent,
+)
 from .generation import (
     _AudioOutput,
     _TextOutput,
@@ -23,19 +30,13 @@ from .generation import (
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
+    perform_text_transcriber,
     perform_tool_executions,
     perform_tts_inference,
-    update_instructions,
     truncate_message,
-)
-from .events import (
-    UserInputTranscribedEvent,
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
-    MetricsCollectedEvent,
+    update_instructions,
 )
 from .speech_handle import SpeechHandle
-from ..metrics import AgentMetrics
 
 
 def log_event(event: str, **kwargs) -> None:
@@ -103,6 +104,10 @@ class TaskActivity(RecognitionHooks):
     @property
     def tts(self) -> tts.TTS | None:
         return self._agent_task.tts or self._agent.tts
+
+    @property
+    def transcriber(self) -> transcription.TextTranscriber | None:
+        return self._agent_task.transcriber or self._agent.transcriber
 
     @property
     def vad(self) -> vad.VAD | None:
@@ -494,7 +499,7 @@ class TaskActivity(RecognitionHooks):
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)
 
-        text_output = self._agent.output.text
+        tr_output = self._agent.output.text
         audio_output = self._agent.output.audio
 
         await speech_handle.wait_if_not_interrupted(
@@ -508,9 +513,17 @@ class TaskActivity(RecognitionHooks):
             yield text
 
         tasks = []
-        if text_output is not None:
+        if tr_output is not None:
+            tr_source = _read_text()
+            if self.transcriber is not None:
+                tr_task, tr_gen_data = perform_text_transcriber(
+                    node=self._agent_task.transcription_node, input=tr_source
+                )
+                tasks.append(tr_task)
+                tr_source = tr_gen_data.text_ch
+
             forward_text, text_out = perform_text_forwarding(
-                text_output=text_output, llm_output=_read_text()
+                text_output=tr_output, source=tr_source
             )
             tasks.append(forward_text)
             if audio_output is None:
@@ -617,9 +630,15 @@ class TaskActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             return
 
-        forward_task, text_out = perform_text_forwarding(
-            text_output=text_output, llm_output=llm_output
-        )
+        tr_source = llm_output
+        if text_output is not None and self.transcriber is not None:
+            tr_task, tr_gen_data = perform_text_transcriber(
+                node=self._agent_task.transcription_node, input=tr_source
+            )
+            tasks.append(tr_task)
+            tr_source = tr_gen_data.text_ch
+
+        forward_task, text_out = perform_text_forwarding(text_output=text_output, source=tr_source)
         tasks.append(forward_task)
 
         if audio_output is not None:
@@ -810,8 +829,16 @@ class TaskActivity(RecognitionHooks):
                 audio_out = None
 
                 if text_output is not None:
+                    tr_source = msg.text_stream
+                    if self.transcriber is not None:
+                        tr_task, tr_gen_data = perform_text_transcriber(
+                            node=self._agent_task.transcription_node, input=tr_source
+                        )
+                        forward_tasks.append(tr_task)
+                        tr_source = tr_gen_data.text_ch
+
                     forward_task, text_out = perform_text_forwarding(
-                        text_output=text_output, llm_output=msg.text_stream
+                        text_output=text_output, source=tr_source
                     )
 
                     forward_tasks.append(forward_task)

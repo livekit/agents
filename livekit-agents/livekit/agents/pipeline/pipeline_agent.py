@@ -4,22 +4,22 @@ import asyncio
 import copy
 from dataclasses import dataclass
 from typing import AsyncIterable, Generic, Literal, TypeVar
-from typing_extensions import override
 
+from typing_extensions import override
 
 from livekit import rtc
 
-from .. import debug, llm, stt, tts, utils, vad
+from .. import debug, llm, stt, transcription, tts, utils, vad
 from ..llm import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
 from .audio_recognition import _TurnDetector
+from .events import AgentEvent, AgentStateChangedEvent, EventTypes
 from .speech_handle import SpeechHandle
 from .task import AgentTask
 from .task_activity import TaskActivity
-from .events import EventTypes, AgentEvent, AgentStateChangedEvent
 
 
 @dataclass
@@ -44,6 +44,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+        transcriber: NotGivenOr[transcription.TextTranscriber] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
@@ -69,6 +70,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+        self._transcriber = transcriber or transcription.SimpleTextTranscriber()
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -128,6 +130,10 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def tts(self) -> tts.TTS | None:
         return self._tts
+
+    @property
+    def transcriber(self) -> transcription.TextTranscriber | None:
+        return self._transcriber
 
     @property
     def vad(self) -> vad.VAD | None:

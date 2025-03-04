@@ -51,11 +51,11 @@ class _TextData:
 
 @dataclass
 class _TextSegment:
-    text: str
-    speech_id: str
-    segment_id: str
-    language: str
+    delta: str
+    turn_id: str
+    sentence_id: str
     end_of_sentence: bool
+    language: str
 
 
 class _TextAudioSynchronizer:
@@ -259,9 +259,9 @@ class _TextAudioSynchronizer:
 
             self._event_ch.send_nowait(
                 _TextSegment(
-                    text=text[len(sent_text) :],
-                    speech_id=audio_data.id,
-                    segment_id=seg_id,
+                    delta=text[len(sent_text) :],
+                    turn_id=audio_data.id,
+                    sentence_id=seg_id,
                     language=self._opts.language,
                     end_of_sentence=False,
                 )
@@ -273,9 +273,9 @@ class _TextAudioSynchronizer:
 
         self._event_ch.send_nowait(
             _TextSegment(
-                text=sentence[len(sent_text) :],
-                speech_id=audio_data.id,
-                segment_id=seg_id,
+                delta=sentence[len(sent_text) :],
+                turn_id=audio_data.id,
+                sentence_id=seg_id,
                 language=self._opts.language,
                 end_of_sentence=True,
             )
@@ -353,23 +353,23 @@ class TextSynchronizer:
         while not self._closed:
             async for segment in self._synchronizer:
                 # flush if speech or sentence changed
-                if last_speech_id != segment.speech_id:
-                    last_speech_id = segment.speech_id
+                if last_speech_id != segment.turn_id:
+                    last_speech_id = segment.turn_id
                     if self._speech_text_sink:
                         self._speech_text_sink.flush()
 
-                if last_sentence_id != segment.segment_id:
-                    last_sentence_id = segment.segment_id
+                if last_sentence_id != segment.sentence_id:
+                    last_sentence_id = segment.sentence_id
                     if self._sentence_text_sink:
                         self._sentence_text_sink.flush()
 
                 # capture text
                 if self._sentence_text_sink:
-                    await self._sentence_text_sink.capture_text(segment.text.strip("\n"))
+                    await self._sentence_text_sink.capture_text(segment.delta.strip("\n"))
                     if segment.end_of_sentence:
                         self._sentence_text_sink.flush()
                 if self._speech_text_sink:
-                    await self._speech_text_sink.capture_text(segment.text)
+                    await self._speech_text_sink.capture_text(segment.delta)
 
             # end of speech
             if self._speech_text_sink:

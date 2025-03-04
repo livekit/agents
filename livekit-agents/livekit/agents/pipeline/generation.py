@@ -16,7 +16,7 @@ from typing import (
 from livekit import rtc
 from pydantic import ValidationError
 
-from .. import debug, llm, utils
+from .. import debug, llm, utils, transcription
 from ..llm import (
     AIError,
     ChatChunk,
@@ -147,27 +147,52 @@ def perform_tts_inference(
 
 
 @dataclass
+class _TranscribeGenerationData:
+    text_ch: aio.Chan[str]
+
+
+def perform_text_transcriber(
+    *, node: io.TranscriptionNode, input: AsyncIterable[str]
+) -> Tuple[asyncio.Task, _TranscribeGenerationData]:
+    text_ch = aio.Chan()
+
+    async def _inference_task():
+        tr_node = node(input)
+        if asyncio.iscoroutine(tr_node):
+            tr_node = await tr_node
+
+        source = tr_node if isinstance(tr_node, AsyncIterable) else input
+        async for delta in source:
+            text_ch.send_nowait(delta)
+
+    tr_task = asyncio.create_task(_inference_task())
+    tr_task.add_done_callback(lambda _: text_ch.close())
+
+    return tr_task, _TranscribeGenerationData(text_ch=text_ch)
+
+
+@dataclass
 class _TextOutput:
     text: str
     first_text_fut: asyncio.Future
 
 
 def perform_text_forwarding(
-    *, text_output: io.TextSink | None, llm_output: AsyncIterable[str]
+    *, text_output: io.TextSink | None, source: AsyncIterable[str]
 ) -> tuple[asyncio.Task, _TextOutput]:
     out = _TextOutput(text="", first_text_fut=asyncio.Future())
-    task = asyncio.create_task(_text_forwarding_task(text_output, llm_output, out))
+    task = asyncio.create_task(_text_forwarding_task(text_output, source, out))
     return task, out
 
 
 @utils.log_exceptions(logger=logger)
 async def _text_forwarding_task(
     text_output: io.TextSink | None,
-    llm_output: AsyncIterable[str],
+    source: AsyncIterable[str],
     out: _TextOutput,
 ) -> None:
     try:
-        async for delta in llm_output:
+        async for delta in source:
             out.text += delta
             if text_output is not None:
                 await text_output.capture_text(delta)
@@ -175,8 +200,8 @@ async def _text_forwarding_task(
             if not out.first_text_fut.done():
                 out.first_text_fut.set_result(None)
     finally:
-        if isinstance(llm_output, _ACloseable):
-            await llm_output.aclose()
+        if isinstance(source, _ACloseable):
+            await source.aclose()
 
         if text_output is not None:
             text_output.flush()
