@@ -55,6 +55,9 @@ class StreamAdapter(TTS):
             sentence_tokenizer=self._sentence_tokenizer,
         )
 
+    def prewarm(self) -> None:
+        self._tts.prewarm()
+
 
 class StreamAdapterWrapper(SynthesizeStream):
     def __init__(

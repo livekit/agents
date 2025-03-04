@@ -173,10 +173,16 @@ class AgentOutput:
         if isinstance(transcript_source, Awaitable):
             transcript_source = await transcript_source
 
+        tts_stream: AsyncIterable[str] | None = None
         if isinstance(tts_source, str):
-            co = self._str_synthesis_task(tts_source, transcript_source, handle)
+            # wrap in async iterator
+            async def string_to_stream(text: str):
+                yield text
+
+            tts_stream = string_to_stream(tts_source)
         else:
-            co = self._stream_synthesis_task(tts_source, transcript_source, handle)
+            tts_stream = tts_source
+        co = self._stream_synthesis_task(tts_stream, transcript_source, handle)
 
         synth = asyncio.create_task(co)
         synth.add_done_callback(lambda _: handle._buf_ch.close())
@@ -204,41 +210,6 @@ class AgentOutput:
         finally:
             if inspect.isasyncgen(transcript_source):
                 await transcript_source.aclose()
-
-    @utils.log_exceptions(logger=logger)
-    async def _str_synthesis_task(
-        self,
-        tts_text: str,
-        transcript_source: AsyncIterable[str] | str,
-        handle: SynthesisHandle,
-    ) -> None:
-        """synthesize speech from a string"""
-        read_transcript_atask: asyncio.Task | None = None
-
-        first_frame = True
-        tts_stream = handle._tts.synthesize(tts_text)
-        try:
-            async for audio in tts_stream:
-                if first_frame:
-                    first_frame = False
-                    read_transcript_atask = asyncio.create_task(
-                        self._read_transcript_task(transcript_source, handle)
-                    )
-
-                handle._buf_ch.send_nowait(audio.frame)
-                if not handle.tts_forwarder.closed:
-                    handle.tts_forwarder.push_audio(audio.frame)
-
-            if not handle.tts_forwarder.closed:
-                handle.tts_forwarder.mark_audio_segment_end()
-
-            if read_transcript_atask is not None:
-                await read_transcript_atask
-        finally:
-            await tts_stream.aclose()
-
-            if read_transcript_atask is not None:
-                await utils.aio.gracefully_cancel(read_transcript_atask)
 
     @utils.log_exceptions(logger=logger)
     async def _stream_synthesis_task(

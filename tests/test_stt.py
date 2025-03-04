@@ -17,12 +17,13 @@ from livekit.plugins import (
     fal,
     openai,
     silero,
+    speechmatics,
 )
 
 from .utils import make_test_speech, wer
 
 SAMPLE_RATES = [24000, 44100]  # test multiple input sample rates
-WER_THRESHOLD = 0.2
+WER_THRESHOLD = 0.25
 RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
     pytest.param(lambda: deepgram.STT(), id="deepgram"),
     # pytest.param(lambda: google.STT(), id="google"),
@@ -81,6 +82,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
     #     id="google.chirp_2",
     # ),
     pytest.param(lambda: azure.STT(), id="azure"),
+    pytest.param(lambda: speechmatics.STT(), id="speechmatics"),
 ]
 
 

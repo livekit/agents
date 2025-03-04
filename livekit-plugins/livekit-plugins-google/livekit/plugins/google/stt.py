@@ -322,6 +322,10 @@ class STT(stt.STT):
                 keywords=keywords,
             )
 
+    async def aclose(self) -> None:
+        await self._pool.aclose()
+        await super().aclose()
+
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
