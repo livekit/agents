@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import pathlib
 import signal
@@ -13,6 +15,13 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..worker import JobExecutorType, Worker, WorkerOptions
 from . import proto
 from .log import setup_logging
+
+
+CLI_ARGUMENTS: proto.CliArgs | None = None
+
+
+def _esc(*codes: int) -> str:
+    return "\033[" + ";".join(str(c) for c in codes) + "m"
 
 
 def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) -> None:
@@ -144,20 +153,20 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
         opts.api_secret = api_secret or opts.api_secret
 
         chat_name = utils.shortuuid("chat_cli_")
-
         args = proto.CliArgs(
             opts=opts,
-            log_level="WARN",
+            log_level="INFO",
             devmode=True,
             asyncio_debug=False,
             watch=False,
+            console=True,
             drain_timeout=0,
             register=False,
             simulate_job=proto.SimulateJobArgs(
                 room=chat_name,
             ),
         )
-        _run_dev(args)
+        run_worker(args)
 
     @cli.command(help="Connect to a specific room")
     @click.option(
@@ -230,7 +239,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
         help="Set the logging level",
     )
     def download_files(log_level: str) -> None:
-        setup_logging(log_level, True)
+        setup_logging(log_level, True, False)
 
         for plugin in Plugin.registered_plugins:
             logger.info(f"Downloading files for {plugin}")
@@ -246,7 +255,7 @@ def _run_dev(
     if args.watch:
         from .watcher import WatchServer
 
-        setup_logging(args.log_level, args.devmode)
+        setup_logging(args.log_level, args.devmode, args.console)
         main_file = pathlib.Path(sys.argv[0]).parent
 
         async def _run_loop():
@@ -262,11 +271,20 @@ def _run_dev(
 
 
 def run_worker(args: proto.CliArgs) -> None:
-    setup_logging(args.log_level, args.devmode)
+    global CLI_ARGUMENTS
+    CLI_ARGUMENTS = args
+
+    setup_logging(args.log_level, args.devmode, args.console)
     args.opts.validate_config(args.devmode)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    if args.console:
+        print(_esc(34) + "=" * 50 + _esc(0))
+        print(_esc(34) + "     Livekit Agents - Console" + _esc(0))
+        print(_esc(34) + "=" * 50 + _esc(0))
+        print("Press [Ctrl+B] to toggle between Text/Audio mode, [Q] to quit.\n")
 
     worker = Worker(args.opts, devmode=args.devmode, register=args.register, loop=loop)
 
@@ -280,6 +298,15 @@ def run_worker(args: proto.CliArgs) -> None:
             logger.info("connecting to room %s", args.simulate_job.room)
             loop.create_task(
                 worker.simulate_job(args.simulate_job.room, args.simulate_job.participant_identity)
+            )
+
+        if args.devmode:
+            logger.info(
+                f"{_esc(1)}see tracing information at http://localhost:{worker.worker_info.http_port}/debug{_esc(0)}"
+            )
+        else:
+            logger.info(
+                f"see tracing information at http://localhost:{worker.worker_info.http_port}/debug"
             )
 
     try:

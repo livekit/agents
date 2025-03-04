@@ -146,15 +146,13 @@ class ChatCLI:
         self._text_sink = _TextSink(self)
         self._audio_sink = _AudioSink(self)
 
-    def _print_welcome(self):
-        print(_esc(34) + "=" * 50 + _esc(0))
-        print(_esc(34) + "     Livekit Agents - ChatCLI" + _esc(0))
-        print(_esc(34) + "=" * 50 + _esc(0))
-        print("Press [Ctrl+B] to toggle between Text/Audio mode, [Q] to quit.\n")
+        self._main_atask: asyncio.Task | None = None
 
-    async def run(self) -> None:
-        self._print_welcome()
+    async def start(self) -> None:
+        self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
 
+    @log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
         fd = sys.stdin.fileno()
         stdin_ch = aio.Chan[str](loop=self._loop)
 
