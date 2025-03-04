@@ -44,7 +44,6 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
-        noise_cancellation: NotGivenOr[rtc.NoiseCancellationOptions] = NOT_GIVEN,
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
@@ -69,7 +68,6 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
-        self._noise_cancellation = noise_cancellation or None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -231,7 +229,6 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     agent=self,
                     input_options=(room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS),
                     output_options=(room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS),
-                    noise_cancellation=self._noise_cancellation,
                 )
                 await self._room_io.start()
 

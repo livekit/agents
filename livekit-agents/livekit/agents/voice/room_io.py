@@ -36,6 +36,8 @@ class RoomInputOptions:
     """Number of audio channels"""
     text_input_topic: str | None = TOPIC_CHAT
     """Topic for text input"""
+    noise_cancellation: rtc.NoiseCancellationOptions | None = None
+    """Noise cancellation options"""
 
 
 @dataclass(frozen=True)
@@ -71,13 +73,11 @@ class RoomIO:
         link_to_participant: Optional[rtc.RemoteParticipant | str] = None,
         input_options: RoomInputOptions = DEFAULT_ROOM_INPUT_OPTIONS,
         output_options: RoomOutputOptions = DEFAULT_ROOM_OUTPUT_OPTIONS,
-        noise_cancellation: rtc.NoiseCancellationOptions | None = None,
     ) -> None:
         self._room = room
         self._agent = agent
         self._in_opts = input_options
         self._out_opts = output_options
-        self._noise_cancellation = noise_cancellation
         # room input
         self._participant_identity: Optional[str] = (
             link_to_participant.identity
@@ -113,7 +113,7 @@ class RoomIO:
                 room=self._room,
                 sample_rate=self._in_opts.audio_sample_rate,
                 num_channels=self._in_opts.audio_num_channels,
-                noise_cancellation=self._noise_cancellation,
+                noise_cancellation=self._in_opts.noise_cancellation,
             )
         if self._in_opts.video_enabled:
             self._video_input_handle = VideoStreamHandle(room=self._room)
