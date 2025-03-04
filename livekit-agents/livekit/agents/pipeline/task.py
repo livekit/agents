@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar, Uni
 
 from livekit import rtc
 
-from .. import llm, stt, tokenize, transcription, tts, utils, vad
+from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     AIError,
     AIFunction,
@@ -34,7 +34,6 @@ class AgentTask:
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
-        transcriber: NotGivenOr[transcription.TextTranscriber | None] = NOT_GIVEN,
     ) -> None:
         if tts and not tts.capabilities.streaming:
             from .. import tts as text_to_speech
@@ -61,7 +60,6 @@ class AgentTask:
         self._stt = stt
         self._llm = llm
         self._tts = tts
-        self._transcriber = transcriber
         self._vad = vad
         self._activity: TaskActivity | None = None
 
@@ -92,10 +90,6 @@ class AgentTask:
     @property
     def tts(self) -> NotGivenOr[tts.TTS | None]:
         return self._tts
-
-    @property
-    def transcriber(self) -> NotGivenOr[transcription.TextTranscriber | None]:
-        return self._transcriber
 
     @property
     def vad(self) -> NotGivenOr[vad.VAD | None]:
@@ -168,25 +162,9 @@ class AgentTask:
                 yield chunk
 
     async def transcription_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[str]]:
-        activity = self.__get_activity_or_raise()
-        assert activity.transcriber is not None, (
-            "transcription_node called but no Transcription node is available"
-        )
-
-        async with activity.transcriber.stream() as stream:
-
-            async def _forward_input():
-                async for chunk in text:
-                    stream.push_text(chunk)
-
-                stream.end_input()
-
-            forward_task = asyncio.create_task(_forward_input())
-            try:
-                async for chunk in stream:
-                    yield chunk
-            finally:
-                await utils.aio.cancel_and_wait(forward_task)
+        """Process the LLM output to transcriptions"""
+        async for delta in text:
+            yield delta
 
     async def tts_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[rtc.AudioFrame]]:
         activity = self.__get_activity_or_raise()

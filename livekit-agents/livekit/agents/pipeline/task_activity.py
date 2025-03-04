@@ -11,7 +11,7 @@ from typing import (
 
 from livekit import rtc
 
-from .. import debug, llm, stt, transcription, tts, utils, vad
+from .. import debug, llm, stt, tts, utils, vad
 from ..log import logger
 from ..metrics import AgentMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
@@ -30,7 +30,7 @@ from .generation import (
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
-    perform_text_transcriber,
+    perform_text_transcription,
     perform_tool_executions,
     perform_tts_inference,
     truncate_message,
@@ -104,10 +104,6 @@ class TaskActivity(RecognitionHooks):
     @property
     def tts(self) -> tts.TTS | None:
         return self._agent_task.tts or self._agent.tts
-
-    @property
-    def transcriber(self) -> transcription.TextTranscriber | None:
-        return self._agent_task.transcriber or self._agent.transcriber
 
     @property
     def vad(self) -> vad.VAD | None:
@@ -515,12 +511,11 @@ class TaskActivity(RecognitionHooks):
         tasks = []
         if tr_output is not None:
             tr_source = _read_text()
-            if self.transcriber is not None:
-                tr_task, tr_gen_data = perform_text_transcriber(
-                    node=self._agent_task.transcription_node, input=tr_source
-                )
-                tasks.append(tr_task)
-                tr_source = tr_gen_data.text_ch
+            tr_task, tr_gen_data = perform_text_transcription(
+                node=self._agent_task.transcription_node, input=tr_source
+            )
+            tasks.append(tr_task)
+            tr_source = tr_gen_data.text_ch
 
             forward_text, text_out = perform_text_forwarding(
                 text_output=tr_output, source=tr_source
@@ -631,8 +626,8 @@ class TaskActivity(RecognitionHooks):
             return
 
         tr_source = llm_output
-        if text_output is not None and self.transcriber is not None:
-            tr_task, tr_gen_data = perform_text_transcriber(
+        if text_output is not None:
+            tr_task, tr_gen_data = perform_text_transcription(
                 node=self._agent_task.transcription_node, input=tr_source
             )
             tasks.append(tr_task)
@@ -830,12 +825,11 @@ class TaskActivity(RecognitionHooks):
 
                 if text_output is not None:
                     tr_source = msg.text_stream
-                    if self.transcriber is not None:
-                        tr_task, tr_gen_data = perform_text_transcriber(
-                            node=self._agent_task.transcription_node, input=tr_source
-                        )
-                        forward_tasks.append(tr_task)
-                        tr_source = tr_gen_data.text_ch
+                    tr_task, tr_gen_data = perform_text_transcription(
+                        node=self._agent_task.transcription_node, input=tr_source
+                    )
+                    forward_tasks.append(tr_task)
+                    tr_source = tr_gen_data.text_ch
 
                     forward_task, text_out = perform_text_forwarding(
                         text_output=text_output, source=tr_source

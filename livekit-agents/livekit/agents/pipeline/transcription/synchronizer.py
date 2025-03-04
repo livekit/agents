@@ -8,11 +8,11 @@ from typing import AsyncIterator, Callable, Optional
 
 from livekit import rtc
 
-from .. import tokenize, utils
-from ..log import logger
-from ..pipeline.io import AudioSink, PlaybackFinishedEvent, TextSink
-from ..tokenize.tokenizer import PUNCTUATIONS
-from ..types import NOT_GIVEN, NotGivenOr
+from ... import tokenize, utils
+from ...log import logger
+from ...pipeline.io import AudioSink, PlaybackFinishedEvent, TextSink
+from ...tokenize.tokenizer import PUNCTUATIONS
+from ...types import NOT_GIVEN, NotGivenOr
 from . import _utils
 
 # Standard speech rate in hyphens per second

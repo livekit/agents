@@ -16,7 +16,7 @@ from typing import (
 from livekit import rtc
 from pydantic import ValidationError
 
-from .. import debug, llm, utils, transcription
+from .. import debug, llm, utils
 from ..llm import (
     AIError,
     ChatChunk,
@@ -151,7 +151,7 @@ class _TranscribeGenerationData:
     text_ch: aio.Chan[str]
 
 
-def perform_text_transcriber(
+def perform_text_transcription(
     *, node: io.TranscriptionNode, input: AsyncIterable[str]
 ) -> Tuple[asyncio.Task, _TranscribeGenerationData]:
     text_ch = aio.Chan()
