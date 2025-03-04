@@ -30,9 +30,9 @@ from livekit.agents import (
 
 import openai
 
+from .log import logger
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
-from .log import logger
 
 OPENAI_TTS_SAMPLE_RATE = 48000
 OPENAI_TTS_CHANNELS = 1
@@ -185,33 +185,25 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=OPENAI_TTS_CHANNELS,
         )
 
+        @utils.log_exceptions(logger=logger)
         async def _decode_loop():
             try:
-                logger.info("starting decode loop")
-                first = True
                 async with oai_stream as stream:
                     async for data in stream.iter_bytes():
                         decoder.push(data)
-                        if first:
-                            first = False
-                            logger.info("pushed first frame")
             finally:
                 decoder.end_input()
 
         decode_task = asyncio.create_task(_decode_loop())
 
         try:
-            emitter = tts.AudioFrameEmitter(
+            emitter = tts.SynthesizedAudioEmitter(
                 event_ch=self._event_ch,
                 request_id=request_id,
             )
             async for frame in decoder:
                 emitter.push(frame)
             emitter.flush()
-
-            logger.info("flushed final frame")
-            # # task may not have been created yet,
-            # await decode_task
         except openai.APITimeoutError:
             raise APITimeoutError()
         except openai.APIStatusError as e:
@@ -224,7 +216,6 @@ class ChunkedStream(tts.ChunkedStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            logger.info("closing decode loop")
             await utils.aio.gracefully_cancel(decode_task)
             logger.info("closing decoder")
             await decoder.aclose()

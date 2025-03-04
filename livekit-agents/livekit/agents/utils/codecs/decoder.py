@@ -58,7 +58,6 @@ class StreamBuffer:
         with self._data_available:
             while True:
                 if self._buffer.closed:
-                    logger.info("sb - buffer closed")
                     return b""
                 # always read from beginning
                 self._buffer.seek(0)
@@ -68,11 +67,9 @@ class StreamBuffer:
                     # shrink the buffer to remove already-read data
                     remaining = self._buffer.read()
                     self._buffer = io.BytesIO(remaining)
-                    logger.info("sb - returning data")
                     return data
 
                 if self._eof:
-                    logger.info("sb - eof")
                     return b""
 
                 self._data_available.wait()
@@ -81,11 +78,9 @@ class StreamBuffer:
         """Signal that no more data will be written."""
         with self._data_available:
             self._eof = True
-            logger.info("sb - ending input, notifying all")
             self._data_available.notify_all()
 
     def close(self):
-        logger.info("sb - closing buffer")
         self._buffer.close()
 
 
@@ -135,12 +130,9 @@ class AudioStreamDecoder:
         self._input_buf.end_input()
 
     def _decode_loop(self):
-
         try:
-            logger.info("decoding loop - opening container")
             container = av.open(self._input_buf)
             audio_stream = next(s for s in container.streams if s.type == "audio")
-            logger.info("decoding loop - found audio stream")
             resampler = av.AudioResampler(
                 # convert to signed 16-bit little endian
                 format="s16",
@@ -169,7 +161,6 @@ class AudioStreamDecoder:
         except Exception:
             logger.exception("error decoding audio")
         finally:
-            logger.info("decode loop finally reached, closing output stream")
             self._output_ch.close()
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
@@ -179,7 +170,6 @@ class AudioStreamDecoder:
         try:
             return await self._output_ch.recv()
         except aio.ChanClosed:
-            logger.info("output_ch received aio.ChanClosed")
             raise StopAsyncIteration
 
     async def aclose(self):
@@ -188,10 +178,9 @@ class AudioStreamDecoder:
         self._closed = True
         self.end_input()
         self._input_buf.close()
-        # wait for decode loop to finish
+        # wait for decode loop to finish, only if anything's been pushed
         try:
-            logger.info("waiting for output channel to close")
-            await self._output_ch.recv()
+            if self._started:
+                await self._output_ch.recv()
         except aio.ChanClosed:
-            logger.info("received aio.ChanClosed")
             pass
