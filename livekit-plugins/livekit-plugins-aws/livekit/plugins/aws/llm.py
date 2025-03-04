@@ -40,9 +40,9 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from ._utils import (
-    _get_aws_credentials,
-    _to_chat_ctx,
-    _to_fnc_ctx,
+    get_aws_credentials,
+    to_chat_ctx,
+    to_fnc_ctx,
 )
 from .log import logger
 
@@ -94,7 +94,7 @@ class LLM(llm.LLM):
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
         """
         super().__init__()
-        self._api_key, self._api_secret, self._region = _get_aws_credentials(
+        self._api_key, self._api_secret, self._region = get_aws_credentials(
             api_key, api_secret, region
         )
 
@@ -127,7 +127,7 @@ class LLM(llm.LLM):
             opts["modelId"] = self._opts.model
 
         if fnc_ctx:
-            opts["tools"] = _to_fnc_ctx(fnc_ctx)
+            opts["tools"] = to_fnc_ctx(fnc_ctx)
             tool_choice_value = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice_value):
                 if isinstance(tool_choice_value, ToolChoice):
@@ -139,7 +139,7 @@ class LLM(llm.LLM):
                 elif tool_choice_value == "none":
                     opts["tools"] = []
 
-        messages, system_message = _to_chat_ctx(chat_ctx, id(self))
+        messages, system_message = to_chat_ctx(chat_ctx, id(self))
         opts["messages"] = messages
         if system_message:
             opts["system"] = [system_message]

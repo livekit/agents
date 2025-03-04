@@ -40,9 +40,9 @@ from google.auth._default_async import default_async
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
 
-from ._utils import to_chat_ctx, to_fnc_ctx
 from .log import logger
 from .models import ChatModels
+from .utils import to_chat_ctx, to_fnc_ctx
 
 
 @dataclass

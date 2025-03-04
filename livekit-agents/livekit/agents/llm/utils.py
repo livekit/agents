@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import inspect
 from dataclasses import dataclass
 from typing import (
@@ -12,12 +13,13 @@ from typing import (
     get_type_hints,
 )
 
+from livekit import rtc
+from livekit.agents import llm, utils
 from pydantic import BaseModel, create_model
 from pydantic.fields import FieldInfo
 
 from . import _strict
 from .chat_context import ChatContext
-from .function_context import AIFunction, get_function_info
 
 if TYPE_CHECKING:
     from ..pipeline.events import CallContext
@@ -102,49 +104,53 @@ def is_context_type(ty: type) -> bool:
     return is_call_context
 
 
-def build_legacy_openai_schema(
-    ai_function: AIFunction, *, internally_tagged: bool = False
-) -> dict[str, Any]:
-    """non-strict mode tool description
-    see https://serde.rs/enum-representations.html for the internally tagged representation"""
-    model = function_arguments_to_pydantic_model(ai_function)
-    info = get_function_info(ai_function)
-    schema = model.model_json_schema()
+def serialize_image(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]:
+    if isinstance(image.image, str):
+        header, b64_data = image.image.split(",", 1)
+        encoded_data = base64.b64decode(b64_data)
+        media_type = header.split(";")[0].split(":")[1]
+        supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+        if media_type not in supported_types:
+            raise ValueError(
+                f"Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+            )
 
-    if internally_tagged:
         return {
-            "name": info.name,
-            "description": info.description or "",
-            "parameters": schema,
-            "type": "function",
+            "data_bytes": encoded_data,
+            "media_type": media_type,
+            "inference_detail": image.inference_detail,
         }
+    elif isinstance(image.image, rtc.VideoFrame):
+        if cache_key not in image._cache:
+            opts = utils.images.EncodeOptions()
+            if image.inference_width and image.inference_height:
+                opts.resize_options = utils.images.ResizeOptions(
+                    width=image.inference_width,
+                    height=image.inference_height,
+                    strategy="scale_aspect_fit",
+                )
+            encoded_data = utils.images.encode(image.image, opts)
+            image._cache[cache_key] = encoded_data
+
+        return {
+            "data_bytes": image._cache[cache_key],
+            "media_type": "image/jpeg",
+            "inference_detail": image.inference_detail,
+        }
+    raise ValueError("Unsupported image type")
+
+
+def serialize_fnc_item(fnc: llm.AIFunction, strict: bool = False) -> dict[str, Any]:
+    model = utils.function_arguments_to_pydantic_model(fnc)
+    if strict:
+        schema = _strict.to_strict_json_schema(model)
     else:
-        return {
-            "type": "function",
-            "function": {
-                "name": info.name,
-                "description": info.description or "",
-                "parameters": schema,
-            },
-        }
-
-
-def build_strict_openai_schema(
-    ai_function: AIFunction,
-) -> dict[str, Any]:
-    """strict mode tool description"""
-    model = function_arguments_to_pydantic_model(ai_function)
-    info = get_function_info(ai_function)
-    schema = _strict.to_strict_json_schema(model)
-
+        schema = model.model_json_schema()
+    info = utils.get_function_info(fnc)
     return {
-        "type": "function",
-        "function": {
-            "name": info.name,
-            "strict": True,
-            "description": info.description or "",
-            "parameters": schema,
-        },
+        "name": fnc.name,
+        "description": info.description or "",
+        "schema": schema,
     }
 
 

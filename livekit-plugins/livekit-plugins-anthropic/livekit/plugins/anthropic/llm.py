@@ -14,27 +14,23 @@
 
 from __future__ import annotations
 
-import base64
 import os
 from dataclasses import dataclass
 from typing import (
     Any,
     Awaitable,
-    List,
     Literal,
     Union,
-    cast,
 )
 
 import httpx
-from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
     llm,
 )
-from livekit.agents.llm import ToolChoice, utils
+from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.function_context import AIFunction
 from livekit.agents.types import (
@@ -48,12 +44,8 @@ from typing_extensions import Literal
 
 import anthropic
 
-from .log import logger
-from .models import (
-    ChatModels,
-)
-
-CACHE_CONTROL_EPHEMERAL = anthropic.types.CacheControlEphemeralParam(type="ephemeral")
+from .models import ChatModels
+from .utils import to_chat_ctx, to_fnc_ctx
 
 
 @dataclass
@@ -159,7 +151,7 @@ class LLM(llm.LLM):
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
         if fnc_ctx:
-            extra["tools"] = _to_fnc_ctx(fnc_ctx, self._opts.caching)
+            extra["tools"] = to_fnc_ctx(fnc_ctx, self._opts.caching)
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
@@ -185,18 +177,13 @@ class LLM(llm.LLM):
                         anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
                     extra["tool_choice"] = anthropic_tool_choice
 
-        latest_system_message: anthropic.types.TextBlockParam | None = _latest_system_message(
-            chat_ctx, caching=self._opts.caching
-        )
-        if latest_system_message:
-            extra["system"] = [latest_system_message]
+        anthropic_ctx, system_message = to_chat_ctx(chat_ctx, id(self), caching=self._opts.caching)
 
-        anthropic_ctx = to_chat_ctx(chat_ctx, id(self), caching=self._opts.caching)
-
-        collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
+        if system_message:
+            extra["system"] = [system_message]
 
         stream = self._client.messages.create(
-            messages=collaped_anthropic_ctx,
+            messages=anthropic_ctx,
             model=self._opts.model,
             stream=True,
             **extra,
@@ -341,220 +328,3 @@ class LLMStream(llm.LLMStream):
                 return chat_chunk
 
         return None
-
-
-def _latest_system_message(
-    chat_ctx: llm.ChatContext, caching: Literal["ephemeral"] | None = None
-) -> anthropic.types.TextBlockParam | None:
-    latest_system_message: llm.ChatMessage | None = None
-    for m in chat_ctx.items:
-        if m.role == "system":
-            latest_system_message = m
-            continue
-
-    latest_system_str = ""
-    if latest_system_message:
-        if isinstance(latest_system_message.content, str):
-            latest_system_str = latest_system_message.content
-        elif isinstance(latest_system_message.content, list):
-            latest_system_str = " ".join(
-                [c for c in latest_system_message.content if isinstance(c, str)]
-            )
-    if latest_system_str:
-        system_text_block = anthropic.types.TextBlockParam(
-            text=latest_system_str,
-            type="text",
-            cache_control=CACHE_CONTROL_EPHEMERAL if caching == "ephemeral" else None,
-        )
-        return system_text_block
-    return None
-
-
-def _merge_messages(
-    messages: List[anthropic.types.MessageParam],
-) -> List[anthropic.types.MessageParam]:
-    # Anthropic enforces alternating messages
-    combined_messages: list[anthropic.types.MessageParam] = []
-    for m in messages:
-        if len(combined_messages) == 0 or m["role"] != combined_messages[-1]["role"]:
-            combined_messages.append(m)
-            continue
-        last_message = combined_messages[-1]
-        if not isinstance(last_message["content"], list) or not isinstance(m["content"], list):
-            logger.error("message content is not a list")
-            continue
-
-        last_message["content"].extend(m["content"])
-
-    if len(combined_messages) == 0 or combined_messages[0]["role"] != "user":
-        combined_messages.insert(
-            0, {"role": "user", "content": [{"type": "text", "text": "(empty)"}]}
-        )
-
-    return combined_messages
-
-
-def to_chat_ctx(
-    chat_ctx: llm.ChatContext,
-    cache_key: Any,
-    caching: Literal["ephemeral"] | None,
-) -> list[anthropic.types.MessageParam]:
-    messages: list[anthropic.types.MessageParam] = []
-    for i, msg in enumerate(chat_ctx.items):
-        cache_ctrl = (
-            CACHE_CONTROL_EPHEMERAL
-            if (i == len(chat_ctx.items) - 1) and caching == "ephemeral"
-            else None
-        )
-        a_msg = to_chat_item(msg, cache_key, cache_ctrl=cache_ctrl)
-        if a_msg:
-            messages.append(a_msg)
-    return messages
-
-
-def to_chat_item(
-    msg: llm.ChatItem,
-    cache_key: Any,
-    cache_ctrl: anthropic.types.CacheControlEphemeralParam | None,
-) -> anthropic.types.MessageParam:
-    if msg.type == "message" and msg.role in ("user", "assistant"):
-        anthropic_content: list[anthropic.types.TextBlockParam] = []
-        for content in msg.content:
-            if isinstance(content, str):
-                anthropic_content.append(
-                    anthropic.types.TextBlockParam(
-                        text=content, type="text", cache_control=cache_ctrl
-                    )
-                )
-            elif isinstance(content, llm.ImageContent):
-                anthropic_content.append(
-                    to_image_content(content, cache_key, cache_ctrl=cache_ctrl)
-                )
-
-        return anthropic.types.MessageParam(
-            role=msg.role,
-            content=anthropic_content,
-        )
-    elif msg.type == "function_call":
-        return anthropic.types.MessageParam(
-            role="assistant",
-            content=[
-                anthropic.types.ToolUseBlockParam(
-                    id=msg.call_id,
-                    type="tool_use",
-                    name=msg.name,
-                    input=msg.arguments,
-                    cache_control=cache_ctrl,
-                )
-            ],
-        )
-    elif msg.type == "function_call_output":
-        return anthropic.types.MessageParam(
-            role="user",
-            content=[
-                anthropic.types.ToolResultBlockParam(
-                    tool_use_id=msg.call_id,
-                    type="tool_result",
-                    content=msg.output,
-                    cache_control=cache_ctrl,
-                )
-            ],
-        )
-
-
-def to_image_content(
-    image: llm.ImageContent,
-    cache_key: Any,
-    cache_ctrl: anthropic.types.CacheControlEphemeralParam | None,
-) -> anthropic.types.ImageBlockParam:
-    if isinstance(image.image, str):  # image is a URL
-        if not image.image.startswith("data:"):
-            raise ValueError("LiveKit Anthropic Plugin: Image URLs must be data URLs")
-
-        try:
-            header, b64_data = image.image.split(",", 1)
-            media_type = header.split(";")[0].split(":")[1]
-
-            supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-            if media_type not in supported_types:
-                raise ValueError(
-                    f"LiveKit Anthropic Plugin: Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
-                )
-
-            return {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "data": b64_data,
-                    "media_type": cast(
-                        Literal["image/jpeg", "image/png", "image/gif", "image/webp"],
-                        media_type,
-                    ),
-                },
-                "cache_control": cache_ctrl,
-            }
-        except (ValueError, IndexError) as e:
-            raise ValueError(f"LiveKit Anthropic Plugin: Invalid image data URL {str(e)}")
-    elif isinstance(image.image, rtc.VideoFrame):  # image is a VideoFrame
-        if cache_key not in image._cache:
-            # inside our internal implementation, we allow to put extra metadata to
-            # each ChatImage (avoid to reencode each time we do a chatcompletion request)
-            opts = utils.images.EncodeOptions()
-            if image.inference_width and image.inference_height:
-                opts.resize_options = utils.images.ResizeOptions(
-                    width=image.inference_width,
-                    height=image.inference_height,
-                    strategy="scale_aspect_fit",
-                )
-
-            encoded_data = utils.images.encode(image.image, opts)
-            image._cache[cache_key] = base64.b64encode(encoded_data).decode("utf-8")
-
-        return {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "data": image._cache[cache_key],
-                "media_type": "image/jpeg",
-            },
-            "cache_control": cache_ctrl,
-        }
-
-    raise ValueError("LiveKit Anthropic Plugin: ChatImage must be an rtc.VideoFrame or a data URL")
-
-
-def _to_fnc_ctx(
-    fncs: list[AIFunction], caching: Literal["ephemeral"] | None
-) -> list[anthropic.types.ToolParam]:
-    tools: list[anthropic.types.ToolParam] = []
-    for i, fnc in enumerate(fncs):
-        cache_ctrl = (
-            CACHE_CONTROL_EPHEMERAL if (i == len(fncs) - 1) and caching == "ephemeral" else None
-        )
-        tools.append(build_anthropic_schema(fnc, cache_ctrl=cache_ctrl))
-
-    return tools
-
-
-def add_required_flags(schema: dict[str, Any]) -> dict[str, Any]:
-    required_fields = set(schema.get("required", []))
-    properties = schema.get("properties", {})
-    for name, prop in properties.items():
-        prop["required"] = name in required_fields
-    return schema
-
-
-def build_anthropic_schema(
-    ai_function: AIFunction,
-    cache_ctrl: anthropic.types.CacheControlEphemeralParam | None = None,
-) -> anthropic.types.ToolParam:
-    model = utils.function_arguments_to_pydantic_model(ai_function)
-    info = utils.get_function_info(ai_function)
-    schema = model.model_json_schema()
-    schema = add_required_flags(schema)
-    return anthropic.types.ToolParam(
-        name=info.name,
-        description=info.description or "",
-        input_schema=schema,
-        cache_control=cache_ctrl,
-    )

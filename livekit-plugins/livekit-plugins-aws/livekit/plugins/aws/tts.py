@@ -28,8 +28,8 @@ from livekit.agents import (
     utils,
 )
 
-from ._utils import _get_aws_credentials
 from .models import TTS_LANGUAGE, TTS_OUTPUT_FORMAT, TTS_SPEECH_ENGINE
+from .utils import get_aws_credentials
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_OUTPUT_FORMAT: TTS_OUTPUT_FORMAT = "pcm"
@@ -90,13 +90,15 @@ class TTS(tts.TTS):
             num_channels=TTS_NUM_CHANNELS,
         )
 
-        self._api_key, self._api_secret = _get_aws_credentials(api_key, api_secret, speech_region)
+        self._api_key, self._api_secret, self._speech_region = get_aws_credentials(
+            api_key, api_secret, speech_region
+        )
 
         self._opts = _TTSOptions(
             voice=voice,
             output_format=output_format,
             speech_engine=speech_engine,
-            speech_region=speech_region,
+            speech_region=self._speech_region,
             language=language,
             sample_rate=sample_rate,
         )
