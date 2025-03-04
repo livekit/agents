@@ -1,4 +1,6 @@
+import asyncio
 import time
+import weakref
 from contextlib import asynccontextmanager
 from typing import (
     AsyncGenerator,
@@ -9,6 +11,8 @@ from typing import (
     Set,
     TypeVar,
 )
+
+from . import aio
 
 T = TypeVar("T")
 
@@ -46,6 +50,8 @@ class ConnectionPool(Generic[T]):
         # store connections to be reaped (closed) later.
         self._to_close: Set[T] = set()
 
+        self._prewarm_task: Optional[weakref.ref[asyncio.Task]] = None
+
     async def _connect(self) -> T:
         """Create a new connection.
 
@@ -57,7 +63,9 @@ class ConnectionPool(Generic[T]):
         """
         if self._connect_cb is None:
             raise NotImplementedError("Must provide connect_cb or implement connect()")
-        return await self._connect_cb()
+        connection = await self._connect_cb()
+        self._connections[connection] = time.time()
+        return connection
 
     async def _drain_to_close(self) -> None:
         """Drain and close all the connections queued for closing."""
@@ -104,9 +112,7 @@ class ConnectionPool(Generic[T]):
             # connection expired; mark it for resetting.
             self.remove(conn)
 
-        conn = await self._connect()
-        self._connections[conn] = now
-        return conn
+        return await self._connect()
 
     def put(self, conn: T) -> None:
         """Mark a connection as available for reuse.
@@ -151,7 +157,29 @@ class ConnectionPool(Generic[T]):
         self._connections.clear()
         self._available.clear()
 
+    def prewarm(self) -> None:
+        """Initiate prewarming of the connection pool without blocking.
+
+        This method starts a background task that creates a new connection if none exist.
+        The task automatically cleans itself up when the connection pool is closed.
+        """
+        if self._prewarm_task is not None or self._connections:
+            return
+
+        async def _prewarm_impl():
+            if not self._connections:
+                conn = await self._connect()
+                self._available.add(conn)
+
+        task = asyncio.create_task(_prewarm_impl())
+        self._prewarm_task = weakref.ref(task)
+
     async def aclose(self):
         """Close all connections, draining any pending connection closures."""
+        if self._prewarm_task is not None:
+            task = self._prewarm_task()
+            if task:
+                aio.gracefully_cancel(task)
+
         self.invalidate()
         await self._drain_to_close()

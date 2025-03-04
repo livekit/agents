@@ -146,6 +146,9 @@ class TTS(tts.TTS):
 
         return self._session
 
+    def prewarm(self) -> None:
+        self._pool.prewarm()
+
     def update_options(
         self,
         *,

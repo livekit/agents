@@ -158,6 +158,16 @@ class TTS(tts.TTS):
         self._streams.add(stream)
         return stream
 
+    def prewarm(self) -> None:
+        self._pool.prewarm()
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        await self._pool.aclose()
+        await super().aclose()
+
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(

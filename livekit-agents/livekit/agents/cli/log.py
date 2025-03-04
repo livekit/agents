@@ -21,6 +21,8 @@ NOISY_LOGGERS = [
     "websockets.client",
     "aiohttp.access",
     "livekit",
+    "botocore",
+    "aiobotocore",
 ]
 
 

@@ -134,6 +134,10 @@ class FallbackAdapter(
             conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
         )
 
+    def prewarm(self) -> None:
+        if self._tts_instances:
+            self._tts_instances[0].prewarm()
+
     async def aclose(self) -> None:
         for tts_status in self._status:
             if tts_status.recovering_task is not None:
