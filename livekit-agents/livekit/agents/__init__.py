@@ -17,13 +17,14 @@ from . import (
     ipc,
     llm,
     metrics,
-    pipeline,
+    voice,
     stt,
     tokenize,
     tts,
     utils,
     vad,
 )
+from .voice import VoiceAgent
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -66,7 +67,8 @@ __all__ = [
     "tokenize",
     "llm",
     "metrics",
-    "pipeline",
+    "voice",
+    "VoiceAgent",
     "cli",
     "AssignmentTimeoutError",
     "APIConnectionError",

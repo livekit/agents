@@ -33,8 +33,8 @@ from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .pipeline_agent import PipelineAgent
-    from .task import AgentTask
+    from .voice_agent import VoiceAgent
+    from .agent_task import AgentTask
 
 
 @runtime_checkable
@@ -244,7 +244,7 @@ async def _audio_forwarding_task(
 
 def perform_tool_executions(
     *,
-    agent: PipelineAgent,
+    agent: VoiceAgent,
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -269,7 +269,7 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    agent: PipelineAgent,
+    agent: VoiceAgent,
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -448,7 +448,7 @@ def _sanitize_function_output(
     fnc_call: llm.FunctionCall,
     out: _FunctionCallOutput,
 ) -> tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]:
-    from .task import AgentTask
+    from .agent_task import AgentTask
 
     if isinstance(out.exception, AIError):
         return (

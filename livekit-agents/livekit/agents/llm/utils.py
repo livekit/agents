@@ -20,7 +20,7 @@ from .chat_context import ChatContext
 from .function_context import AIFunction, get_function_info
 
 if TYPE_CHECKING:
-    from ..pipeline.events import CallContext
+    from ..voice.events import CallContext
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -94,7 +94,7 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
 
 def is_context_type(ty: type) -> bool:
-    from ..pipeline.events import CallContext
+    from ..voice.events import CallContext
 
     origin = get_origin(ty)
     is_call_context = ty is CallContext or origin is CallContext
@@ -207,7 +207,7 @@ def pydantic_model_to_function_arguments(
     Raises TypeError if required params are missing
     """
 
-    from ..pipeline.events import CallContext
+    from ..voice.events import CallContext
 
     signature = inspect.signature(ai_function)
     type_hints = get_type_hints(ai_function, include_extras=True)

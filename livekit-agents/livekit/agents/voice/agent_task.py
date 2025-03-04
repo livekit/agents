@@ -18,7 +18,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
 
 if TYPE_CHECKING:
-    from .pipeline_agent import PipelineAgent
+    from .voice_agent import VoiceAgent
     from .task_activity import TaskActivity
 
 
@@ -96,9 +96,9 @@ class AgentTask:
         return self._vad
 
     @property
-    def agent(self) -> PipelineAgent:
+    def agent(self) -> VoiceAgent:
         """
-        Retrieve the PipelineAgent associated with the current task;.
+        Retrieve the VoiceAgent associated with the current task;.
 
         Raises:
             RuntimeError: If the task is not running
@@ -107,7 +107,7 @@ class AgentTask:
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
-    # constructor of the PipelineAgent
+    # constructor of the VoiceAgent
 
     async def on_enter(self) -> None:
         """Called when the task is entered"""

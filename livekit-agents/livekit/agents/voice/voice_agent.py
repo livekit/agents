@@ -19,12 +19,12 @@ from . import io, room_io
 from .audio_recognition import _TurnDetector
 from .events import AgentEvent, AgentStateChangedEvent, EventTypes
 from .speech_handle import SpeechHandle
-from .task import AgentTask
+from .agent_task import AgentTask
 from .task_activity import TaskActivity
 
 
 @dataclass
-class PipelineOptions:
+class VoiceOptions:
     allow_interruptions: bool
     min_interruption_duration: float
     min_endpointing_delay: float
@@ -34,7 +34,7 @@ class PipelineOptions:
 Userdata_T = TypeVar("Userdata_T")
 
 
-class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
@@ -57,7 +57,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
-        self._opts = PipelineOptions(
+        self._opts = VoiceOptions(
             allow_interruptions=allow_interruptions,
             min_interruption_duration=min_interruption_duration,
             min_endpointing_delay=min_endpointing_delay,
@@ -106,7 +106,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("PipelineAgent userdata is not set")
+            raise ValueError("VoiceAgent userdata is not set")
 
         return self._userdata
 
@@ -161,7 +161,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None:
-        """Start the pipeline agent.
+        """Start the voice agent.
 
         Create a default RoomIO if the input or output audio is not already set.
         If the console flag is provided, start a ChatCLI.
@@ -260,7 +260,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._input.close()
 
     @property
-    def options(self) -> PipelineOptions:
+    def options(self) -> VoiceOptions:
         return self._opts
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
@@ -283,7 +283,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         return self._activity.say(
             text,
@@ -300,7 +300,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         return self._activity.generate_reply(
             user_input=user_input,
@@ -310,7 +310,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def interrupt(self) -> None:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         self._activity.interrupt()
 

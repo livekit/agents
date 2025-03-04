@@ -16,7 +16,7 @@ from livekit import rtc
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
-from .pipeline_agent import PipelineAgent
+from .voice_agent import VoiceAgent
 
 MAX_AUDIO_BAR = 30
 INPUT_DB_MIN = -70.0
@@ -126,7 +126,7 @@ class _AudioSink(io.AudioSink):
 class ChatCLI:
     def __init__(
         self,
-        agent: PipelineAgent,
+        agent: VoiceAgent,
         *,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
