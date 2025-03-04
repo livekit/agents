@@ -1,6 +1,7 @@
 import logging
 
 from dotenv import load_dotenv
+
 from livekit import rtc
 from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
@@ -66,11 +67,11 @@ async def entrypoint(ctx: JobContext):
         if agent.output.set_audio_enabled(enable):
             logger.info("toggled audio output", extra={"enable": enable})
 
-    @ctx.room.local_participant.register_rpc_method("toggle_text_output")
-    async def toggle_text_output(data: rtc.RpcInvocationData) -> None:
+    @ctx.room.local_participant.register_rpc_method("toggle_transcription_output")
+    async def toggle_transcription_output(data: rtc.RpcInvocationData) -> None:
         enable = data.payload.lower() == "on"
-        if agent.output.set_text_enabled(enable):
-            logger.info("toggled text output", extra={"enable": enable})
+        if agent.output.set_transcription_enabled(enable):
+            logger.info("toggled transcription output", extra={"enable": enable})
 
     if agent.output.audio is not None:
 

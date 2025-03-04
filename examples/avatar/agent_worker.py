@@ -87,8 +87,8 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
         room=ctx.room,
         room_output_options=RoomOutputOptions(
             audio_enabled=False,
-            text_enabled=True,
-            agent_text_identity=AVATAR_IDENTITY,
+            transcription_enabled=True,
+            agent_transcription_identity=AVATAR_IDENTITY,
         ),
     )
 

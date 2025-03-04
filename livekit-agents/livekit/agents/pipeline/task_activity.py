@@ -499,7 +499,7 @@ class TaskActivity(RecognitionHooks):
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)
 
-        tr_output = self._agent.output.text
+        tr_output = self._agent.output.transcription
         audio_output = self._agent.output.audio
 
         await speech_handle.wait_if_not_interrupted(
@@ -591,7 +591,7 @@ class TaskActivity(RecognitionHooks):
         )
 
         audio_output = self._agent.output.audio
-        text_output = self._agent.output.text
+        text_output = self._agent.output.transcription
         chat_ctx = chat_ctx.copy()
         fnc_ctx = fnc_ctx.copy()
 
@@ -804,7 +804,7 @@ class TaskActivity(RecognitionHooks):
         )
 
         audio_output = self._agent.output.audio
-        text_output = self._agent.output.text
+        text_output = self._agent.output.transcription
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]

@@ -257,22 +257,24 @@ class AgentInput:
         self._consume_video_task = None
 
 
-class AgentOutput(rtc.EventEmitter[Literal["video_changed", "audio_changed", "text_changed"]]):
+class AgentOutput(
+    rtc.EventEmitter[Literal["video_changed", "audio_changed", "transcription_changed"]]
+):
     def __init__(
-        self, video_changed: Callable, audio_changed: Callable, text_changed: Callable
+        self, video_changed: Callable, audio_changed: Callable, transcription_changed: Callable
     ) -> None:
         super().__init__()
         self._video_sink: VideoSink | None = None
         self._audio_sink: AudioSink | None = None
-        self._text_sink: TextSink | None = None
+        self._transcription_sink: TextSink | None = None
         self._video_changed = video_changed
         self._audio_changed = audio_changed
-        self._text_changed = text_changed
+        self._transcription_changed = transcription_changed
 
         # used to pause/resume streams
         self._inactive_video_sink: VideoSink | None = None
         self._inactive_audio_sink: AudioSink | None = None
-        self._inactive_text_sink: TextSink | None = None
+        self._inactive_tr_sink: TextSink | None = None
 
     def set_video_enabled(self, enable: bool) -> bool:
         if enable and not self._video_sink and self._inactive_video_sink:
@@ -298,14 +300,14 @@ class AgentOutput(rtc.EventEmitter[Literal["video_changed", "audio_changed", "te
 
         return False
 
-    def set_text_enabled(self, enable: bool) -> bool:
-        if enable and not self._text_sink and self._inactive_text_sink:
-            self.text = self._inactive_text_sink
+    def set_transcription_enabled(self, enable: bool) -> bool:
+        if enable and not self._transcription_sink and self._inactive_tr_sink:
+            self.transcription = self._inactive_tr_sink
             return True
 
-        if not enable and self._text_sink:
-            self._inactive_text_sink = self._text_sink
-            self.text = None
+        if not enable and self._transcription_sink:
+            self._inactive_tr_sink = self._transcription_sink
+            self.transcription = None
             return True
 
         return False
@@ -335,13 +337,13 @@ class AgentOutput(rtc.EventEmitter[Literal["video_changed", "audio_changed", "te
         self._audio_changed()
 
     @property
-    def text(self) -> TextSink | None:
-        return self._text_sink
+    def transcription(self) -> TextSink | None:
+        return self._transcription_sink
 
-    @text.setter
-    def text(self, sink: TextSink | None) -> None:
-        self._text_sink = sink
+    @transcription.setter
+    def transcription(self, sink: TextSink | None) -> None:
+        self._transcription_sink = sink
         if sink is not None:
-            self._inactive_text_sink = None
-        self.emit("text_changed", sink)
-        self._text_changed()
+            self._inactive_tr_sink = None
+        self.emit("transcription_changed", sink)
+        self._transcription_changed()

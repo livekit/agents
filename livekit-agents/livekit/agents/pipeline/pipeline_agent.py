@@ -70,7 +70,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
-        self._transcriber = transcriber or transcription.SimpleTextTranscriber()
+        self._transcriber = transcriber or None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -205,14 +205,14 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_output_options.audio_enabled = False
 
                 if (
-                    self.output.text is not None
+                    self.output.transcription is not None
                     and is_given(room_output_options)
-                    and room_output_options.text_enabled
+                    and room_output_options.transcription_enabled
                 ):
                     logger.warning(
                         "room text output is enabled but output.text is already set, ignoring"
                     )
-                    room_output_options.text_enabled = False
+                    room_output_options.transcription_enabled = False
 
                 self._room_io = room_io.RoomIO(
                     room=room,
@@ -235,7 +235,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = True
             self._update_agent_state(AgentState.LISTENING)
 
-        if self.output.audio is None and self.output.text is None:
+        if self.output.audio is None and self.output.transcription is None:
             logger.warning("agent started without audio or text output")
 
     async def aclose(self) -> None:

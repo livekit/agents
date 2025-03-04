@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from types import TracebackType
 from typing import AsyncIterator, Union
 
-from ..utils import aio, shortuuid
+from ..utils import aio
 
 
 class TextTranscriber(ABC):
@@ -46,7 +46,6 @@ class TranscriptionStream(ABC):
         self._transcriber = transcriber
         self._input_ch = aio.Chan[Union[str, TranscriptionStream._FlushSentinel]]()
         self._event_ch = aio.Chan[str]()
-        self._stream_id = shortuuid("tr_")
 
         self._task = asyncio.create_task(self._run(), name="Transcription._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -116,7 +115,6 @@ class SimpleTextTranscriber(TextTranscriber):
     class SimpleStream(TranscriptionStream):
         async def _run(self) -> None:
             async for text in self._input_ch:
-                print(f"SimpleTextTranscriber: {text}")
                 if isinstance(text, str):
                     self._event_ch.send_nowait(text)
 

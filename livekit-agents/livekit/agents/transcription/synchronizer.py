@@ -52,7 +52,7 @@ class _TextData:
 @dataclass
 class _TextSegment:
     delta: str
-    turn_id: str
+    stream_id: str
     sentence_id: str
     end_of_sentence: bool
     language: str
@@ -202,6 +202,8 @@ class _TextAudioSynchronizer:
                     await self._sync_sentence(
                         seg_index, forward_start_time, text_data, audio_data, ev.token
                     )
+                    if self._closed:
+                        await sentence_stream.aclose()
 
                 seg_index += 1
 
@@ -260,7 +262,7 @@ class _TextAudioSynchronizer:
             self._event_ch.send_nowait(
                 _TextSegment(
                     delta=text[len(sent_text) :],
-                    turn_id=audio_data.id,
+                    stream_id=audio_data.id,
                     sentence_id=seg_id,
                     language=self._opts.language,
                     end_of_sentence=False,
@@ -274,7 +276,7 @@ class _TextAudioSynchronizer:
         self._event_ch.send_nowait(
             _TextSegment(
                 delta=sentence[len(sent_text) :],
-                turn_id=audio_data.id,
+                stream_id=audio_data.id,
                 sentence_id=seg_id,
                 language=self._opts.language,
                 end_of_sentence=True,
@@ -307,8 +309,7 @@ class TextSynchronizer:
     def __init__(
         self,
         audio_sink: AudioSink,
-        sentence_text_sink: TextSink | None = None,
-        speech_text_sink: TextSink | None = None,
+        text_sink: TextSink,
         *,
         sync_options: NotGivenOr[TextSyncOptions] = NOT_GIVEN,
     ) -> None:
@@ -318,11 +319,7 @@ class TextSynchronizer:
         self._synchronizer = _TextAudioSynchronizer(options=self._sync_options)
         self._sync_enabled = True
 
-        # flush for each sentence
-        self._sentence_text_sink = sentence_text_sink
-        # flush for each speech
-        self._speech_text_sink = speech_text_sink
-
+        self._base_text_sink = text_sink
         self._text_sink = _TextSink(self)
         self._audio_sink = _AudioSync(audio_sink, self)
 
@@ -347,33 +344,17 @@ class TextSynchronizer:
         return self._text_sink
 
     async def _forward_event(self) -> None:
-        last_speech_id: str | None = None
-        last_sentence_id: str | None = None
+        last_stream_id: str | None = None
 
         while not self._closed:
             async for segment in self._synchronizer:
-                # flush if speech or sentence changed
-                if last_speech_id != segment.turn_id:
-                    last_speech_id = segment.turn_id
-                    if self._speech_text_sink:
-                        self._speech_text_sink.flush()
+                if last_stream_id != segment.stream_id:
+                    self._base_text_sink.flush()
+                    last_stream_id = segment.stream_id
 
-                if last_sentence_id != segment.sentence_id:
-                    last_sentence_id = segment.sentence_id
-                    if self._sentence_text_sink:
-                        self._sentence_text_sink.flush()
+                await self._base_text_sink.capture_text(segment.delta)
 
-                # capture text
-                if self._sentence_text_sink:
-                    await self._sentence_text_sink.capture_text(segment.delta.strip("\n"))
-                    if segment.end_of_sentence:
-                        self._sentence_text_sink.flush()
-                if self._speech_text_sink:
-                    await self._speech_text_sink.capture_text(segment.delta)
-
-            # end of speech
-            if self._speech_text_sink:
-                self._speech_text_sink.flush()
+            self._base_text_sink.flush()
 
     def _flush(self) -> None:
         """Close the old transcription segment and create a new one"""
@@ -392,10 +373,7 @@ class TextSynchronizer:
         await utils.aio.cancel_and_wait(self._main_task)
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
-        if self._sentence_text_sink:
-            self._sentence_text_sink.flush()
-        if self._speech_text_sink:
-            self._speech_text_sink.flush()
+        self._base_text_sink.flush()
 
 
 class _AudioSync(AudioSink):
