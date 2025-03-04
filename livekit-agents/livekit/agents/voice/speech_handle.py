@@ -11,7 +11,7 @@ class SpeechHandle:
     SPEECH_PRIORITY_LOW = 0
     """Priority for messages that should be played after all other messages in the queue"""
     SPEECH_PRIORITY_NORMAL = 5
-    """Every speech generates by the PipelineAgent defaults to this priority."""
+    """Every speech generates by the VoiceAgent defaults to this priority."""
     SPEECH_PRIORITY_HIGH = 10
     """Priority for important messages that should be played before others."""
 

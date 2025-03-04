@@ -18,7 +18,7 @@ from ..utils.misc import is_given
 from . import io, room_io
 from .audio_recognition import _TurnDetector
 from .speech_handle import SpeechHandle
-from .task import AgentTask
+from .agent_task import AgentTask
 from .task_activity import TaskActivity
 from .events import EventTypes, AgentEvent, AgentStateChangedEvent
 
@@ -34,7 +34,7 @@ class PipelineOptions:
 Userdata_T = TypeVar("Userdata_T")
 
 
-class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
@@ -106,7 +106,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("PipelineAgent userdata is not set")
+            raise ValueError("VoiceAgent userdata is not set")
 
         return self._userdata
 
@@ -283,7 +283,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         return self._activity.say(
             text,
@@ -300,7 +300,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         return self._activity.generate_reply(
             user_input=user_input,
@@ -310,7 +310,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def interrupt(self) -> None:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         self._activity.interrupt()
 

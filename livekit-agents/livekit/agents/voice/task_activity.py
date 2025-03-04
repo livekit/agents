@@ -43,8 +43,8 @@ def log_event(event: str, **kwargs) -> None:
 
 
 if TYPE_CHECKING:
-    from .pipeline_agent import PipelineAgent
-    from .task import AgentTask
+    from .voice_agent import VoiceAgent
+    from .agent_task import AgentTask
 
 
 _TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")
@@ -64,7 +64,7 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 
 # NOTE: TaskActivity isn't exposed to the public API
 class TaskActivity(RecognitionHooks):
-    def __init__(self, task: AgentTask, agent: PipelineAgent) -> None:
+    def __init__(self, task: AgentTask, agent: VoiceAgent) -> None:
         self._agent_task, self._agent = task, agent
         self._rt_session: llm.RealtimeSession | None = None
         self._audio_recognition: AudioRecognition | None = None
@@ -85,7 +85,7 @@ class TaskActivity(RecognitionHooks):
         return self._draining
 
     @property
-    def agent(self) -> PipelineAgent:
+    def agent(self) -> VoiceAgent:
         return self._agent
 
     @property
@@ -183,7 +183,7 @@ class TaskActivity(RecognitionHooks):
 
             # on_enter callback
             tk = _TaskActivityContextVar.set(self)
-            from .task import _authorize_inline_task
+            from .agent_task import _authorize_inline_task
 
             on_enter_task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
             _authorize_inline_task(on_enter_task)
@@ -197,7 +197,7 @@ class TaskActivity(RecognitionHooks):
 
             # execute on_exit
             tk = _TaskActivityContextVar.set(self)
-            from .task import _authorize_inline_task
+            from .agent_task import _authorize_inline_task
 
             on_exit_task = asyncio.create_task(self._agent_task.on_exit(), name="_task_on_exit")
             _authorize_inline_task(on_exit_task)

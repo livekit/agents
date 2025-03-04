@@ -9,7 +9,7 @@ from ..types import AgentState
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from .pipeline_agent import PipelineAgent
+    from .voice_agent import VoiceAgent
     from .speech_handle import SpeechHandle
 
 
@@ -21,7 +21,7 @@ class CallContext(Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        agent: PipelineAgent,
+        agent: VoiceAgent,
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
     ) -> None:
@@ -30,7 +30,7 @@ class CallContext(Generic[Userdata_T]):
         self._function_call = function_call
 
     @property
-    def agent(self) -> PipelineAgent[Userdata_T]:
+    def agent(self) -> VoiceAgent[Userdata_T]:
         return self._agent
 
     @property

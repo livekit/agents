@@ -14,7 +14,7 @@ from .io import AudioSink, ParallelTextSink, TextSink
 from .transcription import TextSynchronizer, find_micro_track_id
 
 if TYPE_CHECKING:
-    from ..pipeline import PipelineAgent
+    from .voice_agent import VoiceAgent
 
 
 ATTRIBUTE_PUBLISH_FOR = "lk.publish_for"
@@ -66,7 +66,7 @@ class RoomIO:
     def __init__(
         self,
         room: rtc.Room,
-        agent: "PipelineAgent",
+        agent: "VoiceAgent",
         *,
         link_to_participant: Optional[rtc.RemoteParticipant | str] = None,
         input_options: RoomInputOptions = DEFAULT_ROOM_INPUT_OPTIONS,

@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.llm import ai_function
-from livekit.agents.pipeline import (
+from livekit.agents.voice import (
     AgentTask,
     CallContext,
     ChatCLI,
     InlineTask,
-    PipelineAgent,
+    VoiceAgent,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 
@@ -71,7 +71,7 @@ async def entrypoint(ctx: JobContext):
 
     alloy, echo = AlloyTask(), EchoTask()
     userdata = Userdata(alloy_task=alloy, echo_task=echo)
-    agent = PipelineAgent(
+    agent = VoiceAgent(
         task=alloy,
         userdata=userdata,
         stt=deepgram.STT(),
