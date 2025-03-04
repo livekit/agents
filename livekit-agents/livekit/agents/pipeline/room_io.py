@@ -8,10 +8,10 @@ from livekit import rtc
 
 from .. import utils
 from ..log import logger
+from ..transcription import TextSynchronizer, find_micro_track_id
 from ..types import ATTRIBUTE_AGENT_STATE
 from .events import AgentStateChangedEvent, UserInputTranscribedEvent
 from .io import AudioSink, ParallelTextSink, TextSink
-from .transcription import TextSynchronizer, find_micro_track_id
 
 if TYPE_CHECKING:
     from ..pipeline import PipelineAgent
