@@ -50,7 +50,7 @@ class ConnectionPool(Generic[T]):
         # store connections to be reaped (closed) later.
         self._to_close: Set[T] = set()
 
-        self._prewarm_task = None
+        self._prewarm_task: weakref.ref[asyncio.Task] | None = None
 
     async def _connect(self) -> T:
         """Create a new connection.
