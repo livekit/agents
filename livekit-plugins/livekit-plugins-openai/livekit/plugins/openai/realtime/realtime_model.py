@@ -521,6 +521,9 @@ class RealtimeSession(llm.RealtimeSession):
             item_generation.audio_ch.close()
 
     def _handle_response_done(self, _: ResponseDoneEvent) -> None:
+        if self._current_generation is None:
+            return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)
+
         assert self._current_generation is not None, "current_generation is None"
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
