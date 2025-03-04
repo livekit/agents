@@ -58,8 +58,9 @@ class SpeechEvent:
 
 @dataclass
 class STTCapabilities:
-    streaming: bool
-    interim_results: bool
+    streaming: bool = False
+    interim_results: bool = False
+    single_frame_recognition: bool = True
 
 
 TEvent = TypeVar("TEvent")
@@ -70,8 +71,10 @@ class STT(
     rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
     Generic[TEvent],
 ):
-    def __init__(self, *, capabilities: STTCapabilities) -> None:
+    def __init__(self, *, capabilities: STTCapabilities | None = None) -> None:
         super().__init__()
+        if capabilities is None:
+            capabilities = STTCapabilities()
         self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 

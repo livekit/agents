@@ -54,6 +54,9 @@ class FallbackAdapter(
             capabilities=STTCapabilities(
                 streaming=all(t.capabilities.streaming for t in stt),
                 interim_results=all(t.capabilities.interim_results for t in stt),
+                single_frame_recognition=all(
+                    t.capabilities.single_frame_recognition for t in stt
+                ),
             )
         )
 
@@ -81,16 +84,24 @@ class FallbackAdapter(
         recovering: bool = False,
     ) -> SpeechEvent:
         try:
-            return await stt.recognize(
-                buffer,
-                language=language,
-                conn_options=dataclasses.replace(
-                    conn_options,
-                    max_retry=self._max_retry_per_stt,
-                    timeout=self._attempt_timeout,
-                    retry_interval=self._retry_interval,
-                ),
-            )
+            if stt.capabilities.single_frame_recognition:
+                return await stt.recognize(
+                    buffer,
+                    language=language,
+                    conn_options=dataclasses.replace(
+                        conn_options,
+                        max_retry=self._max_retry_per_stt,
+                        timeout=self._attempt_timeout,
+                        retry_interval=self._retry_interval,
+                    ),
+                )
+            elif stt.capabilities.streaming:
+                return await self._recognize_via_stream(
+                    stt=stt,
+                    buffer=buffer,
+                    language=language,
+                    conn_options=conn_options,
+                )
         except asyncio.TimeoutError:
             if recovering:
                 logger.warning(
@@ -131,6 +142,29 @@ class FallbackAdapter(
                 extra={"streamed": False},
             )
             raise
+
+    async def _recognize_via_stream(
+        self,
+        stt: STT,
+        buffer: utils.AudioBuffer,
+        language: str | None,
+        conn_options: APIConnectOptions,
+    ) -> SpeechEvent:
+        stream = stt.stream(language=language, conn_options=conn_options)
+        try:
+            if isinstance(buffer, list):
+                for frame in buffer:
+                    stream.push_frame(frame)
+            else:
+                stream.push_frame(buffer)
+            stream.end_input()
+
+            async for event in stream:
+                if event.type == SpeechEventType.FINAL_TRANSCRIPT:
+                    return event
+            raise APIConnectionError("No final transcript received from streaming")
+        finally:
+            await stream.aclose()
 
     def _try_recovery(
         self,

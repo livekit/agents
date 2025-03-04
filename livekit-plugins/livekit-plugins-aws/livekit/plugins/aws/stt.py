@@ -70,7 +70,9 @@ class STT(stt.STT):
         language_model_name: Optional[str] = None,
     ):
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, single_frame_recognition=False
+            )
         )
 
         self._api_key, self._api_secret = _get_aws_credentials(

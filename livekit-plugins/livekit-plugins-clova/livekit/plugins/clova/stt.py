@@ -57,7 +57,9 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=STTCapabilities(streaming=False, interim_results=True)
+            capabilities=STTCapabilities(
+                streaming=False, interim_results=True, single_frame_recognition=True
+            )
         )
         self._secret = secret or os.environ.get("CLOVA_STT_SECRET_KEY")
         self._invoke_url = invoke_url or os.environ.get("CLOVA_STT_INVOKE_URL")

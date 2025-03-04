@@ -64,6 +64,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                single_frame_recognition=False,
             ),
         )
         self._transcription_config = transcription_config

@@ -75,7 +75,9 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, single_frame_recognition=False
+            )
         )
         speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")

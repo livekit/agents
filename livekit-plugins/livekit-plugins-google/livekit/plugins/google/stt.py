@@ -121,7 +121,9 @@ class STT(stt.STT):
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
         """
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+            capabilities=stt.STTCapabilities(
+                streaming=True, interim_results=True, single_frame_recognition=True
+            )
         )
 
         self._location = location

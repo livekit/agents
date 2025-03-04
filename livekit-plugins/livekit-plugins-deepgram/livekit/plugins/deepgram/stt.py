@@ -167,7 +167,9 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=interim_results
+                streaming=True,
+                interim_results=interim_results,
+                single_frame_recognition=True,
             )
         )
         self._base_url = base_url

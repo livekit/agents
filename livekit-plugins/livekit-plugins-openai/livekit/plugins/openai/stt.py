@@ -60,7 +60,9 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
+            capabilities=stt.STTCapabilities(
+                streaming=False, interim_results=False, single_frame_recognition=True
+            )
         )
         if detect_language:
             language = ""

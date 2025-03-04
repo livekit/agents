@@ -34,7 +34,9 @@ class WizperSTT(stt.STT):
         version: Optional[str] = "3",
     ):
         super().__init__(
-            capabilities=STTCapabilities(streaming=False, interim_results=True)
+            capabilities=STTCapabilities(
+                streaming=False, interim_results=True, single_frame_recognition=True
+            )
         )
         self._api_key = os.getenv("FAL_KEY")
         self._opts = _STTOptions(

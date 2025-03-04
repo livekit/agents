@@ -80,6 +80,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                single_frame_recognition=False,
             ),
         )
         api_key = api_key or os.environ.get("ASSEMBLYAI_API_KEY")
