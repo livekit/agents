@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 MAX_AUDIO_BAR = 30
 INPUT_DB_MIN = -70.0
 INPUT_DB_MAX = 0.0
-FPS = 20
+FPS = 16
 
 
 AEC_RING_BUFFER_SIZE = 24000 * 4
@@ -153,9 +153,9 @@ class ChatCLI:
         self._audio_sink = _AudioSink(self)
 
         self._apm = rtc.AudioProcessingModule(
-            echo_canceller_enabled=True,
-            noise_suppression_enabled=True,
-            high_pass_filter_enabled=True,
+            echo_cancellation=True,
+            noise_suppression=True,
+            high_pass_filter=True,
         )
 
         self._render_ring_buffer = np.empty((0,), dtype=np.int16)

@@ -16,6 +16,7 @@ async def entrypoint(ctx: JobContext):
 
     agent = VoiceAgent(
         instructions="You are a helpful assistant that can answer questions and help with tasks.",
+        # llm=openai.realtime.RealtimeModel(base_url="http://localhost:1234/v1"),
         llm=openai.realtime.RealtimeModel(),
     )
     await agent.start()
