@@ -62,18 +62,21 @@ class StreamBuffer:
                     return b""
                 # always read from beginning
                 self._buffer.seek(0)
+                logger.info("sb - reading from buffer")
                 data = self._buffer.read(size)
 
                 if data:
                     # shrink the buffer to remove already-read data
                     remaining = self._buffer.read()
                     self._buffer = io.BytesIO(remaining)
+                    logger.info("sb - returning data")
                     return data
 
                 if self._eof:
                     logger.info("sb - eof")
                     return b""
 
+                logger.info("sb - waiting for data")
                 self._data_available.wait()
 
     def end_input(self):
@@ -134,15 +137,18 @@ class AudioStreamDecoder:
         self._input_buf.end_input()
 
     def _decode_loop(self):
-        container = av.open(self._input_buf)
-        audio_stream = next(s for s in container.streams if s.type == "audio")
-        resampler = av.AudioResampler(
-            # convert to signed 16-bit little endian
-            format="s16",
-            layout=self._layout,
-            rate=self._sample_rate,
-        )
+
         try:
+            logger.info("decoding loop - opening container")
+            container = av.open(self._input_buf)
+            audio_stream = next(s for s in container.streams if s.type == "audio")
+            logger.info("decoding loop - found audio stream")
+            resampler = av.AudioResampler(
+                # convert to signed 16-bit little endian
+                format="s16",
+                layout=self._layout,
+                rate=self._sample_rate,
+            )
             # TODO: handle error where audio stream isn't found
             if not audio_stream:
                 return
