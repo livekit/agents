@@ -19,6 +19,8 @@ NOISY_LOGGERS = [
     "watchfiles",
     "anthropic",
     "websockets.client",
+    "aiohttp.access",
+    "livekit",
 ]
 
 
@@ -194,14 +196,21 @@ class ColoredFormatter(logging.Formatter):
         return msg + self._esc_codes["esc_reset"]
 
 
-def setup_logging(log_level: str, devmode: bool) -> None:
+def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
     handler = logging.StreamHandler()
 
     if devmode:
         # colorful logs for dev (improves readability)
-        colored_formatter = ColoredFormatter(
-            "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"
-        )
+        if console:
+            # reset the line before each log message
+            colored_formatter = ColoredFormatter(
+                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"
+            )
+        else:
+            colored_formatter = ColoredFormatter(
+                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"
+            )
+
         handler.setFormatter(colored_formatter)
     else:
         # production logs (serialized of json)

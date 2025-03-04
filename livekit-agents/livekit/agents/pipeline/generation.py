@@ -210,7 +210,7 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
-    first_frame_fut = asyncio.Future()
+    first_frame_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
 
 
 def perform_audio_forwarding(

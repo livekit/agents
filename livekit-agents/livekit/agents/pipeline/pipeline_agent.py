@@ -10,6 +10,7 @@ from typing_extensions import override
 from livekit import rtc
 
 from .. import debug, llm, stt, transcription, tts, utils, vad
+from ..cli import cli
 from ..llm import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
@@ -167,20 +168,37 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None:
         """Start the pipeline agent.
+
         Create a default RoomIO if the input or output audio is not already set.
+        If the console flag is provided, start a ChatCLI.
 
         Args:
             room: The room to use for input and output
             room_input_options: Options for the room input
             room_output_options: Options for the room output
         """
-        if self._started:
-            return
-
         async with self._lock:
+            if self._started:
+                return
+
             self._update_agent_state(AgentState.INITIALIZING)
 
-            if is_given(room):
+            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+                from .chat_cli import ChatCLI
+
+                if (
+                    self.input.audio is not None
+                    or self.output.audio is not None
+                    or self.output.text is not None
+                ):
+                    logger.warning(
+                        "agent started with the console subcommand, but input.audio or output.audio or output.text is already set, overriding.."
+                    )
+
+                chat_cli = ChatCLI(self)
+                await chat_cli.start()
+
+            elif is_given(room):
                 room_input_options = copy.deepcopy(room_input_options)
                 room_output_options = copy.deepcopy(room_output_options)
 
@@ -190,7 +208,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and room_input_options.audio_enabled
                 ):
                     logger.warning(
-                        "room audio input is enabled but input.audio is already set, ignoring"
+                        "RoomIO audio input is enabled but input.audio is already set, ignoring.."
                     )
                     room_input_options.audio_enabled = False
 
@@ -200,7 +218,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and room_output_options.audio_enabled
                 ):
                     logger.warning(
-                        "room audio output is enabled but output.audio or output.text is already set, ignoring"
+                        "RoomIO audio output is enabled but output.audio is already set, ignoring.."
                     )
                     room_output_options.audio_enabled = False
 
@@ -210,7 +228,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and room_output_options.transcription_enabled
                 ):
                     logger.warning(
-                        "room text output is enabled but output.text is already set, ignoring"
+                        "RoomIO text output is enabled but output.text is already set, ignoring.."
                     )
                     room_output_options.transcription_enabled = False
 
@@ -235,19 +253,17 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = True
             self._update_agent_state(AgentState.LISTENING)
 
-        if self.output.audio is None and self.output.transcription is None:
-            logger.warning("agent started without audio or text output")
-
     async def aclose(self) -> None:
-        if not self._started:
-            return
+        async with self._lock:
+            if not self._started:
+                return
 
-        if self._forward_audio_atask is not None:
-            await utils.aio.cancel_and_wait(self._forward_audio_atask)
+            if self._forward_audio_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
-        if self._room_io:
-            await self._room_io.aclose()
-        self._input.close()
+            if self._room_io:
+                await self._room_io.aclose()
+            self._input.close()
 
     @property
     def options(self) -> PipelineOptions:

@@ -61,15 +61,14 @@ class AlloyTask(AgentTask):
     async def on_exit(self) -> None:
         self.agent.say("Goodbye!")
 
-    async def on_exit(self) -> None:
-        self.agent.say("Goodbye!")
-
     @ai_function
     async def talk_to_echo(self, ctx: CallContext[Userdata]):
         return ctx.userdata.echo_task, "Transfering you to Echo."
 
 
 async def entrypoint(ctx: JobContext):
+    await ctx.connect()
+
     alloy, echo = AlloyTask(), EchoTask()
     userdata = Userdata(alloy_task=alloy, echo_task=echo)
     agent = PipelineAgent(
@@ -80,12 +79,7 @@ async def entrypoint(ctx: JobContext):
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
-    chat_cli = ChatCLI(agent)
-
     await agent.start()
-    await chat_cli.run()
-
-    # start a chat inside the CLI
 
 
 if __name__ == "__main__":
