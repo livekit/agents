@@ -16,7 +16,6 @@ from ..worker import JobExecutorType, Worker, WorkerOptions
 from . import proto
 from .log import setup_logging
 
-
 CLI_ARGUMENTS: proto.CliArgs | None = None
 
 

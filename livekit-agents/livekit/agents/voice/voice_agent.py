@@ -3,9 +3,7 @@ from __future__ import annotations, print_function
 import asyncio
 import copy
 from dataclasses import dataclass
-from typing import AsyncIterable, Generic, Literal, TypeVar
-from typing_extensions import override
-
+from typing import AsyncIterable, Generic, TypeVar
 
 from livekit import rtc
 
@@ -16,11 +14,11 @@ from ..log import logger
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
-from .audio_recognition import _TurnDetector
-from .speech_handle import SpeechHandle
 from .agent_task import AgentTask
+from .audio_recognition import _TurnDetector
+from .events import AgentEvent, AgentStateChangedEvent, EventTypes
+from .speech_handle import SpeechHandle
 from .task_activity import TaskActivity
-from .events import EventTypes, AgentEvent, AgentStateChangedEvent
 
 
 @dataclass

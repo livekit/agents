@@ -13,9 +13,16 @@ from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..log import logger
+from ..metrics import AgentMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
+from .events import (
+    MetricsCollectedEvent,
+    UserInputTranscribedEvent,
+    UserStartedSpeakingEvent,
+    UserStoppedSpeakingEvent,
+)
 from .generation import (
     _AudioOutput,
     _TextOutput,
@@ -25,17 +32,10 @@ from .generation import (
     perform_text_forwarding,
     perform_tool_executions,
     perform_tts_inference,
-    update_instructions,
     truncate_message,
-)
-from .events import (
-    UserInputTranscribedEvent,
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
-    MetricsCollectedEvent,
+    update_instructions,
 )
 from .speech_handle import SpeechHandle
-from ..metrics import AgentMetrics
 
 
 def log_event(event: str, **kwargs) -> None:
@@ -43,8 +43,8 @@ def log_event(event: str, **kwargs) -> None:
 
 
 if TYPE_CHECKING:
-    from .voice_agent import VoiceAgent
     from .agent_task import AgentTask
+    from .voice_agent import VoiceAgent
 
 
 _TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")

@@ -4,9 +4,6 @@ import asyncio
 
 from aiohttp import web
 
-from . import utils
-from .log import logger
-
 
 class HttpServer:
     def __init__(self, host: str, port: int, loop: asyncio.AbstractEventLoop | None = None) -> None:

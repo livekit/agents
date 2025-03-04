@@ -6,7 +6,7 @@ import termios
 import threading
 import time
 import tty
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import click
 import numpy as np
@@ -16,8 +16,6 @@ from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
 from .voice_agent import VoiceAgent
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import sounddevice as sd

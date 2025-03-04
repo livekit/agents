@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Union, Literal, Optional
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel
 

@@ -98,6 +98,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: Optional[
             _InputAudioTranscription
         ] = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
@@ -110,7 +111,7 @@ class RealtimeModel(llm.RealtimeModel):
             voice=voice,
             input_audio_transcription=input_audio_transcription,
         )
-        self._client = client or openai.AsyncClient()
+        self._client = client or openai.AsyncClient(base_url=base_url or None)
 
     def session(self) -> "RealtimeSession":
         return RealtimeSession(self)

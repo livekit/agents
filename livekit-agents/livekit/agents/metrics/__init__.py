@@ -1,7 +1,7 @@
 from .base import (
     AgentMetrics,
-    LLMMetrics,
     EOUMetrics,
+    LLMMetrics,
     STTMetrics,
     TTSMetrics,
     VADMetrics,

@@ -1,4 +1,5 @@
 from unittest.mock import create_autospec
+
 from livekit import rtc
 
 MockRoom = create_autospec(rtc.Room, instance=True)
