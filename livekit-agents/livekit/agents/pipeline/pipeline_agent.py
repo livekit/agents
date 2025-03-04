@@ -184,7 +184,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
-        noise_cancellation: tuple[str, dict[str, Any]] | None = None,
+        noise_cancellation: rtc.NoiseCancellationOptions | None = None,
         turn_detector: _TurnDetector | None = None,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,

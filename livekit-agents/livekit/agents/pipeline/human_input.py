@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal, Any
+from typing import Literal
 
 from livekit import rtc
 
@@ -28,7 +28,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
         stt: speech_to_text.STT,
         participant: rtc.RemoteParticipant,
         transcription: bool,
-        noise_cancellation: tuple[str, dict[str, Any]] | None = None,
+        noise_cancellation: rtc.NoiseCancellationOptions | None = None,
     ) -> None:
         super().__init__()
         self._room, self._vad, self._stt, self._participant, self._transcription = (
