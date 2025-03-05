@@ -1,4 +1,5 @@
 import base64
+import json
 from typing import Any, Literal
 
 from livekit.agents import llm
@@ -78,7 +79,7 @@ def to_chat_ctx(
                     id=msg.call_id,
                     type="tool_use",
                     name=msg.name,
-                    input=msg.arguments or {},
+                    input=json.loads(msg.arguments),
                     cache_control=cache_ctrl,
                 )
             )

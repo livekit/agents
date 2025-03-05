@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Optional, cast
 
@@ -74,7 +75,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
                 "toolUse": {
                     "toolUseId": msg.call_id,
                     "name": msg.name,
-                    "input": msg.arguments if msg.arguments else {},
+                    "input": json.loads(msg.arguments),
                 }
             })
         elif msg.type == "function_call_output":
