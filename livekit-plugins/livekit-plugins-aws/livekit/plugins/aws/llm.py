@@ -126,19 +126,30 @@ class LLM(llm.LLM):
         if is_given(self._opts.model):
             opts["modelId"] = self._opts.model
 
-        if fnc_ctx:
-            opts["tools"] = to_fnc_ctx(fnc_ctx)
-            tool_choice_value = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-            if is_given(tool_choice_value):
-                if isinstance(tool_choice_value, ToolChoice):
-                    opts["toolChoice"] = {"tool": {"name": tool_choice_value.name}}
-                elif tool_choice_value == "required":
-                    opts["toolChoice"] = {"any": {}}
-                elif tool_choice_value == "auto":
-                    opts["toolChoice"] = {"auto": {}}
-                elif tool_choice_value == "none":
-                    opts["tools"] = []
+        def _get_tool_config() -> dict[str, Any] | None:
+            nonlocal tool_choice
 
+            if not fnc_ctx:
+                return None
+
+            tools = to_fnc_ctx(fnc_ctx)
+            tool_config: dict[str, Any] = {"tools": tools}
+            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+            if is_given(tool_choice):
+                if isinstance(tool_choice, ToolChoice):
+                    tool_config["toolChoice"] = {"tool": {"name": tool_choice.name}}
+                elif tool_choice == "required":
+                    tool_config["toolChoice"] = {"any": {}}
+                elif tool_choice == "auto":
+                    tool_config["toolChoice"] = {"auto": {}}
+                else:
+                    return None
+
+            return tool_config
+
+        tool_config = _get_tool_config()
+        if tool_config:
+            opts["toolConfig"] = tool_config
         messages, system_message = to_chat_ctx(chat_ctx, id(self))
         opts["messages"] = messages
         if system_message:
@@ -165,7 +176,7 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
             conn_options=conn_options,
-            opts=opts,
+            extra_kwargs=opts,
         )
 
 

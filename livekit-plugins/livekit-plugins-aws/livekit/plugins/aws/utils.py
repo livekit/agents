@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import boto3
 from livekit.agents import llm
@@ -29,7 +29,7 @@ def get_aws_credentials(api_key: Optional[str], api_secret: Optional[str], regio
     credentials = session.get_credentials()
     if not credentials or not credentials.access_key or not credentials.secret_key:
         raise ValueError("No valid AWS credentials found.")
-    return credentials.access_key, credentials.secret_key, region
+    return cast(tuple[str, str, str], (credentials.access_key, credentials.secret_key, region))
 
 
 def to_fnc_ctx(fncs: list[AIFunction]) -> list[dict]:
@@ -74,7 +74,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
                 "toolUse": {
                     "toolUseId": msg.call_id,
                     "name": msg.name,
-                    "input": msg.arguments,
+                    "input": msg.arguments if msg.arguments else {},
                 }
             })
         elif msg.type == "function_call_output":
@@ -105,11 +105,11 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
 def _build_tool_spec(fnc: AIFunction) -> dict:
     fnc = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
     return {
-        "toolSpec": {
+        "toolSpec": _strip_nones({
             "name": fnc["name"],
-            "description": fnc["description"],
-            "inputSchema": {"json": fnc["parameters"]},
-        }
+            "description": fnc["description"] if fnc["description"] else None,
+            "inputSchema": {"json": fnc["parameters"] if fnc["parameters"] else {}},
+        })
     }
 
 
@@ -121,3 +121,7 @@ def _build_image(image: ImageContent, cache_key: Any) -> dict:
             "source": {"bytes": img.data_bytes},
         }
     }
+
+
+def _strip_nones(d: dict) -> dict:
+    return {k: v for k, v in d.items() if v is not None}
