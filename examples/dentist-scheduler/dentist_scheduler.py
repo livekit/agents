@@ -52,15 +52,19 @@ class Receptionist(AgentTask):
 
     @ai_function()
     async def hours_inquiry(self):
-        """ Answers user inquiries about the LiveKit dental office's hours of operation. """
+        """Answers user inquiries about the LiveKit dental office's hours of operation."""
         await self.agent.current_speech.wait_for_playout()
-        await self.agent.generate_reply(instructions="Inform the user that the LiveKit dental office is closed on Sundays but open 10 AM to 12 PM, and 1 PM to 4 PM otherwise.")
+        await self.agent.generate_reply(
+            instructions="Inform the user that the LiveKit dental office is closed on Sundays but open 10 AM to 12 PM, and 1 PM to 4 PM otherwise."
+        )
 
     @ai_function()
     async def location_inquiry(self):
-        """ Answers user inquiries about the LiveKit dental office's location and parking"""
+        """Answers user inquiries about the LiveKit dental office's location and parking"""
         await self.agent.current_speech.wait_for_playout()
-        await self.agent.generate_reply(instructions="Inform the user that the LiveKit dental office is located at 123 LiveKit Lane and there is free parking.")
+        await self.agent.generate_reply(
+            instructions="Inform the user that the LiveKit dental office is located at 123 LiveKit Lane and there is free parking."
+        )
 
     @ai_function()
     async def appointment(self, service: str):
@@ -69,7 +73,9 @@ class Receptionist(AgentTask):
         Args:
             service (str): Either "schedule", "reschedule", or "cancel"
         """
-        return Scheduler(service=service), "I'll be transferring you to our scheduler, Echo!"
+        return Scheduler(
+            service=service
+        ), "I'll be transferring you to our scheduler, Echo!"
 
     @ai_function()
     async def take_message(self):
@@ -85,24 +91,24 @@ class Receptionist(AgentTask):
         """
         self.agent.userdata["userinfo"].name = name
 
-    
     @ai_function()
     async def update_email(self, email: str) -> None:
-        """ Updates email associated with the user 
+        """Updates email associated with the user
 
-            Args:
-                email (str): The user's email
+        Args:
+            email (str): The user's email
         """
         self.agent.userdata["userinfo"].email = email
-    
+
     @ai_function()
     async def update_phone_number(self, phone_number: str) -> None:
-        """ Updates phone number associated with the user 
+        """Updates phone number associated with the user
 
-            Args:
-                phone number (str): The user's phone number
+        Args:
+            phone number (str): The user's phone number
         """
         self.agent.userdata["userinfo"].phone = phone_number
+
 
 class Scheduler(AgentTask):
     def __init__(self, *, service: str) -> None:
@@ -297,14 +303,13 @@ async def entrypoint(ctx: JobContext):
     userdata = {"event_ids": event_ids, "userinfo": UserInfo()}
 
     agent = PipelineAgent(
-        task=Receptionist(), 
-        userdata=userdata, 
+        task=Receptionist(),
+        userdata=userdata,
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
-    
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     await agent.start(room=ctx.room)

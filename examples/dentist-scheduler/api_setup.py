@@ -29,23 +29,38 @@ async def get_event_id(slug: str) -> str | None:
             else:
                 return None
 
+
 async def create_schedule() -> str:
-    """ Sets schedule for example, returns schedule ID"""
+    """Sets schedule for example, returns schedule ID"""
     payload = {
         "name": "LiveKit Dental Office Hours",
         "timeZone": "America/Los_Angeles",
         "availability": [
             {
-                "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+                "days": [
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                ],
                 "startTime": "10:00",
-                "endTime": "12:00"
+                "endTime": "12:00",
             },
             {
-                "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+                "days": [
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                ],
                 "startTime": "13:00",
-                "endTime": "16:00"
-            }
-        ]
+                "endTime": "16:00",
+            },
+        ],
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -56,7 +71,8 @@ async def create_schedule() -> str:
                 return response["data"][0]["id"]
             if response["status"] == "error":
                 raise Exception("Error creating schedule")
-            
+
+
 async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
     """Creates specified event type and returns the event ID
 
@@ -64,7 +80,12 @@ async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
         title (str): The title of the event type
         slug (str): The unique identifier of the event type, typically with dashes in place of spaces
     """
-    payload = {"lengthInMinutes": 60, "title": title, "slug": slug, "scheduleId": schedule_id}
+    payload = {
+        "lengthInMinutes": 60,
+        "title": title,
+        "slug": slug,
+        "scheduleId": schedule_id,
+    }
     async with aiohttp.ClientSession() as session:
         async with session.post(
             "https://api.cal.com/v2/event-types", json=payload, headers=HEADERS
@@ -77,7 +98,7 @@ async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
 
 
 async def setup_event_types() -> dict:
-    """Ensures that the schedule and event types are set up correctly in Cal.com for this example. Returns a dictionary with event slugs and their respective IDs """
+    """Ensures that the schedule and event types are set up correctly in Cal.com for this example. Returns a dictionary with event slugs and their respective IDs"""
     schedule_id = create_schedule()
 
     event_ids = {}
@@ -85,9 +106,7 @@ async def setup_event_types() -> dict:
     checkup_event_id = await get_event_id("routine-checkup")
     if not checkup_event_id:
         checkup_event_id = await create_event_type(
-            title="Routine Checkup", 
-            slug="routine-checkup",
-            schedule_id=schedule_id
+            title="Routine Checkup", slug="routine-checkup", schedule_id=schedule_id
         )
 
     event_ids["routine-checkup"] = checkup_event_id
@@ -95,9 +114,7 @@ async def setup_event_types() -> dict:
     extraction_event_id = await get_event_id("tooth-extraction")
     if not extraction_event_id:
         extraction_event_id = await create_event_type(
-            title="Tooth Extraction", 
-            slug="tooth-extraction",
-            schedule_id=schedule_id
+            title="Tooth Extraction", slug="tooth-extraction", schedule_id=schedule_id
         )
 
     event_ids["tooth-extraction"] = extraction_event_id
