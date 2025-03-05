@@ -39,12 +39,12 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from ._utils import (
+from .log import logger
+from .utils import (
     get_aws_credentials,
     to_chat_ctx,
     to_fnc_ctx,
 )
-from .log import logger
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
 DEFAULT_REGION = "us-east-1"

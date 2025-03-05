@@ -57,8 +57,8 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
             role = "user"
 
         # if the effective role changed, finalize the previous turn.
-        if role != current_role and current_content:
-            if current_role is not None:
+        if role != current_role:
+            if current_content and current_role is not None:
                 messages.append({"role": current_role, "content": current_content})
             current_content = []
             current_role = role
