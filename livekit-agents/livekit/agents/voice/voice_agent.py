@@ -181,10 +181,11 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if (
                     self.input.audio is not None
                     or self.output.audio is not None
-                    or self.output.text is not None
+                    or self.output.transcription is not None
                 ):
                     logger.warning(
-                        "agent started with the console subcommand, but input.audio or output.audio or output.text is already set, overriding.."
+                        "agent started with the console subcommand, but input.audio or output.audio "
+                        "or output.transcription is already set, overriding.."
                     )
 
                 chat_cli = ChatCLI(self)
@@ -215,14 +216,14 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_output_options.audio_enabled = False
 
                 if (
-                    self.output.text is not None
+                    self.output.transcription is not None
                     and is_given(room_output_options)
-                    and room_output_options.text_enabled
+                    and room_output_options.transcription_enabled
                 ):
                     logger.warning(
-                        "RoomIO text output is enabled but output.text is already set, ignoring.."
+                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."
                     )
-                    room_output_options.text_enabled = False
+                    room_output_options.transcription_enabled = False
 
                 self._room_io = room_io.RoomIO(
                     room=room,

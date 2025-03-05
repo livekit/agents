@@ -42,20 +42,18 @@ class RoomInputOptions:
 
 @dataclass(frozen=True)
 class RoomOutputOptions:
-    text_enabled: bool = True
-    """Whether to publish text output"""
+    transcription_enabled: bool = True
+    """Whether to publish transcription output that synced with audio (if available)"""
     audio_enabled: bool = True
     """Whether to publish audio output"""
     audio_sample_rate: int = 24000
     """Sample rate of the output audio in Hz"""
     audio_num_channels: int = 1
     """Number of audio channels"""
-    text_output_topic: str | None = TOPIC_CHAT
+    transcription_output_topic: str | None = TOPIC_CHAT
     """Topic for text output"""
-    agent_text_identity: str | None = None
+    agent_transcription_identity: str | None = None
     """Identity of the sender for text output, default to the local participant"""
-    agent_text_sync_with_audio: bool = True
-    """Whether to synchronize agent transcription with audio playback"""
     audio_track_source: rtc.TrackSource.ValueType = rtc.TrackSource.SOURCE_MICROPHONE
     """Source of the audio track to publish"""
 
@@ -90,9 +88,9 @@ class RoomIO:
 
         # room output
         self._audio_output: Optional[RoomAudioSink] = None
-        self._user_text_output: Optional[ParallelTextSink] = None
-        self._agent_text_output: Optional[ParallelTextSink] = None
-        self._text_synchronizer: Optional[TextSynchronizer] = None
+        self._user_transcription: Optional[ParallelTextSink] = None
+        self._agent_transcription: Optional[ParallelTextSink] = None
+        self._tr_synchronizer: Optional[TextSynchronizer] = None
 
         self._tasks: set[asyncio.Task] = set()
         self._update_state_task: Optional[asyncio.Task] = None
@@ -127,34 +125,30 @@ class RoomIO:
                 track_source=self._out_opts.audio_track_source,
             )
 
-        if self._out_opts.text_enabled:
-            self._user_text_output = self._create_text_sink(
+        if self._out_opts.transcription_enabled:
+            self._user_transcription = self._create_transcription_sink(
                 participant_identity=self._participant_identity,
                 is_delta_stream=False,
-                topic=self._out_opts.text_output_topic,
+                topic=self._out_opts.transcription_output_topic,
             )
             self._agent.on("user_input_transcribed", self._on_user_input_transcribed)
 
-            self._agent_text_output = self._create_text_sink(
+            self._agent_transcription = self._create_transcription_sink(
                 participant_identity=(
-                    self._out_opts.agent_text_identity or self._room.local_participant.identity
+                    self._out_opts.agent_transcription_identity
+                    or self._room.local_participant.identity
                 ),
                 is_delta_stream=True,
-                topic=self._out_opts.text_output_topic,
+                topic=self._out_opts.transcription_output_topic,
             )
-            if self._out_opts.agent_text_sync_with_audio:
-                audio_output = self._audio_output or self._agent.output.audio
-                if not audio_output:
-                    logger.warning(
-                        "text sync with audio is enabled but audio output is not enabled, ignoring"
-                    )
-                else:
-                    self._text_synchronizer = TextSynchronizer(
-                        audio_sink=audio_output,
-                        text_sink=self._agent_text_output,
-                    )
-                    self._agent.output.on("audio_changed", self._on_agent_output_changed)
-                    self._agent.output.on("text_changed", self._on_agent_output_changed)
+            audio_output = self._audio_output or self._agent.output.audio
+            if audio_output:
+                self._tr_synchronizer = TextSynchronizer(
+                    audio_sink=audio_output,
+                    text_sink=self._agent_transcription,
+                )
+                self._agent.output.on("audio_changed", self._on_agent_output_changed)
+                self._agent.output.on("transcription_changed", self._on_agent_output_changed)
 
         if self._audio_output:
             await self._audio_output.start()
@@ -170,8 +164,8 @@ class RoomIO:
 
         if self.audio_output:
             self._agent.output.audio = self.audio_output
-        if self.text_output:
-            self._agent.output.text = self.text_output
+        if self.transcription_output:
+            self._agent.output.transcription = self.transcription_output
 
         self._agent.on("agent_state_changed", self._on_agent_state_changed)
 
@@ -182,15 +176,15 @@ class RoomIO:
 
     @property
     def audio_output(self) -> AudioSink | None:
-        if self._text_synchronizer:
-            return self._text_synchronizer.audio_sink
+        if self._tr_synchronizer:
+            return self._tr_synchronizer.audio_sink
         return self._audio_output
 
     @property
-    def text_output(self) -> TextSink | None:
-        if self._text_synchronizer:
-            return self._text_synchronizer.text_sink
-        return self._agent_text_output
+    def transcription_output(self) -> TextSink | None:
+        if self._tr_synchronizer:
+            return self._tr_synchronizer.text_sink
+        return self._agent_transcription
 
     @property
     def audio_input(self) -> AsyncIterable[rtc.AudioFrame] | None:
@@ -235,7 +229,7 @@ class RoomIO:
         if self._video_input_handle:
             self._video_input_handle.set_participant(participant_identity)
 
-        self._update_user_text_sink(participant_identity)
+        self._update_user_transcription(participant_identity)
 
         logger.debug(
             "set participant",
@@ -249,17 +243,17 @@ class RoomIO:
             self._audio_input_handle.set_participant(None)
         if self._video_input_handle:
             self._video_input_handle.set_participant(None)
-        self._update_user_text_sink(None)
+        self._update_user_transcription(None)
         logger.debug("unset participant")
 
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         return await self._participant_connected
 
     def toggle_text_audio_sync(self, enable: bool) -> None:
-        if not self._text_synchronizer:
+        if not self._tr_synchronizer:
             logger.warning("text audio sync is not enabled, ignoring")
             return
-        self._text_synchronizer.toggle_sync(enable)
+        self._tr_synchronizer.toggle_sync(enable)
 
     # -- RPC methods --
     # user can override these methods to handle RPC calls from the room
@@ -317,14 +311,14 @@ class RoomIO:
         self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-        if self._user_text_output is None:
+        if self._user_transcription is None:
             return
 
         async def _capture_text():
-            await self._user_text_output.capture_text(ev.transcript)
+            await self._user_transcription.capture_text(ev.transcript)
 
             if ev.is_final:
-                self._user_text_output.flush()
+                self._user_transcription.flush()
 
         task = asyncio.create_task(_capture_text())
         self._tasks.add(task)
@@ -363,22 +357,24 @@ class RoomIO:
         self._update_state_task = asyncio.create_task(_set_state())
 
     def _on_agent_output_changed(self, sink: AudioSink | TextSink | None) -> None:
-        if not self._text_synchronizer:
+        if not self._tr_synchronizer:
             return
 
-        using_room_audio = self._agent.output.audio is self.audio_output
-        using_room_text = self._agent.output.text is self.text_output
-        self._text_synchronizer.set_sync_enabled(using_room_audio and using_room_text)
+        sync_enabled = (
+            self._agent.output.audio is self.audio_output
+            and self._agent.output.transcription is self.transcription_output
+        )
+        self._tr_synchronizer.set_sync_enabled(sync_enabled)
 
-    def _update_user_text_sink(self, participant_identity: str | None) -> None:
-        if not self._user_text_output:
+    def _update_user_transcription(self, participant_identity: str | None) -> None:
+        if not self._user_transcription:
             return
 
-        for sink in self._user_text_output._sinks:
+        for sink in self._user_transcription._sinks:
             assert isinstance(sink, (DataStreamTextSink, RoomTranscriptEventSink))
             sink.set_participant(participant_identity)
 
-    def _create_text_sink(
+    def _create_transcription_sink(
         self, participant_identity: str | None, is_delta_stream: bool, topic: str | None
     ) -> ParallelTextSink:
         return ParallelTextSink(
@@ -404,10 +400,10 @@ class RoomIO:
         if self._video_input_handle:
             await self._video_input_handle.aclose()
 
-        if self._text_synchronizer:
+        if self._tr_synchronizer:
             self._agent.output.off("audio_changed", self._on_agent_output_changed)
-            self._agent.output.off("text_changed", self._on_agent_output_changed)
-            await self._text_synchronizer.aclose()
+            self._agent.output.off("transcription_changed", self._on_agent_output_changed)
+            await self._tr_synchronizer.aclose()
 
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)

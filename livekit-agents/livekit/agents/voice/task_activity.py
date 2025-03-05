@@ -494,7 +494,7 @@ class TaskActivity(RecognitionHooks):
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)
 
-        text_output = self._agent.output.text
+        tr_output = self._agent.output.transcription
         audio_output = self._agent.output.audio
 
         await speech_handle.wait_if_not_interrupted(
@@ -508,9 +508,13 @@ class TaskActivity(RecognitionHooks):
             yield text
 
         tasks = []
-        if text_output is not None:
+        if tr_output is not None:
+            tr_source = _read_text()
+            tr_node = self._agent_task.transcription_node(tr_source)
+            if tr_node is not None:
+                tr_source = tr_node
             forward_text, text_out = perform_text_forwarding(
-                text_output=text_output, llm_output=_read_text()
+                text_output=tr_output, source=tr_source
             )
             tasks.append(forward_text)
             if audio_output is None:
@@ -578,7 +582,7 @@ class TaskActivity(RecognitionHooks):
         )
 
         audio_output = self._agent.output.audio
-        text_output = self._agent.output.text
+        text_output = self._agent.output.transcription
         chat_ctx = chat_ctx.copy()
         fnc_ctx = fnc_ctx.copy()
 
@@ -617,9 +621,11 @@ class TaskActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             return
 
-        forward_task, text_out = perform_text_forwarding(
-            text_output=text_output, llm_output=llm_output
-        )
+        tr_source = llm_output
+        tr_node = self._agent_task.transcription_node(tr_source)
+        if tr_node is not None:
+            tr_source = tr_node
+        forward_task, text_out = perform_text_forwarding(text_output=text_output, source=tr_source)
         tasks.append(forward_task)
 
         if audio_output is not None:
@@ -785,7 +791,7 @@ class TaskActivity(RecognitionHooks):
         )
 
         audio_output = self._agent.output.audio
-        text_output = self._agent.output.text
+        text_output = self._agent.output.transcription
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
@@ -810,8 +816,12 @@ class TaskActivity(RecognitionHooks):
                 audio_out = None
 
                 if text_output is not None:
+                    tr_source = msg.text_stream
+                    tr_node = self._agent_task.transcription_node(tr_source)
+                    if tr_node is not None:
+                        tr_source = tr_node
                     forward_task, text_out = perform_text_forwarding(
-                        text_output=text_output, llm_output=msg.text_stream
+                        text_output=text_output, source=tr_source
                     )
 
                     forward_tasks.append(forward_task)

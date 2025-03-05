@@ -153,21 +153,21 @@ class _TextOutput:
 
 
 def perform_text_forwarding(
-    *, text_output: io.TextSink | None, llm_output: AsyncIterable[str]
+    *, text_output: io.TextSink | None, source: AsyncIterable[str]
 ) -> tuple[asyncio.Task, _TextOutput]:
     out = _TextOutput(text="", first_text_fut=asyncio.Future())
-    task = asyncio.create_task(_text_forwarding_task(text_output, llm_output, out))
+    task = asyncio.create_task(_text_forwarding_task(text_output, source, out))
     return task, out
 
 
 @utils.log_exceptions(logger=logger)
 async def _text_forwarding_task(
     text_output: io.TextSink | None,
-    llm_output: AsyncIterable[str],
+    source: AsyncIterable[str],
     out: _TextOutput,
 ) -> None:
     try:
-        async for delta in llm_output:
+        async for delta in source:
             out.text += delta
             if text_output is not None:
                 await text_output.capture_text(delta)
@@ -175,8 +175,8 @@ async def _text_forwarding_task(
             if not out.first_text_fut.done():
                 out.first_text_fut.set_result(None)
     finally:
-        if isinstance(llm_output, _ACloseable):
-            await llm_output.aclose()
+        if isinstance(source, _ACloseable):
+            await source.aclose()
 
         if text_output is not None:
             text_output.flush()

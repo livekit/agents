@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable, Optional
 
 from livekit import rtc
@@ -12,7 +12,7 @@ from ... import tokenize, utils
 from ...log import logger
 from ...tokenize.tokenizer import PUNCTUATIONS
 from ...types import NOT_GIVEN, NotGivenOr
-from ..io import AudioSink, PlaybackFinishedEvent, TextSink
+from ...voice.io import AudioSink, PlaybackFinishedEvent, TextSink
 from . import _utils
 
 # Standard speech rate in hyphens per second
@@ -26,7 +26,9 @@ class TextSyncOptions:
     language: str = ""
     speed: float = 1.0  # Multiplier of STANDARD_SPEECH_RATE
     new_sentence_delay: float = 0.4
-    sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer()
+    sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(
+        retain_format=True
+    )
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
     split_words: Callable[[str], list[tuple[str, int, int]]] = tokenize.basic.split_words
 
@@ -35,6 +37,7 @@ class TextSyncOptions:
 class _AudioData:
     pushed_duration: float = 0.0
     done: bool = False
+    id: str = field(default_factory=_utils.speech_uuid)
 
 
 @dataclass
@@ -44,6 +47,15 @@ class _TextData:
     done: bool = False
     forwarded_hyphens: int = 0
     forwarded_sentences: int = 0
+
+
+@dataclass
+class _TextSegment:
+    delta: str
+    stream_id: str
+    sentence_id: str
+    end_of_sentence: bool
+    language: str
 
 
 class _TextAudioSynchronizer:
@@ -57,7 +69,7 @@ class _TextAudioSynchronizer:
 
         self._closed = False
         self._close_future = asyncio.Future[None]()
-        self._event_ch = utils.aio.Chan[rtc.TranscriptionSegment]()
+        self._event_ch = utils.aio.Chan[_TextSegment]()
 
         self._playing_seg_index = -1
         self._finished_seg_index = -1
@@ -153,10 +165,10 @@ class _TextAudioSynchronizer:
             await self._main_task
         self._event_ch.close()
 
-    async def __anext__(self) -> rtc.TranscriptionSegment:
+    async def __anext__(self) -> _TextSegment:
         return await self._event_ch.__anext__()
 
-    def __aiter__(self) -> AsyncIterator[rtc.TranscriptionSegment]:
+    def __aiter__(self) -> AsyncIterator[_TextSegment]:
         return self
 
     @utils.log_exceptions(logger=logger)
@@ -190,6 +202,8 @@ class _TextAudioSynchronizer:
                     await self._sync_sentence(
                         seg_index, forward_start_time, text_data, audio_data, ev.token
                     )
+                    if self._closed:
+                        await sentence_stream.aclose()
 
                 seg_index += 1
 
@@ -246,14 +260,13 @@ class _TextAudioSynchronizer:
             await self._sleep_if_not_closed(first_delay)
 
             self._event_ch.send_nowait(
-                rtc.TranscriptionSegment(
-                    id=seg_id,
-                    text=text[len(sent_text) :],
-                    start_time=0,
-                    end_time=0,
-                    final=False,
+                _TextSegment(
+                    delta=text[len(sent_text) :],
+                    stream_id=audio_data.id,
+                    sentence_id=seg_id,
                     language=self._opts.language,
-                ),
+                    end_of_sentence=False,
+                )
             )
             sent_text = text
 
@@ -261,14 +274,13 @@ class _TextAudioSynchronizer:
             text_data.forwarded_hyphens += word_hyphens
 
         self._event_ch.send_nowait(
-            rtc.TranscriptionSegment(
-                id=seg_id,
-                text=sentence[len(sent_text) :],
-                start_time=0,
-                end_time=0,
-                final=True,
+            _TextSegment(
+                delta=sentence[len(sent_text) :],
+                stream_id=audio_data.id,
+                sentence_id=seg_id,
                 language=self._opts.language,
-            ),
+                end_of_sentence=True,
+            )
         )
         sent_text = sentence
 
@@ -310,7 +322,6 @@ class TextSynchronizer:
         self._base_text_sink = text_sink
         self._text_sink = _TextSink(self)
         self._audio_sink = _AudioSync(audio_sink, self)
-        self._current_segment_id: str | None = None
 
         self._tasks: set[asyncio.Task] = set()
         self._main_task = asyncio.create_task(self._forward_event())
@@ -333,15 +344,17 @@ class TextSynchronizer:
         return self._text_sink
 
     async def _forward_event(self) -> None:
+        last_stream_id: str | None = None
+
         while not self._closed:
             async for segment in self._synchronizer:
-                if self._current_segment_id != segment.id:
+                if last_stream_id != segment.stream_id:
                     self._base_text_sink.flush()
-                    self._current_segment_id = segment.id
+                    last_stream_id = segment.stream_id
 
-                await self._base_text_sink.capture_text(segment.text)
-                if segment.final:
-                    self._base_text_sink.flush()
+                await self._base_text_sink.capture_text(segment.delta)
+
+            self._base_text_sink.flush()
 
     def _flush(self) -> None:
         """Close the old transcription segment and create a new one"""

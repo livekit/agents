@@ -261,9 +261,9 @@ class ChatCLI:
 
     def _update_text_output(self, *, enable: bool) -> None:
         if enable:
-            self._agent.output.text = self._text_sink
+            self._agent.output.transcription = self._text_sink
         else:
-            self._agent.output.text = None
+            self._agent.output.transcription = None
             self._text_input_buf = []
 
     def _sd_output_callback(self, outdata: np.ndarray, frames: int, *_) -> None:

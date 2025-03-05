@@ -161,6 +161,11 @@ class AgentTask:
             async for chunk in stream:
                 yield chunk
 
+    async def transcription_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[str]]:
+        """Process the LLM output to transcriptions"""
+        async for delta in text:
+            yield delta
+
     async def tts_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[rtc.AudioFrame]]:
         activity = self.__get_activity_or_raise()
         assert activity.tts is not None, "tts_node called but no TTS node is available"

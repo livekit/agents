@@ -5,7 +5,8 @@ from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import cartesia, deepgram, noise_cancellation, openai
+from livekit.plugins import cartesia, deepgram, openai
+# from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
@@ -50,7 +51,7 @@ async def entrypoint(ctx: JobContext):
     await agent.start(
         room=ctx.room,
         room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
+            # noise_cancellation=noise_cancellation.BVC(),
         ),
     )
 
