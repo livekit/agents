@@ -153,6 +153,7 @@ class ChatCLI:
             echo_cancellation=True,
             noise_suppression=True,
             high_pass_filter=True,
+            auto_gain_control=True,
         )
 
         self._render_ring_buffer = np.empty((0,), dtype=np.int16)
