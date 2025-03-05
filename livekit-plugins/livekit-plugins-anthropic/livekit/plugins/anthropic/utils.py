@@ -2,7 +2,6 @@ import base64
 from typing import Any, Literal
 
 from livekit.agents import llm
-from livekit.agents.llm import utils
 from livekit.agents.llm.function_context import AIFunction
 
 import anthropic
@@ -126,11 +125,11 @@ def _build_anthropic_schema(
     ai_function: AIFunction,
     cache_ctrl: anthropic.types.CacheControlEphemeralParam | None = None,
 ) -> anthropic.types.ToolParam:
-    fnc = utils.serialize_fnc_item(ai_function)
+    fnc = llm.utils.build_legacy_openai_schema(ai_function, internally_tagged=True)
     return anthropic.types.ToolParam(
         name=fnc["name"],
         description=fnc["description"] or "",
-        input_schema=_add_required_flags(fnc["schema"]),
+        input_schema=_add_required_flags(fnc["parameters"]),
         cache_control=cache_ctrl,
     )
 

@@ -20,6 +20,7 @@ from pydantic.fields import FieldInfo
 
 from . import _strict
 from .chat_context import ChatContext
+from .function_context import AIFunction, get_function_info
 
 if TYPE_CHECKING:
     from ..pipeline.events import CallContext
@@ -147,17 +148,49 @@ def serialize_image(image: llm.ImageContent, cache_key: Any) -> SerializedImage:
     raise ValueError("Unsupported image type")
 
 
-def serialize_fnc_item(fnc: llm.AIFunction, strict: bool = False) -> dict[str, Any]:
-    model = utils.function_arguments_to_pydantic_model(fnc)
-    if strict:
-        schema = _strict.to_strict_json_schema(model)
+def build_legacy_openai_schema(
+    ai_function: AIFunction, *, internally_tagged: bool = False
+) -> dict[str, Any]:
+    """non-strict mode tool description
+    see https://serde.rs/enum-representations.html for the internally tagged representation"""
+    model = function_arguments_to_pydantic_model(ai_function)
+    info = get_function_info(ai_function)
+    schema = model.model_json_schema()
+
+    if internally_tagged:
+        return {
+            "name": info.name,
+            "description": info.description or "",
+            "parameters": schema,
+            "type": "function",
+        }
     else:
-        schema = model.model_json_schema()
-    info = utils.get_function_info(fnc)
+        return {
+            "type": "function",
+            "function": {
+                "name": info.name,
+                "description": info.description or "",
+                "parameters": schema,
+            },
+        }
+
+
+def build_strict_openai_schema(
+    ai_function: AIFunction,
+) -> dict[str, Any]:
+    """strict mode tool description"""
+    model = function_arguments_to_pydantic_model(ai_function)
+    info = get_function_info(ai_function)
+    schema = _strict.to_strict_json_schema(model)
+
     return {
-        "name": fnc.name,
-        "description": info.description or "",
-        "schema": schema,
+        "type": "function",
+        "function": {
+            "name": info.name,
+            "strict": True,
+            "description": info.description or "",
+            "parameters": schema,
+        },
     }
 
 

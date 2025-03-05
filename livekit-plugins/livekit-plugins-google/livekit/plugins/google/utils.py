@@ -84,11 +84,11 @@ def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
 
 
 def _build_gemini_fnc(ai_function: AIFunction) -> types.FunctionDeclaration:
-    fnc = llm.utils.serialize_fnc_item(ai_function)
+    fnc = llm.utils.build_legacy_openai_schema(ai_function, internally_tagged=True)
     return types.FunctionDeclaration(
         name=fnc["name"],
         description=fnc["description"],
-        parameters=_convert_to_gemini_schema(fnc["schema"]),
+        parameters=_convert_to_gemini_schema(fnc["parameters"]),
     )
 
 

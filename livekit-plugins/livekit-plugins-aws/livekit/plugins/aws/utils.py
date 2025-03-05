@@ -103,12 +103,12 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
 
 
 def _build_tool_spec(fnc: AIFunction) -> dict:
-    fnc = llm.utils.serialize_fnc_item(fnc)
+    fnc = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
     return {
         "toolSpec": {
             "name": fnc["name"],
             "description": fnc["description"],
-            "inputSchema": {"json": fnc["schema"]},
+            "inputSchema": {"json": fnc["parameters"]},
         }
     }
 

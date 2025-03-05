@@ -22,53 +22,11 @@ def get_base_url(base_url: Optional[str]) -> str:
 
 
 def to_fnc_ctx(fnc_ctx: list[llm.AIFunction]) -> list[ChatCompletionToolParam]:
-    return [_build_strict_openai_schema(fnc) for fnc in fnc_ctx]
+    return [llm.utils.build_strict_openai_schema(fnc) for fnc in fnc_ctx]
 
 
 def to_chat_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> list[ChatCompletionMessageParam]:
     return [_to_chat_item(msg, cache_key) for msg in chat_ctx.items]
-
-
-def build_legacy_openai_schema(
-    ai_function: llm.AIFunction, *, internally_tagged: bool = False
-) -> dict[str, Any]:
-    """non-strict mode tool description
-    see https://serde.rs/enum-representations.html for the internally tagged representation"""
-    fnc = llm.utils.serialize_fnc_item(ai_function, strict=False)
-
-    if internally_tagged:
-        return {
-            "name": fnc["name"],
-            "description": fnc["description"],
-            "parameters": fnc["schema"],
-            "type": "function",
-        }
-    else:
-        return {
-            "type": "function",
-            "function": {
-                "name": fnc["name"],
-                "description": fnc["description"],
-                "parameters": fnc["schema"],
-            },
-        }
-
-
-def _build_strict_openai_schema(
-    ai_function: llm.AIFunction,
-) -> dict[str, Any]:
-    """strict mode tool description"""
-    fnc = llm.utils.serialize_fnc_item(ai_function, strict=True)
-
-    return {
-        "type": "function",
-        "function": {
-            "name": fnc["name"],
-            "strict": True,
-            "description": fnc["description"],
-            "parameters": fnc["schema"],
-        },
-    }
 
 
 def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessageParam:
