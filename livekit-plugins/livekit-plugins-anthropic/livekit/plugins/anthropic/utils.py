@@ -50,9 +50,9 @@ def to_chat_ctx(
             else None
         )
         if msg.type == "message":
-            role = "model" if msg.role == "assistant" else "user"
+            role = "assistant" if msg.role == "assistant" else "user"
         elif msg.type == "function_call":
-            role = "model"
+            role = "assistant"
         elif msg.type == "function_call_output":
             role = "user"
 
@@ -63,18 +63,22 @@ def to_chat_ctx(
             current_role = role
 
         if msg.type == "message":
-            for content in msg.content:
-                if isinstance(content, str):
-                    content.append(anthropic.types.TextBlockParam(text=content, type="text"))
-                elif isinstance(content, llm.ImageContent):
-                    content.append(_to_image_content(content, cache_key, cache_ctrl=cache_ctrl))
+            for c in msg.content:
+                if isinstance(c, str):
+                    content.append(
+                        anthropic.types.TextBlockParam(
+                            text=c, type="text", cache_control=cache_ctrl
+                        )
+                    )
+                elif isinstance(c, llm.ImageContent):
+                    content.append(_to_image_content(c, cache_key, cache_ctrl=cache_ctrl))
         elif msg.type == "function_call":
             content.append(
                 anthropic.types.ToolUseBlockParam(
                     id=msg.call_id,
                     type="tool_use",
                     name=msg.name,
-                    input=msg.arguments,
+                    input=msg.arguments or {},
                     cache_control=cache_ctrl,
                 )
             )
