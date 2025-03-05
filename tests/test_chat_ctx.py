@@ -1,4 +1,3 @@
-
 from livekit.agents.llm import utils
 
 # function_arguments_to_pydantic_model
@@ -7,7 +6,6 @@ from livekit.agents.llm import utils
 def ai_function1(a: int, b: str = "default") -> None:
     """
     This is a test function
-
     Args:
         a: First argument
         b: Second argument
@@ -16,5 +14,10 @@ def ai_function1(a: int, b: str = "default") -> None:
 
 
 def test_args_model():
+    from docstring_parser import parse_from_object
+
+    docstring = parse_from_object(ai_function1)
+    print(docstring.description)
+
     model = utils.function_arguments_to_pydantic_model(ai_function1)
     print(model.model_json_schema())
