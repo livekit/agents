@@ -13,7 +13,7 @@ from livekit.agents import (
 )
 
 from livekit.agents.llm import ai_function
-from livekit.agents.pipeline import AgentTask, PipelineAgent
+from livekit.agents.voice import AgentTask, VoiceAgent
 from livekit.plugins import openai, cartesia, deepgram, silero
 
 from api_setup import setup_event_types
@@ -39,7 +39,7 @@ class Receptionist(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions=f"""You are Alloy, a receptionist at the LiveKit Dental Office who answers inquiries and manages appointments for users. 
-                            When the user provides their name, number, or email, spell it out to confirm it. Always speak in English.""",
+                            When the user provides their name, number, or email, spell it out to confirm it. Always speak in English. Be brief and concise.""",
             tts=cartesia.TTS(emotion=["positivity:high"]),
         )
 
@@ -52,7 +52,7 @@ class Receptionist(AgentTask):
 
     @ai_function()
     async def hours_inquiry(self):
-        """Answers user inquiries about the LiveKit dental office's hours of operation."""
+        """Answers user inquiries about the LiveKit dental office's hours of operation"""
         await self.agent.current_speech.wait_for_playout()
         await self.agent.generate_reply(
             instructions="Inform the user that the LiveKit dental office is closed on Sundays but open 10 AM to 12 PM, and 1 PM to 4 PM otherwise."
@@ -68,10 +68,10 @@ class Receptionist(AgentTask):
 
     @ai_function()
     async def appointment(self, service: str):
-        """This function allows for users to schedule, reschedule, or cancel an appointment.
-
+        """
+        This function allows for users to schedule, reschedule, or cancel an appointment.
         Args:
-            service (str): Either "schedule", "reschedule", or "cancel"
+            service: Either "schedule", "reschedule", or "cancel"
         """
         return Scheduler(
             service=service
@@ -87,16 +87,17 @@ class Receptionist(AgentTask):
         """Records the user's name
 
         Args:
-            name (str): User's name
+            name: User's name
         """
         self.agent.userdata["userinfo"].name = name
+        return
 
     @ai_function()
     async def update_email(self, email: str) -> None:
         """Updates email associated with the user
 
         Args:
-            email (str): The user's email
+            email: The user's email
         """
         self.agent.userdata["userinfo"].email = email
 
@@ -105,7 +106,7 @@ class Receptionist(AgentTask):
         """Updates phone number associated with the user
 
         Args:
-            phone number (str): The user's phone number
+            phone number: The user's phone number
         """
         self.agent.userdata["userinfo"].phone = phone_number
 
@@ -113,8 +114,8 @@ class Receptionist(AgentTask):
 class Scheduler(AgentTask):
     def __init__(self, *, service: str) -> None:
         super().__init__(
-            instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user wants to schedule a new appointment and
-                            their email is not given, ask for it. When given any information, confirm with the user that it is correct. """
+            instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
+                            proceeding. Always confirm details with the user. """,
         )
         self._service_requested = service
 
@@ -137,7 +138,10 @@ class Scheduler(AgentTask):
         async with aiohttp.ClientSession() as session:
             params = {}
             if request.value == "get_appts":
-                payload = {"attendeeName": self._userdata.name}
+                payload = {
+                    "attendeeEmail": self.agent.userdata["userinfo"].email,
+                    "attendeeName": self.agent.userdata["userinfo"].name,
+                }
                 params = {
                     "url": "https://api.cal.com/v2/bookings",
                     "params": payload,
@@ -152,8 +156,8 @@ class Scheduler(AgentTask):
 
             if request.value == "schedule":
                 attendee_details = {
-                    "name": self._userinfo.name,
-                    "email": self._userinfo.email,
+                    "name": self.agent.userdata["userinfo"].name,
+                    "email": self.agent.userdata["userinfo"].email,
                     "timeZone": "America/Los_Angeles",
                 }
                 payload = {
@@ -161,6 +165,7 @@ class Scheduler(AgentTask):
                     "eventTypeId": self._event_ids[slug],
                     "attendee": attendee_details,
                 }
+
                 params = {
                     "url": "https://api.cal.com/v2/bookings",
                     "json": payload,
@@ -175,49 +180,56 @@ class Scheduler(AgentTask):
                     "json": payload,
                 }
 
-            if request.value == "get_appt":
-                params = {
-                    "url": f"https://api.cal.com/v2/bookings/{uid}",
-                    "headers": headers,
-                }
             else:
-                raise Exception(f"APIRequest not valid: {request}")
+                raise Exception(f"APIRequest not valid: {request}, {request.value}")
             try:
-                async with session.post(**params) as response:
-                    data = await response.json()
+                if "json" in params:
+                    async with session.post(**params) as response:
+                        data = await response.json()
+                else:
+                    async with session.get(**params) as response:
+                        data = await response.json()
                 return data
             except Exception as e:
                 print(f"Error occurred: {e}")
 
     @ai_function()
-    async def schedule(self, description: str, date: str) -> None:
-        """Schedules a new appointment for users.
-        Args:
-            description (str): Reason for scheduling appointment, either "routine-checkup" or "tooth-extraction"
-            date (str): Date and time for the appointment in ISO 8601 format in UTC timezone.
+    async def schedule(self, email: str, description: str, date: str) -> None:
         """
+        Schedules a new appointment for users.
+        Args:
+            email: The user's email, in the format local-part@domain
+            description: Reason for scheduling appointment, either "routine-checkup" or "tooth-extraction"
+            date: Date and time for the appointment in ISO 8601 format in UTC timezone
+        """
+        self.agent.userdata["userinfo"].email = email
         response = await self.send_request(
             request=APIRequests.SCHEDULE, time=date, slug=description
         )
-        if response.status == "success":
+        if response["status"] == "success":
             await self.agent.generate_reply(
-                instructions="Tell the user you were able to schedule the appointment successfully."
+                instructions="Inform the user you were able to schedule the appointment successfully."
             )
         else:
             raise Exception("Error occurred when attempting to schedule")
 
     @ai_function()
-    async def cancel(self) -> None:
-        """Cancels an existing appointment"""
+    async def cancel(self, email: str) -> None:
+        """
+        Cancels an existing appointment
+        Args:
+            email: The user's email formatted local-part@domain
+        """
+        self.agent.userdata["userinfo"].email = email
         response = await self.send_request(request=APIRequests.GET_APPTS)
-        if response.data:
+        if response["data"]:
             await self.agent.generate_reply(
-                instructions=f"Inform the user that you are canceling the appointment found on {response.data.start} for {response.data.title}."
+                instructions=f"Confirm with the user that they'd like to cancel the appointment found on {response["data"]["start"]} for {response["data"]["title"]}."
             )
-            confirmation = await self.send_request(
-                request=APIRequests.CANCEL, uid=response.data.uid
+            cancel_response = await self.send_request(
+                request=APIRequests.CANCEL, uid=response["data"]["uid"]
             )
-            if confirmation.status == "success":
+            if cancel_response["status"] == "success":
                 return Receptionist(), "You're all set, transferring you back to Alloy."
         else:
             await self.agent.generate_reply(
@@ -225,34 +237,30 @@ class Scheduler(AgentTask):
             )
 
     @ai_function()
-    async def reschedule(self, new_time: str) -> None:
-        """Reschedules an existing appointment
-        Args:
-            new_time (str): New time for the appointment to be rescheduled to, in ISO 8601 format in UTC timezone.
+    async def reschedule(self, email: str, new_time: str) -> None:
         """
+        Reschedules an existing appointment.
+        Args:
+            email: The user's email formatted local-part@domain
+            new_time: New time for the appointment to be rescheduled to in ISO 8601 format in UTC timezone.
+        """
+        self.agent.userdata["userinfo"].email = email
         response = await self.send_request(request=APIRequests.GET_APPTS)
-        if response.data:
+        if response["data"]:
             await self.agent.generate_reply(
-                instructions=f"Inform the user that you are rescheduling the appointment found on {response.data.start} for {response.data.title} to {new_time}."
+                instructions=f"Confirm with the user that you are rescheduling the appointment found on {response["data"]["start"]} for {response["data"]["title"]} to {new_time}."
             )
-            confirmation = await self.send_request(
-                request=APIRequests.RESCHEDULE, uid=response.data.uid, time=new_time
+            reschedule_response = await self.send_request(
+                request=APIRequests.RESCHEDULE,
+                uid=response["data"]["uid"],
+                time=new_time,
             )
-            if confirmation.status == "success":
+            if reschedule_response["status"] == "success":
                 return Receptionist(), "You're all set, transferring you back to Alloy."
         else:
             await self.agent.generate_reply(
                 instructions="Inform the user that there are no appointments under their name and ask to create one."
             )
-
-    @ai_function()
-    async def get_email(self, email: str) -> None:
-        """Records the user's email.
-
-        Args:
-            email (str): The user's email
-        """
-        self.agent.userdata.email = email
 
 
 class Messenger(AgentTask):
@@ -272,17 +280,16 @@ class Messenger(AgentTask):
         """Records the user's phone number.
 
         Args:
-            phone_number (str): The user's phone number
+            phone_number: The user's phone number
         """
         self.agent.userdata.phone = phone_number
-        # confirm correct phone number
 
     @ai_function()
     async def record_message(self, message: str) -> None:
         """Records the user's message to be left for the office.
 
         Args:
-            message (str): The user's message to be left for the office
+            message: The user's message to be left for the office
         """
         self.agent.userdata.message = message
         # send to supabase
@@ -302,11 +309,11 @@ async def entrypoint(ctx: JobContext):
     event_ids = await setup_event_types()
     userdata = {"event_ids": event_ids, "userinfo": UserInfo()}
 
-    agent = PipelineAgent(
+    agent = VoiceAgent(
         task=Receptionist(),
         userdata=userdata,
         stt=deepgram.STT(),
-        llm=openai.LLM(),
+        llm=openai.realtime.RealtimeModel(),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
