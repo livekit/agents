@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, MutableSet, Union
 
@@ -266,11 +267,13 @@ class LLMStream(llm.LLMStream):
                 self._text += delta["text"]
         elif "contentBlockStop" in chunk:
             if self._text:
+                # ignore chain of thought
+                text = re.sub(r"<thinking>.*?</thinking>", "", self._text)
                 chat_chunk = llm.ChatChunk(
                     request_id=request_id,
                     choices=[
                         llm.Choice(
-                            delta=llm.ChoiceDelta(content=self._text, role="assistant"),
+                            delta=llm.ChoiceDelta(content=text, role="assistant"),
                             index=chunk["contentBlockStop"]["contentBlockIndex"],
                         )
                     ],
