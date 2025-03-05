@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Literal
 
 import click
 import numpy as np
-import sounddevice as sd
 from livekit import rtc
 
 from ..log import logger
