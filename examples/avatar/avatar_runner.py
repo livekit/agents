@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import AsyncIterator, Generator, Optional, Union
 
 import numpy as np
+
 from livekit import rtc
-from livekit.agents.pipeline.avatar import AvatarRunner, MediaOptions
-from livekit.agents.pipeline.datastream_io import AudioFlushSentinel
+from livekit.agents.voice.avatar import AvatarRunner, MediaOptions
+from livekit.agents.voice.datastream_io import AudioFlushSentinel
 
 sys.path.insert(0, str(Path(__file__).parent))
 from wave_viz import WaveformVisualizer
