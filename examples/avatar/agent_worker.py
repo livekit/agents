@@ -6,12 +6,13 @@ from functools import partial
 
 import httpx
 from dotenv import load_dotenv
+
 from livekit import api, rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.pipeline import AgentTask, PipelineAgent
-from livekit.agents.pipeline.datastream_io import DataStreamOutput
-from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import ATTRIBUTE_PUBLISH_FOR, RoomOutputOptions
+from livekit.agents.voice import AgentTask, VoiceAgent
+from livekit.agents.voice.datastream_io import DataStreamOutput
+from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_FOR, RoomOutputOptions
 from livekit.plugins import openai
 
 logger = logging.getLogger("avatar-example")
@@ -65,7 +66,7 @@ async def launch_avatar_worker(
 async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await ctx.connect()
 
-    agent = PipelineAgent(
+    agent = VoiceAgent(
         task=AgentTask(
             instructions="Talk to me!",
             llm=openai.realtime.RealtimeModel(),
