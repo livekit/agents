@@ -184,6 +184,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
+        noise_cancellation: rtc.NoiseCancellationOptions | None = None,
         turn_detector: _TurnDetector | None = None,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
@@ -309,6 +310,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._last_final_transcript_time: float | None = None
         self._last_speech_time: float | None = None
+
+        self._noise_cancellation = noise_cancellation
 
     @property
     def fnc_ctx(self) -> FunctionContext | None:
@@ -559,6 +562,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             stt=self._stt,
             participant=participant,
             transcription=self._opts.transcription.user_transcription,
+            noise_cancellation=self._noise_cancellation,
         )
 
         def _on_start_of_speech(ev: vad.VADEvent) -> None:

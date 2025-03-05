@@ -165,6 +165,7 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         transcription: AgentTranscriptionOptions = AgentTranscriptionOptions(),
         max_text_response_retries: int = 5,
         loop: asyncio.AbstractEventLoop | None = None,
+        noise_cancellation: rtc.NoiseCancellationOptions | None = None,
     ):
         """Create a new MultimodalAgent.
 
@@ -210,6 +211,8 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
 
         self._text_response_retries = 0
         self._max_text_response_retries = max_text_response_retries
+
+        self._noise_cancellation = noise_cancellation
 
     @property
     def vad(self) -> vad.VAD | None:
@@ -505,7 +508,12 @@ class MultimodalAgent(utils.EventEmitter[EventTypes]):
         if sample_rate is None:
             sample_rate = 24000
 
-        input_stream = rtc.AudioStream(track, sample_rate=sample_rate, num_channels=1)
+        input_stream = rtc.AudioStream(
+            track,
+            sample_rate=sample_rate,
+            num_channels=1,
+            noise_cancellation=self._noise_cancellation,
+        )
         async for ev in input_stream:
             self._input_audio_ch.send_nowait(ev.frame)
 
