@@ -33,8 +33,8 @@ from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .pipeline_agent import PipelineAgent
-    from .task import AgentTask
+    from .agent_task import AgentTask
+    from .voice_agent import VoiceAgent
 
 
 @runtime_checkable
@@ -153,21 +153,21 @@ class _TextOutput:
 
 
 def perform_text_forwarding(
-    *, text_output: io.TextSink | None, llm_output: AsyncIterable[str]
+    *, text_output: io.TextSink | None, source: AsyncIterable[str]
 ) -> tuple[asyncio.Task, _TextOutput]:
     out = _TextOutput(text="", first_text_fut=asyncio.Future())
-    task = asyncio.create_task(_text_forwarding_task(text_output, llm_output, out))
+    task = asyncio.create_task(_text_forwarding_task(text_output, source, out))
     return task, out
 
 
 @utils.log_exceptions(logger=logger)
 async def _text_forwarding_task(
     text_output: io.TextSink | None,
-    llm_output: AsyncIterable[str],
+    source: AsyncIterable[str],
     out: _TextOutput,
 ) -> None:
     try:
-        async for delta in llm_output:
+        async for delta in source:
             out.text += delta
             if text_output is not None:
                 await text_output.capture_text(delta)
@@ -175,8 +175,8 @@ async def _text_forwarding_task(
             if not out.first_text_fut.done():
                 out.first_text_fut.set_result(None)
     finally:
-        if isinstance(llm_output, _ACloseable):
-            await llm_output.aclose()
+        if isinstance(source, _ACloseable):
+            await source.aclose()
 
         if text_output is not None:
             text_output.flush()
@@ -185,7 +185,7 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
-    first_frame_fut = asyncio.Future()
+    first_frame_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
 
 
 def perform_audio_forwarding(
@@ -219,7 +219,7 @@ async def _audio_forwarding_task(
 
 def perform_tool_executions(
     *,
-    agent: PipelineAgent,
+    agent: VoiceAgent,
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -244,7 +244,7 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    agent: PipelineAgent,
+    agent: VoiceAgent,
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -423,7 +423,7 @@ def _sanitize_function_output(
     fnc_call: llm.FunctionCall,
     out: _FunctionCallOutput,
 ) -> tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]:
-    from .task import AgentTask
+    from .agent_task import AgentTask
 
     if isinstance(out.exception, AIError):
         return (

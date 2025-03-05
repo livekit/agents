@@ -199,7 +199,7 @@ class WorkerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
     host: str = ""  # default to all interfaces
-    port: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=8080, prod_default=8081)
+    port: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
 
     The HTTP server is used as a health check endpoint.
@@ -211,6 +211,11 @@ class WorkerOptions:
             logger.warning(
                 f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
             )
+
+
+@dataclass
+class WorkerInfo:
+    http_port: int
 
 
 EventTypes = Literal["worker_started", "worker_registered"]
@@ -306,9 +311,10 @@ class Worker(utils.EventEmitter[EventTypes]):
             return web.Response(text="OK")
 
         self._http_server.app.add_routes([web.get("/", health_check)])
-        self._http_server.app.add_subapp("/tracing", tracing._create_tracing_app(self))
+        self._http_server.app.add_subapp("/debug", tracing._create_tracing_app(self))
 
         self._conn_task: asyncio.Task[None] | None = None
+        self._load_task: asyncio.Task[None] | None = None
 
         self._worker_load: float = 0.0
         self._worker_load_graph = tracing.Tracing.add_graph(
@@ -319,6 +325,10 @@ class Worker(utils.EventEmitter[EventTypes]):
             y_range=(0, 1),
             max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
         )
+
+    @property
+    def worker_info(self) -> WorkerInfo:
+        return WorkerInfo(http_port=self._http_server.port)
 
     async def run(self):
         if not self._closed:
@@ -340,6 +350,8 @@ class Worker(utils.EventEmitter[EventTypes]):
             t = self._loop.create_task(self._update_job_status(proc))
             self._tasks.add(t)
             t.add_done_callback(self._tasks.discard)
+
+        await self._http_server.start()
 
         self._proc_pool.on("process_started", _update_job_status)
         self._proc_pool.on("process_closed", _update_job_status)
@@ -368,10 +380,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                 self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
                 self._worker_load_graph.plot(time.time(), self._worker_load)
 
-        tasks = [
-            asyncio.create_task(self._http_server.run(), name="http_server"),
-            asyncio.create_task(_load_task(), name="load_task"),
-        ]
+        tasks = []
+        self._load_task = asyncio.create_task(_load_task(), name="load_task")
+        tasks.append(self._load_task)
 
         if self._register:
             self._conn_task = asyncio.create_task(self._connection_task(), name="worker_conn_task")
@@ -466,6 +477,9 @@ class Worker(utils.EventEmitter[EventTypes]):
         if self._conn_task is not None:
             await utils.aio.cancel_and_wait(self._conn_task)
 
+        if self._load_task is not None:
+            await utils.aio.cancel_and_wait(self._load_task)
+
         await self._proc_pool.aclose()
 
         if self._inference_executor is not None:
@@ -494,7 +508,6 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _connection_task(self) -> None:
-        print("connection task")
         assert self._http_session is not None
 
         retry_count = 0
@@ -572,8 +585,6 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
         closing_ws = False
-
-        print("running ws")
 
         async def _load_task():
             """periodically update worker status"""

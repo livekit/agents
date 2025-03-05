@@ -27,6 +27,7 @@ from typing import Any, Callable
 
 from livekit import rtc
 
+from ..cli import cli
 from ..debug import tracing
 from ..job import JobContext, JobProcess, _JobContextVar
 from ..log import logger
@@ -184,7 +185,12 @@ class _JobProc:
         await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
-        self._room = rtc.Room()
+        if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+            from .mock_room import MockRoom
+
+            self._room = MockRoom
+        else:
+            self._room = rtc.Room()
 
         @self._room.on("disconnected")
         def _on_room_disconnected(*args):
@@ -229,6 +235,9 @@ class _JobProc:
         )
 
         async def _warn_not_connected_task():
+            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+                return
+
             await asyncio.sleep(10)
             if not self._ctx_connect_called and not self._ctx_shutdown_called:
                 logger.warning(
@@ -248,6 +257,9 @@ class _JobProc:
                     exc_info=t.exception(),
                 )
             elif not self._ctx_connect_called and not self._ctx_shutdown_called:
+                if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+                    return
+
                 logger.warning(
                     (
                         "The job task completed without establishing a connection or performing a proper shutdown. "

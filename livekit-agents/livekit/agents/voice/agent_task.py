@@ -18,8 +18,8 @@ from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
 
 if TYPE_CHECKING:
-    from .pipeline_agent import PipelineAgent
     from .task_activity import TaskActivity
+    from .voice_agent import VoiceAgent
 
 
 class AgentTask:
@@ -96,9 +96,9 @@ class AgentTask:
         return self._vad
 
     @property
-    def agent(self) -> PipelineAgent:
+    def agent(self) -> VoiceAgent:
         """
-        Retrieve the PipelineAgent associated with the current task;.
+        Retrieve the VoiceAgent associated with the current task;.
 
         Raises:
             RuntimeError: If the task is not running
@@ -107,7 +107,7 @@ class AgentTask:
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
-    # constructor of the PipelineAgent
+    # constructor of the VoiceAgent
 
     async def on_enter(self) -> None:
         """Called when the task is entered"""
@@ -160,6 +160,11 @@ class AgentTask:
         async with activity.llm.chat(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx) as stream:
             async for chunk in stream:
                 yield chunk
+
+    async def transcription_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[str]]:
+        """Process the LLM output to transcriptions"""
+        async for delta in text:
+            yield delta
 
     async def tts_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[rtc.AudioFrame]]:
         activity = self.__get_activity_or_raise()

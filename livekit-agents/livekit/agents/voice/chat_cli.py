@@ -2,26 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import termios
 import threading
 import time
-import tty
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import click
 import numpy as np
-import sounddevice as sd
 from livekit import rtc
 
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
-from .pipeline_agent import PipelineAgent
+from .voice_agent import VoiceAgent
+
+if TYPE_CHECKING:
+    import sounddevice as sd
 
 MAX_AUDIO_BAR = 30
 INPUT_DB_MIN = -70.0
 INPUT_DB_MAX = 0.0
-FPS = 20
+FPS = 16
+
+
+AEC_RING_BUFFER_SIZE = 24000 * 4
 
 
 def _esc(*codes: int) -> str:
@@ -126,7 +129,7 @@ class _AudioSink(io.AudioSink):
 class ChatCLI:
     def __init__(
         self,
-        agent: PipelineAgent,
+        agent: VoiceAgent,
         *,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -146,36 +149,60 @@ class ChatCLI:
         self._text_sink = _TextSink(self)
         self._audio_sink = _AudioSink(self)
 
-    def _print_welcome(self):
-        print(_esc(34) + "=" * 50 + _esc(0))
-        print(_esc(34) + "     Livekit Agents - ChatCLI" + _esc(0))
-        print(_esc(34) + "=" * 50 + _esc(0))
-        print("Press [Ctrl+B] to toggle between Text/Audio mode, [Q] to quit.\n")
+        self._apm = rtc.AudioProcessingModule(
+            echo_cancellation=True,
+            noise_suppression=True,
+            high_pass_filter=True,
+        )
 
-    async def run(self) -> None:
-        self._print_welcome()
+        self._render_ring_buffer = np.empty((0,), dtype=np.int16)
+        self._render_ring_lock = threading.Lock()
 
-        fd = sys.stdin.fileno()
+        self._main_atask: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
+
+    @log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
         stdin_ch = aio.Chan[str](loop=self._loop)
 
-        def _on_input():
-            try:
-                ch = sys.stdin.read(1)
-                stdin_ch.send_nowait(ch)
-            except Exception:
-                stdin_ch.close()
+        if sys.platform == "win32":
+            import msvcrt
 
-        self._loop.add_reader(fd, _on_input)
-        old_settings = termios.tcgetattr(fd)
+            async def win_reader():
+                while True:
+                    ch = await self._loop.run_in_executor(None, msvcrt.getch)
+                    try:
+                        ch = ch.decode("utf-8")
+                    except Exception:
+                        pass
+                    await stdin_ch.send(ch)
+
+            self._win_read_task = asyncio.create_task(win_reader())
+        else:
+            import termios
+            import tty
+
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
+
+            def on_input():
+                try:
+                    ch = sys.stdin.read(1)
+                    stdin_ch.send_nowait(ch)
+                except Exception:
+                    stdin_ch.close()
+
+            self._loop.add_reader(fd, on_input)
 
         self._update_microphone(enable=True)
         self._update_speaker(enable=True)
 
         try:
-            tty.setcbreak(fd)
             input_cli_task = asyncio.create_task(self._input_cli_task(stdin_ch))
             input_cli_task.add_done_callback(lambda _: self._done_fut.set_result(None))
-
             render_cli_task = asyncio.create_task(self._render_cli_task())
 
             await self._done_fut
@@ -184,10 +211,15 @@ class ChatCLI:
             self._update_microphone(enable=False)
             self._update_speaker(enable=False)
         finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            self._loop.remove_reader(fd)
+            if sys.platform != "win32":
+                import termios
+
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                self._loop.remove_reader(fd)
 
     def _update_microphone(self, *, enable: bool) -> None:
+        import sounddevice as sd
+
         input_device, _ = sd.default.device
         if input_device is not None and enable:
             device_info = sd.query_devices(input_device)
@@ -200,6 +232,7 @@ class ChatCLI:
                 channels=1,
                 device=input_device,
                 samplerate=24000,
+                blocksize=240,
             )
             self._input_stream.start()
             self._agent.input.audio = self._audio_input_ch
@@ -210,6 +243,8 @@ class ChatCLI:
             self._agent.input.audio = None
 
     def _update_speaker(self, *, enable: bool) -> None:
+        import sounddevice as sd
+
         _, output_device = sd.default.device
         if output_device is not None and enable:
             self._output_stream = sd.OutputStream(
@@ -218,7 +253,7 @@ class ChatCLI:
                 channels=1,
                 device=output_device,
                 samplerate=24000,
-                blocksize=4800,
+                blocksize=2400,  # 100ms
             )
             self._output_stream.start()
             self._agent.output.audio = self._audio_sink
@@ -229,9 +264,9 @@ class ChatCLI:
 
     def _update_text_output(self, *, enable: bool) -> None:
         if enable:
-            self._agent.output.text = self._text_sink
+            self._agent.output.transcription = self._text_sink
         else:
-            self._agent.output.text = None
+            self._agent.output.transcription = None
             self._text_input_buf = []
 
     def _sd_output_callback(self, outdata: np.ndarray, frames: int, *_) -> None:
@@ -252,18 +287,44 @@ class ChatCLI:
                 outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
                 del self._audio_sink.audio_buffer[:bytes_needed]
 
+        with self._render_ring_lock:
+            render_chunk = outdata[:, 0].copy()
+            self._render_ring_buffer = np.concatenate((self._render_ring_buffer, render_chunk))
+            if self._render_ring_buffer.size > AEC_RING_BUFFER_SIZE:
+                self._render_ring_buffer = self._render_ring_buffer[-AEC_RING_BUFFER_SIZE:]
+
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
         rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
         max_int16 = np.iinfo(np.int16).max
         self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
 
-        frame = rtc.AudioFrame(
-            data=indata.tobytes(),
+        capture_np = indata.copy()
+
+        CHUNK_SAMPLES = 240
+        with self._render_ring_lock:
+            if self._render_ring_buffer.size >= CHUNK_SAMPLES:
+                render_chunk = self._render_ring_buffer[:CHUNK_SAMPLES].copy()
+                self._render_ring_buffer = self._render_ring_buffer[CHUNK_SAMPLES:]
+            else:
+                render_chunk = np.zeros((CHUNK_SAMPLES,), dtype=np.int16)
+
+        capture_frame_for_aec = rtc.AudioFrame(
+            data=capture_np.tobytes(),
             samples_per_channel=frame_count,
             sample_rate=24000,
             num_channels=1,
         )
-        self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, frame)
+        render_frame_for_aec = rtc.AudioFrame(
+            data=render_chunk.tobytes(),
+            samples_per_channel=CHUNK_SAMPLES,
+            sample_rate=24000,
+            num_channels=1,
+        )
+
+        self._apm.process_reverse_stream(render_frame_for_aec)
+        self._apm.process_stream(capture_frame_for_aec)
+
+        self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, capture_frame_for_aec)
 
     @log_exceptions(logger=logger)
     async def _input_cli_task(self, in_ch: aio.Chan[str]) -> None:

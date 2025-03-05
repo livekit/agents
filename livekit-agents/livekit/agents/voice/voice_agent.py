@@ -3,27 +3,26 @@ from __future__ import annotations, print_function
 import asyncio
 import copy
 from dataclasses import dataclass
-from typing import AsyncIterable, Generic, Literal, TypeVar
-from typing_extensions import override
-
+from typing import AsyncIterable, Generic, TypeVar
 
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
+from ..cli import cli
 from ..llm import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
+from .agent_task import AgentTask
 from .audio_recognition import _TurnDetector
+from .events import AgentEvent, AgentStateChangedEvent, EventTypes
 from .speech_handle import SpeechHandle
-from .task import AgentTask
 from .task_activity import TaskActivity
-from .events import EventTypes, AgentEvent, AgentStateChangedEvent
 
 
 @dataclass
-class PipelineOptions:
+class VoiceOptions:
     allow_interruptions: bool
     min_interruption_duration: float
     min_endpointing_delay: float
@@ -33,7 +32,7 @@ class PipelineOptions:
 Userdata_T = TypeVar("Userdata_T")
 
 
-class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
@@ -56,7 +55,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
-        self._opts = PipelineOptions(
+        self._opts = VoiceOptions(
             allow_interruptions=allow_interruptions,
             min_interruption_duration=min_interruption_duration,
             min_endpointing_delay=min_endpointing_delay,
@@ -105,7 +104,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("PipelineAgent userdata is not set")
+            raise ValueError("VoiceAgent userdata is not set")
 
         return self._userdata
 
@@ -160,21 +159,39 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
     ) -> None:
-        """Start the pipeline agent.
+        """Start the voice agent.
+
         Create a default RoomIO if the input or output audio is not already set.
+        If the console flag is provided, start a ChatCLI.
 
         Args:
             room: The room to use for input and output
             room_input_options: Options for the room input
             room_output_options: Options for the room output
         """
-        if self._started:
-            return
-
         async with self._lock:
+            if self._started:
+                return
+
             self._update_agent_state(AgentState.INITIALIZING)
 
-            if is_given(room):
+            if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
+                from .chat_cli import ChatCLI
+
+                if (
+                    self.input.audio is not None
+                    or self.output.audio is not None
+                    or self.output.transcription is not None
+                ):
+                    logger.warning(
+                        "agent started with the console subcommand, but input.audio or output.audio "
+                        "or output.transcription is already set, overriding.."
+                    )
+
+                chat_cli = ChatCLI(self)
+                await chat_cli.start()
+
+            elif is_given(room):
                 room_input_options = copy.deepcopy(room_input_options)
                 room_output_options = copy.deepcopy(room_output_options)
 
@@ -184,7 +201,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and room_input_options.audio_enabled
                 ):
                     logger.warning(
-                        "room audio input is enabled but input.audio is already set, ignoring"
+                        "RoomIO audio input is enabled but input.audio is already set, ignoring.."
                     )
                     room_input_options.audio_enabled = False
 
@@ -194,19 +211,19 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and room_output_options.audio_enabled
                 ):
                     logger.warning(
-                        "room audio output is enabled but output.audio or output.text is already set, ignoring"
+                        "RoomIO audio output is enabled but output.audio is already set, ignoring.."
                     )
                     room_output_options.audio_enabled = False
 
                 if (
-                    self.output.text is not None
+                    self.output.transcription is not None
                     and is_given(room_output_options)
-                    and room_output_options.text_enabled
+                    and room_output_options.transcription_enabled
                 ):
                     logger.warning(
-                        "room text output is enabled but output.text is already set, ignoring"
+                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."
                     )
-                    room_output_options.text_enabled = False
+                    room_output_options.transcription_enabled = False
 
                 self._room_io = room_io.RoomIO(
                     room=room,
@@ -229,18 +246,20 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = True
             self._update_agent_state(AgentState.LISTENING)
 
-        if self.output.audio is None and self.output.text is None:
-            logger.warning("agent started without audio or text output")
-
     async def aclose(self) -> None:
-        if not self._started:
-            return
+        async with self._lock:
+            if not self._started:
+                return
 
-        if self._forward_audio_atask is not None:
-            await utils.aio.cancel_and_wait(self._forward_audio_atask)
+            if self._forward_audio_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_audio_atask)
+
+            if self._room_io:
+                await self._room_io.aclose()
+            self._input.close()
 
     @property
-    def options(self) -> PipelineOptions:
+    def options(self) -> VoiceOptions:
         return self._opts
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
@@ -263,7 +282,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         return self._activity.say(
             text,
@@ -280,7 +299,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         return self._activity.generate_reply(
             user_input=user_input,
@@ -290,7 +309,7 @@ class PipelineAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def interrupt(self) -> None:
         if self._activity is None:
-            raise ValueError("PipelineAgent isn't running")
+            raise ValueError("VoiceAgent isn't running")
 
         self._activity.interrupt()
 

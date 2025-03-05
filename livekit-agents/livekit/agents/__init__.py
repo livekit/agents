@@ -17,12 +17,12 @@ from . import (
     ipc,
     llm,
     metrics,
-    pipeline,
     stt,
     tokenize,
     tts,
     utils,
     vad,
+    voice,
 )
 from ._exceptions import (
     APIConnectionError,
@@ -43,6 +43,7 @@ from .types import (
     NotGivenOr,
 )
 from .version import __version__
+from .voice import VoiceAgent
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
@@ -66,7 +67,8 @@ __all__ = [
     "tokenize",
     "llm",
     "metrics",
-    "pipeline",
+    "voice",
+    "VoiceAgent",
     "cli",
     "AssignmentTimeoutError",
     "APIConnectionError",

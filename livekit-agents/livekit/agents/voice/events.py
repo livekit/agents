@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar, Literal, Union
-
-from ..llm import FunctionCall, ChatMessage
-from ..metrics import AgentMetrics
-from ..types import AgentState
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel
 
+from ..llm import ChatMessage, FunctionCall
+from ..metrics import AgentMetrics
+from ..types import AgentState
+
 if TYPE_CHECKING:
-    from .pipeline_agent import PipelineAgent
     from .speech_handle import SpeechHandle
+    from .voice_agent import VoiceAgent
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -21,7 +21,7 @@ class CallContext(Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        agent: PipelineAgent,
+        agent: VoiceAgent,
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
     ) -> None:
@@ -30,7 +30,7 @@ class CallContext(Generic[Userdata_T]):
         self._function_call = function_call
 
     @property
-    def agent(self) -> PipelineAgent[Userdata_T]:
+    def agent(self) -> VoiceAgent[Userdata_T]:
         return self._agent
 
     @property
