@@ -59,7 +59,7 @@ def to_chat_ctx(
                 types.Part(
                     function_call=types.FunctionCall(
                         name=msg.name,
-                        args=msg.arguments,
+                        args=json.loads(msg.arguments),
                     )
                 )
             )
@@ -68,7 +68,7 @@ def to_chat_ctx(
                 types.Part(
                     function_response=types.FunctionResponse(
                         name=msg.name,
-                        response=msg.output,
+                        response={"text": msg.output},
                     )
                 )
             )

@@ -432,6 +432,7 @@ def _sanitize_function_output(
         return (
             fnc_call,
             llm.FunctionCallOutput(
+                name=out.name,
                 call_id=out.call_id,
                 output=out.exception.message,
                 is_error=True,
@@ -454,6 +455,7 @@ def _sanitize_function_output(
         return (
             fnc_call,
             llm.FunctionCallOutput(
+                name=out.name,
                 call_id=out.call_id,
                 output="An internal error occurred",
                 is_error=True,
@@ -509,6 +511,7 @@ def _sanitize_function_output(
     return (
         fnc_call,
         llm.FunctionCallOutput(
+            name=out.name,
             call_id=out.call_id,
             output=str(fnc_out),
             is_error=False,

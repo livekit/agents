@@ -115,6 +115,7 @@ class FunctionCall(BaseModel):
 
 class FunctionCallOutput(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    name: str = Field(default="")
     type: Literal["function_call_output"] = Field(default="function_call_output")
     call_id: str
     output: str
