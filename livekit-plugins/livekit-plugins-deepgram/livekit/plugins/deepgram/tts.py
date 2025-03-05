@@ -84,6 +84,7 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,  # 1 hour
+            mark_refreshed_on_get=False,
         )
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
