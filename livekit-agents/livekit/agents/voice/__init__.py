@@ -1,18 +1,18 @@
+from .agent_task import AgentTask, InlineTask
 from .chat_cli import ChatCLI
 from .events import (
-    CallContext,
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
     AgentEvent,
-    UserInputTranscribedEvent,
     AgentStartedSpeakingEvent,
     AgentStoppedSpeakingEvent,
-    MetricsCollectedEvent,
+    CallContext,
     ConversationItemAddedEvent,
+    MetricsCollectedEvent,
+    UserInputTranscribedEvent,
+    UserStartedSpeakingEvent,
+    UserStoppedSpeakingEvent,
 )
-from .voice_agent import VoiceAgent
 from .speech_handle import SpeechHandle
-from .agent_task import AgentTask, InlineTask
+from .voice_agent import VoiceAgent
 
 __all__ = [
     "ChatCLI",

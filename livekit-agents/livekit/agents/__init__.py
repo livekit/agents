@@ -17,14 +17,13 @@ from . import (
     ipc,
     llm,
     metrics,
-    voice,
     stt,
     tokenize,
     tts,
     utils,
     vad,
+    voice,
 )
-from .voice import VoiceAgent
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -44,6 +43,7 @@ from .types import (
     NotGivenOr,
 )
 from .version import __version__
+from .voice import VoiceAgent
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [

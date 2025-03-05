@@ -48,7 +48,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "click~=8.1",
-        "livekit>=0.20.1",
+        "livekit>=0.21.1",
         "livekit-api~=0.8.2",
         "livekit-protocol~=0.8.2",
         "protobuf>=3",
@@ -58,6 +58,7 @@ setuptools.setup(
         "psutil~=5.9",
         "aiohttp~=3.10",
         "typing-extensions~=4.12",
+        "sounddevice>=0.5",
     ],
     extras_require={
         ':sys_platform=="win32"': ["colorama"],  # fix logs color on windows (devmode only)

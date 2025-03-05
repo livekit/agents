@@ -43,8 +43,8 @@ def log_event(event: str, **kwargs) -> None:
 
 
 if TYPE_CHECKING:
-    from .voice_agent import VoiceAgent
     from .agent_task import AgentTask
+    from .voice_agent import VoiceAgent
 
 
 _TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")

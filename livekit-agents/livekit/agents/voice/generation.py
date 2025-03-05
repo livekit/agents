@@ -33,8 +33,8 @@ from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .voice_agent import VoiceAgent
     from .agent_task import AgentTask
+    from .voice_agent import VoiceAgent
 
 
 @runtime_checkable

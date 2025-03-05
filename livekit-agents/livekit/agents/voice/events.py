@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar, Literal, Union
-
-from ..llm import FunctionCall, ChatMessage
-from ..metrics import AgentMetrics
-from ..types import AgentState
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel
 
+from ..llm import ChatMessage, FunctionCall
+from ..metrics import AgentMetrics
+from ..types import AgentState
+
 if TYPE_CHECKING:
-    from .voice_agent import VoiceAgent
     from .speech_handle import SpeechHandle
+    from .voice_agent import VoiceAgent
 
 
 Userdata_T = TypeVar("Userdata_T")

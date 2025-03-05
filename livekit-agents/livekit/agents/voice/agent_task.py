@@ -18,8 +18,8 @@ from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
 
 if TYPE_CHECKING:
-    from .voice_agent import VoiceAgent
     from .task_activity import TaskActivity
+    from .voice_agent import VoiceAgent
 
 
 class AgentTask:

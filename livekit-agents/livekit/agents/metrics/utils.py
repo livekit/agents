@@ -6,7 +6,6 @@ from ..log import logger as default_logger
 from .base import (
     AgentMetrics,
     LLMMetrics,
-    EOUMetrics,
     STTMetrics,
     TTSMetrics,
 )
