@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 import boto3
 from livekit.agents import llm
-from livekit.agents.llm import AIFunction, ChatContext, ImageContent
+from livekit.agents.llm import AIFunction, ChatContext, ImageContent, utils
 
 __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
 
@@ -114,10 +114,10 @@ def _build_tool_spec(fnc: AIFunction) -> dict:
 
 
 def _build_image(image: ImageContent, cache_key: Any) -> dict:
-    img = llm.utils.serialize_image(image, cache_key)
+    img = utils.serialize_image(image, cache_key)
     return {
         "image": {
             "format": "jpeg",
-            "source": {"bytes": img["data_bytes"]},
+            "source": {"bytes": img.data_bytes},
         }
     }

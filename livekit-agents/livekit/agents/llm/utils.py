@@ -104,7 +104,14 @@ def is_context_type(ty: type) -> bool:
     return is_call_context
 
 
-def serialize_image(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]:
+@dataclass
+class SerializedImage:
+    data_bytes: bytes
+    media_type: str
+    inference_detail: str
+
+
+def serialize_image(image: llm.ImageContent, cache_key: Any) -> SerializedImage:
     if isinstance(image.image, str):
         header, b64_data = image.image.split(",", 1)
         encoded_data = base64.b64decode(b64_data)
@@ -115,11 +122,11 @@ def serialize_image(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]:
                 f"Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
             )
 
-        return {
-            "data_bytes": encoded_data,
-            "media_type": media_type,
-            "inference_detail": image.inference_detail,
-        }
+        return SerializedImage(
+            data_bytes=encoded_data,
+            media_type=media_type,
+            inference_detail=image.inference_detail,
+        )
     elif isinstance(image.image, rtc.VideoFrame):
         if cache_key not in image._cache:
             opts = utils.images.EncodeOptions()
@@ -132,11 +139,11 @@ def serialize_image(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]:
             encoded_data = utils.images.encode(image.image, opts)
             image._cache[cache_key] = encoded_data
 
-        return {
-            "data_bytes": image._cache[cache_key],
-            "media_type": "image/jpeg",
-            "inference_detail": image.inference_detail,
-        }
+        return SerializedImage(
+            data_bytes=image._cache[cache_key],
+            media_type="image/jpeg",
+            inference_detail=image.inference_detail,
+        )
     raise ValueError("Unsupported image type")
 
 

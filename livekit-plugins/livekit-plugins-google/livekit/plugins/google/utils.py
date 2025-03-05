@@ -80,7 +80,7 @@ def to_chat_ctx(
 
 def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
     img = llm.utils.serialize_image(image, cache_key)
-    return types.Part.from_bytes(data=img["data_bytes"], mime_type=img["media_type"])
+    return types.Part.from_bytes(data=img.data_bytes, mime_type=img.media_type)
 
 
 def _build_gemini_fnc(ai_function: AIFunction) -> types.FunctionDeclaration:
