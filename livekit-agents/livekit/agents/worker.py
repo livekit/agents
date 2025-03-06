@@ -427,12 +427,18 @@ class Worker(utils.EventEmitter[EventTypes]):
     async def simulate_job(self, room: str, participant_identity: str | None = None) -> None:
         assert self._api is not None
 
-        room_obj = await self._api.room.create_room(api.CreateRoomRequest(name=room))
+        from livekit.protocol.models import Room, ParticipantInfo
+        from .cli import cli
+
         participant = None
-        if participant_identity:
-            participant = await self._api.room.get_participant(
-                api.RoomParticipantIdentity(room=room, identity=participant_identity)
-            )
+        if cli.CLI_ARGUMENTS is None or not cli.CLI_ARGUMENTS.console:
+            room_obj = await self._api.room.create_room(api.CreateRoomRequest(name=room))
+            if participant_identity:
+                participant = await self._api.room.get_participant(
+                    api.RoomParticipantIdentity(room=room, identity=participant_identity)
+                )
+        else:
+            room_obj = Room(sid=utils.shortuuid("RM_"), name=room)
 
         agent_id = utils.shortuuid("simulated-agent-")
         token = (
