@@ -15,6 +15,7 @@ HG_MODEL = "livekit/turn-detector"
 ONNX_FILENAME = "model_q8.onnx"
 MODEL_REVISION = "v1.2.1"
 MAX_HISTORY_TOKENS = 512
+MAX_HISTORY_TURNS = 6
 
 
 def _download_from_hf_hub(repo_id, filename, **kwargs):
@@ -167,9 +168,6 @@ class EOUModel:
                         )
                         break
 
-        MAX_HISTORY_TURNS = (
-            25  # Probably not necessary since we truncate with tokenizer
-        )
         messages = messages[-MAX_HISTORY_TURNS:]
 
         json_data = json.dumps({"chat_ctx": messages}).encode()
@@ -184,7 +182,6 @@ class EOUModel:
         )
 
         result_json = json.loads(result.decode())
-        result_json["job_id"] = get_current_job_context().job.id
         logger.debug(
             "eou prediction",
             extra=result_json,
