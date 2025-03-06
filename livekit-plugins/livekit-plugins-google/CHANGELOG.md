@@ -1,5 +1,17 @@
 # livekit-plugins-google
 
+## 0.11.0
+
+### Minor Changes
+
+- Add simple video input support for gemini live - [#1536](https://github.com/livekit/agents/pull/1536) ([@bcherry](https://github.com/bcherry))
+
+### Patch Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.10.6
 
 ### Patch Changes

@@ -1,5 +1,17 @@
 # livekit-plugins-openai
 
+## 1.0.1
+
+### Patch Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+- fix multimodal agent interrupts itself when creating function call response - [#1585](https://github.com/livekit/agents/pull/1585) ([@longcw](https://github.com/longcw))
+
+- feat: add max_tokens option to LLM and LLMStream classes - [#1576](https://github.com/livekit/agents/pull/1576) ([@davidzhao](https://github.com/davidzhao))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
 ## 1.0.0
 
 ### Major Changes
