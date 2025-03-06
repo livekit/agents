@@ -52,7 +52,7 @@ setuptools.setup(
         "google-cloud-speech >= 2, < 3",
         "google-cloud-texttospeech >= 2, < 3",
         "google-genai == 1.3.0",
-        "livekit-agents>=0.12.11",
+        "livekit-agents>=0.12.16,<1.0.0",
     ],
     package_data={"livekit.plugins.google": ["py.typed"]},
     project_urls={
