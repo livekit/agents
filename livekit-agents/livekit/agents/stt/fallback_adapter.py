@@ -50,9 +50,17 @@ class FallbackAdapter(
         if len(stt) < 1:
             raise ValueError("At least one STT instance must be provided.")
 
+        non_streaming_stt = [t for t in stt if not t.capabilities.streaming]
+        if non_streaming_stt:
+            labels = ", ".join(t.label for t in non_streaming_stt)
+            raise ValueError(
+                f"STTs do not support streaming: {labels}. "
+                "Wrap them with stt.StreamAdapter to enable streaming."
+            )
+
         super().__init__(
             capabilities=STTCapabilities(
-                streaming=all(t.capabilities.streaming for t in stt),
+                streaming=True,
                 interim_results=all(t.capabilities.interim_results for t in stt),
             )
         )

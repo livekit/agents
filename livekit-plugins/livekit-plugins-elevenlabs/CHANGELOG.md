@@ -1,5 +1,49 @@
 # livekit-plugins-elevenlabs
 
+## 0.8.0
+
+### Minor Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+### Patch Changes
+
+- added a tts.prewarm method to start the connection pool early. - [#1587](https://github.com/livekit/agents/pull/1587) ([@davidzhao](https://github.com/davidzhao))
+
+- deprecated elevenlabs' optimize_stream_latency option - [#1587](https://github.com/livekit/agents/pull/1587) ([@davidzhao](https://github.com/davidzhao))
+
+- increase elevenlabs websocket connection timeout to default 300 seconds - [#1582](https://github.com/livekit/agents/pull/1582) ([@jayeshp19](https://github.com/jayeshp19))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
+- Added speed parameter for voices. - [#1574](https://github.com/livekit/agents/pull/1574) ([@MatthiasGruba](https://github.com/MatthiasGruba))
+
+  E.g.:
+
+  ```python
+  voice = Voice(
+      id="EXAVITQu4vr4xnSDxMaL",
+      name="Bella",
+      category="premade",
+      settings=VoiceSettings(
+          stability=0.71,
+          speed=1.2,
+          similarity_boost=0.5,
+          style=0.0,
+          use_speaker_boost=True,
+      ),
+  )
+
+  ```
+
+## 0.7.14
+
+### Patch Changes
+
+- use connection pool for elevenlabs websocket persistant connection - [#1546](https://github.com/livekit/agents/pull/1546) ([@jayeshp19](https://github.com/jayeshp19))
+
+- remove update options from tts synthesis stream - [#1546](https://github.com/livekit/agents/pull/1546) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.7.13
 
 ### Patch Changes

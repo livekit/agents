@@ -19,6 +19,8 @@ NOISY_LOGGERS = [
     "watchfiles",
     "anthropic",
     "websockets.client",
+    "botocore",
+    "aiobotocore",
 ]
 
 
