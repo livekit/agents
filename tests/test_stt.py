@@ -91,9 +91,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_stream(stt_factory, sample_rate):
     stt = stt_factory()
-    frames, transcript = await make_test_speech(
-        chunk_duration_ms=10, sample_rate=sample_rate
-    )
+    frames, transcript = await make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)
 
     stream = stt.stream()
 

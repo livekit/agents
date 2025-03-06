@@ -130,9 +130,7 @@ async def entrypoint(ctx: JobContext):
 
     # Start the assistant. This will automatically publish a microphone track and listen to the participant.
     agent.start(ctx.room, participant)
-    await agent.say(
-        "Hello from the weather station. Tell me your location to check the weather."
-    )
+    await agent.say("Hello from the weather station. Tell me your location to check the weather.")
 
 
 if __name__ == "__main__":

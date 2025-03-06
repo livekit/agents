@@ -239,9 +239,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> "SynthesizeStream":
+    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> "SynthesizeStream":
         stream = SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
         self._streams.add(stream)
         return stream
@@ -409,14 +407,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             # 11labs protocol expects the first message to be an "init msg"
             init_pkt = dict(
                 text=" ",
-                voice_settings=_strip_nones(
-                    dataclasses.asdict(self._opts.voice.settings)
-                )
+                voice_settings=_strip_nones(dataclasses.asdict(self._opts.voice.settings))
                 if self._opts.voice.settings
                 else None,
-                generation_config=dict(
-                    chunk_length_schedule=self._opts.chunk_length_schedule
-                ),
+                generation_config=dict(chunk_length_schedule=self._opts.chunk_length_schedule),
             )
             await ws_conn.send_str(json.dumps(init_pkt))
 
@@ -487,9 +481,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         decoder.push(b64data)
 
                         if alignment := data.get("normalizedAlignment"):
-                            received_text += "".join(
-                                alignment.get("chars", [])
-                            ).replace(" ", "")
+                            received_text += "".join(alignment.get("chars", [])).replace(" ", "")
                             if received_text == expected_text:
                                 decoder.end_input()
                                 break

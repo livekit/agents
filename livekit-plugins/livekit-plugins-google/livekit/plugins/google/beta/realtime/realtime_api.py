@@ -325,9 +325,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     DEFAULT_ENCODE_OPTIONS = images.EncodeOptions(
         format="JPEG",
         quality=75,
-        resize_options=images.ResizeOptions(
-            width=1024, height=1024, strategy="scale_aspect_fit"
-        ),
+        resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
     )
 
     def push_video(
