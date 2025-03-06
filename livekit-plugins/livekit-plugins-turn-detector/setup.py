@@ -48,7 +48,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit-agents>=0.12.3",
+        "livekit-agents>=1.0.0.dev3",
         "transformers>=4.47.1",
         "numpy>=1.26",
         "onnxruntime>=1.18",
