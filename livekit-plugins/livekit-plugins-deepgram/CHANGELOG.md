@@ -1,5 +1,21 @@
 # livekit-plugins-deepgram
 
+## 0.7.0
+
+### Minor Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+### Patch Changes
+
+- added a tts.prewarm method to start the connection pool early. - [#1587](https://github.com/livekit/agents/pull/1587) ([@davidzhao](https://github.com/davidzhao))
+
+- update pool configuration for deepgram and cartesia - [#1605](https://github.com/livekit/agents/pull/1605) ([@jayeshp19](https://github.com/jayeshp19))
+
+- set mex session duration to 1 hour in deepgram connection pool - [#1582](https://github.com/livekit/agents/pull/1582) ([@jayeshp19](https://github.com/jayeshp19))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.6.20
 
 ### Patch Changes

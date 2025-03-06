@@ -1,5 +1,21 @@
 # livekit-agents
 
+## 0.12.17
+
+### Patch Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+- added a tts.prewarm method to start the connection pool early. - [#1587](https://github.com/livekit/agents/pull/1587) ([@davidzhao](https://github.com/davidzhao))
+
+- Raise ValueError in FallbackAdapter when streaming is not supported - [#1609](https://github.com/livekit/agents/pull/1609) ([@jayeshp19](https://github.com/jayeshp19))
+
+- fixed a bug in AudioStreamDecoder where it could fail on close - [#1587](https://github.com/livekit/agents/pull/1587) ([@davidzhao](https://github.com/davidzhao))
+
+- support for livekit noise cancellation plugin in VoicePipelineAgent and MultimodalAgent - [#1551](https://github.com/livekit/agents/pull/1551) ([@bcherry](https://github.com/bcherry))
+
+- fix: \_play_speech get stuck due to orphan speech handle - [#1555](https://github.com/livekit/agents/pull/1555) ([@SiyuanQi](https://github.com/SiyuanQi))
+
 ## 0.12.16
 
 ### Patch Changes
