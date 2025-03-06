@@ -134,14 +134,6 @@ def _build_anthropic_schema(
     return anthropic.types.ToolParam(
         name=fnc["name"],
         description=fnc["description"] or "",
-        input_schema=_add_required_flags(fnc["parameters"]),
+        input_schema=fnc["parameters"],
         cache_control=cache_ctrl,
     )
-
-
-def _add_required_flags(schema: dict[str, Any]) -> dict[str, Any]:
-    required_fields = set(schema.get("required", []))
-    properties = schema.get("properties", {})
-    for name, prop in properties.items():
-        prop["required"] = name in required_fields
-    return schema
