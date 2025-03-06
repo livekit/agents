@@ -5,11 +5,6 @@ TTSEncodings = Literal[
     "pcm_mulaw",
 ]
 
-TTSModels = Literal[
-    "neu-fast", 
-    "neu-hq"
-]
+TTSModels = Literal["neu-fast", "neu-hq"]
 
-TTSLangCodes = Literal[
-    "en", "nl", "es", "de", "hi", "en-hi", "ar"
-]
+TTSLangCodes = Literal["en", "nl", "es", "de", "hi", "en-hi", "ar"]

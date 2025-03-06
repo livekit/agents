@@ -33,14 +33,10 @@ from livekit.agents import (
 )
 
 from .log import logger
-from .models import (
-    TTSEncodings,
-    TTSModels,
-    TTSLangCodes
-)
+from .models import TTSEncodings, TTSModels, TTSLangCodes
 
 API_BASE_URL = "api.neuphonic.com"
-AUTHORIZATION_HEADER = 'X-API-KEY'
+AUTHORIZATION_HEADER = "X-API-KEY"
 NUM_CHANNELS = 1
 
 
@@ -58,7 +54,14 @@ class _TTSOptions:
     @property
     def model_params(self) -> dict:
         """Returns a dict of all model parameters and their values."""
-        params = ["voice_id", "model", "lang_code", "encoding", "sampling_rate", "speed"]
+        params = [
+            "voice_id",
+            "model",
+            "lang_code",
+            "encoding",
+            "sampling_rate",
+            "speed",
+        ]
         values = {}
 
         for param in params:
@@ -87,15 +90,15 @@ def _parse_sse_message(message: str) -> dict:
     """
     message = message.strip()
 
-    if not message or 'data' not in message:
+    if not message or "data" not in message:
         return None
 
-    _, value = message.split(': ', 1)
+    _, value = message.split(": ", 1)
     message = json.loads(value)
 
-    if message.get('errors') is not None:
+    if message.get("errors") is not None:
         raise Exception(
-            f'Status {message.status_code} error received: {message.errors}.'
+            f"Status {message.status_code} error received: {message.errors}."
         )
 
     return message
@@ -134,14 +137,14 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS
+            num_channels=NUM_CHANNELS,
         )
 
         api_key = api_key or os.environ.get("NEUPHONIC_API_TOKEN")
 
         if not api_key:
             raise ValueError("NEUPHONIC_API_TOKEN must be set")
-        
+
         self._opts = _TTSOptions(
             model=model,
             voice_id=voice_id,
@@ -150,7 +153,7 @@ class TTS(tts.TTS):
             speed=speed,
             sampling_rate=sample_rate,
             api_key=api_key,
-            base_url=base_url
+            base_url=base_url,
         )
 
         self._session = http_session
@@ -165,25 +168,22 @@ class TTS(tts.TTS):
         url = f"wss://{self._opts.base_url}/speak/{self._opts.lang_code}{self._opts.get_query_param_string()}"
 
         return await asyncio.wait_for(
-            session.ws_connect(
-                url,
-                headers={AUTHORIZATION_HEADER: self._opts.api_key}
-            ),
-            self._conn_options.timeout
+            session.ws_connect(url, headers={AUTHORIZATION_HEADER: self._opts.api_key}),
+            self._conn_options.timeout,
         )
-    
+
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()
-    
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
 
         return self._session
-    
+
     def prewarm(self) -> None:
         self._pool.prewarm()
-    
+
     def synthesize(
         self,
         text: str,
@@ -197,7 +197,7 @@ class TTS(tts.TTS):
             opts=self._opts,
             session=self._ensure_session(),
         )
-    
+
     def stream(
         self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> SynthesizeStream:
@@ -256,7 +256,9 @@ class ChunkedStream(tts.ChunkedStream):
                     total=30,
                     sock_connect=self._conn_options.timeout,
                 ),
-                read_bufsize=10 * 1024 * 1024,  # large read_bufsize to avoid `ValueError: Chunk too big`
+                read_bufsize=10
+                * 1024
+                * 1024,  # large read_bufsize to avoid `ValueError: Chunk too big`
             ) as response:
                 response.raise_for_status()
                 emitter = tts.SynthesizedAudioEmitter(
@@ -265,12 +267,17 @@ class ChunkedStream(tts.ChunkedStream):
                 )
 
                 async for line in response.content:
-                    message = line.decode('utf-8').strip()
+                    message = line.decode("utf-8").strip()
                     if message:
                         parsed_message = _parse_sse_message(message)
 
-                        if parsed_message is not None and parsed_message.get('data', {}).get('audio') is not None:
-                            audio_bytes = base64.b64decode(parsed_message['data']['audio'])
+                        if (
+                            parsed_message is not None
+                            and parsed_message.get("data", {}).get("audio") is not None
+                        ):
+                            audio_bytes = base64.b64decode(
+                                parsed_message["data"]["audio"]
+                            )
 
                             for frame in bstream.write(audio_bytes):
                                 emitter.push(frame)
@@ -289,7 +296,7 @@ class ChunkedStream(tts.ChunkedStream):
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
-        
+
 
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
@@ -308,8 +315,18 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         def _is_all_audio_recv():
             """Check whether all audio has been recieved."""
-            recv_text = request_data[request_id]["recv"].lower().replace(" ", "").replace("<stop>", "")
-            sent_text = request_data[request_id]["sent"].lower().replace(" ", "").replace("<stop>", "")
+            recv_text = (
+                request_data[request_id]["recv"]
+                .lower()
+                .replace(" ", "")
+                .replace("<stop>", "")
+            )
+            sent_text = (
+                request_data[request_id]["sent"]
+                .lower()
+                .replace(" ", "")
+                .replace("<stop>", "")
+            )
 
             return sent_text == recv_text
 
@@ -324,7 +341,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 request_data[request_id]["sent"] += data
                 await ws.send_str(json.dumps({"text": data}))
-            
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
             audio_bstream = utils.audio.AudioByteStream(
@@ -359,16 +375,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     recv_text = data["data"]["text"]
                     for frame in audio_bstream.write(b64data):
                         emitter.push(frame)
-                    
+
                     request_data[request_id]["recv"] += recv_text
                 else:
                     logger.error("Unexpected Neuphonic message %s", data)
-                
+
                 if _is_all_audio_recv():
                     for frame in audio_bstream.flush():
                         emitter.push(frame)
                     emitter.flush()
                     break  # we are not going to receive any more audio
+
         async with self._pool.connection() as ws:
             tasks = [
                 asyncio.create_task(_send_task(ws)),
