@@ -1,12 +1,11 @@
 import logging
 import os
-from typing import AsyncGenerator
+from typing import AsyncGenerator, AsyncIterator
 
 import cv2
 import numpy as np
 from bithuman_runtime import AsyncBithumanRuntime
 from dotenv import load_dotenv
-
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, utils
 from livekit.agents.llm import ai_function
@@ -63,7 +62,10 @@ class BithumanGenerator(VideoGenerator):
     def clear_buffer(self) -> None:
         self._runtime.interrupt()
 
-    async def stream(
+    def stream(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
+        return self._stream_impl()
+
+    async def _stream_impl(
         self,
     ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
         def create_video_frame(image: np.ndarray) -> rtc.VideoFrame:
@@ -76,11 +78,10 @@ class BithumanGenerator(VideoGenerator):
             )
 
         async for frame in self._runtime.run():
-            video_frame: rtc.VideoFrame | None = None
             if frame.bgr_image is not None:
                 video_frame = create_video_frame(frame.bgr_image)
+                yield video_frame
 
-            audio_frame: rtc.AudioFrame | None = None
             audio_chunk = frame.audio_chunk
             if audio_chunk is not None:
                 audio_frame = rtc.AudioFrame(
@@ -89,9 +90,6 @@ class BithumanGenerator(VideoGenerator):
                     num_channels=1,
                     samples_per_channel=len(audio_chunk.array),
                 )
-            if video_frame is not None:
-                yield video_frame
-            if audio_frame is not None:
                 yield audio_frame
 
             if frame.end_of_speech:
