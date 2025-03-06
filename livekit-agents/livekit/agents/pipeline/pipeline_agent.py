@@ -63,7 +63,16 @@ _CallContextVar = contextvars.ContextVar["AgentCallContext"](
     "voice_assistant_contextvar"
 )
 
-ExcludedWords = {"", "hello?", "hello.", "hello", "hello,", "okay?", "okay.", "okay", "okay,", "ok?", "ok.", "ok", "ok,", "yes?", "yes.", "yes", "yes,", "ya?", "ya.", "ya", "ya,", "hm?", "hm.", "hm", "hm,", "hmm?", "hmm.", "hmm", "hmm,", "sure?", "sure.", "sure", "sure,"}
+ExcludedWords = {
+    "",
+    "hello?", "hello.", "hello", "hello,",
+    "okay?", "okay.", "okay", "okay,", "ok?", "ok.", "ok", "ok,",
+    "yes?", "yes.", "yes", "yes,",
+    "yeah?", "yeah.", "yeah", "yeah,",
+    "ya?", "ya.", "ya", "ya,",
+    "hm?", "hm.", "hm", "hm,", "hmm?", "hmm.", "hmm", "hmm,",
+    "sure?", "sure.", "sure", "sure,"
+}
 
 class AgentCallContext:
     def __init__(self, assistant: "VoicePipelineAgent", llm_stream: LLMStream) -> None:
