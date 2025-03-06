@@ -233,13 +233,15 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 await self._room_io.start()
 
+            # it is ok to await it directly, there is no previous task to drain
+            await self._update_activity_task(self._agent_task)
+
+            # important: no await should be done after this!
+
             if self.input.audio is not None:
                 self._forward_audio_atask = asyncio.create_task(
                     self._forward_audio_task(), name="_forward_audio_task"
                 )
-
-            # it is ok to await it directly, there is no previous task to drain
-            await self._update_activity_task(self._agent_task)
 
             self._started = True
             self._update_agent_state(AgentState.LISTENING)

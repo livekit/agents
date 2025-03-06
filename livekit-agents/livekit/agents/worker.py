@@ -427,7 +427,8 @@ class Worker(utils.EventEmitter[EventTypes]):
     async def simulate_job(self, room: str, participant_identity: str | None = None) -> None:
         assert self._api is not None
 
-        from livekit.protocol.models import Room, ParticipantInfo
+        from livekit.protocol.models import Room
+
         from .cli import cli
 
         participant = None
