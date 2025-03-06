@@ -1,6 +1,6 @@
+import os
 import logging
 import aiohttp
-import os
 from enum import Enum
 from dataclasses import dataclass
 
@@ -81,14 +81,13 @@ class Receptionist(AgentTask):
         return Messenger(), "I'll be transferring you to Shimmer."
 
     @ai_function()
-    async def get_name(self, name: str) -> None:
-        """Records the user's name
+    async def update_name(self, name: str) -> None:
+        """Updates the user's name on record
 
         Args:
             name: User's name
         """
         self.agent.userdata["userinfo"].name = name
-        return
 
     @ai_function()
     async def update_email(self, email: str) -> None:
@@ -211,6 +210,16 @@ class Scheduler(AgentTask):
             await self.agent.generate_reply(
                 instructions="Tell the user you were able to schedule the appointment successfully."
             )
+        if (
+            response["status"] == "error"
+            and response["status"]["error"]["message"]
+            == "User either already has booking at this time or is not available"
+        ):
+            if self.agent.current_speech:
+                await self.agent.current_speech.wait_for_playout()
+            await self.agent.generate_reply(
+                instructions="Inform the user that the date and time specified are unavailable, and ask the user to choose another date."
+            )
         else:
             raise Exception("Error occurred when attempting to schedule")
 
@@ -271,6 +280,16 @@ class Scheduler(AgentTask):
                     await self.agent.current_speech.wait_for_playout()
                 await self.agent.generate_reply(
                     instructions="Inform the user that they are all set."
+                )
+            if (
+                response["status"] == "error"
+                and response["status"]["error"]["message"]
+                == "User either already has booking at this time or is not available"
+            ):
+                if self.agent.current_speech:
+                    await self.agent.current_speech.wait_for_playout()
+                await self.agent.generate_reply(
+                    instructions="Inform the user that the date and time specified are unavailable, and ask the user to choose another date."
                 )
                 return Receptionist(), "You're all set, transferring you back to Alloy."
         else:
