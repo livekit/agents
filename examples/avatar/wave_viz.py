@@ -110,24 +110,6 @@ class WaveformVisualizer:
         for i in range(len(points) - 1):
             cv2.line(canvas, tuple(points[i]), tuple(points[i + 1]), (0, 255, 0), 2)
 
-        # Draw frequency scale
-        font_face = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.6
-        thickness = 1
-
-        freq_points = [0, 1000, 2000, 4000, 8000, self.nyquist_freq]  # Hz
-        for freq in freq_points:
-            x_pos = int(width * freq / self.nyquist_freq)
-            cv2.putText(
-                canvas,
-                f"{freq}Hz",
-                (x_pos, center_y + 20),
-                font_face,
-                font_scale,
-                (100, 100, 100),
-                thickness,
-            )
-
         return volume
 
     def draw_volume_history(self, canvas: np.ndarray, current_volume: float):

@@ -5,29 +5,19 @@ import ctypes
 import json
 import logging
 from dataclasses import asdict
-from typing import AsyncIterator, Literal, Optional
+from typing import AsyncGenerator, AsyncIterator, Optional
 
 from livekit import rtc
 
-from .. import utils
-from .io import AudioSink, PlaybackFinishedEvent
+from ... import utils
+from ..io import AudioSink, PlaybackFinishedEvent
+from ._types import AudioReceiver, AudioSegmentEnd
 
 logger = logging.getLogger(__name__)
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 AUDIO_STREAM_TOPIC = "lk.audio_stream"
-
-
-class DataStreamOutput:
-    def __init__(self, room: rtc.Room, *, destination_identity: str):
-        self._room = room
-        self._destination_identity = destination_identity
-        self._audio_sink = DataStreamAudioSink(room, destination_identity=destination_identity)
-
-    @property
-    def audio(self) -> "DataStreamAudioSink":
-        return self._audio_sink
 
 
 class DataStreamAudioSink(AudioSink):
@@ -113,11 +103,7 @@ class DataStreamAudioSink(AudioSink):
         task.add_done_callback(self._tasks.discard)
 
 
-class AudioFlushSentinel:
-    pass
-
-
-class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
+class DataStreamAudioReceiver(AudioReceiver):
     """
     Audio receiver that receives streamed audio from a sender participant using LiveKit DataStream.
     If the sender_identity is provided, subscribe to the specified participant. If not provided,
@@ -175,7 +161,7 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
         assert self._remote_participant is not None
         event = PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
         try:
-            logger.info(
+            logger.debug(
                 f"notifying playback finished: {event.playback_position:.3f}s, "
                 f"interrupted: {event.interrupted}"
             )
@@ -187,8 +173,11 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
         except Exception as e:
             logger.exception(f"error notifying playback finished: {e}")
 
+    def stream(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
+        return self._stream_impl()
+
     @utils.log_exceptions(logger=logger)
-    async def stream(self) -> AsyncIterator[rtc.AudioFrame | AudioFlushSentinel]:
+    async def _stream_impl(self) -> AsyncGenerator[rtc.AudioFrame | AudioSegmentEnd, None]:
         while True:
             await self._stream_reader_changed.wait()
 
@@ -211,7 +200,7 @@ class DataStreamAudioReceiver(rtc.EventEmitter[Literal["clear_buffer"]]):
                     yield frame
                 self._current_reader = None
                 self._current_reader_cleared = False
-                yield AudioFlushSentinel()
+                yield AudioSegmentEnd()
 
             self._stream_reader_changed.clear()
 
