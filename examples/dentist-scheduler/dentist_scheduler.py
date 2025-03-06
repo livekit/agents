@@ -15,7 +15,7 @@ from livekit.agents import (
 from livekit.agents.llm import ai_function
 from livekit.agents.voice import AgentTask, VoiceAgent
 from livekit.plugins import openai, cartesia, deepgram, silero
-
+from supabase import create_client, Client
 from api_setup import setup_event_types
 
 
@@ -37,9 +37,8 @@ class APIRequests(Enum):
 class Receptionist(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions=f"""You are Alloy, a receptionist at the LiveKit Dental Office who answers inquiries and manages appointments for users. 
-                            When the user provides their name, number, or email, be sure to confirm it. Always speak in English. Be brief and concise.""",
-            tts=cartesia.TTS(emotion=["positivity:high"]),
+            instructions="""You are Alloy, a receptionist at the LiveKit Dental Office who answers inquiries and manages appointments for users. 
+                            When the user provides their name, number, or email, spell it out to confirm it. Always speak in English. Be brief and concise.""",
         )
 
     async def on_enter(self) -> None:
@@ -51,9 +50,8 @@ class Receptionist(AgentTask):
 
     @ai_function()
     async def hours_inquiry(self):
-        """Answers user inquiries about the LiveKit dental office's hours of operation"""
-        if self.agent.current_speech:
-            await self.agent.current_speech.wait_for_playout()
+        """Answers user inquiries about the LiveKit dental office's hours of operation."""
+        await self.agent.current_speech.wait_for_playout()
         await self.agent.generate_reply(
             instructions="Inform the user that the LiveKit dental office is closed on Sundays but open 10 AM to 12 PM, and 1 PM to 4 PM otherwise."
         )
@@ -61,18 +59,16 @@ class Receptionist(AgentTask):
     @ai_function()
     async def location_inquiry(self):
         """Answers user inquiries about the LiveKit dental office's location and parking"""
-        if self.agent.current_speech:
-            await self.agent.current_speech.wait_for_playout()
+        await self.agent.current_speech.wait_for_playout()
         await self.agent.generate_reply(
             instructions="Inform the user that the LiveKit dental office is located at 123 LiveKit Lane and there is free parking."
         )
 
     @ai_function()
-    async def appointment(self, name: str, service: str):
+    async def appointment(self, service: str):
         """
         This function allows for users to schedule, reschedule, or cancel an appointment.
         Args:
-            name: The user's name
             service: Either "schedule", "reschedule", or "cancel"
         """
         return Scheduler(
@@ -81,22 +77,23 @@ class Receptionist(AgentTask):
 
     @ai_function()
     async def take_message(self):
-        """This function allows for users to leave a message for the office"""
+        """This function allows for users to leave a message for the office."""
         return Messenger(), "I'll be transferring you to Shimmer."
 
     @ai_function()
-    async def update_name(self, name: str) -> None:
-        """
-        Updates the user's name
+    async def get_name(self, name: str) -> None:
+        """Records the user's name
+
         Args:
             name: User's name
         """
         self.agent.userdata["userinfo"].name = name
+        return
 
     @ai_function()
     async def update_email(self, email: str) -> None:
-        """
-        Updates email associated with the user
+        """Updates email associated with the user
+
         Args:
             email: The user's email
         """
@@ -105,6 +102,7 @@ class Receptionist(AgentTask):
     @ai_function()
     async def update_phone_number(self, phone_number: str) -> None:
         """Updates phone number associated with the user
+
         Args:
             phone number: The user's phone number
         """
@@ -115,7 +113,7 @@ class Scheduler(AgentTask):
     def __init__(self, *, service: str) -> None:
         super().__init__(
             instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
-                            proceeding. Always confirm details with the user. """
+                            proceeding. Always double check details with the user. """,
         )
         self._service_requested = service
 
@@ -203,7 +201,7 @@ class Scheduler(AgentTask):
         Args:
             email: The user's email, in the format local-part@domain
             description: Reason for scheduling appointment, either "routine-checkup" or "tooth-extraction"
-            date: Date and time for the appointment in ISO 8601 format in UTC timezone
+            date: Date and time for the appointment, convert it to ISO 8601 format in UTC timezone.
         """
         self.agent.userdata["userinfo"].email = email
         response = await self.send_request(
@@ -219,7 +217,7 @@ class Scheduler(AgentTask):
     @ai_function()
     async def cancel(self, email: str) -> None:
         """
-        Cancels an existing appointment.
+        Cancels an existing appointment
         Args:
             email: The user's email formatted local-part@domain
         """
@@ -294,23 +292,29 @@ class Scheduler(AgentTask):
 class Messenger(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are Shimmer, an assistant taking messages for the LiveKit dental office.",
-            llm=openai.realtime.RealtimeModel(voice="shimmer"),
+            instructions="""You are Shimmer, an assistant taking messages for the LiveKit dental office. If the user's number is not given, ask for it before proceeding.
+            Be sure to confirm details such as phone numbers with the user.""",
         )
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+        self._supabase: Client = create_client(url, key)
 
     async def on_enter(self) -> None:
-        self.agent.say(
-            f"Alright {self.agent.userdata.name}, please state your phone number and then your message."
+        self._userinfo = self.agent.userdata["userinfo"]
+
+        await self.agent.generate_reply(
+            instructions=f"""Introduce yourself and ask {self._userinfo.name} to confirm that they would like to {self._service_requested} an appointment. 
+                            Their phone number is {self._userinfo.phone}."""
         )
 
     @ai_function()
     async def get_phone_number(self, phone_number: str) -> None:
-        """Records the user's phone number.
-
+        """
+        Records the user's phone number.
         Args:
             phone_number: The user's phone number
         """
-        self.agent.userdata.phone = phone_number
+        self.agent.userdata["userinfo"].phone = phone_number
 
     @ai_function()
     async def record_message(self, message: str) -> None:
@@ -319,28 +323,18 @@ class Messenger(AgentTask):
         Args:
             message: The user's message to be left for the office
         """
-        self.agent.userdata.message = message
-        # send to supabase
-        return (
-            Receptionist(),
-            f"Got it {self.agent.userdata.name}, transferring you to Alloy!",
-        )
+        self.agent.userdata["userinfo"].message = message
+        param = {"name": self.agent.userdata["userinfo"].name, "message": message}
+        response = self._supbase.table("messages").insert(param).execute()
 
-    @ai_function()
-    async def transfer_to_receptionist(self) -> None:
-        """Transfers the user to the receptionist"""
-        return Receptionist(), "Transferring you to our receptionist!"
-
-    @ai_function()
-    async def transfer_to_scheduler(self, service_requested: str) -> None:
-        """
-        Transfers the user to the scheduler
-        Args:
-            service_requested: Either "schedule", "reschedule", or "cancel"
-        """
-        return Scheduler(
-            service=service_requested
-        ), "Transferring you to our scheduler!"
+        if response["data"]:
+            if self.agent.current_speech:
+                await self.agent.current_speech.wait_for_playout()
+            await self.agent.generate_reply(
+                instructions="Inform the user that their message has been submitted."
+            )
+        else:
+            raise Exception("Error sending data to Supabase")
 
 
 load_dotenv()
