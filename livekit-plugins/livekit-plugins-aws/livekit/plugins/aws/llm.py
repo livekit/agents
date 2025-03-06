@@ -184,33 +184,36 @@ class LLMStream(llm.LLMStream):
         try:
             opts: dict[str, Any] = {}
             messages, system_instruction = _build_aws_ctx(self._chat_ctx, id(self))
-            if messages[0]["role"] != "user":
-                messages.insert(
-                    0,
-                    {"role": "user", "content": [{"text": "(empty)"}]},
-                )
+            messages = _merge_messages(messages)
 
-            if self._fnc_ctx and self._fnc_ctx.ai_functions:
+            def _get_tool_config() -> dict[str, Any] | None:
+                if not (self._fnc_ctx and self._fnc_ctx.ai_functions):
+                    return None
+
                 tools = _build_tools(self._fnc_ctx)
-                tool_config: dict[str, Any] = {"tools": tools}
+                config: dict[str, Any] = {"tools": tools}
 
                 if isinstance(self._tool_choice, ToolChoice):
-                    tool_config["toolChoice"] = {
-                        "tool": {"name": self._tool_choice.name}
-                    }
+                    config["toolChoice"] = {"tool": {"name": self._tool_choice.name}}
                 elif self._tool_choice == "required":
-                    tool_config["toolChoice"] = {"any": {}}
+                    config["toolChoice"] = {"any": {}}
                 elif self._tool_choice == "auto":
-                    tool_config["toolChoice"] = {"auto": {}}
+                    config["toolChoice"] = {"auto": {}}
                 else:
-                    raise ValueError("aws bedrock llm: invalid tool choice")
+                    return None
 
+                return config
+
+            tool_config = _get_tool_config()
+            if tool_config:
                 opts["toolConfig"] = tool_config
 
             if self._additional_request_fields:
                 opts["additionalModelRequestFields"] = _strip_nones(
                     self._additional_request_fields
                 )
+            if system_instruction:
+                opts["system"] = [system_instruction]
 
             inference_config = _strip_nones(
                 {
@@ -222,9 +225,8 @@ class LLMStream(llm.LLMStream):
             response = self._client.converse_stream(
                 modelId=self._model,
                 messages=messages,
-                system=[system_instruction],
                 inferenceConfig=inference_config,
-                **opts,
+                **_strip_nones(opts),
             )  # type: ignore
 
             request_id = response["ResponseMetadata"]["RequestId"]
@@ -281,16 +283,16 @@ class LLMStream(llm.LLMStream):
         return None
 
     def _try_build_function(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
-        if not self._tool_call_id:
+        if self._tool_call_id is None:
             logger.warning("aws bedrock llm: no tool call id in the response")
             return None
-        if not self._fnc_name:
+        if self._fnc_name is None:
             logger.warning("aws bedrock llm: no function name in the response")
             return None
-        if not self._fnc_raw_arguments:
+        if self._fnc_raw_arguments is None:
             logger.warning("aws bedrock llm: no function arguments in the response")
             return None
-        if not self._fnc_ctx:
+        if self._fnc_ctx is None:
             logger.warning(
                 "aws bedrock llm: stream tried to run function without function context"
             )
@@ -318,6 +320,30 @@ class LLMStream(llm.LLMStream):
                 )
             ],
         )
+
+
+def _merge_messages(
+    messages: list[dict],
+) -> list[dict]:
+    # Anthropic enforces alternating messages
+    combined_messages: list[dict] = []
+    for m in messages:
+        if len(combined_messages) == 0 or m["role"] != combined_messages[-1]["role"]:
+            combined_messages.append(m)
+            continue
+        last_message = combined_messages[-1]
+        if not isinstance(last_message["content"], list) or not isinstance(
+            m["content"], list
+        ):
+            logger.error("message content is not a list")
+            continue
+
+        last_message["content"].extend(m["content"])
+
+    if len(combined_messages) == 0 or combined_messages[0]["role"] != "user":
+        combined_messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
+
+    return combined_messages
 
 
 def _strip_nones(d: dict[str, Any]) -> dict[str, Any]:

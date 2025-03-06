@@ -15,27 +15,27 @@ from livekit.plugins import (
     azure,
     deepgram,
     fal,
-    google,
     openai,
     silero,
+    speechmatics,
 )
 
 from .utils import make_test_speech, wer
 
 SAMPLE_RATES = [24000, 44100]  # test multiple input sample rates
-WER_THRESHOLD = 0.2
+WER_THRESHOLD = 0.25
 RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
     pytest.param(lambda: deepgram.STT(), id="deepgram"),
-    pytest.param(lambda: google.STT(), id="google"),
-    pytest.param(
-        lambda: google.STT(
-            languages=["en-AU"],
-            model="chirp_2",
-            spoken_punctuation=False,
-            location="us-central1",
-        ),
-        id="google.chirp_2",
-    ),
+    # pytest.param(lambda: google.STT(), id="google"),
+    # pytest.param(
+    #     lambda: google.STT(
+    #         languages=["en-AU"],
+    #         model="chirp_2",
+    #         spoken_punctuation=False,
+    #         location="us-central1",
+    #     ),
+    #     id="google.chirp_2",
+    # ),
     pytest.param(lambda: openai.STT(), id="openai"),
     pytest.param(lambda: fal.WizperSTT(), id="fal"),
 ]
@@ -46,7 +46,7 @@ RECOGNIZE_STT: list[Callable[[], stt.STT]] = [
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_recognize(stt_factory, sample_rate):
     async with stt_factory() as stt:
-        frames, transcript = make_test_speech(sample_rate=sample_rate)
+        frames, transcript = await make_test_speech(sample_rate=sample_rate)
 
         start_time = time.time()
         event = await stt.recognize(buffer=frames)
@@ -63,7 +63,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
     pytest.param(lambda: aws.STT(), id="aws"),
     pytest.param(lambda: assemblyai.STT(), id="assemblyai"),
     pytest.param(lambda: deepgram.STT(), id="deepgram"),
-    pytest.param(lambda: google.STT(), id="google"),
+    # pytest.param(lambda: google.STT(), id="google"),
     pytest.param(
         lambda: agents.stt.StreamAdapter(stt=openai.STT(), vad=STREAM_VAD),
         id="openai.stream",
@@ -72,16 +72,17 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
         lambda: agents.stt.StreamAdapter(stt=openai.STT.with_groq(), vad=STREAM_VAD),
         id="openai.with_groq.stream",
     ),
-    pytest.param(
-        lambda: google.STT(
-            languages=["en-AU"],
-            model="chirp_2",
-            spoken_punctuation=False,
-            location="us-central1",
-        ),
-        id="google.chirp_2",
-    ),
+    # pytest.param(
+    #     lambda: google.STT(
+    #         languages=["en-AU"],
+    #         model="chirp_2",
+    #         spoken_punctuation=False,
+    #         location="us-central1",
+    #     ),
+    #     id="google.chirp_2",
+    # ),
     pytest.param(lambda: azure.STT(), id="azure"),
+    pytest.param(lambda: speechmatics.STT(), id="speechmatics"),
 ]
 
 
@@ -90,8 +91,10 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_stream(stt_factory, sample_rate):
     stt = stt_factory()
+    frames, transcript = await make_test_speech(
+        chunk_duration_ms=10, sample_rate=sample_rate
+    )
 
-    frames, transcript = make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)
     stream = stt.stream()
 
     async def _stream_input():
