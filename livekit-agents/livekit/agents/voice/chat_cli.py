@@ -295,12 +295,6 @@ class ChatCLI:
                 self._render_ring_buffer = self._render_ring_buffer[-AEC_RING_BUFFER_SIZE:]
 
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
-        rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
-        max_int16 = np.iinfo(np.int16).max
-        self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
-
-        capture_np = indata.copy()
-
         CHUNK_SAMPLES = 240
         with self._render_ring_lock:
             if self._render_ring_buffer.size >= CHUNK_SAMPLES:
@@ -310,7 +304,7 @@ class ChatCLI:
                 render_chunk = np.zeros((CHUNK_SAMPLES,), dtype=np.int16)
 
         capture_frame_for_aec = rtc.AudioFrame(
-            data=capture_np.tobytes(),
+            data=indata.tobytes(),
             samples_per_channel=frame_count,
             sample_rate=24000,
             num_channels=1,
@@ -324,6 +318,11 @@ class ChatCLI:
 
         self._apm.process_reverse_stream(render_frame_for_aec)
         self._apm.process_stream(capture_frame_for_aec)
+
+        in_data_aec = np.frombuffer(capture_frame_for_aec.data, dtype=np.int16)
+        rms = np.sqrt(np.mean(in_data_aec.astype(np.float32) ** 2))
+        max_int16 = np.iinfo(np.int16).max
+        self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
 
         self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, capture_frame_for_aec)
 
