@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from typing import (
+    Annotated,
     Any,
     Literal,
     Optional,
@@ -24,7 +25,7 @@ from typing import (
 from livekit import rtc
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.misc import is_given
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
 
 from .. import utils
@@ -102,7 +103,7 @@ class ChatMessage(BaseModel):
     hash: Optional[bytes] = None
 
 
-ChatContent: TypeAlias = Union[str, ImageContent, AudioContent]
+ChatContent = Union[ImageContent, AudioContent, str]
 
 
 class FunctionCall(BaseModel):
@@ -121,12 +122,14 @@ class FunctionCallOutput(BaseModel):
     is_error: bool
 
 
-ChatItem: TypeAlias = Union[ChatMessage, FunctionCall, FunctionCallOutput]
+ChatItem = Annotated[
+    Union[ChatMessage, FunctionCall, FunctionCallOutput], Field(discriminator="type")
+]
 
 
 class ChatContext:
-    def __init__(self, items: list[ChatItem]):
-        self._items: list[ChatItem] = items
+    def __init__(self, items: NotGivenOr[list[ChatItem]] = NOT_GIVEN):
+        self._items: list[ChatItem] = items if is_given(items) else []
 
     @classmethod
     def empty(cls) -> "ChatContext":
@@ -161,9 +164,33 @@ class ChatContext:
     def copy(self) -> "ChatContext":
         return ChatContext(self.items.copy())
 
-    def to_dict(self) -> dict:
-        raise NotImplementedError
+    def to_dict(
+        self,
+        *,
+        exclude_image: bool = True,
+        exclude_audio: bool = True,
+        exclude_function_call: bool = False,
+    ) -> dict:
+        items = []
+        for item in self.items:
+            if exclude_function_call and item.type in ["function_call", "function_call_output"]:
+                continue
+
+            if item.type == "message":
+                item = item.model_copy()
+                if exclude_image:
+                    item.content = [c for c in item.content if not isinstance(c, ImageContent)]
+                if exclude_audio:
+                    item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+
+            items.append(item)
+
+        return {
+            "items": [item.model_dump(mode="json", exclude_none=True) for item in items],
+        }
 
     @classmethod
-    def from_dict(cls, _: dict) -> "ChatContext":
-        raise NotImplementedError
+    def from_dict(cls, data: dict) -> "ChatContext":
+        item_adapter = TypeAdapter(list[ChatItem])
+        items = item_adapter.validate_python(data["items"])
+        return cls(items)
