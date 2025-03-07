@@ -10,14 +10,15 @@ from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
 
 from google.genai import types
+from google.genai.types import Type as GenaiType
 
-JSON_SCHEMA_TYPE_MAP: dict[type, types.Type] = {
-    str: "STRING",
-    int: "INTEGER",
-    float: "NUMBER",
-    bool: "BOOLEAN",
-    dict: "OBJECT",
-    list: "ARRAY",
+JSON_SCHEMA_TYPE_MAP: dict[type, GenaiType] = {
+    str: GenaiType.STRING,
+    int: GenaiType.INTEGER,
+    float: GenaiType.NUMBER,
+    bool: GenaiType.BOOLEAN,
+    dict: GenaiType.OBJECT,
+    list: GenaiType.ARRAY,
 }
 
 __all__ = ["_build_gemini_ctx", "_build_tools"]
@@ -38,7 +39,7 @@ def _build_parameters(arguments: Dict[str, Any]) -> types.Schema | None:
             item_type = get_args(py_type)[0]
             if item_type not in JSON_SCHEMA_TYPE_MAP:
                 raise ValueError(f"Unsupported type: {item_type}")
-            prop.type = "ARRAY"
+            prop.type = GenaiType.ARRAY
             prop.items = types.Schema(type=JSON_SCHEMA_TYPE_MAP[item_type])
 
             if arg_info.choices:
@@ -62,7 +63,7 @@ def _build_parameters(arguments: Dict[str, Any]) -> types.Schema | None:
             required.append(arg_name)
 
     if properties:
-        parameters = types.Schema(type="OBJECT", properties=properties)
+        parameters = types.Schema(type=GenaiType.OBJECT, properties=properties)
         if required:
             parameters.required = required
 
@@ -119,7 +120,6 @@ def _build_gemini_ctx(
                 parts.append(
                     types.Part(
                         function_call=types.FunctionCall(
-                            id=fnc.tool_call_id,
                             name=fnc.function_info.name,
                             args=fnc.arguments,
                         )
@@ -132,7 +132,6 @@ def _build_gemini_ctx(
                     parts.append(
                         types.Part(
                             function_response=types.FunctionResponse(
-                                id=msg.tool_call_id,
                                 name=msg.name,
                                 response=msg.content,
                             )
@@ -142,7 +141,6 @@ def _build_gemini_ctx(
                     parts.append(
                         types.Part(
                             function_response=types.FunctionResponse(
-                                id=msg.tool_call_id,
                                 name=msg.name,
                                 response={"result": msg.content},
                             )
@@ -193,8 +191,7 @@ def _build_gemini_image_part(image: llm.ChatImage, cache_key: Any) -> types.Part
                     height=image.inference_height,
                     strategy="scale_aspect_fit",
                 )
-            encoded_data = utils.images.encode(image.image, opts)
-            image._cache[cache_key] = base64.b64encode(encoded_data).decode("utf-8")
+            image._cache[cache_key] = utils.images.encode(image.image, opts)
 
         return types.Part.from_bytes(
             data=image._cache[cache_key], mime_type="image/jpeg"

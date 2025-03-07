@@ -10,6 +10,8 @@ SpeechModels = Literal[
     "medical_conversation",
     "chirp",
     "chirp_2",
+    "latest_long",
+    "latest_short",
 ]
 
 SpeechLanguages = Literal[
@@ -91,8 +93,6 @@ SpeechLanguages = Literal[
 ]
 
 Gender = Literal["male", "female", "neutral"]
-
-AudioEncoding = Literal["wav", "mp3", "ogg", "mulaw", "alaw", "linear16"]
 
 ChatModels = Literal[
     "gemini-2.0-flash-001",

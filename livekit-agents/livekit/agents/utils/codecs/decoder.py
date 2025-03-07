@@ -17,6 +17,7 @@ import io
 from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Optional
 
+from livekit.agents.log import logger
 from livekit.agents.utils import aio
 
 try:
@@ -39,14 +40,14 @@ class StreamBuffer:
         self._buffer = io.BytesIO()
         self._lock = threading.Lock()
         self._data_available = threading.Condition(self._lock)
-        self._eof = False  # EOF flag to signal no more writes
+        self._eof = False
 
     def write(self, data: bytes):
         """Write data to the buffer from a writer thread."""
-        with self._data_available:  # Lock and notify readers
-            self._buffer.seek(0, io.SEEK_END)  # Move to the end
+        with self._data_available:
+            self._buffer.seek(0, io.SEEK_END)
             self._buffer.write(data)
-            self._data_available.notify_all()  # Notify waiting readers
+            self._data_available.notify_all()
 
     def read(self, size: int = -1) -> bytes:
         """Read data from the buffer in a reader thread."""
@@ -56,21 +57,21 @@ class StreamBuffer:
 
         with self._data_available:
             while True:
-                self._buffer.seek(0)  # Rewind for reading
+                if self._buffer.closed:
+                    return b""
+                # always read from beginning
+                self._buffer.seek(0)
                 data = self._buffer.read(size)
 
-                # If data is available, return it
                 if data:
-                    # Shrink the buffer to remove already-read data
+                    # shrink the buffer to remove already-read data
                     remaining = self._buffer.read()
                     self._buffer = io.BytesIO(remaining)
                     return data
 
-                # If EOF is signaled and no data remains, return EOF
                 if self._eof:
                     return b""
 
-                # Wait for more data
                 self._data_available.wait()
 
     def end_input(self):
@@ -129,15 +130,15 @@ class AudioStreamDecoder:
         self._input_buf.end_input()
 
     def _decode_loop(self):
-        container = av.open(self._input_buf)
-        audio_stream = next(s for s in container.streams if s.type == "audio")
-        resampler = av.AudioResampler(
-            # convert to signed 16-bit little endian
-            format="s16",
-            layout=self._layout,
-            rate=self._sample_rate,
-        )
         try:
+            container = av.open(self._input_buf)
+            audio_stream = next(s for s in container.streams if s.type == "audio")
+            resampler = av.AudioResampler(
+                # convert to signed 16-bit little endian
+                format="s16",
+                layout=self._layout,
+                rate=self._sample_rate,
+            )
             # TODO: handle error where audio stream isn't found
             if not audio_stream:
                 return
@@ -157,6 +158,8 @@ class AudioStreamDecoder:
                             ),
                         )
                     )
+        except Exception:
+            logger.exception("error decoding audio")
         finally:
             self._output_ch.close()
 
@@ -175,8 +178,9 @@ class AudioStreamDecoder:
         self._closed = True
         self.end_input()
         self._input_buf.close()
-        # wait for decode loop to finish
+        # wait for decode loop to finish, only if anything's been pushed
         try:
-            await self._output_ch.recv()
+            if self._started:
+                await self._output_ch.recv()
         except aio.ChanClosed:
             pass
