@@ -252,7 +252,7 @@ class LLMStream(llm.LLMStream):
                 **self._extra_kwargs,
             )
 
-            stream = self._client.aio.models.generate_content_stream(
+            stream = await self._client.aio.models.generate_content_stream(
                 model=self._model,
                 contents=cast(types.ContentListUnion, turns),
                 config=config,

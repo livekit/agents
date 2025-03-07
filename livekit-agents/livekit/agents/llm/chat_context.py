@@ -32,14 +32,14 @@ from .. import utils
 
 class ImageContent(BaseModel):
     """
-    ChatImage is used to input images into the ChatContext on supported LLM providers / plugins.
+    ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.
 
     You may need to consult your LLM provider's documentation on supported URL types.
 
     ```python
     # Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally
     async for event in rtc.VideoStream(video_track):
-        chat_image = ChatImage(image=event.frame)
+        chat_image = ImageContent(image=event.frame)
         # this instance is now available for your ChatContext
 
     # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
@@ -52,12 +52,12 @@ class ImageContent(BaseModel):
             resize_options=ResizeOptions(width=512, height=512, strategy="scale_aspect_fit"),
         ),
     )
-    chat_image = ChatImage(
+    chat_image = ImageContent(
         image=f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
     )
 
     # With an external URL
-    chat_image = ChatImage(image="https://example.com/image.jpg")
+    chat_image = ImageContent(image="https://example.com/image.jpg")
     ```
     """
 

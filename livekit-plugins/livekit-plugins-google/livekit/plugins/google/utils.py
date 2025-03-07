@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from typing import Any, List, Optional
 
@@ -86,7 +87,7 @@ def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
 
 def _build_gemini_fnc(ai_function: AIFunction) -> types.FunctionDeclaration:
     fnc = llm.utils.build_legacy_openai_schema(ai_function, internally_tagged=True)
-    json_schema = GeminiSchemaTransformer(fnc["parameters"]).transform()
+    json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
     return types.FunctionDeclaration(
         name=fnc["name"],
         description=fnc["description"],
@@ -94,114 +95,114 @@ def _build_gemini_fnc(ai_function: AIFunction) -> types.FunctionDeclaration:
     )
 
 
-# https://github.com/googleapis/python-genai/blob/v1.3.0/google/genai/types.py#L75
-TYPE_MAPPING = {
-    "string": types.Type.STRING,
-    "number": types.Type.NUMBER,
-    "integer": types.Type.INTEGER,
-    "boolean": types.Type.BOOLEAN,
-    "array": types.Type.ARRAY,
-    "object": types.Type.OBJECT,
-}
-
-
-# Convert JSON schema to Gemini SDK types.Schema object
-# https://github.com/googleapis/python-genai/blob/v1.3.0/google/genai/types.py#L809
-class GeminiSchemaTransformer:
+class _GeminiJsonSchema:
     """
-    A class to transform a JSON schema dictionary into a Gemini SDK types.Schema object.
+    Transforms the JSON Schema from Pydantic to be suitable for Gemini.
+    based on pydantic-ai implementation
+    https://github.com/pydantic/pydantic-ai/blob/085a9542a7360b7e388ce575323ce189b397d7ad/pydantic_ai_slim/pydantic_ai/models/gemini.py#L809
     """
 
-    def __init__(self, schema: dict):
+    # Type mapping from JSON Schema to Gemini Schema
+    TYPE_MAPPING = {
+        "string": "STRING",
+        "number": "NUMBER",
+        "integer": "INTEGER",
+        "boolean": "BOOLEAN",
+        "array": "ARRAY",
+        "object": "OBJECT",
+    }
+
+    def __init__(self, schema: dict[str, Any]):
         self.schema = deepcopy(schema)
         self.defs = self.schema.pop("$defs", {})
 
-    def transform(self) -> types.Schema:
-        return self._transform_schema(self.schema, refs_stack=())
+    def simplify(self) -> dict[str, Any] | None:
+        self._simplify(self.schema, refs_stack=())
+        # If the schema is an OBJECT with no properties, return None.
+        if self.schema.get("type") == "OBJECT" and not self.schema.get("properties"):
+            return None
+        return self.schema
 
-    def _transform_schema(self, schema: dict, refs_stack: tuple) -> types.Schema:
-        if "$ref" in schema:
-            ref_key = schema["$ref"].split("/")[-1]
-            if ref_key in refs_stack:
-                raise ValueError("Recursive $ref is not supported")
-            if ref_key not in self.defs:
-                raise ValueError(f"Reference {ref_key} not found in $defs")
-            new_refs_stack = refs_stack + (ref_key,)
-            return self._transform_schema(self.defs[ref_key], new_refs_stack)
+    def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
+        if ref := schema.pop("$ref", None):
+            key = re.sub(r"^#/\$defs/", "", ref)
+            if key in refs_stack:
+                raise ValueError("Recursive `$ref`s in JSON Schema are not supported by Gemini")
+            refs_stack += (key,)
+            schema_def = self.defs[key]
+            self._simplify(schema_def, refs_stack)
+            schema.update(schema_def)
+            return
 
-        # Dictionary to collect schema fields
-        fields = {}
-
-        # Handle anyOf field
-        if "anyOf" in schema:
-            fields["any_of"] = [
-                self._transform_schema(sub_schema, refs_stack) for sub_schema in schema["anyOf"]
-            ]
-        # Handle type field
-        elif "type" in schema:
-            type_field = schema["type"]
-            if isinstance(type_field, str):
-                type_lower = type_field.lower()
-                if type_lower not in TYPE_MAPPING:
-                    raise ValueError(f"Unsupported type: {type_field}")
-                fields["type"] = TYPE_MAPPING[type_lower]
-            elif isinstance(type_field, list):
-                non_null_types = [t for t in type_field if t != "null"]
-                fields["nullable"] = "null" in type_field
-                if len(non_null_types) == 1:
-                    # single non-null type with nullable
-                    type_lower = non_null_types[0].lower()
-                    if type_lower not in TYPE_MAPPING:
-                        raise ValueError(f"Unsupported type in union: {type_lower}")
-                    fields["type"] = TYPE_MAPPING[type_lower]
-                elif non_null_types:
-                    # union of multiple types
-                    fields["any_of"] = [
-                        types.Schema(type=TYPE_MAPPING[t.lower()])
-                        for t in non_null_types
-                        if t.lower() in TYPE_MAPPING
-                    ]
-                else:
-                    raise ValueError("Union contains only null")
+        # Convert type value to Gemini format
+        if "type" in schema and schema["type"] != "null":
+            json_type = schema["type"]
+            if json_type in self.TYPE_MAPPING:
+                schema["type"] = self.TYPE_MAPPING[json_type]
             else:
-                raise ValueError("Invalid 'type' field")
-        else:
-            raise ValueError("Schema must specify a 'type' field or 'anyOf'")
+                raise ValueError(f"Unsupported type in JSON Schema: {json_type}")
 
-        supported_fields = [
-            "description",
-            "enum",
-            "format",
-            "title",
-            "default",
-            "nullable",
-            "min_items",
-            "max_items",
-            "min_length",
-            "max_length",
-            "minimum",
-            "maximum",
-            "pattern",
-            "min_properties",
-            "max_properties",
-        ]
-        for field in supported_fields:
-            if field in schema:
-                fields[field] = schema[field]
+        # Map field names that differ between JSON Schema and Gemini
+        self._map_field_names(schema)
 
-        # Handle object-specific fields
-        if fields.get("type") == types.Type.OBJECT:
-            if "properties" in schema:
-                fields["properties"] = {
-                    key: self._transform_schema(value, refs_stack)
-                    for key, value in schema["properties"].items()
-                }
-            if "required" in schema:
-                fields["required"] = schema["required"]
+        # Handle anyOf - map to any_of
+        if any_of := schema.pop("anyOf", None):
+            if any_of:
+                mapped_any_of = []
+                has_null = False
+                non_null_schema = None
 
-        # Handle array-specific fields
-        elif fields.get("type") == types.Type.ARRAY:
-            if "items" in schema:
-                fields["items"] = self._transform_schema(schema["items"], refs_stack)
+                for item_schema in any_of:
+                    self._simplify(item_schema, refs_stack)
+                    if item_schema == {"type": "null"}:
+                        has_null = True
+                    else:
+                        non_null_schema = item_schema
+                        mapped_any_of.append(item_schema)
 
-        return types.Schema(**fields)
+                if has_null and len(any_of) == 2 and non_null_schema:
+                    schema.update(non_null_schema)
+                    schema["nullable"] = True
+                else:
+                    schema["any_of"] = mapped_any_of
+
+        type_ = schema.get("type")
+
+        if type_ == "OBJECT":
+            self._object(schema, refs_stack)
+        elif type_ == "ARRAY":
+            self._array(schema, refs_stack)
+
+    def _map_field_names(self, schema: dict[str, Any]) -> None:
+        """Map JSON Schema field names to Gemini Schema field names."""
+        mappings = {
+            "minLength": "min_length",
+            "maxLength": "max_length",
+            "minItems": "min_items",
+            "maxItems": "max_items",
+            "minProperties": "min_properties",
+            "maxProperties": "max_properties",
+            "additionalProperties": "additional_properties",
+        }
+
+        for json_name, gemini_name in mappings.items():
+            if json_name in schema:
+                schema[gemini_name] = schema.pop(json_name)
+
+    def _object(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
+        # Gemini doesn't support additionalProperties
+        ad_props = schema.pop("additional_properties", None)
+        if ad_props:
+            raise ValueError("Additional properties in JSON Schema are not supported by Gemini")
+
+        if properties := schema.get("properties"):
+            for value in properties.values():
+                self._simplify(value, refs_stack)
+
+    def _array(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
+        if prefix_items := schema.get("prefixItems"):
+            for prefix_item in prefix_items:
+                self._simplify(prefix_item, refs_stack)
+
+        if items_schema := schema.get("items"):
+            self._simplify(items_schema, refs_stack)

@@ -40,7 +40,6 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from typing_extensions import Literal
 
 import anthropic
 
