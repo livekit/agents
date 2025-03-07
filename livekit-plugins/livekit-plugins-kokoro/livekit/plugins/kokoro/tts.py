@@ -24,10 +24,12 @@ class _TTSOptions:
     language: str = DEFAULT_LANGUAGE
     sample_rate: int = SAMPLE_RATE
 
+
 class TTS(tts.TTS):
     MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx"
     VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
     MODEL_FOLDER = "kokoro_models"
+
     def __init__(
         self,
         *,
@@ -48,17 +50,14 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(voice, speed, language)
 
-    def synthesize(
-        self,
-        text: str
-    ) -> "ChunkedStream":
+    def synthesize(self, text: str) -> "ChunkedStream":
         return ChunkedStream(
             tts=self,
             text=text,
             opts=self._opts,
             model=self._model,
         )
-    
+
     def _loadkokoro(self):
         """Loads the Kokoro model. Note that if this is the first time
         this model is being run, it will take time to download.
@@ -74,16 +73,16 @@ class TTS(tts.TTS):
 
     def _download_model_files(self):
         os.makedirs(self.MODEL_FOLDER, exist_ok=True)
-        
+
         model_path = os.path.join(self.MODEL_FOLDER, "kokoro-v1.0.int8.onnx")
         voices_path = os.path.join(self.MODEL_FOLDER, "voices-v1.0.bin")
-        
+
         if not os.path.exists(model_path):
             self._download_file(self.MODEL_URL, model_path)
-        
+
         if not os.path.exists(voices_path):
             self._download_file(self.VOICES_URL, voices_path)
-        
+
         return model_path, voices_path
 
     @staticmethod
@@ -118,14 +117,17 @@ class ChunkedStream(tts.ChunkedStream):
             self._opts.speed,
             self._opts.language,
         )
+
         async def push_data():
             try:
                 async for audio_data, sample_rate in stream:
-                    logger.debug(f"Received audio chunk: shape={audio_data.shape}, dtype={audio_data.dtype}, sample_rate={sample_rate}")
-                    
+                    logger.debug(
+                        f"Received audio chunk: shape={audio_data.shape}, dtype={audio_data.dtype}, sample_rate={sample_rate}"
+                    )
+
                     # Convert to int16
                     audio_int16 = (audio_data * 32767).astype(np.int16)
-                    
+
                     # Create an AudioFrame
                     frame = AudioFrame(
                         data=audio_int16.tobytes(),
@@ -133,23 +135,27 @@ class ChunkedStream(tts.ChunkedStream):
                         num_channels=TTS_NUM_CHANNELS,
                         samples_per_channel=len(audio_int16),
                     )
-                    
-                    self._event_ch.send_nowait(tts.SynthesizedAudio(
-                        request_id=request_id,
-                        segment_id=self._segment_id,
-                        frame=frame,
-                    ))
+
+                    self._event_ch.send_nowait(
+                        tts.SynthesizedAudio(
+                            request_id=request_id,
+                            segment_id=self._segment_id,
+                            frame=frame,
+                        )
+                    )
             except Exception as e:
                 logger.error(f"Kokoro TTS error: {e}")
             finally:
-                self._event_ch.send_nowait(tts.SynthesizedAudio(
-                    request_id=request_id,
-                    segment_id=self._segment_id,
-                    frame=None,
-                ))
+                self._event_ch.send_nowait(
+                    tts.SynthesizedAudio(
+                        request_id=request_id,
+                        segment_id=self._segment_id,
+                        frame=None,
+                    )
+                )
+
         push_task = asyncio.create_task(push_data())
         try:
             await push_task
         finally:
             await utils.aio.gracefully_cancel(push_task)
-       
