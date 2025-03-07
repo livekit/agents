@@ -160,7 +160,7 @@ def _create_tracing_app(w: Worker) -> web.Application:
                     "room": runner.running_job.job.room.name if runner.running_job else None,
                 }
                 for runner in w._proc_pool.processes
-                if runner.started
+                if runner.started and runner.running_job
             ]
         }
 
