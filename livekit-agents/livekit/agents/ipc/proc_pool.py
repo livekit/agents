@@ -88,7 +88,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             return
 
         self._closed = True
-        await aio.cancel_and_wait(self._main_atask)
+        await aio.gracefully_cancel(self._main_atask)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
         if self._num_idle_processes == 0:
