@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from multiprocessing.context import BaseContext
 from typing import Any, Awaitable, Callable, Literal
 
@@ -19,7 +20,7 @@ EventTypes = Literal[
     "process_job_launched",
 ]
 
-MAX_CONCURRENT_INITIALIZATIONS = 5
+MAX_CONCURRENT_INITIALIZATIONS = os.cpu_count() or 1
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):
