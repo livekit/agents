@@ -315,7 +315,7 @@ class SupabaseClient:
     @classmethod
     async def initiate_supabase(supabase):
         url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_KEY")
+        key = os.getenv("SUPABASE_API_KEY")
 
         supabase_client: AsyncClient = await create_async_client(url, key)
         return supabase(supabase_client)
@@ -384,7 +384,7 @@ async def entrypoint(ctx: JobContext):
         task=Receptionist(),
         userdata=userdata,
         stt=deepgram.STT(),
-        llm=openai.realtime.RealtimeModel(),
+        llm=openai.LLM(),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
