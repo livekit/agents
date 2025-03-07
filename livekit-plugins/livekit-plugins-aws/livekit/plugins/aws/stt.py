@@ -26,8 +26,8 @@ from livekit.agents import (
     utils,
 )
 
-from ._utils import _get_aws_credentials
 from .log import logger
+from .utils import get_aws_credentials
 
 
 @dataclass
@@ -71,9 +71,11 @@ class STT(stt.STT):
     ):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
-        self._api_key, self._api_secret = _get_aws_credentials(api_key, api_secret, speech_region)
+        self._api_key, self._api_secret, self._speech_region = get_aws_credentials(
+            api_key, api_secret, speech_region
+        )
         self._config = STTOptions(
-            speech_region=speech_region,
+            speech_region=self._speech_region,
             language=language,
             sample_rate=sample_rate,
             encoding=encoding,
