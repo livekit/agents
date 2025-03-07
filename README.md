@@ -111,7 +111,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | livekit-plugins-rag           | Annoy based simple RAG              |
 | livekit-plugins-llama-index   | RAG with LlamaIndex                 |
 | livekit-plugins-nltk          | Utilities for working with text     |
-| livekit-plugins-vad           | Voice activity detection            |
+| livekit-plugins-silero        | Voice activity detection            |
 | livekit-plugins-turn-detector | Conversational turn detection model |
 
 ## Documentation and guides
