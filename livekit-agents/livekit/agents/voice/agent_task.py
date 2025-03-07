@@ -130,9 +130,9 @@ class AgentTask:
     ) -> Optional[AsyncIterable[stt.SpeechEvent]]:
         activity = self.__get_activity_or_raise()
         assert activity.stt is not None, "stt_node called but no STT node is available"
-
         async with activity.stt.stream() as stream:
 
+            @utils.log_exceptions(logger=logger)
             async def _forward_input():
                 async for frame in audio:
                     stream.push_frame(frame)

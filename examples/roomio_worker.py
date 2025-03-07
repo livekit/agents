@@ -6,6 +6,7 @@ from livekit.agents.llm import ai_function
 from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
 from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai
+
 # from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("roomio-example")

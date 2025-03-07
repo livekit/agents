@@ -293,7 +293,7 @@ def run_worker(args: proto.CliArgs) -> None:
     @worker.once("worker_started")
     def _worker_started():
         if args.simulate_job and args.reload_count == 0:
-            logger.info("connecting to room %s", args.simulate_job.room)
+            # logger.info("connecting to room %s", args.simulate_job.room)
             loop.create_task(
                 worker.simulate_job(args.simulate_job.room, args.simulate_job.participant_identity)
             )

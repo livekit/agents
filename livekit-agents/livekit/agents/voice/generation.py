@@ -58,6 +58,7 @@ def perform_llm_inference(
 
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
 
+    @utils.log_exceptions(logger=logger)
     async def _inference_task():
         llm_node = node(
             chat_ctx, list(fnc_ctx.ai_functions.values()) if fnc_ctx is not None else []
@@ -127,6 +128,7 @@ def perform_tts_inference(
 ) -> Tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 
+    @utils.log_exceptions(logger=logger)
     async def _inference_task():
         tts_node = node(input)
         if asyncio.iscoroutine(tts_node):

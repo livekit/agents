@@ -18,7 +18,6 @@ from typing import Any, Callable, Optional
 
 import aiohttp
 from aiobotocore.session import AioSession, get_session
-from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -28,11 +27,10 @@ from livekit.agents import (
     utils,
 )
 
-from .models import TTS_LANGUAGE, TTS_OUTPUT_FORMAT, TTS_SPEECH_ENGINE
+from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
 from .utils import get_aws_credentials
 
 TTS_NUM_CHANNELS: int = 1
-DEFAULT_OUTPUT_FORMAT: TTS_OUTPUT_FORMAT = "pcm"
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
 DEFAULT_SPEECH_REGION = "us-east-1"
 DEFAULT_VOICE = "Ruth"
@@ -43,7 +41,6 @@ DEFAULT_SAMPLE_RATE = 16000
 class _TTSOptions:
     # https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
     voice: str | None
-    output_format: TTS_OUTPUT_FORMAT
     speech_engine: TTS_SPEECH_ENGINE
     speech_region: str
     sample_rate: int
@@ -56,7 +53,6 @@ class TTS(tts.TTS):
         *,
         voice: str | None = DEFAULT_VOICE,
         language: TTS_LANGUAGE | str | None = None,
-        output_format: TTS_OUTPUT_FORMAT = DEFAULT_OUTPUT_FORMAT,
         speech_engine: TTS_SPEECH_ENGINE = DEFAULT_SPEECH_ENGINE,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         speech_region: str = DEFAULT_SPEECH_REGION,
@@ -75,7 +71,6 @@ class TTS(tts.TTS):
         Args:
             Voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to "Ruth".
             language (TTS_LANGUAGE, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
-            output_format(TTS_OUTPUT_FORMAT, optional): The format in which the returned output will be encoded. Defaults to "pcm".
             sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
             speech_engine(TTS_SPEECH_ENGINE, optional): The engine to use for the synthesis. Defaults to "generative".
             speech_region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
@@ -96,7 +91,6 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             voice=voice,
-            output_format=output_format,
             speech_engine=speech_engine,
             speech_region=self._speech_region,
             language=language,
@@ -149,7 +143,7 @@ class ChunkedStream(tts.ChunkedStream):
             async with self._get_client() as client:
                 params = {
                     "Text": self._input_text,
-                    "OutputFormat": self._opts.output_format,
+                    "OutputFormat": "mp3",
                     "Engine": self._opts.speech_engine,
                     "VoiceId": self._opts.voice,
                     "TextType": "text",
@@ -158,32 +152,36 @@ class ChunkedStream(tts.ChunkedStream):
                 }
                 response = await client.synthesize_speech(**_strip_nones(params))
                 if "AudioStream" in response:
-                    decoder = utils.codecs.Mp3StreamDecoder()
-                    async with response["AudioStream"] as resp:
-                        async for data, _ in resp.content.iter_chunks():
-                            if self._opts.output_format == "mp3":
-                                frames = decoder.decode_chunk(data)
-                                for frame in frames:
-                                    self._event_ch.send_nowait(
-                                        tts.SynthesizedAudio(
-                                            request_id=request_id,
-                                            segment_id=self._segment_id,
-                                            frame=frame,
-                                        )
-                                    )
-                            else:
-                                self._event_ch.send_nowait(
-                                    tts.SynthesizedAudio(
-                                        request_id=request_id,
-                                        segment_id=self._segment_id,
-                                        frame=rtc.AudioFrame(
-                                            data=data,
-                                            sample_rate=self._opts.sample_rate,
-                                            num_channels=1,
-                                            samples_per_channel=len(data) // 2,
-                                        ),
-                                    )
-                                )
+                    decoder = utils.codecs.AudioStreamDecoder(
+                        sample_rate=self._opts.sample_rate,
+                        num_channels=1,
+                    )
+
+                    # Create a task to push data to the decoder
+                    async def push_data():
+                        try:
+                            async with response["AudioStream"] as resp:
+                                async for data, _ in resp.content.iter_chunks():
+                                    decoder.push(data)
+                        finally:
+                            decoder.end_input()
+
+                    # Start pushing data to the decoder
+                    push_task = asyncio.create_task(push_data())
+
+                    try:
+                        # Create emitter and process decoded frames
+                        emitter = tts.SynthesizedAudioEmitter(
+                            event_ch=self._event_ch,
+                            request_id=request_id,
+                            segment_id=self._segment_id,
+                        )
+                        async for frame in decoder:
+                            emitter.push(frame)
+                        emitter.flush()
+                        await push_task
+                    finally:
+                        await utils.aio.gracefully_cancel(push_task)
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e

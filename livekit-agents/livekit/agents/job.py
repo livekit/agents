@@ -94,7 +94,8 @@ class JobContext:
         self._room = room
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
-        self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]],] = []
+        self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
+        self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
         self._participant_entrypoints: list[
             Tuple[
                 Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
@@ -140,6 +141,15 @@ class JobContext:
     @property
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
+
+    def add_tracing_callback(
+        self,
+        callback: Callable[[], Coroutine[None, None, None]],
+    ) -> None:
+        """
+        Add a callback to be called when the job is about to receive a new tracing request.
+        """
+        self._tracing_callbacks.append(callback)
 
     def add_shutdown_callback(
         self,

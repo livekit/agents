@@ -172,6 +172,17 @@ class _JobProc:
                         logger.warning("tracing request received without running job")
                         return
 
+                    try:
+                        tracing_tasks = []
+                        for callback in self._job_ctx._tracing_callbacks:
+                            tracing_tasks.append(
+                                asyncio.create_task(callback(), name="job_tracing_callback")
+                            )
+
+                        await asyncio.gather(*tracing_tasks)
+                    except Exception:
+                        logger.exception("error while exeuting tracing tasks")
+
                     await self._client.send(
                         TracingResponse(
                             request_id=msg.request_id,

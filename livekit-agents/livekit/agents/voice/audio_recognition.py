@@ -198,6 +198,7 @@ class AudioRecognition:
 
         self._end_of_turn_task = asyncio.create_task(_bounce_eou_task())
 
+    @utils.log_exceptions(logger=logger)
     async def _stt_task(
         self,
         stt_node: io.STTNode,
@@ -219,6 +220,7 @@ class AudioRecognition:
                 assert isinstance(ev, stt.SpeechEvent), "STT node must yield SpeechEvent"
                 await self._on_stt_event(ev)
 
+    @utils.log_exceptions(logger=logger)
     async def _vad_task(
         self, vad: vad.VAD, audio_input: io.AudioStream, task: asyncio.Task[None] | None
     ) -> None:
@@ -227,6 +229,7 @@ class AudioRecognition:
 
         stream = vad.stream()
 
+        @utils.log_exceptions(logger=logger)
         async def _forward() -> None:
             async for frame in audio_input:
                 stream.push_frame(frame)
