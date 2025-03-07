@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -62,15 +61,11 @@ class WorkerLauncher:
         # Launch new worker process
         cmd = [
             sys.executable,
-            str(THIS_DIR / "simli_worker.py"),
+            str(THIS_DIR / "simli_avatar_runner.py"),
             "--url",
             connection_info.url,
             "--token",
             connection_info.token,
-            "--simli-api-key",
-            os.environ["SIMLI_API_KEY"],
-            "--simli-face-id",
-            os.environ["SIMLI_FACE_ID"],
             "--room",
             connection_info.room_name,
         ]

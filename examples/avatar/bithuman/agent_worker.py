@@ -62,7 +62,7 @@ class BithumanGenerator(VideoGenerator):
     def clear_buffer(self) -> None:
         self._runtime.interrupt()
 
-    def stream(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
+    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         return self._stream_impl()
 
     async def _stream_impl(
