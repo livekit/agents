@@ -100,7 +100,7 @@ class AvatarRunner:
         )
 
     async def _read_audio(self) -> None:
-        async for frame in self._audio_recv.stream():
+        async for frame in self._audio_recv:
             if not self._audio_playing and isinstance(frame, rtc.AudioFrame):
                 self._audio_playing = True
             await self._video_gen.push_audio(frame)
@@ -109,7 +109,7 @@ class AvatarRunner:
     async def _publish_video(self) -> None:
         """Process audio frames and generate synchronized video"""
 
-        async for frame in self._video_gen.stream():
+        async for frame in self._video_gen:
             if isinstance(frame, AudioSegmentEnd):
                 # notify the agent that the audio has finished playing
                 if self._audio_playing:

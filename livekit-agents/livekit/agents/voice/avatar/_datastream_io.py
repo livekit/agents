@@ -173,7 +173,7 @@ class DataStreamAudioReceiver(AudioReceiver):
         except Exception as e:
             logger.exception(f"error notifying playback finished: {e}")
 
-    def stream(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
+    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self._stream_impl()
 
     @utils.log_exceptions(logger=logger)

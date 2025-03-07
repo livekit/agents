@@ -21,7 +21,7 @@ class AudioReceiver(ABC, rtc.EventEmitter[Literal["clear_buffer"]]):
         """Notify the sender that playback has finished"""
 
     @abstractmethod
-    def stream(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
+    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         """Continuously stream out audio frames or AudioSegmentEnd when the stream ends"""
 
 
@@ -35,5 +35,5 @@ class VideoGenerator(ABC):
         """Clear the audio buffer, stopping audio playback immediately"""
 
     @abstractmethod
-    def stream(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
+    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         """Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends"""
