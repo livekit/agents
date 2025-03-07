@@ -10,7 +10,6 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-
 from livekit.agents.pipeline import PipelineAgent
 
 
