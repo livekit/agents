@@ -1,25 +1,66 @@
-# LiveKit Avatar Example
+# Avatar Examples
 
-This example demonstrates how to create an animated avatar that responds to audio input using LiveKit's agent system. The avatar worker generates synchronized video based on received audio input.
+Avatars provide a visual representation for agents. This collection showcases three different technical approaches to avatar implementation:
 
-## How it Works
+1. **audio_wave** - A simple local mock demo that visualizes audio input as waveforms
+2. **simli** - Integration with the Simli API for avatar generation
+3. **bithuman** - Direct integration of a local avatar model with the agent worker
 
-1. The agent sends connection info (including token, room name, and URL) to the avatar dispatcher server
-2. The dispatcher launches an avatar worker process for that room
-3. The agent streams audio to the avatar worker using LiveKit's DataStream
-4. The avatar worker:
-   - Receives the audio stream
-   - Generates synchronized video frames based on the audio
-   - Publishes both the audio and video back to the room
+## Integration Approaches
 
-## Usage
+These examples demonstrate two primary methods for integrating avatars with agent systems:
 
-1. Start the avatar dispatcher server:
-```bash
-python examples/avatar/dispatcher.py [--port 8089]
-```
+### 1. Data Stream Sink Integration
 
-2. Start the agent worker:
-```bash
-python examples/avatar/agent_worker.py dev [--avatar-url http://localhost:8089/launch]
-```
+Used in **audio_wave** and **simli** examples, this approach:
+- Runs the avatar in a separate process or server that joins the same LiveKit room as a participant
+- Receives agent audio output through DataStream
+- Processes audio and publishes synchronized video back to the room
+- Enables distributed architecture where avatar generation can run on dedicated hardware
+
+The data stream sink approach allows for more flexible deployment options, as the avatar generation can be:
+- Hosted on specialized hardware optimized for visual processing
+- Scaled independently from the agent worker
+- Deployed closer to the rendering endpoint to reduce latency
+
+### 2. Direct Agent Worker Integration
+
+Used in the **bithuman** example, this approach:
+- Integrates avatar inference directly within the agent worker process
+- Uses a queue-based audio sink to buffer and process audio for avatar generation
+- Embeds the avatar model in the same runtime environment as the agent
+- Simplifies deployment by reducing the number of separate services
+
+Both integration methods leverage the AvatarRunner SDK to handle the core functionality of:
+- Processing audio input from the agent
+- Generating corresponding visual output
+- Publishing synchronized audio and video streams to the LiveKit room
+
+
+## Examples
+
+### audio_wave
+
+The audio_wave example demonstrates a basic local implementation that visualizes audio input as waveforms. This approach:
+- Provides a lightweight visualization that runs locally
+- Functions without requiring external services
+- Processes all visualization locally with minimal latency
+
+### simli
+
+The simli example shows how to integrate with the [Simli API](https://docs.simli.com/introduction) for avatar generation. This approach:
+- Utilizes a third-party service for avatar rendering
+- Implements API request/response handling
+- Requires network connectivity and API authentication
+
+### bithuman
+
+The bithuman example demonstrates direct integration of a [Bithuman local runtime](https://docs.bithuman.io/api-reference/runtime/introduction) with the agent worker. This approach:
+- Runs the avatar generation model locally alongside the agent
+- Operates independently of external services
+- Implements direct model inference within the agent workflow
+
+
+## Contributing
+
+Feel free to contribute additional avatar examples or technical improvements to existing ones by submitting a pull request.
