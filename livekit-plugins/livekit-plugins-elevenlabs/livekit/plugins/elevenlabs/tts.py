@@ -239,9 +239,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> "SynthesizeStream":
+    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> "SynthesizeStream":
         stream = SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
         self._streams.add(stream)
         return stream
@@ -419,9 +417,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if self._opts.voice.settings
                     else None
                 ),
-                generation_config=dict(
-                    chunk_length_schedule=self._opts.chunk_length_schedule
-                ),
+                generation_config=dict(chunk_length_schedule=self._opts.chunk_length_schedule),
             )
             await ws_conn.send_str(json.dumps(init_pkt))
 
@@ -493,7 +489,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data = json.loads(msg.data)
                     if data.get("audio"):
                         b64data = base64.b64decode(data["audio"])
-                        logger.info("recv_task: pushing b64data to decoder")
+                        logger.info(
+                            "recv_task: received audio data",
+                            extra={
+                                "b64_length": len(data["audio"]),
+                                "decoded_length": len(b64data),
+                                "is_empty": len(b64data) == 0,
+                            },
+                        )
+
+                        if len(b64data) == 0:
+                            logger.warning("recv_task: received empty audio data")
+                            continue
 
                         # Create a new decoder for this chunk
                         chunk_decoder = utils.codecs.AudioStreamDecoder(
@@ -504,17 +511,29 @@ class SynthesizeStream(tts.SynthesizeStream):
                         chunk_decoder.push(b64data)
                         chunk_decoder.end_input()
 
+                        frame_count = 0
                         async for frame in chunk_decoder:
-                            logger.info("recv_task: pushing frame to emitter")
+                            frame_count += 1
+                            logger.info(
+                                "recv_task: processing audio frame",
+                                extra={
+                                    "frame_samples": frame.samples_per_channel,
+                                    "frame_duration": frame.duration,
+                                    "frame_number": frame_count,
+                                },
+                            )
                             emitter.push(frame)
+
+                        logger.info(
+                            "recv_task: finished processing audio chunk",
+                            extra={"total_frames": frame_count},
+                        )
 
                         await chunk_decoder.aclose()
                         emitter.flush()
 
                         if alignment := data.get("normalizedAlignment"):
-                            received_text += "".join(
-                                alignment.get("chars", [])
-                            ).replace(" ", "")
+                            received_text += "".join(alignment.get("chars", [])).replace(" ", "")
                             if received_text == expected_text:
                                 decoder.end_input()
                                 break
