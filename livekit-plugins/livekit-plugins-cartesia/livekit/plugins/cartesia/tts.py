@@ -304,12 +304,25 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
                 self._mark_started()
+                logger.info(
+                    f"Cartesia TTS Token packet: `{token_pkt['transcript']}`, context ID: {request_id}"
+                )
                 await ws.send_str(json.dumps(token_pkt))
+                # if any(ev.token.strip().endswith(p) for p in [".", "!", "?"]):
+                #     end_pkt = base_pkt.copy()
+                #     end_pkt["context_id"] = request_id
+                #     end_pkt["transcript"] = " "
+                #     end_pkt["continue"] = False
+                #     logger.info(f"Cartesia TTS End packet v1: `{end_pkt['transcript']}`, context ID: {request_id}")
+                #     await ws.send_str(json.dumps(end_pkt))
 
             end_pkt = base_pkt.copy()
             end_pkt["context_id"] = request_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
+            logger.info(
+                f"Cartesia TTS End packet v2: `{end_pkt['transcript']}`, context ID: {request_id}"
+            )
             await ws.send_str(json.dumps(end_pkt))
 
         async def _input_task():
@@ -354,6 +367,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["data"])
                     for frame in audio_bstream.write(b64data):
                         emitter.push(frame)
+                    emitter.flush()
                 elif data.get("done"):
                     for frame in audio_bstream.flush():
                         emitter.push(frame)
