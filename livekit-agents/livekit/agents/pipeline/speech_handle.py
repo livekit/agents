@@ -136,6 +136,10 @@ class SpeechHandle:
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
+    @allow_interruptions.setter
+    def allow_interruptions(self, value: bool) -> None:
+        self._allow_interruptions = value
+
     @property
     def add_to_chat_ctx(self) -> bool:
         return self._add_to_chat_ctx
@@ -155,7 +159,8 @@ class SpeechHandle:
     @synthesis_handle.setter
     def synthesis_handle(self, synthesis_handle: SynthesisHandle) -> None:
         """synthesis handle can be replaced for the same speech.
-        This is useful when we need to do a new generation. (e.g for automatic function call answers)"""
+        This is useful when we need to do a new generation. (e.g for automatic function call answers)
+        """
         if self._synthesis_handle is None:
             raise RuntimeError("speech not initialized")
 
