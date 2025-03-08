@@ -512,6 +512,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             emitter.push(frame)
 
                         await chunk_decoder.aclose()
+                        logger.info("about to call emitter.flush()")
                         emitter.flush()
 
                         if alignment := data.get("normalizedAlignment"):
@@ -519,6 +520,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 alignment.get("chars", [])
                             ).replace(" ", "")
                             if received_text == expected_text:
+                                logger.info("about to call decoder.end_input()")
                                 decoder.end_input()
                                 break
                     elif data.get("error"):
