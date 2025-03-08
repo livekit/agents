@@ -1,0 +1,2 @@
+bithuman-runtime>=0.3.19
+opencv-python
