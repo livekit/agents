@@ -443,6 +443,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     data_pkt = dict(text=f"{text} ")  # must always end with a space
                     self._mark_started()
+                    logger.info(f"send_task: sending text: {text}")
                     await ws_conn.send_str(json.dumps(data_pkt))
                     if any(char in text.strip() for char in [".", "!", "?"]):
                         await ws_conn.send_str(json.dumps({"flush": True}))
