@@ -488,15 +488,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     data = json.loads(msg.data)
                     if data.get("audio"):
+                        received_text = ""
+                        if alignment := data.get("normalizedAlignment"):
+                            received_text = "".join(alignment.get("chars", [])).replace(" ", "")
+                            logger.info(f"recv_task: received text: {received_text}")
                         b64data = base64.b64decode(data["audio"])
-                        logger.info(
-                            "recv_task: received audio data",
-                            extra={
-                                "b64_length": len(data["audio"]),
-                                "decoded_length": len(b64data),
-                                "is_empty": len(b64data) == 0,
-                            },
-                        )
 
                         if len(b64data) == 0:
                             logger.warning("recv_task: received empty audio data")
@@ -508,29 +504,33 @@ class SynthesizeStream(tts.SynthesizeStream):
                             num_channels=1,
                         )
 
+                        try:
+                            # check if b63data is empty
+                            if len(b64data) == 0:
+                                logger.info(
+                                    f"recv_task: received empty audio data for text: {received_text}"
+                                )
+                        except Exception as e:
+                            logger.error(f"recv_task: error processing audio data: {e}")
+
+                        logger.info(f"recv_task: pushing data to decoder for text: {received_text}")
                         chunk_decoder.push(b64data)
+                        logger.info(f"recv_task: ending input for text: {received_text}")
                         chunk_decoder.end_input()
 
                         frame_count = 0
                         async for frame in chunk_decoder:
+
                             frame_count += 1
                             logger.info(
-                                "recv_task: processing audio frame",
-                                extra={
-                                    "frame_samples": frame.samples_per_channel,
-                                    "frame_duration": frame.duration,
-                                    "frame_number": frame_count,
-                                },
+                                f"recv_task: pushing frame {frame_count} to emitter for text: {received_text}"
                             )
                             emitter.push(frame)
 
-                        logger.info(
-                            "recv_task: finished processing audio chunk",
-                            extra={"total_frames": frame_count},
-                        )
-
-                        await chunk_decoder.aclose()
+                        logger.info(f"recv_task: flushing emitter for text: {received_text}")
                         emitter.flush()
+                        logger.info(f"recv_task: closing decoder for text: {received_text}")
+                        await chunk_decoder.aclose()
 
                         if alignment := data.get("normalizedAlignment"):
                             received_text += "".join(alignment.get("chars", [])).replace(" ", "")
