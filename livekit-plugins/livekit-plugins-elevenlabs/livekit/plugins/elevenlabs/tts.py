@@ -446,6 +446,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.info(f"send_task: sending text: ~{text}~")
                     await ws_conn.send_str(json.dumps(data_pkt))
                     if any(char in text.strip() for char in [".", "!", "?"]):
+                        logger.info(
+                            "Sending flush packet due to sentence ending punctuation"
+                        )
                         await ws_conn.send_str(json.dumps({"flush": True}))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
@@ -514,6 +517,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                             emitter.push(frame)
 
+
                         logger.info(f"recv_task: flushing emitter for text: {received_text}")
                         emitter.flush()
                         logger.info(f"recv_task: closing decoder for text: {received_text}")
@@ -523,6 +527,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             received_text += "".join(alignment.get("chars", [])).replace(" ", "")
                             if received_text == expected_text:
                                 # decoder.end_input()
+
                                 break
                     elif data.get("error"):
                         raise APIStatusError(
