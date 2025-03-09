@@ -32,6 +32,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit import rtc
 
 from .log import logger
 from .models import OutputFormat, Precision
@@ -45,7 +46,6 @@ NUM_CHANNELS = 1
 @dataclass
 class _Options:
     voice_uuid: str
-    project_uuid: str
     sample_rate: int
     precision: Precision
     output_format: OutputFormat
@@ -59,12 +59,11 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         voice_uuid: str,
-        project_uuid: str,
         sample_rate: int = 44100,
         precision: Union[Precision, str] = Precision.PCM_16,
         output_format: Union[OutputFormat, str] = OutputFormat.WAV,
         binary_response: bool = False,
-        no_audio_header: bool = False,
+        no_audio_header: bool = True,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -91,7 +90,6 @@ class TTS(tts.TTS):
         # Set options
         self._opts = _Options(
             voice_uuid=voice_uuid,
-            project_uuid=project_uuid,
             sample_rate=sample_rate,
             precision=precision,
             output_format=output_format,
@@ -125,7 +123,6 @@ class TTS(tts.TTS):
         self,
         *,
         voice_uuid: str | None = None,
-        project_uuid: str | None = None,
         precision: Union[Precision, str, None] = None,
         output_format: Union[OutputFormat, str, None] = None,
         **kwargs,
@@ -133,8 +130,6 @@ class TTS(tts.TTS):
         """Update TTS options."""
         if voice_uuid:
             self._opts.voice_uuid = voice_uuid
-        if project_uuid:
-            self._opts.project_uuid = project_uuid
         if precision:
             if isinstance(precision, str):
                 precision = Precision(precision)
@@ -236,10 +231,6 @@ class ChunkedStream(tts.ChunkedStream):
             "sample_rate": self._opts.sample_rate,
             "output_format": self._opts.output_format,
         }
-        
-        # Add project_uuid if provided (optional for some accounts)
-        if hasattr(self._opts, "project_uuid") and self._opts.project_uuid:
-            payload["project_uuid"] = self._opts.project_uuid
         
         # Create decoder for audio processing
         decoder = utils.codecs.AudioStreamDecoder(
@@ -377,6 +368,45 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._websocket_task = None
         self._processing_task = None
         self._closed = False
+        
+        # Create a task to monitor the base class's input channel
+        self._input_monitor_task = asyncio.create_task(self._monitor_input_channel())
+        
+    async def _monitor_input_channel(self) -> None:
+        """Monitor the input channel from the base class and forward to our text channel."""
+        try:
+            logger.debug("Input channel monitor started")
+            buffer = ""
+            
+            async for item in self._input_ch:
+                logger.debug(f"Received item from input channel: {type(item)}")
+                
+                if isinstance(item, self._FlushSentinel):
+                    # When we get a flush sentinel, send any buffered text
+                    if buffer:
+                        logger.debug(f"Flushing buffered text: {buffer}")
+                        await self._text_ch.put(buffer)
+                        buffer = ""
+                    continue
+                else:
+                    # It's a text token, add to buffer
+                    buffer += item
+                    # For Resemble, we might want to send after collecting a bit more text
+                    # But for now, we'll send each token as it comes in
+                    await self._text_ch.put(buffer)
+                    buffer = ""
+                
+            # End of input - send any remaining text in buffer
+            if buffer:
+                logger.debug(f"Sending final buffered text: {buffer}")
+                await self._text_ch.put(buffer)
+        except Exception as e:
+            logger.error(f"Error in input channel monitor: {e}")
+        finally:
+            if not self._closed:
+                # Signal end of input if our monitor is shutting down unexpectedly
+                logger.debug("Signaling end of input")
+                await self._text_ch.put(None)
 
     async def synthesize_text(self, text: str) -> None:
         """Queue text for synthesis."""
@@ -396,6 +426,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         # Close the text channel to signal the end
         if self._running:
             await self._text_ch.put(None)  # Signal end of input
+        
+        # Cancel the input monitor task
+        if self._input_monitor_task and not self._input_monitor_task.done():
+            self._input_monitor_task.cancel()
+            try:
+                await self._input_monitor_task
+            except asyncio.CancelledError:
+                pass
         
         # Cancel any running tasks
         if self._processing_task and not self._processing_task.done():
@@ -444,94 +482,176 @@ class SynthesizeStream(tts.SynthesizeStream):
                 segment_id=segment_id,
             )
             
-            # Process text input and WebSocket messages
-            while not self._closed:
-                # Wait for text to synthesize
-                text = await self._text_ch.get()
-                
-                # None signals end of input
-                if text is None:
-                    logger.debug("Received end of input signal")
-                    break
-                
-                # Prepare request payload
-                logger.debug(f"Synthesizing text: {text}")
-                self._mark_started()
-                
-                payload = {
-                    "voice_uuid": self._opts.voice_uuid,
-                    "project_uuid": self._opts.project_uuid,
-                    "data": text,
-                    "request_id": self._request_id,
-                    "binary_response": self._opts.binary_response,
-                    "output_format": self._opts.output_format,
-                    "sample_rate": self._opts.sample_rate,
-                    "precision": self._opts.precision,
-                    "no_audio_header": self._opts.no_audio_header,
-                }
-                
-                # Send synthesis request
-                await self._websocket.send(json.dumps(payload))
-                self._request_id += 1
-                
-                # Process responses until audio_end is received
-                first_audio = True
-                while True:
-                    message = await self._websocket.recv()
-                    
-                    # Handle binary response (when binary_response=true)
-                    if isinstance(message, bytes):
-                        logger.debug(f"Received binary audio data: {len(message)} bytes")
-                        decoder.push(message)
+            # Start a separate task to handle WebSocket messages
+            async def _ws_recv_task():
+                try:
+                    while not self._closed and self._websocket:
+                        message = await self._websocket.recv()
                         
-                        # Process decoded audio frames
-                        async for frame in decoder:
-                            emitter.push(frame)
-                        continue
-                    
-                    # Handle JSON response
-                    try:
-                        data = json.loads(message)
-                        
-                        # Debug log the first message
-                        if first_audio:
-                            logger.debug(f"Received first JSON message: {data.get('type')}")
-                            first_audio = False
-                        
-                        # Handle audio data
-                        if data.get("type") == "audio":
-                            # Decode base64 audio content
-                            audio_data = base64.b64decode(data["audio_content"])
-                            
-                            # Push to decoder
-                            decoder.push(audio_data)
+                        # Handle binary response (when binary_response=true)
+                        if isinstance(message, bytes):
+                            logger.info(f"Received binary audio data: {len(message)} bytes")
+                            decoder.push(message)
                             
                             # Process decoded audio frames
+                            frame_count = 0
                             async for frame in decoder:
+                                frame_count += 1
+                                logger.info(f"Emitting audio frame {frame_count}: {frame.samples_per_channel} samples")
                                 emitter.push(frame)
+                            
+                            # If we didn't get any frames, log a warning
+                            if frame_count == 0:
+                                logger.warning("No audio frames were decoded from the audio data")
+                            else:
+                                logger.info(f"Successfully decoded {frame_count} frames from audio data")
+                                # Immediately flush after each chunk to ensure frames are available
+                                emitter.flush()
+                            continue
                         
-                        # Handle end of audio
-                        elif data.get("type") == "audio_end":
-                            logger.debug("Received audio_end message")
-                            # Complete current segment
-                            emitter.flush()
-                            break
-                        
-                        # Handle errors
-                        elif data.get("type") == "error":
-                            error_msg = data.get("message", "Unknown error")
-                            logger.error(f"Resemble WebSocket API error: {error_msg}")
-                            raise APIStatusError(
-                                message=f"Resemble API error: {error_msg}",
-                                status_code=data.get("status_code", 500),
-                                request_id=str(request_id),
-                                body=None,
-                            )
-                    except json.JSONDecodeError:
-                        logger.error("Failed to decode JSON response")
+                        # Handle JSON response
+                        try:
+                            data = json.loads(message)
+                            logger.debug(f"Received JSON message: {data.get('type')}")
+                            
+                            # Handle audio data
+                            if data.get("type") == "audio":
+                                # Decode base64 audio content
+                                audio_data = base64.b64decode(data["audio_content"])
+                                logger.info(f"Received audio data: {len(audio_data)} bytes")
+                                
+                                try:
+                                    # When no_audio_header is True, we get raw PCM samples
+                                    # Convert the raw bytes directly to an audio frame
+                                    if self._opts.no_audio_header:
+                                        # For PCM_16, each sample is 2 bytes (16 bits)
+                                        bytes_per_sample = 2
+                                        samples_per_channel = len(audio_data) // bytes_per_sample
+                                        
+                                        # Create audio frame directly from the PCM data
+                                        frame = rtc.AudioFrame(
+                                            data=audio_data,
+                                            samples_per_channel=samples_per_channel,
+                                            sample_rate=self._opts.sample_rate,
+                                            num_channels=NUM_CHANNELS,
+                                        )
+                                        
+                                        logger.info(f"Created direct audio frame with {samples_per_channel} samples from raw PCM data")
+                                        emitter.push(frame)
+                                    else:
+                                        # If we have an audio header (WAV format)
+                                        data_chunk_pos = audio_data.find(b'data')
+                                        if data_chunk_pos >= 0:
+                                            # Skip the 'data' marker (4 bytes) and the chunk size (4 bytes)
+                                            pcm_data_start = data_chunk_pos + 8
+                                            # Get the chunk size (4 bytes little-endian)
+                                            chunk_size = int.from_bytes(audio_data[data_chunk_pos+4:data_chunk_pos+8], byteorder='little')
+                                            logger.info(f"Found WAV data chunk at position {data_chunk_pos}, size: {chunk_size}, data starts at {pcm_data_start}")
+                                            pcm_data = audio_data[pcm_data_start:pcm_data_start+chunk_size]
+                                        else:
+                                            # If we can't find the data chunk, assume standard 44-byte header
+                                            pcm_data = audio_data[44:]
+                                            logger.info(f"Using standard 44-byte WAV header offset")
+                                        
+                                        # Create an audio frame from the PCM data
+                                        samples_per_channel = len(pcm_data) // (2 * NUM_CHANNELS)  # 2 bytes per sample (16-bit PCM)
+                                        frame = rtc.AudioFrame(
+                                            data=pcm_data,
+                                            samples_per_channel=samples_per_channel,
+                                            sample_rate=self._opts.sample_rate,
+                                            num_channels=NUM_CHANNELS,
+                                        )
+                                        
+                                        logger.info(f"Created audio frame with {samples_per_channel} samples from WAV data")
+                                        emitter.push(frame)
+                                    
+                                    # Flush after each chunk
+                                    emitter.flush()
+                                    
+                                except Exception as e:
+                                    logger.error(f"Error processing audio data: {e}", exc_info=True)
+                            
+                            # Handle end of audio
+                            elif data.get("type") == "audio_end":
+                                logger.info("Received audio_end message")
+                                # Complete current segment
+                                emitter.flush()
+                                
+                            # Handle errors
+                            elif data.get("type") == "error":
+                                error_msg = data.get("message", "Unknown error")
+                                logger.error(f"Resemble WebSocket API error: {error_msg}")
+                                raise APIStatusError(
+                                    message=f"Resemble API error: {error_msg}",
+                                    status_code=data.get("status_code", 500),
+                                    request_id=str(request_id),
+                                    body=None,
+                                )
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to decode JSON response: {message}")
+                except websockets.exceptions.ConnectionClosed as e:
+                    logger.error(f"WebSocket connection closed: {e}")
+                    if not self._closed:
+                        raise APIConnectionError(f"WebSocket connection closed unexpectedly: {e}")
+                except Exception as e:
+                    logger.error(f"Error in WebSocket receive task: {e}")
+                    if not self._closed:
+                        raise
+            
+            # Start WebSocket receive task
+            ws_task = asyncio.create_task(_ws_recv_task())
+            
+            # Process text input
+            try:
+                while not self._closed:
+                    # Wait for text to synthesize
+                    text = await self._text_ch.get()
+                    
+                    # None signals end of input
+                    if text is None:
+                        logger.debug("Received end of input signal")
+                        break
+                    
+                    if not text.strip():
+                        logger.debug("Skipping empty text")
+                        self._text_ch.task_done()
+                        continue
+                    
+                    # Prepare request payload
+                    logger.info(f"Synthesizing text: {text}")
+                    self._mark_started()
+                    
+                    payload = {
+                        "voice_uuid": self._opts.voice_uuid,
+                        "data": text,
+                        "request_id": self._request_id,
+                        "binary_response": self._opts.binary_response,
+                        "output_format": self._opts.output_format,
+                        "sample_rate": self._opts.sample_rate,
+                        "precision": self._opts.precision,
+                        "no_audio_header": self._opts.no_audio_header,
+                    }
+                    
+                    # Send synthesis request
+                    await self._websocket.send(json.dumps(payload))
+                    logger.debug(f"Sent request {self._request_id}")
+                    self._request_id += 1
+                    
+                    # Mark the text as processed
+                    self._text_ch.task_done()
                 
-                # Mark the text as processed
-                self._text_ch.task_done()
+                # Wait a bit for final responses
+                logger.info("Waiting for final audio responses")
+                await asyncio.sleep(2)
+                
+            finally:
+                # Cancel WebSocket task
+                if not ws_task.done():
+                    ws_task.cancel()
+                    try:
+                        await ws_task
+                    except asyncio.CancelledError:
+                        pass
             
         except asyncio.CancelledError:
             logger.debug("Streaming synthesis was cancelled")
