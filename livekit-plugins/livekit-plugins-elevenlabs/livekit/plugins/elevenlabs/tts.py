@@ -536,7 +536,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         if alignment := data.get("normalizedAlignment"):
                             received_text += "".join(alignment.get("chars", [])).replace(" ", "")
                             if received_text == expected_text:
-                                decoder.end_input()
+                                # decoder.end_input()
                                 break
                     elif data.get("error"):
                         raise APIStatusError(
