@@ -653,7 +653,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 AppConfig().get_call_metadata().pop(
                                     "safe_for_tts_to_break", None
                                 )
-                                await ws_conn.send_str(json.dumps({"text": ""}))
                                 break
                     elif data.get("error"):
                         raise APIStatusError(
