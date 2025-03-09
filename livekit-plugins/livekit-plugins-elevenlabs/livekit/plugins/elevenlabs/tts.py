@@ -643,7 +643,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                     f"recv_task: about to break due to received text == expected text: {expected_text}"
                                 )
                                 AppConfig().get_call_metadata().pop(
-                                    "safe_for_tts_to_break"
+                                    "safe_for_tts_to_break", None
                                 )
                                 break
                     elif data.get("error"):
