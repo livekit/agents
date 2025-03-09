@@ -47,6 +47,7 @@ class PlayoutHandle:
         return self._pushed_duration - self._audio_source.queued_duration
 
     def done(self) -> bool:
+        logger.info(f"PlayoutHandle.done: self._done_fut.done(): {self._done_fut.done()}")
         return self._done_fut.done() or self._interrupted
 
     def interrupt(self) -> None:
