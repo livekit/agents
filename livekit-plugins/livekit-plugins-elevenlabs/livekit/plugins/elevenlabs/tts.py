@@ -601,7 +601,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.info(
                             f"recv_task: pushing data to decoder for text: {received_text_to_print}"
                         )
-                        logger.info(f"about to push b64data: {b64data}")
                         chunk_decoder.push(b64data)
                         logger.info(
                             f"recv_task: ending input for text: {received_text_to_print}"
