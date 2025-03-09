@@ -484,7 +484,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 while True:
                     msg = await ws_conn.receive()
-                    logger.info(f"recv_task: received message: {msg}")
+                    logger.info("recv_task: received message")
                     logger.info(f"recv_task: request_id: {request_id}. segment_id: {segment_id}")
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSED,
@@ -548,8 +548,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                     elif data.get("isFinal"):
                         logger.warning(f"received isFinal. request_id: {request_id}. segment_id: {segment_id}")
-                        if request_id == segment_id:
-                            break
+                        break
+                        # if request_id == segment_id:
+                        #     break
                     else:
                         raise APIStatusError(
                             message=f"unexpected 11labs message {data}",
