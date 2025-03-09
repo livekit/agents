@@ -127,6 +127,8 @@ class HumanInput(utils.EventEmitter[EventTypes]):
             async for ev in audio_stream:
                 stt_stream.push_frame(ev.frame)
                 vad_stream.push_frame(ev.frame)
+            stt_stream.end_input()
+            vad_stream.end_input()
 
         async def _vad_stream_co() -> None:
             async for ev in vad_stream:
