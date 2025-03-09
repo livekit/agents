@@ -495,24 +495,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                             logger.info(f"recv_task: received text: {received_text}")
                         b64data = base64.b64decode(data["audio"])
 
-                        if len(b64data) == 0:
-                            logger.warning("recv_task: received empty audio data")
-                            continue
-
                         # Create a new decoder for this chunk
                         chunk_decoder = utils.codecs.AudioStreamDecoder(
                             sample_rate=self._opts.sample_rate,
                             num_channels=1,
                         )
-
-                        try:
-                            # check if b63data is empty
-                            if len(b64data) == 0:
-                                logger.info(
-                                    f"recv_task: received empty audio data for text: {received_text}"
-                                )
-                        except Exception as e:
-                            logger.error(f"recv_task: error processing audio data: {e}")
 
                         logger.info(f"recv_task: pushing data to decoder for text: {received_text}")
                         chunk_decoder.push(b64data)
@@ -521,7 +508,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                         frame_count = 0
                         async for frame in chunk_decoder:
-
                             frame_count += 1
                             logger.info(
                                 f"recv_task: pushing frame {frame_count} to emitter for text: {received_text}"
