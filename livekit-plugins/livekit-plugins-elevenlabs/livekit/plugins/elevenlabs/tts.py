@@ -617,6 +617,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                             received_text += "".join(
                                 alignment.get("chars", [])
                             ).replace(" ", "")
+                            logger.info(
+                                f"recv_task: received text: {received_text}\n\nexpected text: {expected_text}"
+                            )
+                            logger.info(
+                                AppConfig()
+                                .get_call_metadata()
+                                .get("safe_for_tts_to_break")
+                            )
                             if (
                                 received_text == expected_text
                                 and expected_text.contains(
