@@ -19,11 +19,13 @@ import base64
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import aiohttp
+from app_config import AppConfig
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -239,7 +241,9 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> "SynthesizeStream":
+    def stream(
+        self, *, conn_options: Optional[APIConnectOptions] = None
+    ) -> "SynthesizeStream":
         stream = SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
         self._streams.add(stream)
         return stream
@@ -417,7 +421,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if self._opts.voice.settings
                     else None
                 ),
-                generation_config=dict(chunk_length_schedule=self._opts.chunk_length_schedule),
+                generation_config=dict(
+                    chunk_length_schedule=self._opts.chunk_length_schedule
+                ),
             )
             await ws_conn.send_str(json.dumps(init_pkt))
 
@@ -446,6 +452,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.info(f"send_task: sending text: ~{text}~")
                     await ws_conn.send_str(json.dumps(data_pkt))
                     if any(char in text.strip() for char in [".", "!", "?"]):
+                        if (
+                            not AppConfig()
+                            .get_call_metadata()
+                            .get("first_sentence_synthesis_start_time")
+                        ):
+                            AppConfig().get_call_metadata().update(
+                                {"first_sentence_synthesis_start_time": time.time()}
+                            )
                         logger.info(
                             "Sending flush packet due to sentence ending punctuation"
                         )
@@ -494,7 +508,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if data.get("audio"):
                         received_text = ""
                         if alignment := data.get("normalizedAlignment"):
-                            received_text = "".join(alignment.get("chars", [])).replace(" ", "")
+                            received_text = "".join(alignment.get("chars", [])).replace(
+                                " ", ""
+                            )
                             logger.info(f"recv_task: received text: {received_text}")
                         b64data = base64.b64decode(data["audio"])
 
@@ -504,9 +520,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                             num_channels=1,
                         )
 
-                        logger.info(f"recv_task: pushing data to decoder for text: {received_text}")
+                        logger.info(
+                            f"recv_task: pushing data to decoder for text: {received_text}"
+                        )
                         chunk_decoder.push(b64data)
-                        logger.info(f"recv_task: ending input for text: {received_text}")
+                        logger.info(
+                            f"recv_task: ending input for text: {received_text}"
+                        )
                         chunk_decoder.end_input()
 
                         frame_count = 0
@@ -517,14 +537,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                             emitter.push(frame)
 
-
-                        logger.info(f"recv_task: flushing emitter for text: {received_text}")
+                        logger.info(
+                            f"recv_task: flushing emitter for text: {received_text}"
+                        )
                         emitter.flush()
-                        logger.info(f"recv_task: closing decoder for text: {received_text}")
+                        logger.info(
+                            f"recv_task: closing decoder for text: {received_text}"
+                        )
                         await chunk_decoder.aclose()
 
                         if alignment := data.get("normalizedAlignment"):
-                            received_text += "".join(alignment.get("chars", [])).replace(" ", "")
+                            received_text += "".join(
+                                alignment.get("chars", [])
+                            ).replace(" ", "")
                             if received_text == expected_text:
                                 # decoder.end_input()
 
