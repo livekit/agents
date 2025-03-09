@@ -47,7 +47,9 @@ class Receptionist(AgentTask):
             service: Either "schedule", "reschedule", or "cancel"
         """
         self.agent.userdata["userinfo"].name = name
-        return self.agent.userdata["tasks"].scheduler(service=service), "I'll be transferring you to our scheduler, Echo!"
+        return self.agent.userdata["tasks"].scheduler(
+            service=service
+        ), "I'll be transferring you to our scheduler, Echo!"
 
     @ai_function()
     async def leave_message(self, name: str):
@@ -59,7 +61,9 @@ class Receptionist(AgentTask):
             name: The user's name
         """
         self.agent.userdata["userinfo"].name = name
-        return self.agent.userdata["tasks"].messenger, "I'll be transferring you to Shimmer."
+        return self.agent.userdata[
+            "tasks"
+        ].messenger, "I'll be transferring you to Shimmer."
 
     @ai_function()
     async def update_name(self, name: str) -> None:

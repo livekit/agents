@@ -198,9 +198,13 @@ class Scheduler(AgentTask):
     @ai_function()
     async def transfer_to_receptionist(self) -> None:
         """Transfers the user to the receptionist"""
-        return self.agent.userdata["tasks"].receptionist, "Transferring you to our receptionist!"
+        return self.agent.userdata[
+            "tasks"
+        ].receptionist, "Transferring you to our receptionist!"
 
     @ai_function()
     async def transfer_to_messenger(self) -> None:
         """Transfers the user to the messenger"""
-        return self.agent.userdata["tasks"].messenger, "Transferring you to our messenger!"
+        return self.agent.userdata[
+            "tasks"
+        ].messenger, "Transferring you to our messenger!"

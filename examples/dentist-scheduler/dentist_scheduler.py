@@ -24,18 +24,20 @@ class UserInfo:
     phone: str = "not given"
     message: str | None = None
 
+
 @dataclass
 class Tasks:
     @property
     def receptionist(self) -> AgentTask:
         return Receptionist()
-    
+
     @property
     def messenger(self) -> AgentTask:
         return Messenger()
-    
+
     def scheduler(self, service: str) -> AgentTask:
         return Scheduler(service=service)
+
 
 load_dotenv()
 
@@ -45,10 +47,7 @@ logger.setLevel(logging.INFO)
 
 async def entrypoint(ctx: JobContext):
     event_ids = await setup_event_types()
-    userdata = {"event_ids": event_ids, 
-                "userinfo": UserInfo(),
-                "tasks": Tasks()
-                }
+    userdata = {"event_ids": event_ids, "userinfo": UserInfo(), "tasks": Tasks()}
 
     agent = VoiceAgent(
         task=Receptionist(),
