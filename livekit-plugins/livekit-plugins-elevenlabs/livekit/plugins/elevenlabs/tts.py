@@ -633,8 +633,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 and received_text.contains(
                                     AppConfig()
                                     .get_call_metadata()
-                                    .get("safe_for_tts_to_break")[:5]
-                                    or "saikrishna"
+                                    .get("safe_for_tts_to_break", "saikrishna")[:5]
                                 )
                             ):
                                 # decoder.end_input()
