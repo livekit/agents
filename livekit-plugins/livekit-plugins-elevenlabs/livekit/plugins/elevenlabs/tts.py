@@ -619,16 +619,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                             ).replace(" ", "")
                             if (
                                 received_text == expected_text
-                                and AppConfig()
-                                .get_call_metadata()
-                                .get("safe_for_tts_to_break")
+                                and expected_text.contains(
+                                    AppConfig()
+                                    .get_call_metadata()
+                                    .get("safe_for_tts_to_break")
+                                    or "saikrishna"
+                                )
                             ):
                                 # decoder.end_input()
                                 logger.info(
                                     f"recv_task: about to break due to received text == expected text: {expected_text}"
                                 )
-                                AppConfig().get_call_metadata().update(
-                                    {"safe_for_tts_to_break": False}
+                                AppConfig().get_call_metadata().pop(
+                                    "safe_for_tts_to_break"
                                 )
                                 break
                     elif data.get("error"):
