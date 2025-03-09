@@ -617,8 +617,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                             received_text += "".join(
                                 alignment.get("chars", [])
                             ).replace(" ", "")
+                            expected_text_without_spaces = expected_text.replace(
+                                " ", ""
+                            )
                             logger.info(
-                                f"recv_task: received text: {received_text}\n\nexpected text: {expected_text}"
+                                f"recv_task: received text: {received_text}\n\nexpected_text_without_spaces: {expected_text_without_spaces}"
                             )
                             logger.info(
                                 f"recv_task: safe_for_tts_to_break: {AppConfig()
@@ -626,13 +629,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                                     .get('safe_for_tts_to_break')}"
                             )
                             if (
-                                received_text == expected_text
-                                and expected_text.contains(
-                                    AppConfig()
-                                    .get_call_metadata()
-                                    .get("safe_for_tts_to_break")
-                                    or "saikrishna"
-                                )
+                                received_text
+                                == expected_text_without_spaces
+                                # and expected_text.contains(
+                                #     AppConfig()
+                                #     .get_call_metadata()
+                                #     .get("safe_for_tts_to_break")
+                                #     or "saikrishna"
+                                # )
                             ):
                                 # decoder.end_input()
                                 logger.info(
