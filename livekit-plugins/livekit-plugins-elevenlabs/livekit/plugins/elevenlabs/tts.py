@@ -537,6 +537,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 # decoder.end_input()
 
                                 break
+                    elif data.get("isFinal"):
+                        logger.warning(f"received isFinal. request_id: {request_id}. segment_id: {segment_id}")
+                        if received_text == expected_text:
+                            break
                     elif data.get("error"):
                         raise APIStatusError(
                             message=data["error"],
@@ -544,9 +548,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                             request_id=request_id,
                             body=None,
                         )
-                    elif data.get("isFinal"):
-                        logger.warning("received isFinal")
-                        break
                     else:
                         raise APIStatusError(
                             message=f"unexpected 11labs message {data}",
