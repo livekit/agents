@@ -617,10 +617,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                             received_text += "".join(
                                 alignment.get("chars", [])
                             ).replace(" ", "")
-                            if received_text == expected_text:
+                            if (
+                                received_text == expected_text
+                                and AppConfig()
+                                .get_call_metadata()
+                                .get("safe_for_tts_to_break")
+                            ):
                                 # decoder.end_input()
                                 logger.info(
                                     f"recv_task: about to break due to received text == expected text: {expected_text}"
+                                )
+                                AppConfig().get_call_metadata().update(
+                                    {"safe_for_tts_to_break": False}
                                 )
                                 break
                     elif data.get("error"):
