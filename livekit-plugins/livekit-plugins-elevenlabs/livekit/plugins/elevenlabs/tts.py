@@ -268,7 +268,6 @@ class TTS(tts.TTS):
         request_id = utils.shortuuid()
 
         # Read the WAV file
-        wav_path = get_wav_if_available(input_text)
         audio_array, file_sample_rate = sf.read(str(wav_path), dtype="int16")
 
         logger.info(f"File sample rate: {file_sample_rate}")
