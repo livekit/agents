@@ -539,7 +539,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 break
                     elif data.get("isFinal"):
                         logger.warning(f"received isFinal. request_id: {request_id}. segment_id: {segment_id}")
-                        if received_text == expected_text:
+                        if request_id == segment_id:
                             break
                     elif data.get("error"):
                         raise APIStatusError(
