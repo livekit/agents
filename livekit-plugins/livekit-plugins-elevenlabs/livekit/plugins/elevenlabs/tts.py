@@ -630,11 +630,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                             if (
                                 received_text == expected_text_without_spaces
-                                and received_text.contains(
-                                    AppConfig()
-                                    .get_call_metadata()
-                                    .get("safe_for_tts_to_break", "saikrishna")[:5]
-                                )
+                                and AppConfig()
+                                .get_call_metadata()
+                                .get("safe_for_tts_to_break", "saikrishna")[:5]
+                                in received_text
                             ):
                                 # decoder.end_input()
                                 logger.info(
