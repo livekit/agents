@@ -25,9 +25,9 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import aiohttp
-from app_config import AppConfig
 import numpy as np
 import soundfile as sf
+from app_config import AppConfig
 from filler_phrases import get_wav_if_available
 from livekit.agents import (
     APIConnectionError,
@@ -320,6 +320,7 @@ class TTS(tts.TTS):
         logger.info(f"Sent Presynthesized Audio to event channel")
         return
 
+
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
@@ -570,12 +571,14 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     data = json.loads(msg.data)
                     if data.get("audio"):
-                        received_text = ""
+                        received_text_to_print = ""
                         if alignment := data.get("normalizedAlignment"):
-                            received_text = "".join(alignment.get("chars", [])).replace(
-                                " ", ""
+                            received_text_to_print = "".join(
+                                alignment.get("chars", [])
+                            ).replace(" ", "")
+                            logger.info(
+                                f"recv_task: received text: {received_text_to_print}"
                             )
-                            logger.info(f"recv_task: received text: {received_text}")
                         b64data = base64.b64decode(data["audio"])
 
                         # Create a new decoder for this chunk
@@ -585,11 +588,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
 
                         logger.info(
-                            f"recv_task: pushing data to decoder for text: {received_text}"
+                            f"recv_task: pushing data to decoder for text: {received_text_to_print}"
                         )
                         chunk_decoder.push(b64data)
                         logger.info(
-                            f"recv_task: ending input for text: {received_text}"
+                            f"recv_task: ending input for text: {received_text_to_print}"
                         )
                         chunk_decoder.end_input()
 
@@ -597,16 +600,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                         async for frame in chunk_decoder:
                             frame_count += 1
                             logger.info(
-                                f"recv_task: pushing frame {frame_count} to emitter for text: {received_text}"
+                                f"recv_task: pushing frame {frame_count} to emitter for text: {received_text_to_print}"
                             )
                             emitter.push(frame)
 
                         logger.info(
-                            f"recv_task: flushing emitter for text: {received_text}"
+                            f"recv_task: flushing emitter for text: {received_text_to_print}"
                         )
                         emitter.flush()
                         logger.info(
-                            f"recv_task: closing decoder for text: {received_text}"
+                            f"recv_task: closing decoder for text: {received_text_to_print}"
                         )
                         await chunk_decoder.aclose()
 
@@ -616,7 +619,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                             ).replace(" ", "")
                             if received_text == expected_text:
                                 # decoder.end_input()
-
+                                logger.info(
+                                    f"recv_task: about to break due to received text == expected text: {expected_text}"
+                                )
                                 break
                     elif data.get("error"):
                         raise APIStatusError(
