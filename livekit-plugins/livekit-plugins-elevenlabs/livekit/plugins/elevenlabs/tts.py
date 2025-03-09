@@ -399,10 +399,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             segment_id = utils.shortuuid()
             expected_text = ""  # accumulate all tokens sent
 
-            decoder = utils.codecs.AudioStreamDecoder(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-            )
+            # decoder = utils.codecs.AudioStreamDecoder(
+            #     sample_rate=self._opts.sample_rate,
+            #     num_channels=1,
+            # )
             emitter = tts.SynthesizedAudioEmitter(
                 event_ch=self._event_ch,
                 request_id=request_id,
@@ -452,17 +452,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws_conn.send_str(json.dumps({"flush": True}))
 
             # consumes from decoder and generates events
-            @utils.log_exceptions(logger=logger)
-            async def generate_task():
-                # emitter = tts.SynthesizedAudioEmitter(
-                #     event_ch=self._event_ch,
-                #     request_id=request_id,
-                #     segment_id=segment_id,
-                # )
-                async for frame in decoder:
-                    logger.info("generate_task: pushing frame to emitter")
-                    emitter.push(frame)
-                emitter.flush()
+            # @utils.log_exceptions(logger=logger)
+            # async def generate_task():
+            #     # emitter = tts.SynthesizedAudioEmitter(
+            #     #     event_ch=self._event_ch,
+            #     #     request_id=request_id,
+            #     #     segment_id=segment_id,
+            #     # )
+            #     async for frame in decoder:
+            #         logger.info("generate_task: pushing frame to emitter")
+            #         emitter.push(frame)
+            #     emitter.flush()
 
             # receives from ws and decodes audio
             @utils.log_exceptions(logger=logger)
@@ -575,7 +575,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise APIConnectionError() from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
-                await decoder.aclose()
+                # await decoder.aclose()
 
 
 def _dict_to_voices_list(data: dict[str, Any]):
