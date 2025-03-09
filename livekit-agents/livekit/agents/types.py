@@ -32,7 +32,8 @@ NOT_GIVEN = NotGiven()
 
 @dataclass(frozen=True)
 class APIConnectOptions:
-    max_retry: int = 3
+    max_retry: int = 0  # Salient Default is 0
+    # max_retry: int = 3  # Livekit Default is 3
     """
     Maximum number of retries to connect to the API.
     """
