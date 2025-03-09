@@ -481,7 +481,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 nonlocal expected_text
 
                 received_text = ""
-                streaming_done = False
 
                 while True:
                     msg = await ws_conn.receive()
@@ -492,8 +491,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        if streaming_done:
-                            break
                         raise APIStatusError(
                             "11labs connection closed unexpectedly, not all tokens have been consumed",
                             request_id=request_id,
@@ -550,7 +547,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                             body=None,
                         )
                     elif data.get("isFinal"):
-                        streaming_done = True
                         logger.warning(f"received isFinal. request_id: {request_id}. segment_id: {segment_id}")
                         # break
                         # if request_id == segment_id:
