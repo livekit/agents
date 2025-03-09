@@ -114,10 +114,13 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
     async def _playout_task(
         self, old_task: asyncio.Task[None] | None, handle: PlayoutHandle
     ) -> None:
+        logger.info(f"playout_task: handle: {handle}")
         if old_task is not None:
+            logger.info(f"playout_task: old_task: {old_task}")
             await utils.aio.gracefully_cancel(old_task)
 
         if self._audio_source.queued_duration > 0:
+            logger.info("DANGER: new playout while the source is still playing")
             # this should not happen, but log it just in case
             logger.warning(
                 "new playout while the source is still playing",
@@ -132,8 +135,13 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         @utils.log_exceptions(logger=logger)
         async def _capture_task():
             nonlocal first_frame
+            logger.info(f"playout_task: _capture_task: handle: {handle}")
             async for frame in handle._playout_source:
+                logger.info(f"playout_task: _capture_task: frame: {frame}")
                 if first_frame:
+                    logger.info(
+                        f"playout_task: _capture_task: handle._tr_fwd: {handle._tr_fwd}"
+                    )
                     handle._tr_fwd.segment_playout_started()
 
                     logger.debug(
@@ -146,34 +154,60 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
 
                 handle._pushed_duration += frame.samples_per_channel / frame.sample_rate
                 await self._audio_source.capture_frame(frame)
+                logger.info(f"playout_task: past self._audio_source.capture_frame")
 
             if self._audio_source.queued_duration > 0:
+                logger.info(
+                    f"playout_task: past self._audio_source.queued_duration > 0"
+                )
                 await self._audio_source.wait_for_playout()
+                logger.info(f"playout_task: past self._audio_source.wait_for_playout")
 
         capture_task = asyncio.create_task(_capture_task())
         try:
+            logger.info(f"playout_task: capture_task: {capture_task}")
             await asyncio.wait(
                 [capture_task, handle._int_fut],
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            logger.info(f"playout_task: past await asyncio.wait")
         finally:
+            logger.info(f"playout_task: finally")
             await utils.aio.gracefully_cancel(capture_task)
+            logger.info(
+                f"playout_task: past await utils.aio.gracefully_cancel(capture_task)"
+            )
 
             handle._total_played_time = (
                 handle._pushed_duration - self._audio_source.queued_duration
             )
 
             if handle.interrupted or capture_task.exception():
+                logger.info(
+                    f"playout_task: past if handle.interrupted or capture_task.exception()"
+                )
                 self._audio_source.clear_queue()  # make sure to remove any queued frames
+                logger.info(f"playout_task: past self._audio_source.clear_queue")
 
             if not first_frame:
+                logger.info(f"playout_task: past if not first_frame: {not first_frame}")
                 if not handle.interrupted:
+                    logger.info(
+                        f"playout_task: past if not handle.interrupted: {not handle.interrupted}"
+                    )
                     handle._tr_fwd.segment_playout_finished()
+                    logger.info(
+                        f"playout_task: past handle._tr_fwd.segment_playout_finished"
+                    )
 
                 self.emit("playout_stopped", handle.interrupted)
+                logger.info(
+                    f"playout_task: past self.emit('playout_stopped', handle.interrupted)"
+                )
 
             await handle._tr_fwd.aclose()
             handle._done_fut.set_result(None)
+            logger.info(f"playout_task: past handle._done_fut.set_result(None)")
 
             logger.debug(
                 "speech playout finished",
