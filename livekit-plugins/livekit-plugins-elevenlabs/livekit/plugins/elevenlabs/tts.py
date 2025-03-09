@@ -351,24 +351,31 @@ class SynthesizeStream(tts.SynthesizeStream):
             """tokenize text from the input_ch to words"""
             word_stream = None
             async for input in self._input_ch:
+                logger.info(f"received input: {input}")
                 if isinstance(input, str):
+                    logger.info("received input")
                     if word_stream is None:
                         # new segment (after flush for e.g)
                         word_stream = self._opts.word_tokenizer.stream()
                         self._segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
+                    logger.info("received flush sentinel")
                     if word_stream is not None:
                         word_stream.end_input()
                     word_stream = None
             if word_stream is not None:
+                logger.info("calling end_input on word stream")
                 word_stream.end_input()
+            logger.info("closing segments ch")
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
         async def _process_segments():
             async for word_stream in self._segments_ch:
+                logger.info(f"processing segments on word stream: {word_stream}")
                 await self._run_ws(word_stream, request_id)
+            logger.info("closing process segments")
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -452,7 +459,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         await ws_conn.send_str(json.dumps({"flush": True}))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
-                await ws_conn.send_str(json.dumps({"flush": True}))
+                logger.info("closing 11labs stream")
+                await ws_conn.send_str(json.dumps({"text": "", "flush": True}))
 
             # consumes from decoder and generates events
             # @utils.log_exceptions(logger=logger)
