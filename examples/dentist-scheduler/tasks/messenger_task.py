@@ -72,9 +72,7 @@ class Messenger(AgentTask):
     @ai_function()
     async def transfer_to_receptionist(self) -> AgentTask:
         """Transfers the user to the Receptionist"""
-        from . import Receptionist
-
-        return Receptionist(), "Transferring you to our receptionist!"
+        return self.agent.userdata["tasks"].receptionist, "Transferring you to our receptionist!"
 
     @ai_function()
     async def transfer_to_scheduler(self, service: str) -> AgentTask:
@@ -84,6 +82,4 @@ class Messenger(AgentTask):
         Args:
             service: Either "schedule", "reschedule", or "cancel"
         """
-        from . import Scheduler
-
-        return Scheduler(service=service), "Transferring you to our scheduler!"
+        return self.agent.userdata["tasks"].scheduler(service=service), "Transferring you to our scheduler!"
