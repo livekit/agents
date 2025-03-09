@@ -29,6 +29,7 @@ import numpy as np
 import soundfile as sf
 from app_config import AppConfig
 from filler_phrases import get_wav_if_available
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -38,6 +39,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from scipy import signal
 
 from .log import logger
 from .models import TTSEncoding, TTSModels
@@ -83,6 +85,7 @@ DEFAULT_VOICE = Voice(
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 300
+NUM_CHANNELS = 1
 
 
 @dataclass
@@ -421,6 +424,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             word_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
+                    # Check for filler phrases
+                    filler_phrase_wav = get_wav_if_available(input)
+                    if filler_phrase_wav:
+                        logger.info(f"Playing presynthesized audio for: {input}")
+                        await self._tts._play_presynthesized_audio(
+                            filler_phrase_wav, self._event_ch, input
+                        )
+                        continue
+
                     if word_stream is None:
                         # new segment (after flush for e.g)
                         word_stream = self._opts.word_tokenizer.stream()
