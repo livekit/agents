@@ -622,6 +622,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.info(
                             f"recv_task: closing decoder for text: {received_text_to_print}"
                         )
+                        await asyncio.sleep(3)
                         await chunk_decoder.aclose()
 
                         if alignment := data.get("normalizedAlignment"):
