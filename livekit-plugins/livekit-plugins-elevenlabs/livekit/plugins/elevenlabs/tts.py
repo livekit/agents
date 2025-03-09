@@ -530,7 +530,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         await ws_conn.send_str(json.dumps({"flush": True}))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
-                await ws_conn.send_str(json.dumps({"text": ""}))
+                await ws_conn.send_str(json.dumps({"flush": True}))
 
             # consumes from decoder and generates events
             # @utils.log_exceptions(logger=logger)
@@ -625,11 +625,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                             request_id=request_id,
                             body=None,
                         )
-                    elif data.get("isFinal"):
-                        logger.warning(f"received isFinal. request_id: {request_id}. segment_id: {segment_id}")
-                        # break
-                        # if request_id == segment_id:
-                        #     break
                     else:
                         raise APIStatusError(
                             message=f"unexpected 11labs message {data}",
