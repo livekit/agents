@@ -239,9 +239,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> "SynthesizeStream":
+    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> "SynthesizeStream":
         stream = SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
         self._streams.add(stream)
         return stream
@@ -401,10 +399,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             segment_id = utils.shortuuid()
             expected_text = ""  # accumulate all tokens sent
 
-            decoder = utils.codecs.AudioStreamDecoder(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-            )
+            # decoder = utils.codecs.AudioStreamDecoder(
+            #     sample_rate=self._opts.sample_rate,
+            #     num_channels=1,
+            # )
             emitter = tts.SynthesizedAudioEmitter(
                 event_ch=self._event_ch,
                 request_id=request_id,
@@ -419,9 +417,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if self._opts.voice.settings
                     else None
                 ),
-                generation_config=dict(
-                    chunk_length_schedule=self._opts.chunk_length_schedule
-                ),
+                generation_config=dict(chunk_length_schedule=self._opts.chunk_length_schedule),
             )
             await ws_conn.send_str(json.dumps(init_pkt))
 
@@ -447,6 +443,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     data_pkt = dict(text=f"{text} ")  # must always end with a space
                     self._mark_started()
+                    logger.info(f"send_task: sending text: ~{text}~")
                     await ws_conn.send_str(json.dumps(data_pkt))
                     if any(char in text.strip() for char in [".", "!", "?"]):
                         logger.info(
@@ -458,17 +455,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws_conn.send_str(json.dumps({"flush": True}))
 
             # consumes from decoder and generates events
-            @utils.log_exceptions(logger=logger)
-            async def generate_task():
-                # emitter = tts.SynthesizedAudioEmitter(
-                #     event_ch=self._event_ch,
-                #     request_id=request_id,
-                #     segment_id=segment_id,
-                # )
-                async for frame in decoder:
-                    logger.info("generate_task: pushing frame to emitter")
-                    emitter.push(frame)
-                emitter.flush()
+            # @utils.log_exceptions(logger=logger)
+            # async def generate_task():
+            #     # emitter = tts.SynthesizedAudioEmitter(
+            #     #     event_ch=self._event_ch,
+            #     #     request_id=request_id,
+            #     #     segment_id=segment_id,
+            #     # )
+            #     async for frame in decoder:
+            #         logger.info("generate_task: pushing frame to emitter")
+            #         emitter.push(frame)
+            #     emitter.flush()
 
             # receives from ws and decodes audio
             @utils.log_exceptions(logger=logger)
@@ -495,8 +492,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     data = json.loads(msg.data)
                     if data.get("audio"):
+                        received_text = ""
+                        if alignment := data.get("normalizedAlignment"):
+                            received_text = "".join(alignment.get("chars", [])).replace(" ", "")
+                            logger.info(f"recv_task: received text: {received_text}")
                         b64data = base64.b64decode(data["audio"])
-                        logger.info("recv_task: pushing b64data to decoder")
 
                         # Create a new decoder for this chunk
                         chunk_decoder = utils.codecs.AudioStreamDecoder(
@@ -504,24 +504,30 @@ class SynthesizeStream(tts.SynthesizeStream):
                             num_channels=1,
                         )
 
+                        logger.info(f"recv_task: pushing data to decoder for text: {received_text}")
                         chunk_decoder.push(b64data)
+                        logger.info(f"recv_task: ending input for text: {received_text}")
                         chunk_decoder.end_input()
 
+                        frame_count = 0
                         async for frame in chunk_decoder:
-                            logger.info("recv_task: pushing frame to emitter")
+                            frame_count += 1
+                            logger.info(
+                                f"recv_task: pushing frame {frame_count} to emitter for text: {received_text}"
+                            )
                             emitter.push(frame)
 
-                        await chunk_decoder.aclose()
-                        logger.info("about to call emitter.flush()")
+
+                        logger.info(f"recv_task: flushing emitter for text: {received_text}")
                         emitter.flush()
+                        logger.info(f"recv_task: closing decoder for text: {received_text}")
+                        await chunk_decoder.aclose()
 
                         if alignment := data.get("normalizedAlignment"):
-                            received_text += "".join(
-                                alignment.get("chars", [])
-                            ).replace(" ", "")
+                            received_text += "".join(alignment.get("chars", [])).replace(" ", "")
                             if received_text == expected_text:
-                                logger.info("about to call decoder.end_input()")
-                                decoder.end_input()
+                                # decoder.end_input()
+
                                 break
                     elif data.get("error"):
                         raise APIStatusError(
@@ -560,7 +566,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise APIConnectionError() from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
-                await decoder.aclose()
+                # await decoder.aclose()
 
 
 def _dict_to_voices_list(data: dict[str, Any]):
