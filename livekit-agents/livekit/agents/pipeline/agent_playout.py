@@ -47,7 +47,9 @@ class PlayoutHandle:
         return self._pushed_duration - self._audio_source.queued_duration
 
     def done(self) -> bool:
-        logger.info(f"PlayoutHandle.done: self._done_fut.done(): {self._done_fut.done()}")
+        logger.info(
+            f"PlayoutHandle.done: self._done_fut.done(): {self._done_fut.done()}"
+        )
         return self._done_fut.done() or self._interrupted
 
     def interrupt(self) -> None:
@@ -106,7 +108,9 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             playout_source=playout_source,
             transcription_fwd=transcription_fwd,
         )
-        self._playout_atask = asyncio.create_task(self._playout_task(self._playout_atask, handle))
+        self._playout_atask = asyncio.create_task(
+            self._playout_task(self._playout_atask, handle)
+        )
 
         return handle
 
@@ -135,9 +139,11 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         @utils.log_exceptions(logger=logger)
         async def _capture_task():
             nonlocal first_frame
-            logger.info(f"[{handle.speech_id}]playout_task: _capture_task: handle: {handle}")
+            # logger.info(f"[{handle.speech_id}]playout_task: _capture_task: handle: {handle}")
             async for frame in handle._playout_source:
-                logger.info(f"[{handle.speech_id}]playout_task: _capture_task: frame: {frame}")
+                # logger.info(
+                #     f"[{handle.speech_id}]playout_task: _capture_task: frame: {frame}"
+                # )
                 if first_frame:
                     logger.info(
                         f"[{handle.speech_id}]playout_task: _capture_task: handle._tr_fwd: {handle._tr_fwd}"
@@ -178,7 +184,9 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
             # f"playout_task: past await utils.aio.gracefully_cancel(capture_task)"
             # )
 
-            handle._total_played_time = handle._pushed_duration - self._audio_source.queued_duration
+            handle._total_played_time = (
+                handle._pushed_duration - self._audio_source.queued_duration
+            )
 
             if handle.interrupted or capture_task.exception():
                 # logger.info(
