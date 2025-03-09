@@ -460,7 +460,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
                 logger.info("closing 11labs stream")
-                await ws_conn.send_str(json.dumps({"text": "", "flush": True}))
+                await ws_conn.send_str(json.dumps({"text": ""}))
 
             # consumes from decoder and generates events
             # @utils.log_exceptions(logger=logger)
