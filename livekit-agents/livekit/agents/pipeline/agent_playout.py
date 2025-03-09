@@ -81,6 +81,7 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
         return self._target_volume
 
     async def aclose(self) -> None:
+        logger.info("Trying to close AgentPlayout")
         if self._closed:
             return
 
