@@ -26,6 +26,9 @@ from typing import Any, List, Optional
 
 import aiohttp
 from app_config import AppConfig
+import numpy as np
+import soundfile as sf
+from filler_phrases import get_wav_if_available
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -255,6 +258,67 @@ class TTS(tts.TTS):
         await self._pool.aclose()
         await super().aclose()
 
+    async def _play_presynthesized_audio(
+        self, wav_path: str, event_ch, input_text: str
+    ) -> None:
+        logger.info(f"Playing Presynthesized Audio: {input_text}")
+        request_id = utils.shortuuid()
+
+        # Read the WAV file
+        wav_path = get_wav_if_available(input_text)
+        audio_array, file_sample_rate = sf.read(str(wav_path), dtype="int16")
+
+        logger.info(f"File sample rate: {file_sample_rate}")
+        logger.info(
+            f"WAV file channels: {1 if audio_array.ndim == 1 else audio_array.shape[1]}"
+        )
+        logger.info(f"Target sample rate: {self._opts.sample_rate}")
+
+        # Convert stereo to mono if needed
+        if audio_array.ndim == 2 and audio_array.shape[1] == 2:
+            logger.info("Converting stereo to mono")
+            audio_array = audio_array.mean(axis=1)
+
+        # Resample if needed
+        if file_sample_rate != self._opts.sample_rate:
+            logger.info(
+                f"Resampling from {file_sample_rate} to {self._opts.sample_rate}"
+            )
+            # Calculate number of samples for the target sample rate
+            num_samples = int(
+                len(audio_array) * self._opts.sample_rate / file_sample_rate
+            )
+            audio_array = signal.resample(audio_array, num_samples)
+
+        # Process audio in chunks
+        samples_per_channel = 960  # Standard frame size for audio processing
+        for i in range(0, len(audio_array), samples_per_channel):
+            chunk = audio_array[i : i + samples_per_channel]
+
+            # Pad the last chunk if needed
+            if len(chunk) < samples_per_channel:
+                chunk = np.pad(chunk, (0, samples_per_channel - len(chunk)))
+
+            # Apply soft clipping and ensure int16 format
+            chunk = np.tanh(chunk / 32768.0) * 32768.0
+            chunk = np.round(chunk).astype(np.int16)
+
+            # Create and send the audio frame with matching parameters
+            frame = rtc.AudioFrame(
+                data=chunk.tobytes(),
+                sample_rate=self._opts.sample_rate,  # Use the TTS instance's sample rate
+                samples_per_channel=samples_per_channel,
+                num_channels=NUM_CHANNELS,  # Make sure this matches the expected number of channels
+            )
+            event_ch.send_nowait(
+                tts.SynthesizedAudio(
+                    request_id=request_id,
+                    frame=frame,
+                )
+            )
+
+        logger.info(f"Sent Presynthesized Audio to event channel")
+        return
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
