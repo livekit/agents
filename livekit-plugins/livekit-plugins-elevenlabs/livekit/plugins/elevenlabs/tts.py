@@ -483,11 +483,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             #     sample_rate=self._opts.sample_rate,
             #     num_channels=1,
             # )
-            emitter = tts.SynthesizedAudioEmitter(
-                event_ch=self._event_ch,
-                request_id=request_id,
-                segment_id=segment_id,
-            )
 
             # 11labs protocol expects the first message to be an "init msg"
             init_pkt = dict(
@@ -544,19 +539,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("11labs stream ended with incomplete xml content")
                 await ws_conn.send_str(json.dumps({"flush": True}))
 
-            # consumes from decoder and generates events
-            # @utils.log_exceptions(logger=logger)
-            # async def generate_task():
-            #     # emitter = tts.SynthesizedAudioEmitter(
-            #     #     event_ch=self._event_ch,
-            #     #     request_id=request_id,
-            #     #     segment_id=segment_id,
-            #     # )
-            #     async for frame in decoder:
-            #         logger.info("generate_task: pushing frame to emitter")
-            #         emitter.push(frame)
-            #     emitter.flush()
-
             # receives from ws and decodes audio
             @utils.log_exceptions(logger=logger)
             async def recv_task():
@@ -596,6 +578,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                         chunk_decoder = utils.codecs.AudioStreamDecoder(
                             sample_rate=self._opts.sample_rate,
                             num_channels=1,
+                        )
+
+                        emitter = tts.SynthesizedAudioEmitter(
+                            event_ch=self._event_ch,
+                            request_id=request_id,
+                            segment_id=segment_id,
                         )
 
                         logger.info(
