@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -92,7 +93,7 @@ class RealtimeModel(llm.RealtimeModel):
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = ["AUDIO"],
+        modalities: list[Modality] = [Modality.AUDIO],
         enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
@@ -139,8 +140,6 @@ class RealtimeModel(llm.RealtimeModel):
         Raises:
             ValueError: If the API key is required but not found.
         """
-        super().__init__()
-
         super().__init__(capabilities=llm.RealtimeCapabilities(message_truncation=False))
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
@@ -235,7 +234,8 @@ class RealtimeSession(llm.RealtimeSession):
         async with self._update_chat_ctx_lock:
             turns, _ = to_chat_ctx(chat_ctx, id(self))
             self._chat_ctx = chat_ctx
-            self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
+            if turns:
+                self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
 
     async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]) -> None:
         async with self._update_fnc_ctx_lock:
@@ -319,6 +319,7 @@ class RealtimeSession(llm.RealtimeSession):
             ),
             tools=self._tools,
         )
+        print(config)
 
         async with self._client.aio.live.connect(model=self._opts.model, config=config) as session:
             self._session = session
@@ -380,6 +381,7 @@ class RealtimeSession(llm.RealtimeSession):
         generation_event = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
+            user_initiated=False,
         )
         self.emit("generation_created", generation_event)
 
@@ -413,6 +415,40 @@ class RealtimeSession(llm.RealtimeSession):
 
         if server_content.interrupted or server_content.turn_complete:
             self._finalize_response(item_generation)
+
+    def _finalize_response(self, item_generation: _MessageGeneration):
+        item_generation.text_ch.close()
+        item_generation.audio_ch.close()
+
+        if self._current_generation:
+            self._current_generation.message_ch.close()
+            self._current_generation.function_ch.close()
+            self._current_generation = None
+
+        self._is_interrupted = True
+        self._active_response_id = None
+        self.emit("agent_speech_stopped")
+
+    def _handle_tool_calls(self, tool_call):
+        if not self._current_generation:
+            return
+        for fnc_call in tool_call.function_calls:
+            self._current_generation.function_ch.send_nowait(
+                llm.FunctionCall(
+                    call_id=fnc_call.call_id,
+                    name=fnc_call.name,
+                    arguments=json.dumps(fnc_call.args),
+                )
+            )
+
+    def _handle_tool_call_cancellation(self, tool_call_cancellation):
+        logger.warning(
+            "function call cancelled",
+            extra={
+                "function_call_ids": tool_call_cancellation.function_call_ids,
+            },
+        )
+        self.emit("function_calls_cancelled", tool_call_cancellation.function_call_ids)
 
     def commit_audio_buffer(self) -> None:
         raise NotImplementedError("commit_audio_buffer is not supported yet")
