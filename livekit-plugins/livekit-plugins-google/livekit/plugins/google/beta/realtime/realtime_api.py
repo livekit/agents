@@ -193,6 +193,7 @@ class RealtimeSession(llm.RealtimeSession):
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
         self._fnc_ctx = llm.FunctionContext.empty()
+        self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._tools: list[FunctionDeclaration] = []
         self._client = genai.Client(
@@ -233,6 +234,7 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
             turns, _ = to_chat_ctx(chat_ctx, id(self))
+            self._chat_ctx = chat_ctx
             self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
 
     async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]) -> None:
@@ -253,7 +255,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._remote_chat_ctx.to_chat_ctx()
+        return self._chat_ctx
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext:
