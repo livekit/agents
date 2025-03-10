@@ -65,7 +65,8 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | OpenAI          | livekit-plugins-openai    | [openai.LLM()](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.LLM)                       |
 | Azure OpenAI    | livekit-plugins-openai    | [openai.LLM.with_azure()](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.LLM.with_azure) |
 | Anthropic       | livekit-plugins-anthropic | [anthropic.LLM()](https://docs.livekit.io/python/livekit/plugins/anthropic/index.html#livekit.plugins.anthropic.LLM)              |
-| Google (Gemini) | livekit-plugins-openai    | [openai.LLM.with_vertex()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_vertex)         |
+| Google (Gemini) | livekit-plugins-google    | [google.LLM()](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.LLM)                       |
+| AWS Bedrock     | livekit-plugins-aws       | [aws.LLM()](https://docs.livekit.io/python/livekit/plugins/aws/index.html#livekit.plugins.aws.LLM)                                |
 | Cerebras        | livekit-plugins-openai    | [openai.LLM.with_cerebras()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_cerebras)     |
 | DeepSeek        | livekit-plugins-openai    | [openai.LLM.with_deepseek()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_deepseek)     |
 | Groq            | livekit-plugins-openai    | [openai.LLM.with_groq()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_groq)             |
@@ -73,6 +74,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Perplexity      | livekit-plugins-openai    | [openai.LLM.with_perplexity()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_perplexity) |
 | Together.ai     | livekit-plugins-openai    | [openai.LLM.with_together()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_together)     |
 | X.ai (Grok)     | livekit-plugins-openai    | [openai.LLM.with_x_ai()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_x_ai)             |
+
 
 ### STT
 
@@ -85,6 +87,8 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | AssemblyAI       | livekit-plugins-assemblyai |           | [assemblyai.STT()](https://docs.livekit.io/python/livekit/plugins/assemblyai/index.html#livekit.plugins.assemblyai.STT) |
 | Groq (Whisper)   | livekit-plugins-openai     |           | [openai.STT.with_groq()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.STT.with_groq)   |
 | FAL (Whizper)    | livekit-plugins-fal        |           | [fal.STT()](https://docs.livekit.io/python/livekit/plugins/fal/index.html#livekit.plugins.fal.STT)                      |
+| Speechmatics     | livekit-plugins-speechmatics | ✅      | [speechmatics.STT()](https://docs.livekit.io/python/livekit/plugins/speechmatics/index.html#livekit.plugins.speechmatics.STT) |
+| AWS Transcribe   | livekit-plugins-aws         | ✅      | [aws.STT()](https://docs.livekit.io/python/livekit/plugins/aws/index.html#livekit.plugins.aws.STT)                        |
 
 ### TTS
 
@@ -98,7 +102,8 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Deepgram     | livekit-plugins-deepgram   | ✅        |               | [deepgram.TTS()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.TTS)       |
 | Play.ai      | livekit-plugins-playai     | ✅        | ✅            | [playai.TTS()](https://docs.livekit.io/python/livekit/plugins/playai/index.html#livekit.plugins.playai.TTS)             |
 | Rime         | livekit-plugins-rime       | ✅        |               | [rime.TTS()](https://docs.livekit.io/python/livekit/plugins/rime/index.html#livekit.plugins.rime.TTS)                   |
-| Neuphonic    | livekit-plugins-neuphonic  | ✅        | ✅              | neuphonic.TTS()                   |
+| Neuphonic    | livekit-plugins-neuphonic  | ✅        | ✅            | neuphonic.TTS()                                                                                                       |
+| AWS Polly    | livekit-plugins-aws        | ✅        |               | [aws.TTS()](https://docs.livekit.io/python/livekit/plugins/aws/index.html#livekit.plugins.aws.TTS)                      |
 
 ### Other plugins
 
@@ -107,7 +112,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | livekit-plugins-rag           | Annoy based simple RAG              |
 | livekit-plugins-llama-index   | RAG with LlamaIndex                 |
 | livekit-plugins-nltk          | Utilities for working with text     |
-| livekit-plugins-vad           | Voice activity detection            |
+| livekit-plugins-silero        | Voice activity detection            |
 | livekit-plugins-turn-detector | Conversational turn detection model |
 
 ## Documentation and guides
