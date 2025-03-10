@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 
+from api_setup import setup_event_types
 from dotenv import load_dotenv
 from livekit.agents import (
     AutoSubscribe,
@@ -8,13 +9,9 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-
-from livekit.agents.voice import VoiceAgent
-from livekit.plugins import openai, cartesia, deepgram, silero
-from livekit.agents.voice import AgentTask
-
-from api_setup import setup_event_types
-from tasks import *
+from livekit.agents.voice import AgentTask, VoiceAgent
+from livekit.plugins import cartesia, deepgram, openai, silero
+from tasks import Messenger, Receptionist, Scheduler
 
 
 @dataclass

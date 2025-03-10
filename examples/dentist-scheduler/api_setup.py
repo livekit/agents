@@ -1,8 +1,9 @@
-import aiohttp
 import os
+
+import aiohttp
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(".env.local")
 
 HEADERS = {
     "cal-api-version": "2024-06-14",
@@ -30,11 +31,29 @@ async def get_event_id(slug: str) -> str | None:
                 return None
 
 
+async def search_schedule(name: str) -> str | None:
+    """Checks if needed schedule already exists, returns schedule ID"""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            "https://api.cal.com/v2/schedules/default", headers=HEADERS
+        ) as response:
+            response = await response.json()
+            if (
+                response["status"] == "success"
+                and response["data"]
+                and response["data"]["name"] == name
+            ):
+                return response["data"]["id"]
+            else:
+                return None
+
+
 async def create_schedule() -> str:
     """Sets schedule for example, returns schedule ID"""
     payload = {
         "name": "LiveKit Dental Office Hours",
         "timeZone": "America/Los_Angeles",
+        "isDefault": True,
         "availability": [
             {
                 "days": [
@@ -64,13 +83,13 @@ async def create_schedule() -> str:
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            "https://api.cal.com/v2/event-types", json=payload, headers=HEADERS
+            "https://api.cal.com/v2/schedules", json=payload, headers=HEADERS
         ) as response:
             response = await response.json()
             if response["status"] == "success" and response["data"]:
-                return response["data"][0]["id"]
+                return response["data"]["id"]
             if response["status"] == "error":
-                raise Exception("Error creating schedule")
+                raise Exception(f"Error creating schedule: {response}")
 
 
 async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
@@ -99,7 +118,10 @@ async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
 
 async def setup_event_types() -> dict:
     """Ensures that the schedule and event types are set up correctly in Cal.com for this example. Returns a dictionary with event slugs and their respective IDs"""
-    schedule_id = create_schedule()
+
+    schedule_id = await search_schedule("LiveKit Dental Office Hours")
+    if not schedule_id:
+        schedule_id = await create_schedule()
 
     event_ids = {}
 

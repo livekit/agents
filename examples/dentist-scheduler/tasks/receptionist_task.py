@@ -1,22 +1,19 @@
-from __future__ import annotations
-
 from livekit.agents.llm import ai_function
 from livekit.agents.voice import AgentTask
-from livekit.plugins import openai, cartesia, deepgram, silero
+from livekit.plugins import cartesia
 
 
 class Receptionist(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions=f"""You are Alloy, a receptionist at the LiveKit Dental Office who answers inquiries and manages appointments for users. 
-                            Confirm names by spelling them out. Always speak in English. Be brief and concise.""",
+            instructions="""You are Alloy, a receptionist at the LiveKit Dental Office who answers inquiries and manages appointments for users. 
+            If there is an inquiry that can't be answered, suggest to leave a message. Be brief and efficient.""",
             tts=cartesia.TTS(emotion=["positivity:high"]),
         )
 
     async def on_enter(self) -> None:
-        self._userinfo = self.agent.userdata["userinfo"]
         await self.agent.generate_reply(
-            instructions=f"""Welcome the user to the LiveKit Dental Office and ask how you can assist. The user's name is {self._userinfo.name}. 
+            instructions=f"""Welcome the user to the LiveKit Dental Office and ask how you can assist. The user's name is {self.agent.userdata["userinfo"].name}. 
             If the user wants to manage an appointment or leave a message and their name is not given, ask for it before proceeding."""
         )
 
@@ -40,8 +37,7 @@ class Receptionist(AgentTask):
     async def manage_appointment(self, name: str, service: str):
         """
         This function allows for users to schedule, reschedule, or cancel an appointment.
-        The user's name will be confirmed by spelling it out to the user.
-
+        The user's name will be confirmed with the user by spelling it out.
         Args:
             name: The user's name
             service: Either "schedule", "reschedule", or "cancel"
@@ -55,7 +51,7 @@ class Receptionist(AgentTask):
     async def leave_message(self, name: str):
         """
         This function allows for users to leave a message for the office.
-        The user's name will be confirmed by spelling it out to the user.
+        Confirm the user's name by spelling it out to the user before proceeding.
 
         Args:
             name: The user's name

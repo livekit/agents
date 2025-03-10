@@ -1,13 +1,10 @@
-from __future__ import annotations
-
-from enum import Enum
-import aiohttp
 import os
 from enum import Enum
 
+import aiohttp
 from livekit.agents.llm import ai_function
 from livekit.agents.voice import AgentTask
-from livekit.plugins import openai, cartesia, deepgram, silero
+from livekit.plugins import cartesia
 
 
 class APIRequests(Enum):
@@ -22,17 +19,17 @@ class Scheduler(AgentTask):
     def __init__(self, *, service: str) -> None:
         super().__init__(
             instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
-                            proceeding. Always confirm details with the user. """,
+                            proceeding. Always confirm details with the user. Do not be verbose.""",
+            tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600"),
         )
         self._service_requested = service
 
     async def on_enter(self) -> None:
-        self._userinfo = self.agent.userdata["userinfo"]
         self._event_ids = self.agent.userdata["event_ids"]
 
         await self.agent.generate_reply(
-            instructions=f"""Introduce yourself and ask {self._userinfo.name} to confirm that they would like to {self._service_requested} an appointment. 
-                            Their email is {self._userinfo.email}."""
+            instructions=f"""Introduce yourself and ask {self.agent.userdata["userinfo"].name} to confirm that they would like to {self._service_requested} an appointment. 
+                            Their email is {self.agent.userdata["userinfo"].email}."""
         )
 
     async def send_request(
@@ -101,7 +98,7 @@ class Scheduler(AgentTask):
                         data = await response.json()
                 return data
             except Exception as e:
-                print(f"Error occurred: {e}")
+                print(f"API Communication Error: {e}")
 
     @ai_function()
     async def schedule(self, email: str, description: str, date: str) -> None:
@@ -116,13 +113,14 @@ class Scheduler(AgentTask):
         response = await self.send_request(
             request=APIRequests.SCHEDULE, time=date, slug=description
         )
+
         if response["status"] == "success":
             await self.agent.generate_reply(
                 instructions="Tell the user you were able to schedule the appointment successfully."
             )
         if (
             response["status"] == "error"
-            and response["status"]["error"]["message"]
+            and response["error"]["message"]
             == "User either already has booking at this time or is not available"
         ):
             if self.agent.current_speech:
@@ -130,13 +128,11 @@ class Scheduler(AgentTask):
             await self.agent.generate_reply(
                 instructions="Inform the user that the date and time specified are unavailable, and ask the user to choose another date."
             )
-        else:
-            raise Exception("Error occurred when attempting to schedule")
 
     @ai_function()
     async def cancel(self, email: str) -> None:
         """
-        Cancels an existing appointment
+        Cancels an existing appointment.
         Args:
             email: The user's email formatted local-part@domain
         """
@@ -197,14 +193,14 @@ class Scheduler(AgentTask):
 
     @ai_function()
     async def transfer_to_receptionist(self) -> None:
-        """Transfers the user to the receptionist"""
+        """Transfers the user to the receptionist for any office inquiries, user information updates, or when they are finished with managing appointments."""
         return self.agent.userdata[
             "tasks"
         ].receptionist, "Transferring you to our receptionist!"
 
     @ai_function()
     async def transfer_to_messenger(self) -> None:
-        """Transfers the user to the messenger"""
+        """Transfers the user to the messenger if they want to leave a message for the office."""
         return self.agent.userdata[
             "tasks"
         ].messenger, "Transferring you to our messenger!"
