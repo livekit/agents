@@ -7,6 +7,7 @@ from typing import Optional
 
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from google import genai
 from google.genai._api_client import HttpOptions
@@ -25,8 +26,8 @@ from google.genai.types import (
     VoiceConfig,
 )
 
-from ..._utils import _build_gemini_ctx, _build_tool
 from ...log import logger
+from ...utils import _build_gemini_fnc, to_chat_ctx
 from .api_proto import (
     ClientEvents,
     LiveAPIModels,
@@ -161,9 +162,7 @@ class RealtimeModel(llm.RealtimeModel):
                 )
 
         instructions_content = Content(parts=[Part(text=instructions)]) if instructions else None
-
-        self._rt_sessions: list[GeminiRealtimeSession] = []
-        self._opts = ModelOptions(
+        self._opts = _RealtimeOptions(
             model=model,
             api_key=self._api_key,
             voice=voice,
@@ -233,7 +232,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
-            turns, _ = _build_gemini_ctx(chat_ctx, id(self))
+            turns, _ = to_chat_ctx(chat_ctx, id(self))
             self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
 
     async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]) -> None:
@@ -245,7 +244,7 @@ class RealtimeSession(llm.RealtimeSession):
             tools: list[FunctionDeclaration] = []
 
             for ai_fnc in fnc_ctx.ai_functions.values():
-                tool_desc = _build_tool(ai_fnc)
+                tool_desc = _build_gemini_fnc(ai_fnc)
                 tools.append(tool_desc)
                 retained_functions.append(ai_fnc)
 
