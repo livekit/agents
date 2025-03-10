@@ -126,6 +126,8 @@ class _GeminiJsonSchema:
         return self.schema
 
     def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
+        schema.pop("title", None)
+        schema.pop("default", None)
         if ref := schema.pop("$ref", None):
             key = re.sub(r"^#/\$defs/", "", ref)
             if key in refs_stack:

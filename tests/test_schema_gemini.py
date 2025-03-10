@@ -52,19 +52,16 @@ async def test_json_def_replaced():
             "locations": {
                 "items": {
                     "properties": {
-                        "lat": {"title": "Lat", "type": types.Type.NUMBER},
-                        "lng": {"default": 1.1, "title": "Lng", "type": types.Type.NUMBER},
+                        "lat": {"type": types.Type.NUMBER},
+                        "lng": {"type": types.Type.NUMBER},
                     },
                     "required": ["lat"],
-                    "title": "Location",
                     "type": types.Type.OBJECT,
                 },
-                "title": "Locations",
                 "type": types.Type.ARRAY,
             }
         },
         "required": ["locations"],
-        "title": "Locations",
         "type": types.Type.OBJECT,
     }
     assert gemini_schema == expected_gemini_schema
@@ -80,7 +77,6 @@ async def test_json_def_replaced_any_of():
         op_location: Optional[Location] = None
 
     json_schema = Locations.model_json_schema()
-    print(json_schema)
 
     gemini_schema = utils._GeminiJsonSchema(json_schema).simplify()
 
@@ -90,17 +86,14 @@ async def test_json_def_replaced_any_of():
         "properties": {
             "op_location": {
                 "properties": {
-                    "lat": {"title": "Lat", "type": types.Type.NUMBER},
-                    "lng": {"title": "Lng", "type": types.Type.NUMBER},
+                    "lat": {"type": types.Type.NUMBER},
+                    "lng": {"type": types.Type.NUMBER},
                 },
                 "required": ["lat", "lng"],
-                "title": "Location",
                 "type": types.Type.OBJECT,
                 "nullable": True,
-                "default": None,
             }
         },
-        "title": "Locations",
         "type": types.Type.OBJECT,
     }
     assert gemini_schema == expected_gemini_schema
@@ -142,7 +135,7 @@ async def test_json_def_recursive():
         utils._GeminiJsonSchema(json_schema).simplify()
 
 
-# Test for preserving format, title and description on string fields
+# Test for preserving format, and description on string fields
 async def test_json_def_date():
     class FormattedStringFields(BaseModel):
         d: datetime.date
@@ -172,23 +165,20 @@ async def test_json_def_date():
     gemini_schema = utils._GeminiJsonSchema(json_schema).simplify()
     expected_gemini_schema = {
         "properties": {
-            "d": {"format": "date", "title": "D", "type": types.Type.STRING},
-            "dt": {"format": "date-time", "title": "Dt", "type": types.Type.STRING},
+            "d": {"format": "date", "type": types.Type.STRING},
+            "dt": {"format": "date-time", "type": types.Type.STRING},
             "t": {
                 "format": "time",
-                "title": "T",
                 "type": types.Type.STRING,
                 "description": "",
             },
             "td": {
                 "format": "duration",
-                "title": "Td",
                 "type": types.Type.STRING,
                 "description": "my timedelta",
             },
         },
         "required": ["d", "dt", "t", "td"],
-        "title": "FormattedStringFields",
         "type": types.Type.OBJECT,
     }
     assert gemini_schema == expected_gemini_schema
