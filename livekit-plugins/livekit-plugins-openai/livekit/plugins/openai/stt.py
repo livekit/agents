@@ -59,9 +59,7 @@ class STT(stt.STT):
         ``OPENAI_API_KEY`` environmental variable.
         """
 
-        super().__init__(
-            capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
-        )
+        super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
         if detect_language:
             language = ""
 

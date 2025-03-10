@@ -2,12 +2,17 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from typing import AsyncIterator, Generator, Optional, Union
+from typing import AsyncGenerator, AsyncIterator, Generator, Optional, Union
 
 import numpy as np
 from livekit import rtc
-from livekit.agents.pipeline.avatar import AvatarRunner, MediaOptions
-from livekit.agents.pipeline.datastream_io import AudioFlushSentinel
+from livekit.agents.voice.avatar import (
+    AudioSegmentEnd,
+    AvatarOptions,
+    AvatarRunner,
+    DataStreamAudioReceiver,
+    VideoGenerator,
+)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from wave_viz import WaveformVisualizer
@@ -15,33 +20,29 @@ from wave_viz import WaveformVisualizer
 logger = logging.getLogger("avatar-example")
 
 
-class MyVideoGenerator:
-    def __init__(self, media_options: MediaOptions):
-        self.media_options = media_options
-        self._audio_queue: asyncio.Queue[Union[rtc.AudioFrame, AudioFlushSentinel]] = (
-            asyncio.Queue()
-        )
+class AudioWaveGenerator(VideoGenerator):
+    def __init__(self, options: AvatarOptions):
+        self._options = options
+        self._audio_queue: asyncio.Queue[Union[rtc.AudioFrame, AudioSegmentEnd]] = asyncio.Queue()
 
         self._audio_resampler: Optional[rtc.AudioResampler] = None
 
         # NOTE: Audio frames and video frames have different frequencies,
         #       so we accumulate audio samples in a buffer before
         #       generating corresponding video frames
-        self._audio_buffer = np.zeros(
-            (0, self.media_options.audio_channels), dtype=np.int16
-        )
+        self._audio_buffer = np.zeros((0, self._options.audio_channels), dtype=np.int16)
         self._audio_samples_per_frame = int(
-            self.media_options.audio_sample_rate / self.media_options.video_fps
+            self._options.audio_sample_rate / self._options.video_fps
         )
         self._av_sync: Optional[rtc.AVSynchronizer] = None
 
-    async def push_audio(self, frame: rtc.AudioFrame | AudioFlushSentinel) -> None:
+    async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         """Process and queue audio frames, handling resampling if needed.
 
         Args:
             frame: Either an AudioFrame to process or AudioFlushSentinel to flush
         """
-        if isinstance(frame, AudioFlushSentinel):
+        if isinstance(frame, AudioSegmentEnd):
             if self._audio_resampler is not None:
                 # flush the resampler and queue any remaining frames
                 for resampled_frame in self._audio_resampler.flush():
@@ -51,15 +52,15 @@ class MyVideoGenerator:
 
         # initialize resampler if needed
         needs_resampling = (
-            frame.sample_rate != self.media_options.audio_sample_rate
-            or frame.num_channels != self.media_options.audio_channels
+            frame.sample_rate != self._options.audio_sample_rate
+            or frame.num_channels != self._options.audio_channels
         )
 
         if needs_resampling and self._audio_resampler is None:
             self._audio_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate,
-                output_rate=self.media_options.audio_sample_rate,
-                num_channels=self.media_options.audio_channels,
+                output_rate=self._options.audio_sample_rate,
+                num_channels=self._options.audio_channels,
             )
 
         if self._audio_resampler is not None:
@@ -77,34 +78,33 @@ class MyVideoGenerator:
                 break
         self._reset_audio_buffer()
 
-    async def stream(
+    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
+        return self._stream_impl()
+
+    async def _stream_impl(
         self,
-    ) -> AsyncIterator[
-        tuple[rtc.VideoFrame, Optional[rtc.AudioFrame]] | AudioFlushSentinel
-    ]:
+    ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
         # initialize background canvas
         background = np.zeros(
-            (self.media_options.video_height, self.media_options.video_width, 4),
+            (self._options.video_height, self._options.video_width, 4),
             dtype=np.uint8,
         )
         background.fill(255)
 
-        wave_visualizer = WaveformVisualizer(
-            sample_rate=self.media_options.audio_sample_rate
-        )
+        wave_visualizer = WaveformVisualizer(sample_rate=self._options.audio_sample_rate)
 
         def _generate_idle_frame() -> rtc.VideoFrame:
             idle_frame = background.copy()
             fps = self._av_sync.actual_fps if self._av_sync else None
             wave_visualizer.draw(
                 idle_frame,
-                audio_samples=np.zeros((1, self.media_options.audio_channels)),
+                audio_samples=np.zeros((1, self._options.audio_channels)),
                 fps=fps,
             )
             return self._np_to_video_frame(idle_frame)
 
         def _generate_active_frames(
-            audio_frame: rtc.AudioFrame | AudioFlushSentinel,
+            audio_frame: rtc.AudioFrame | AudioSegmentEnd,
         ) -> Generator[tuple[rtc.VideoFrame, rtc.AudioFrame], None, None]:
             samples_per_frame = self._audio_samples_per_frame
 
@@ -123,9 +123,7 @@ class MyVideoGenerator:
                     [n_fill_samples, self._audio_buffer.shape[1]],
                     dtype=self._audio_buffer.dtype,
                 )
-            self._audio_buffer = np.concatenate(
-                [self._audio_buffer, audio_samples], axis=0
-            )
+            self._audio_buffer = np.concatenate([self._audio_buffer, audio_samples], axis=0)
 
             # generate video frames with audio in buffer
             while len(self._audio_buffer) >= samples_per_frame:
@@ -138,7 +136,7 @@ class MyVideoGenerator:
                 video_frame = self._np_to_video_frame(canvas)
                 sub_audio_frame = rtc.AudioFrame(
                     data=sub_samples.tobytes(),
-                    sample_rate=self.media_options.audio_sample_rate,
+                    sample_rate=self._options.audio_sample_rate,
                     num_channels=sub_samples.shape[1],
                     samples_per_channel=sub_samples.shape[0],
                 )
@@ -147,8 +145,8 @@ class MyVideoGenerator:
         while True:
             try:
                 # timeout has to be shorter than the frame interval to avoid starvation
-                ori_audio_frame = await asyncio.wait_for(
-                    self._audio_queue.get(), timeout=0.5 / self.media_options.video_fps
+                frame = await asyncio.wait_for(
+                    self._audio_queue.get(), timeout=0.5 / self._options.video_fps
                 )
             except asyncio.TimeoutError:
                 # generate frame without audio (e.g. silence state)
@@ -156,24 +154,23 @@ class MyVideoGenerator:
                     # skip if there are already video frames in the queue
                     continue
                 video_frame = _generate_idle_frame()
-                yield video_frame, None
+                yield video_frame
                 await asyncio.sleep(0)
                 continue
 
-            for video_frame, audio_frame in _generate_active_frames(ori_audio_frame):
-                yield video_frame, audio_frame
+            for video_frame, audio_frame in _generate_active_frames(frame):
+                yield video_frame
+                yield audio_frame
 
-            if isinstance(ori_audio_frame, AudioFlushSentinel):
-                yield ori_audio_frame
+            if isinstance(frame, AudioSegmentEnd):
+                yield frame
                 self._reset_audio_buffer()
 
     def set_av_sync(self, av_sync: rtc.AVSynchronizer | None) -> None:
         self._av_sync = av_sync
 
     def _reset_audio_buffer(self) -> None:
-        self._audio_buffer = np.zeros(
-            (0, self.media_options.audio_channels), dtype=np.int16
-        )
+        self._audio_buffer = np.zeros((0, self._options.audio_channels), dtype=np.int16)
 
     def _np_to_video_frame(self, image: np.ndarray) -> rtc.VideoFrame:
         return rtc.VideoFrame(
@@ -191,26 +188,27 @@ async def main(room: rtc.Room):
 
     try:
         # Initialize and start worker
-        media_options = MediaOptions(
+        avatar_options = AvatarOptions(
             video_width=1280,
             video_height=720,
             video_fps=30,
             audio_sample_rate=24000,
             audio_channels=1,
         )
-        video_generator = MyVideoGenerator(media_options)
+        video_gen = AudioWaveGenerator(avatar_options)
         runner = AvatarRunner(
-            room, video_generator=video_generator, media_options=media_options
+            room,
+            audio_recv=DataStreamAudioReceiver(room),
+            video_gen=video_gen,
+            options=avatar_options,
         )
-        video_generator.set_av_sync(runner.av_sync)
+        video_gen.set_av_sync(runner.av_sync)
         await runner.start()
 
         # Set up disconnect handler
         async def handle_disconnect(participant: rtc.RemoteParticipant):
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
-                logging.info(
-                    "Agent %s disconnected, stopping worker...", participant.identity
-                )
+                logging.info("Agent %s disconnected, stopping worker...", participant.identity)
                 stop_event.set()
 
         room.on(

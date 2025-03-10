@@ -62,9 +62,7 @@ class CMakeBuild(build_ext):
         if not self.build_temp.exists():
             self.build_temp.mkdir(parents=True)
 
-        subprocess.run(
-            ["cmake", ext.sourcedir, *cmake_args], cwd=self.build_temp, check=True
-        )
+        subprocess.run(["cmake", ext.sourcedir, *cmake_args], cwd=self.build_temp, check=True)
         subprocess.run(["cmake", "--build", "."], cwd=self.build_temp, check=True)
 
         build_output = self.build_temp / "src" / cfg
@@ -78,14 +76,7 @@ class CMakeBuild(build_ext):
             app = build_output / "lkcef_app.app"
             self.copy_tree(
                 app,
-                str(
-                    extdir
-                    / "livekit"
-                    / "plugins"
-                    / "browser"
-                    / "resources"
-                    / "lkcef_app.app"
-                ),
+                str(extdir / "livekit" / "plugins" / "browser" / "resources" / "lkcef_app.app"),
             )
 
 
@@ -113,7 +104,7 @@ setuptools.setup(
     cmdclass={"build_ext": CMakeBuild},
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents>=0.12.3"],
+    install_requires=["livekit-agents>=1.0.0.dev3"],
     package_data={
         "livekit.plugins.browser": ["py.typed"],
         "livekit.plugins.browser.resources": ["**", "lkcef_app.app"],

@@ -53,9 +53,7 @@ class ProsodyConfig:
     """
 
     rate: Literal["x-slow", "slow", "medium", "fast", "x-fast"] | float | None = None
-    volume: (
-        Literal["silent", "x-soft", "soft", "medium", "loud", "x-loud"] | float | None
-    ) = None
+    volume: Literal["silent", "x-soft", "soft", "medium", "loud", "x-loud"] | float | None = None
     pitch: Literal["x-low", "low", "medium", "high", "x-high"] | None = None
 
     def validate(self) -> None:
@@ -202,9 +200,7 @@ class TTS(tts.TTS):
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
 
         if not (
-            speech_host
-            or (speech_key and speech_region)
-            or (speech_auth_token and speech_region)
+            speech_host or (speech_key and speech_region) or (speech_auth_token and speech_region)
         ):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
@@ -255,9 +251,7 @@ class TTS(tts.TTS):
         *,
         conn_options: Optional[APIConnectOptions] = None,
     ) -> "ChunkedStream":
-        return ChunkedStream(
-            tts=self, input_text=text, conn_options=conn_options, opts=self._opts
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options, opts=self._opts)
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -274,9 +268,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self):
         stream_callback = speechsdk.audio.PushAudioOutputStream(
-            _PushAudioOutputStreamCallback(
-                self._opts, asyncio.get_running_loop(), self._event_ch
-            )
+            _PushAudioOutputStreamCallback(self._opts, asyncio.get_running_loop(), self._event_ch)
         )
         synthesizer = _create_speech_synthesizer(
             config=self._opts,
@@ -369,9 +361,7 @@ class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallba
         self._loop = loop
         self._request_id = utils.shortuuid()
 
-        self._bstream = utils.audio.AudioByteStream(
-            sample_rate=opts.sample_rate, num_channels=1
-        )
+        self._bstream = utils.audio.AudioByteStream(sample_rate=opts.sample_rate, num_channels=1)
 
     def write(self, audio_buffer: memoryview) -> int:
         for frame in self._bstream.write(audio_buffer.tobytes()):
@@ -407,9 +397,7 @@ def _create_speech_synthesizer(
         speech_recognition_language=config.language or "en-US",
     )
 
-    speech_config.set_speech_synthesis_output_format(
-        SUPPORTED_SAMPLE_RATE[config.sample_rate]
-    )
+    speech_config.set_speech_synthesis_output_format(SUPPORTED_SAMPLE_RATE[config.sample_rate])
     stream_config = speechsdk.audio.AudioOutputConfig(stream=stream)
     if config.voice is not None:
         speech_config.speech_synthesis_voice_name = config.voice

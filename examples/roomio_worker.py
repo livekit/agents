@@ -1,12 +1,13 @@
 import logging
 
 from dotenv import load_dotenv
-from livekit.agents import AgentState, JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import ai_function
-from livekit.agents.pipeline import AgentTask, CallContext, PipelineAgent
-from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import RoomInputOptions, RoomOutputOptions
+from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
+from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai
+
+# from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("roomio-example")
 logger.setLevel(logging.INFO)
@@ -44,35 +45,17 @@ class AlloyTask(AgentTask):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    agent = PipelineAgent(
+    agent = VoiceAgent(
         task=AlloyTask(),
     )
 
-    @agent.on("agent_state_changed")
-    def on_agent_state_changed(state: AgentState):
-        logger.info("agent_state_changed", extra={"state": state})
-
     await agent.start(
         room=ctx.room,
-        # optionally override the default input and output options
-        room_input_options=RoomInputOptions(audio_enabled=True, text_enabled=True),
-        room_output_options=RoomOutputOptions(audio_enabled=True, text_enabled=True),
+        room_input_options=RoomInputOptions(
+            # noise_cancellation=noise_cancellation.BVC(),
+        ),
     )
-
-    def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
-        logger.info(
-            "playback_finished",
-            extra={
-                "playback_position": ev.playback_position,
-                "interrupted": ev.interrupted,
-            },
-        )
-
-    if agent.output.audio is not None:
-        agent.output.audio.on("playback_finished", on_playback_finished)
 
 
 if __name__ == "__main__":
-    # WorkerType.ROOM is the default worker type which will create an agent for every room.
-    # You can also use WorkerType.PUBLISHER to create a single agent for all participants that publish a track.
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

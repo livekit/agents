@@ -47,7 +47,7 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents>=0.12.3", "pydub~=0.25.1"],
+    install_requires=["livekit-agents>=1.0.0.dev3", "pydub~=0.25.1"],
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

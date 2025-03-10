@@ -27,6 +27,9 @@ class CliArgs:
     watch: bool
     drain_timeout: int
 
+    console: bool = False
+    # whether to run the worker in console mode (console subcommand
+
     # register the worker to the worker pool
     register: bool = True
 

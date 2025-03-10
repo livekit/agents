@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import inspect
 from dataclasses import dataclass
 from typing import (
@@ -12,15 +13,18 @@ from typing import (
     get_type_hints,
 )
 
+from livekit import rtc
+from livekit.agents import llm, utils
 from pydantic import BaseModel, create_model
-from pydantic.fields import FieldInfo
+from pydantic.fields import Field, FieldInfo
+from pydantic_core import PydanticUndefined
 
 from . import _strict
 from .chat_context import ChatContext
 from .function_context import AIFunction, get_function_info
 
 if TYPE_CHECKING:
-    from ..pipeline.events import CallContext
+    from ..voice.events import CallContext
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -94,12 +98,53 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
 
 def is_context_type(ty: type) -> bool:
-    from ..pipeline.events import CallContext
+    from ..voice.events import CallContext
 
     origin = get_origin(ty)
     is_call_context = ty is CallContext or origin is CallContext
 
     return is_call_context
+
+
+@dataclass
+class SerializedImage:
+    data_bytes: bytes
+    media_type: str
+    inference_detail: str
+
+
+def serialize_image(image: llm.ImageContent) -> SerializedImage:
+    if isinstance(image.image, str):
+        header, b64_data = image.image.split(",", 1)
+        encoded_data = base64.b64decode(b64_data)
+        media_type = header.split(";")[0].split(":")[1]
+        supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+        if media_type not in supported_types:
+            raise ValueError(
+                f"Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+            )
+
+        return SerializedImage(
+            data_bytes=encoded_data,
+            media_type=media_type,
+            inference_detail=image.inference_detail,
+        )
+    elif isinstance(image.image, rtc.VideoFrame):
+        opts = utils.images.EncodeOptions()
+        if image.inference_width and image.inference_height:
+            opts.resize_options = utils.images.ResizeOptions(
+                width=image.inference_width,
+                height=image.inference_height,
+                strategy="scale_aspect_fit",
+            )
+        encoded_data = utils.images.encode(image.image, opts)
+
+        return SerializedImage(
+            data_bytes=encoded_data,
+            media_type="image/jpeg",
+            inference_detail=image.inference_detail,
+        )
+    raise ValueError("Unsupported image type")
 
 
 def build_legacy_openai_schema(
@@ -148,15 +193,17 @@ def build_strict_openai_schema(
     }
 
 
-def function_arguments_to_pydantic_model(
-    func: Callable,
-) -> type[BaseModel]:
-    """
-    Create a Pydantic model from a function’s signature. (excluding context types)
-    """
+def function_arguments_to_pydantic_model(func: Callable) -> type[BaseModel]:
+    """Create a Pydantic model from a function’s signature. (excluding context types)"""
+
+    from docstring_parser import parse_from_object
+
     fnc_name = func.__name__.split("_")
     fnc_name = "".join(x.capitalize() for x in fnc_name)
     model_name = fnc_name + "Args"
+
+    docstring = parse_from_object(func)
+    param_docs = {p.arg_name: p.description for p in docstring.params}
 
     signature = inspect.signature(func)
     type_hints = get_type_hints(func, include_extras=True)
@@ -171,27 +218,23 @@ def function_arguments_to_pydantic_model(
             continue
 
         default_value = param.default if param.default is not param.empty else ...
+        field_info = Field()
 
         # Annotated[str, Field(description="...")]
         if get_origin(type_hint) is Annotated:
             annotated_args = get_args(type_hint)
-            actual_type = annotated_args[0]
-            field_info = None
+            type_hint = annotated_args[0]
+            field_info = next(
+                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), field_info
+            )
 
-            for extra in annotated_args[1:]:
-                if isinstance(extra, FieldInfo):
-                    field_info = extra  # get the first FieldInfo
-                    break
+        if default_value is not ... and field_info.default is PydanticUndefined:
+            field_info.default = default_value
 
-            if field_info:
-                if default_value is not ... and field_info.default is None:
-                    field_info.default = default_value
-                fields[param_name] = (actual_type, field_info)
-            else:
-                fields[param_name] = (actual_type, default_value)
+        if field_info.description is None:
+            field_info.description = param_docs.get(param_name, None)
 
-        else:
-            fields[param_name] = (type_hint, default_value)
+        fields[param_name] = (type_hint, field_info)
 
     return create_model(model_name, **fields)
 
@@ -207,7 +250,7 @@ def pydantic_model_to_function_arguments(
     Raises TypeError if required params are missing
     """
 
-    from ..pipeline.events import CallContext
+    from ..voice.events import CallContext
 
     signature = inspect.signature(ai_function)
     type_hints = get_type_hints(ai_function, include_extras=True)

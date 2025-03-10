@@ -18,11 +18,13 @@ class BufferedTokenStream:
         tokenize_fnc: TokenizeCallable,
         min_token_len: int,
         min_ctx_len: int,
+        retain_format: bool = False,
     ) -> None:
         self._event_ch = aio.Chan[TokenData]()
         self._tokenize_fnc = tokenize_fnc
         self._min_ctx_len = min_ctx_len
         self._min_token_len = min_token_len
+        self._retain_format = retain_format
         self._current_segment_id = shortuuid()
 
         self._buf_tokens: list[str] = []  # <= min_token_len

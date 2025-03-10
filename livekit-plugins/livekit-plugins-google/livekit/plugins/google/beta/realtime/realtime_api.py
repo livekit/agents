@@ -7,7 +7,6 @@ from typing import Optional
 
 from livekit import rtc
 from livekit.agents import llm, utils
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from google import genai
 from google.genai._api_client import HttpOptions
@@ -141,9 +140,7 @@ class RealtimeModel(llm.RealtimeModel):
         """
         super().__init__()
 
-        super().__init__(
-            capabilities=llm.RealtimeCapabilities(message_truncation=False)
-        )
+        super().__init__(capabilities=llm.RealtimeCapabilities(message_truncation=False))
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
         self._project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -163,10 +160,10 @@ class RealtimeModel(llm.RealtimeModel):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
                 )
 
-        instructions_content = (
-            Content(parts=[Part(text=instructions)]) if instructions else None
-        )
-        self._opts = _RealtimeOptions(
+        instructions_content = Content(parts=[Part(text=instructions)]) if instructions else None
+
+        self._rt_sessions: list[GeminiRealtimeSession] = []
+        self._opts = ModelOptions(
             model=model,
             api_key=self._api_key,
             voice=voice,
@@ -206,9 +203,7 @@ class RealtimeSession(llm.RealtimeSession):
             project=self._opts.project,
             location=self._opts.location,
         )
-        self._main_atask = asyncio.create_task(
-            self._main_task(), name="gemini-realtime-session"
-        )
+        self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
 
         self._current_generation: Optional[_ResponseGeneration] = None
         # self._transcriber: Optional[TranscriberSession] = None
@@ -241,9 +236,7 @@ class RealtimeSession(llm.RealtimeSession):
             turns, _ = _build_gemini_ctx(chat_ctx, id(self))
             self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
 
-    async def update_fnc_ctx(
-        self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]
-    ) -> None:
+    async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]) -> None:
         async with self._update_fnc_ctx_lock:
             if isinstance(fnc_ctx, list):
                 fnc_ctx = llm.FunctionContext(fnc_ctx)
@@ -320,17 +313,13 @@ class RealtimeSession(llm.RealtimeSession):
             system_instruction=self._opts.instructions,
             speech_config=SpeechConfig(
                 voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(
-                        voice_name=self._opts.voice
-                    )
+                    prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
                 )
             ),
             tools=self._tools,
         )
 
-        async with self._client.aio.live.connect(
-            model=self._opts.model, config=config
-        ) as session:
+        async with self._client.aio.live.connect(model=self._opts.model, config=config) as session:
             self._session = session
 
             @utils.log_exceptions(logger=logger)
@@ -354,9 +343,7 @@ class RealtimeSession(llm.RealtimeSession):
                             self._handle_tool_calls(response.tool_call)
 
                         if response.tool_call_cancellation:
-                            self._handle_tool_call_cancellation(
-                                response.tool_call_cancellation
-                            )
+                            self._handle_tool_call_cancellation(response.tool_call_cancellation)
 
             send_task = asyncio.create_task(_send_task(), name="gemini-realtime-send")
             recv_task = asyncio.create_task(_recv_task(), name="gemini-realtime-recv")

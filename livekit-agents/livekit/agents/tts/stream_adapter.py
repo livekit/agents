@@ -55,6 +55,9 @@ class StreamAdapter(TTS):
             sentence_tokenizer=self._sentence_tokenizer,
         )
 
+    def prewarm(self) -> None:
+        self._tts.prewarm()
+
 
 class StreamAdapterWrapper(SynthesizeStream):
     def __init__(
@@ -69,9 +72,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         self._wrapped_tts = wrapped_tts
         self._sent_stream = sentence_tokenizer.stream()
 
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[SynthesizedAudio]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         pass  # do nothing
 
     async def _run(self) -> None:

@@ -76,8 +76,12 @@ def ai_function(
     description: str | None = None,
 ) -> Callable[[Callable], AIFunction]:
     def deco(func) -> AIFunction:
+        from docstring_parser import parse_from_object
+
+        docstring = parse_from_object(func)
         info = _AIFunctionInfo(
-            name=name or func.__name__, description=description or func.__doc__
+            name=name or func.__name__,
+            description=description or docstring.description,
         )
         setattr(func, "__livekit_agents_ai_callable", info)
         return func

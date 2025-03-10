@@ -18,9 +18,7 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(
-    os.path.join(here, "livekit", "plugins", "assemblyai", "version.py"), "r"
-) as f:
+with open(os.path.join(here, "livekit", "plugins", "assemblyai", "version.py"), "r") as f:
     exec(f.read(), about)
 
 
@@ -48,7 +46,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit-agents>=0.12.3",
+        "livekit-agents>=1.0.0.dev3",
     ],
     package_data={},
     project_urls={

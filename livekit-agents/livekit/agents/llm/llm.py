@@ -38,6 +38,8 @@ from .function_context import AIFunction
 class CompletionUsage(BaseModel):
     completion_tokens: int
     prompt_tokens: int
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
     total_tokens: int
 
 
@@ -94,9 +96,7 @@ class LLM(
         fnc_ctx: list[AIFunction] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            Union[ToolChoice, Literal["auto", "required", "none"]]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> "LLMStream": ...
 
@@ -164,9 +164,7 @@ class LLMStream(ABC):
                 await asyncio.sleep(self._conn_options.retry_interval)
 
     @utils.log_exceptions(logger=logger)
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[ChatChunk]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
         start_time = time.perf_counter()
         ttft = -1.0
         request_id = ""

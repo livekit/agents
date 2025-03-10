@@ -81,8 +81,7 @@ class WaveformVisualizer:
 
             # Apply temporal smoothing
             self.prev_fft = (
-                self.prev_fft * (1 - self.smoothing_factor)
-                + plot_data * self.smoothing_factor
+                self.prev_fft * (1 - self.smoothing_factor) + plot_data * self.smoothing_factor
             )
         else:
             volume = 0
@@ -97,9 +96,9 @@ class WaveformVisualizer:
 
         # Draw the spectrum visualization
         points = np.column_stack((x_smooth, y_smooth)).astype(np.int32)
-        bottom_points = np.column_stack(
-            (x_smooth, np.full_like(x_smooth, center_y))
-        ).astype(np.int32)
+        bottom_points = np.column_stack((x_smooth, np.full_like(x_smooth, center_y))).astype(
+            np.int32
+        )
         wave_points = np.vstack((points, bottom_points[::-1]))
 
         # Draw filled area with transparency
@@ -110,24 +109,6 @@ class WaveformVisualizer:
         # Draw outline
         for i in range(len(points) - 1):
             cv2.line(canvas, tuple(points[i]), tuple(points[i + 1]), (0, 255, 0), 2)
-
-        # Draw frequency scale
-        font_face = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.6
-        thickness = 1
-
-        freq_points = [0, 1000, 2000, 4000, 8000, self.nyquist_freq]  # Hz
-        for freq in freq_points:
-            x_pos = int(width * freq / self.nyquist_freq)
-            cv2.putText(
-                canvas,
-                f"{freq}Hz",
-                (x_pos, center_y + 20),
-                font_face,
-                font_scale,
-                (100, 100, 100),
-                thickness,
-            )
 
         return volume
 

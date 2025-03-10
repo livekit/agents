@@ -13,9 +13,9 @@ from .log import logger
 
 HG_MODEL = "livekit/turn-detector"
 ONNX_FILENAME = "model_q8.onnx"
-MODEL_REVISION = "v1.2.0"
-MAX_HISTORY = 4
+MODEL_REVISION = "v1.2.1"
 MAX_HISTORY_TOKENS = 512
+MAX_HISTORY_TURNS = 6
 
 
 def _download_from_hf_hub(repo_id, filename, **kwargs):
@@ -102,9 +102,7 @@ class _EUORunner(_InferenceRunner):
             truncation=True,
         )
         # Run inference
-        outputs = self._session.run(
-            None, {"input_ids": inputs["input_ids"].astype("int64")}
-        )
+        outputs = self._session.run(None, {"input_ids": inputs["input_ids"].astype("int64")})
         eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
@@ -120,11 +118,9 @@ class EOUModel:
     def __init__(
         self,
         inference_executor: InferenceExecutor | None = None,
-        unlikely_threshold: float = 0.008,
+        unlikely_threshold: float = 0.0289,
     ) -> None:
-        self._executor = (
-            inference_executor or get_current_job_context().inference_executor
-        )
+        self._executor = inference_executor or get_current_job_context().inference_executor
         self._unlikely_threshold = unlikely_threshold
 
     def unlikely_threshold(self) -> float:
@@ -168,7 +164,7 @@ class EOUModel:
                         )
                         break
 
-        messages = messages[-MAX_HISTORY:]
+        messages = messages[-MAX_HISTORY_TURNS:]
 
         json_data = json.dumps({"chat_ctx": messages}).encode()
 
@@ -177,9 +173,7 @@ class EOUModel:
             timeout=timeout,
         )
 
-        assert result is not None, (
-            "end_of_utterance prediction should always returns a result"
-        )
+        assert result is not None, "end_of_utterance prediction should always returns a result"
 
         result_json = json.loads(result.decode())
         logger.debug(

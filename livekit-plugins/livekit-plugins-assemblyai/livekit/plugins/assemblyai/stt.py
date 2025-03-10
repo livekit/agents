@@ -151,9 +151,7 @@ class STT(stt.STT):
         if end_utterance_silence_threshold is not None:
             self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
         if enable_extra_session_information is not None:
-            self._opts.enable_extra_session_information = (
-                enable_extra_session_information
-            )
+            self._opts.enable_extra_session_information = enable_extra_session_information
         if buffer_size_seconds is not None:
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -180,9 +178,7 @@ class SpeechStream(stt.SpeechStream):
         api_key: str,
         http_session: aiohttp.ClientSession,
     ) -> None:
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._opts = opts
         self._api_key = api_key
@@ -209,9 +205,7 @@ class SpeechStream(stt.SpeechStream):
         if end_utterance_silence_threshold is not None:
             self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
         if enable_extra_session_information is not None:
-            self._opts.enable_extra_session_information = (
-                enable_extra_session_information
-            )
+            self._opts.enable_extra_session_information = enable_extra_session_information
         if buffer_size_seconds is not None:
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -237,9 +231,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                 )
 
-            samples_per_buffer = self._opts.sample_rate // round(
-                1 / self._opts.buffer_size_seconds
-            )
+            samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
@@ -385,9 +377,7 @@ class SpeechStream(stt.SpeechStream):
                 usage_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
                     alternatives=[],
-                    recognition_usage=stt.RecognitionUsage(
-                        audio_duration=self._speech_duration
-                    ),
+                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
                 )
                 self._event_ch.send_nowait(usage_event)
                 self._speech_duration = 0

@@ -81,9 +81,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            Union[ToolChoice, Literal["auto", "required", "none"]]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
     ) -> None:
@@ -134,9 +132,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            Union[ToolChoice, Literal["auto", "required", "none"]]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -180,9 +176,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            Union[ToolChoice, Literal["auto", "required", "none"]]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
@@ -527,9 +521,7 @@ class LLM(llm.LLM):
         fnc_ctx: list[AIFunction] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            Union[ToolChoice, Literal["auto", "required", "none"]]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> "LLMStream":
         extra = {}
@@ -544,9 +536,7 @@ class LLM(llm.LLM):
             extra["user"] = self._opts.user
 
         parallel_tool_calls = (
-            parallel_tool_calls
-            if is_given(parallel_tool_calls)
-            else self._opts.parallel_tool_calls
+            parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
@@ -571,7 +561,7 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx or [],
             conn_options=conn_options,
-            **extra,
+            extra_kwargs=extra,
         )
 
 
@@ -585,11 +575,9 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         fnc_ctx: list[AIFunction],
         conn_options: APIConnectOptions,
-        extra_kwargs: dict[str, Any] = {},
+        extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(
-            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
-        )
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._model = model
         self._client = client
         self._llm = llm

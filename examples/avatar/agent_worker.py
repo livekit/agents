@@ -8,10 +8,10 @@ import httpx
 from dotenv import load_dotenv
 from livekit import api, rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.pipeline import AgentTask, PipelineAgent
-from livekit.agents.pipeline.datastream_io import DataStreamOutput
-from livekit.agents.pipeline.io import PlaybackFinishedEvent
-from livekit.agents.pipeline.room_io import ATTRIBUTE_PUBLISH_FOR, RoomOutputOptions
+from livekit.agents.voice import AgentTask, VoiceAgent
+from livekit.agents.voice.avatar import DataStreamAudioSink
+from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_FOR, RoomOutputOptions
 from livekit.plugins import openai
 
 logger = logging.getLogger("avatar-example")
@@ -49,13 +49,9 @@ async def launch_avatar_worker(
     )
 
     logger.info(f"Sending connection info to avatar dispatcher {avatar_dispatcher_url}")
-    connection_info = AvatarConnectionInfo(
-        room_name=ctx.room.name, url=ctx._info.url, token=token
-    )
+    connection_info = AvatarConnectionInfo(room_name=ctx.room.name, url=ctx._info.url, token=token)
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            avatar_dispatcher_url, json=asdict(connection_info)
-        )
+        response = await client.post(avatar_dispatcher_url, json=asdict(connection_info))
         response.raise_for_status()
     logger.info("Avatar handshake completed")
 
@@ -69,7 +65,7 @@ async def launch_avatar_worker(
 async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await ctx.connect()
 
-    agent = PipelineAgent(
+    agent = VoiceAgent(
         task=AgentTask(
             instructions="Talk to me!",
             llm=openai.realtime.RealtimeModel(),
@@ -83,16 +79,15 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
     # connect the output audio to the avatar runner
-    ds_output = DataStreamOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
-    agent.output.audio = ds_output.audio
+    agent.output.audio = DataStreamAudioSink(ctx.room, destination_identity=AVATAR_IDENTITY)
 
     # start agent with room input and room text output
     await agent.start(
         room=ctx.room,
         room_output_options=RoomOutputOptions(
             audio_enabled=False,
-            text_enabled=True,
-            agent_text_identity=AVATAR_IDENTITY,
+            transcription_enabled=True,
+            agent_transcription_identity=AVATAR_IDENTITY,
         ),
     )
 
@@ -109,9 +104,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--avatar-url", type=str, default="http://localhost:8089/launch"
-    )
+    parser.add_argument("--avatar-url", type=str, default="http://localhost:8089/launch")
     args, remaining_args = parser.parse_known_args()
     print(sys.argv, remaining_args)
     sys.argv = sys.argv[:1] + remaining_args

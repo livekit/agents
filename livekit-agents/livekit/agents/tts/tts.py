@@ -91,12 +91,14 @@ class TTS(
         conn_options: Optional[APIConnectOptions] = None,
     ) -> ChunkedStream: ...
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> SynthesizeStream:
         raise NotImplementedError(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
         )
+
+    def prewarm(self) -> None:
+        """Pre-warm connection to the TTS service"""
+        pass
 
     async def aclose(self) -> None: ...
 
@@ -131,9 +133,7 @@ class ChunkedStream(ABC):
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
         )
-        self._synthesize_task = asyncio.create_task(
-            self._main_task(), name="TTS._synthesize_task"
-        )
+        self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
     @property
@@ -148,9 +148,7 @@ class ChunkedStream(ABC):
     def exception(self) -> BaseException | None:
         return self._synthesize_task.exception()
 
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[SynthesizedAudio]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
 
         start_time = time.perf_counter()
@@ -226,9 +224,7 @@ class ChunkedStream(ABC):
         try:
             val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
-            if not self._synthesize_task.cancelled() and (
-                exc := self._synthesize_task.exception()
-            ):
+            if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
                 raise exc from None
 
             raise StopAsyncIteration
@@ -253,9 +249,7 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     class _FlushSentinel: ...
 
-    def __init__(
-        self, *, tts: TTS, conn_options: Optional[APIConnectOptions] = None
-    ) -> None:
+    def __init__(self, *, tts: TTS, conn_options: Optional[APIConnectOptions] = None) -> None:
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
@@ -305,9 +299,7 @@ class SynthesizeStream(ABC):
         if self._started_time == 0:
             self._started_time = time.perf_counter()
 
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[SynthesizedAudio]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
         audio_duration = 0.0
         ttfb = -1.0
@@ -430,3 +422,48 @@ class SynthesizeStream(ABC):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+class SynthesizedAudioEmitter:
+    """Utility for buffering and emitting audio frames with metadata to a channel.
+
+    This class helps TTS implementers to correctly handle is_final logic when streaming responses.
+    """
+
+    def __init__(
+        self,
+        *,
+        event_ch: aio.Chan[SynthesizedAudio],
+        request_id: str,
+        segment_id: str = "",
+    ) -> None:
+        self._event_ch = event_ch
+        self._frame: rtc.AudioFrame | None = None
+        self._request_id = request_id
+        self._segment_id = segment_id
+
+    def push(self, frame: Optional[rtc.AudioFrame]):
+        """Emits any buffered frame and stores the new frame for later emission.
+
+        The buffered frame is emitted as not final.
+        """
+        self._emit_frame(is_final=False)
+        self._frame = frame
+
+    def _emit_frame(self, is_final: bool = False):
+        """Sends the buffered frame to the event channel if one exists."""
+        if self._frame is None:
+            return
+        self._event_ch.send_nowait(
+            SynthesizedAudio(
+                frame=self._frame,
+                request_id=self._request_id,
+                segment_id=self._segment_id,
+                is_final=is_final,
+            )
+        )
+        self._frame = None
+
+    def flush(self):
+        """Emits any buffered frame as final."""
+        self._emit_frame(is_final=True)
