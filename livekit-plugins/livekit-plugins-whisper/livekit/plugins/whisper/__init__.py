@@ -1,3 +1,5 @@
+from typing import override
+from faster_whisper import download_model
 from livekit.agents import Plugin
 
 from .stt import WhisperSTT, WhisperSTTOptions, WhisperModel
@@ -9,11 +11,17 @@ __all__ = ["WhisperSTT", "WhisperSTTOptions", "WhisperModel", "__version__"]
 
 class WhisperPlugin(Plugin):
     def __init__(self):
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, str(__package__), logger)
 
+    @override
     def download_files(self) -> None:
-        WhisperSTT.load()
-        logger.info("Whisper model downloaded")
+        opts = WhisperSTTOptions()
+        model_path = download_model(
+            opts.model.value,
+            local_files_only=False,
+            cache_dir=None,
+        )
+        logger.info(f"Whisper model downloaded to {model_path}")
 
 
 Plugin.register_plugin(WhisperPlugin())

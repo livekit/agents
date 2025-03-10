@@ -1,3 +1,4 @@
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from .energy import AudioEnergyFilter
 from .models import Model
 from .utils.audio import exp_smoothing, calculate_audio_volume
@@ -24,14 +25,7 @@ from livekit import rtc
 
 utils.time_ms
 
-try:
-    from faster_whisper import WhisperModel
-except ModuleNotFoundError as e:
-    logger.error(f"Exception: {e}")
-    logger.error(
-        "In order to use Whisper, you need to `pip install pipecat-ai[whisper]`."
-    )
-    raise Exception(f"Missing module: {e}")
+from faster_whisper import WhisperModel
 
 
 @dataclass
@@ -83,7 +77,7 @@ class WhisperSTT(stt.STT):
     @classmethod
     def load(cls, opts: WhisperSTTOptions | None = None) -> "WhisperSTT":
         """
-        Load and initialize the Whisper model.
+        Load and initialize the Silero VAD model.
 
         This method loads the Whisper model and prepares it for inference. When options are not provided,
         sane defaults are used.
@@ -111,7 +105,7 @@ class WhisperSTT(stt.STT):
         frame: AudioFrame,
         *,
         language: str | None,
-        conn_options: APIConnectOptions,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         # Try to filter out empty background noise
 
@@ -158,12 +152,11 @@ class WhisperSTT(stt.STT):
             self._silence_num_frames = 0
             self._wave.close()
             self._content.seek(0)
-            # await self.process_generator(self.run_stt(self._content.read()))
             response = await self.run_stt(self._content.read())
             (self._content, self._wave) = self._new_wave()
 
         return response or stt.SpeechEvent(
-            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
                 stt.SpeechData(
                     text="",
@@ -176,7 +169,7 @@ class WhisperSTT(stt.STT):
     async def run_stt(
         self,
         buffer: AudioBuffer,
-    ) -> stt.SpeechEvent:
+    ) -> stt.SpeechEvent | APIConnectionError | APIStatusError:
         """Transcribes given audio using Whisper"""
         if not self._model:
             logger.error(f"{self} error: Whisper model not available")
