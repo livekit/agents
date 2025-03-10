@@ -115,11 +115,13 @@ def _build_tool_spec(fnc: AIFunction) -> dict:
 
 
 def _build_image(image: ImageContent, cache_key: Any) -> dict:
-    img = utils.serialize_image(image, cache_key)
+    img = utils.serialize_image(image)
+    if cache_key not in image._cache:
+        image._cache[cache_key] = img.data_bytes
     return {
         "image": {
             "format": "jpeg",
-            "source": {"bytes": img.data_bytes},
+            "source": {"bytes": image._cache[cache_key]},
         }
     }
 

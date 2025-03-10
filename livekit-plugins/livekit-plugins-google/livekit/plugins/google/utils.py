@@ -81,8 +81,10 @@ def to_chat_ctx(
 
 
 def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
-    img = llm.utils.serialize_image(image, cache_key)
-    return types.Part.from_bytes(data=img.data_bytes, mime_type=img.media_type)
+    img = llm.utils.serialize_image(image)
+    if cache_key not in image._cache:
+        image._cache[cache_key] = img.data_bytes
+    return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.media_type)
 
 
 def _build_gemini_fnc(ai_function: AIFunction) -> types.FunctionDeclaration:
@@ -103,13 +105,13 @@ class _GeminiJsonSchema:
     """
 
     # Type mapping from JSON Schema to Gemini Schema
-    TYPE_MAPPING = {
-        "string": "STRING",
-        "number": "NUMBER",
-        "integer": "INTEGER",
-        "boolean": "BOOLEAN",
-        "array": "ARRAY",
-        "object": "OBJECT",
+    TYPE_MAPPING: dict[str, types.Type] = {
+        "string": types.Type.STRING,
+        "number": types.Type.NUMBER,
+        "integer": types.Type.INTEGER,
+        "boolean": types.Type.BOOLEAN,
+        "array": types.Type.ARRAY,
+        "object": types.Type.OBJECT,
     }
 
     def __init__(self, schema: dict[str, Any]):
@@ -119,7 +121,7 @@ class _GeminiJsonSchema:
     def simplify(self) -> dict[str, Any] | None:
         self._simplify(self.schema, refs_stack=())
         # If the schema is an OBJECT with no properties, return None.
-        if self.schema.get("type") == "OBJECT" and not self.schema.get("properties"):
+        if self.schema.get("type") == types.Type.OBJECT and not self.schema.get("properties"):
             return None
         return self.schema
 
@@ -139,6 +141,8 @@ class _GeminiJsonSchema:
             json_type = schema["type"]
             if json_type in self.TYPE_MAPPING:
                 schema["type"] = self.TYPE_MAPPING[json_type]
+            elif isinstance(json_type, types.Type):
+                schema["type"] = json_type
             else:
                 raise ValueError(f"Unsupported type in JSON Schema: {json_type}")
 
@@ -168,9 +172,9 @@ class _GeminiJsonSchema:
 
         type_ = schema.get("type")
 
-        if type_ == "OBJECT":
+        if type_ == types.Type.OBJECT:
             self._object(schema, refs_stack)
-        elif type_ == "ARRAY":
+        elif type_ == types.Type.ARRAY:
             self._array(schema, refs_stack)
 
     def _map_field_names(self, schema: dict[str, Any]) -> None:

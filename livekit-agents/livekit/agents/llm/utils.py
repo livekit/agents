@@ -113,7 +113,7 @@ class SerializedImage:
     inference_detail: str
 
 
-def serialize_image(image: llm.ImageContent, cache_key: Any) -> SerializedImage:
+def serialize_image(image: llm.ImageContent) -> SerializedImage:
     if isinstance(image.image, str):
         header, b64_data = image.image.split(",", 1)
         encoded_data = base64.b64decode(b64_data)
@@ -130,19 +130,17 @@ def serialize_image(image: llm.ImageContent, cache_key: Any) -> SerializedImage:
             inference_detail=image.inference_detail,
         )
     elif isinstance(image.image, rtc.VideoFrame):
-        if cache_key not in image._cache:
-            opts = utils.images.EncodeOptions()
-            if image.inference_width and image.inference_height:
-                opts.resize_options = utils.images.ResizeOptions(
-                    width=image.inference_width,
-                    height=image.inference_height,
-                    strategy="scale_aspect_fit",
-                )
-            encoded_data = utils.images.encode(image.image, opts)
-            image._cache[cache_key] = encoded_data
+        opts = utils.images.EncodeOptions()
+        if image.inference_width and image.inference_height:
+            opts.resize_options = utils.images.ResizeOptions(
+                width=image.inference_width,
+                height=image.inference_height,
+                strategy="scale_aspect_fit",
+            )
+        encoded_data = utils.images.encode(image.image, opts)
 
         return SerializedImage(
-            data_bytes=image._cache[cache_key],
+            data_bytes=encoded_data,
             media_type="image/jpeg",
             inference_detail=image.inference_detail,
         )
