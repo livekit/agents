@@ -25,16 +25,21 @@ The data stream sink approach allows for more flexible deployment options, as th
 
 ### 2. Direct Agent Worker Integration
 
-Used in the **bithuman** example, this approach:
+Used in the **bithuman** and **simli/integrated_agent_worker.py** example, this approach:
 - Integrates avatar inference directly within the agent worker process
-- Uses a queue-based audio sink to buffer and process audio for avatar generation
-- Embeds the avatar model in the same runtime environment as the agent
+- Uses a queue-based audio sink to buffer audio for avatar generation
+- Embeds the avatar model/API calls in the same runtime environment as the agent
 - Simplifies deployment by reducing the number of separate services
 
-Both integration methods leverage the AvatarRunner SDK to handle the core functionality of:
-- Processing audio input from the agent
-- Generating corresponding visual output
+The direct agent worker integration works for scenarios where:
+- The avatar generation is already an API call and the agent worker has low-latency network connectivity to the avatar server
+- The avatar generation model is lightweight enough to run alongside the agent without significant resource contention
+- Simplified deployment is preferred with fewer separate services to manage
+
+Both integration methods leverage the AvatarRunner SDK to handle the functionality of:
+- Passthrough audio input from the agent
 - Publishing synchronized audio and video streams to the LiveKit room
+- Handling agent interruption and audio playout finished notification
 
 
 ## Examples

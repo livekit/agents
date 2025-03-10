@@ -3,7 +3,3 @@ numpy
 opencv-python
 #av==13.1.0
 av==12.3.0
-
-# For the avatar runner
-matplotlib
-pillow

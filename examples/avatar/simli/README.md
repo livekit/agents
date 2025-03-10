@@ -21,7 +21,7 @@ This example consists of three main components:
    - Receives the audio stream from the agent
    - Sends the audio to Simli's API service
    - Receives synchronized video and audio frames from Simli
-   - Publishes both the audio and video back to the LiveKit room via direct LivekKit (*WebRTC*) tracks
+   - Publishes both the audio and video back to the LiveKit room via direct LiveKit (*WebRTC*) tracks
 
 ## Detailed Call Flow
 
@@ -66,12 +66,18 @@ sequenceDiagram
 - Manages the lifecycle of avatar worker processes
 - Launches and monitors Simli worker subprocesses
 
-### Simli Worker (`simli_worker.py`)
+### Simli Worker (`simli_avatar_runner.py`)
 - Connects to the LiveKit room using the provided token
 - Initializes SimliClient with API key and face ID
 - Processes incoming audio streams and sends them to Simli API
 - Receives generated avatar video and audio from Simli
 - Publishes synchronized media back to the LiveKit room
+
+### Direct Integration Example (`integrated_agent_worker.py`)
+- Combines the agent and avatar in a single process
+- Uses a queue-based audio sink instead of DataStream
+- Publish synchronized media to the LiveKit room from the agent process
+
 
 ## Usage
 
