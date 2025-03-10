@@ -73,7 +73,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels | str = "sonic",
+        model: TTSModels | str = "sonic-2",
         language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
@@ -90,7 +90,7 @@ class TTS(tts.TTS):
         See https://docs.cartesia.ai/reference/web-socket/stream-speech/stream-speech for more details on the the Cartesia API.
 
         Args:
-            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-english".
+            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-2".
             language (str, optional): The language code for synthesis. Defaults to "en".
             encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str | list[float], optional): The voice ID or embedding array.
@@ -169,7 +169,7 @@ class TTS(tts.TTS):
         and emotion. If any parameter is not provided, the existing value will be retained.
 
         Args:
-            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-english".
+            model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-2".
             language (str, optional): The language code for synthesis. Defaults to "en".
             voice (str | list[float], optional): The voice ID or embedding array.
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
