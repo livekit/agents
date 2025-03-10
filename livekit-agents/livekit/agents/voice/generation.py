@@ -273,6 +273,7 @@ async def _execute_tools_task(
             try:
                 function_model = llm_utils.function_arguments_to_pydantic_model(ai_function)
                 parsed_args = function_model.model_validate_json(fnc_call.arguments)
+
             except ValidationError:
                 logger.exception(
                     "LLM called function `{fnc.name}` with invalid arguments",
@@ -431,6 +432,7 @@ def _sanitize_function_output(
         return (
             fnc_call,
             llm.FunctionCallOutput(
+                name=out.name,
                 call_id=out.call_id,
                 output=out.exception.message,
                 is_error=True,
@@ -453,6 +455,7 @@ def _sanitize_function_output(
         return (
             fnc_call,
             llm.FunctionCallOutput(
+                name=out.name,
                 call_id=out.call_id,
                 output="An internal error occurred",
                 is_error=True,
@@ -508,6 +511,7 @@ def _sanitize_function_output(
     return (
         fnc_call,
         llm.FunctionCallOutput(
+            name=out.name,
             call_id=out.call_id,
             output=str(fnc_out),
             is_error=False,

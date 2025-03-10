@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import inspect
 from dataclasses import dataclass
 from typing import (
@@ -12,6 +13,8 @@ from typing import (
     get_type_hints,
 )
 
+from livekit import rtc
+from livekit.agents import llm, utils
 from pydantic import BaseModel, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined
@@ -101,6 +104,47 @@ def is_context_type(ty: type) -> bool:
     is_call_context = ty is CallContext or origin is CallContext
 
     return is_call_context
+
+
+@dataclass
+class SerializedImage:
+    data_bytes: bytes
+    media_type: str
+    inference_detail: str
+
+
+def serialize_image(image: llm.ImageContent) -> SerializedImage:
+    if isinstance(image.image, str):
+        header, b64_data = image.image.split(",", 1)
+        encoded_data = base64.b64decode(b64_data)
+        media_type = header.split(";")[0].split(":")[1]
+        supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+        if media_type not in supported_types:
+            raise ValueError(
+                f"Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+            )
+
+        return SerializedImage(
+            data_bytes=encoded_data,
+            media_type=media_type,
+            inference_detail=image.inference_detail,
+        )
+    elif isinstance(image.image, rtc.VideoFrame):
+        opts = utils.images.EncodeOptions()
+        if image.inference_width and image.inference_height:
+            opts.resize_options = utils.images.ResizeOptions(
+                width=image.inference_width,
+                height=image.inference_height,
+                strategy="scale_aspect_fit",
+            )
+        encoded_data = utils.images.encode(image.image, opts)
+
+        return SerializedImage(
+            data_bytes=encoded_data,
+            media_type="image/jpeg",
+            inference_detail=image.inference_detail,
+        )
+    raise ValueError("Unsupported image type")
 
 
 def build_legacy_openai_schema(
