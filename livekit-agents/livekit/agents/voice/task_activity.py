@@ -701,7 +701,6 @@ class TaskActivity(RecognitionHooks):
         # important: no agent ouput should be used after this point
 
         if len(fnc_outputs) > 0:
-            print("FNC outputs", fnc_outputs)
             if speech_handle.step_index >= self._agent.options.max_fnc_steps:
                 logger.warning(
                     "maximum number of function calls steps reached",
