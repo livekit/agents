@@ -21,6 +21,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Union, AsyncGenerator
+import time
 
 import aiohttp
 import websockets
@@ -379,6 +380,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             logger.debug("Input channel monitor started")
             buffer = ""
+            word_count = 0
+            MIN_WORDS_TO_BUFFER = 5  # Buffer at least this many words before sending
             
             async for item in self._input_ch:
                 logger.debug(f"Received item from input channel: {type(item)}")
@@ -389,14 +392,25 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.debug(f"Flushing buffered text: {buffer}")
                         await self._text_ch.put(buffer)
                         buffer = ""
+                        word_count = 0
+                    # Signal end of input
+                    logger.debug("Signaling end of input")
+                    await self._text_ch.put(None)
                     continue
                 else:
                     # It's a text token, add to buffer
                     buffer += item
-                    # For Resemble, we might want to send after collecting a bit more text
-                    # But for now, we'll send each token as it comes in
-                    await self._text_ch.put(buffer)
-                    buffer = ""
+                    
+                    # Count words in the buffer
+                    if item.strip() and (item.endswith(' ') or item.endswith('\n')):
+                        word_count += 1
+                    
+                    # Send buffer when we have enough words or hit sentence-ending punctuation
+                    if word_count >= MIN_WORDS_TO_BUFFER or any(buffer.rstrip().endswith(p) for p in ['.', '!', '?', ':', ';']):
+                        logger.debug(f"Sending buffered text: {buffer}")
+                        await self._text_ch.put(buffer)
+                        buffer = ""
+                        word_count = 0
                 
             # End of input - send any remaining text in buffer
             if buffer:
@@ -410,12 +424,30 @@ class SynthesizeStream(tts.SynthesizeStream):
                 logger.debug("Signaling end of input")
                 await self._text_ch.put(None)
 
+    def _preprocess_text(self, text: str) -> str:
+        """Preprocess text before sending to Resemble API.
+        
+        This ensures punctuation is properly handled by combining it with adjacent words.
+        """
+        # Skip if text is empty or None
+        if not text or not text.strip():
+            return text
+            
+        # If text is just punctuation, add a space before it to avoid errors
+        if text.strip() in ",.!?;:":
+            return " " + text
+            
+        return text
+
     async def synthesize_text(self, text: str) -> None:
         """Queue text for synthesis."""
         if self._closed:
             raise RuntimeError("Stream is closed")
             
-        await self._text_ch.put(text)
+        # Preprocess text before sending
+        processed_text = self._preprocess_text(text)
+        await self._text_ch.put(processed_text)
+        
         if not self._running:
             # Start processing if not already running
             self._running = True
@@ -496,6 +528,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             
             # Create a lock to prevent multiple coroutines from receiving simultaneously
             self._ws_lock = asyncio.Lock()
+            
+            # Track pending requests to ensure all responses are received
+            pending_requests = set()
             
             # Start a separate task to handle WebSocket messages
             async def _ws_recv_task():
@@ -594,16 +629,30 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 # Complete current segment
                                 emitter.flush()
                                 
+                                # Mark request as completed if request_id is present
+                                if "request_id" in data:
+                                    req_id = data["request_id"]
+                                    if req_id in pending_requests:
+                                        pending_requests.remove(req_id)
+                                        logger.debug(f"Request {req_id} completed, {len(pending_requests)} pending")
+                                
                             # Handle errors
                             elif data.get("type") == "error":
                                 error_msg = data.get("message", "Unknown error")
                                 logger.error(f"Resemble WebSocket API error: {error_msg}")
-                                raise APIStatusError(
-                                    message=f"Resemble API error: {error_msg}",
-                                    status_code=data.get("status_code", 500),
-                                    request_id=str(request_id),
-                                    body=None,
-                                )
+                                
+                                # Don't raise an error for punctuation-only inputs
+                                if "would not generate any audio" in error_msg and data.get("request_id") in pending_requests:
+                                    req_id = data.get("request_id")
+                                    pending_requests.remove(req_id)
+                                    logger.debug(f"Ignoring error for request {req_id}, {len(pending_requests)} pending")
+                                else:
+                                    raise APIStatusError(
+                                        message=f"Resemble API error: {error_msg}",
+                                        status_code=data.get("status_code", 500),
+                                        request_id=str(request_id),
+                                        body=None,
+                                    )
                         except json.JSONDecodeError:
                             logger.error(f"Failed to decode JSON response: {message}")
                 except websockets.exceptions.ConnectionClosed as e:
@@ -634,6 +683,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._text_ch.task_done()
                         continue
                     
+                    # Preprocess text before sending
+                    text = self._preprocess_text(text)
+                    
                     # Prepare request payload
                     logger.info(f"Synthesizing text: {text}")
                     self._mark_started()
@@ -649,6 +701,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "no_audio_header": self._opts.no_audio_header,
                     }
                     
+                    # Add request to pending set
+                    pending_requests.add(self._request_id)
+                    
                     # Send synthesis request
                     async with self._ws_lock:
                         await self._websocket.send(json.dumps(payload))
@@ -658,9 +713,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # Mark the text as processed
                     self._text_ch.task_done()
                 
-                # Wait a bit for final responses
-                logger.info("Waiting for final audio responses")
-                await asyncio.sleep(2)
+                # Wait for all pending requests to complete
+                if pending_requests:
+                    logger.info(f"Waiting for {len(pending_requests)} pending audio responses")
+                    # Wait with a timeout to avoid hanging indefinitely
+                    wait_start = time.time()
+                    while pending_requests and (time.time() - wait_start) < 5.0:
+                        await asyncio.sleep(0.1)
+                    
+                    if pending_requests:
+                        logger.warning(f"Timed out waiting for {len(pending_requests)} audio responses")
                 
             finally:
                 # Cancel WebSocket task
