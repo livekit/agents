@@ -249,16 +249,13 @@ def pydantic_model_to_function_arguments(
     Convert a model’s fields into function args/kwargs.
     Raises TypeError if required params are missing
     """
-
-    from ..voice.events import CallContext
-
     signature = inspect.signature(ai_function)
     type_hints = get_type_hints(ai_function, include_extras=True)
 
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
-        if type_hint is CallContext and call_ctx is not None:
+        if is_context_type(type_hint) and call_ctx is not None:
             context_dict[param_name] = call_ctx
 
     bound = signature.bind(**{**model.model_dump(), **context_dict})
