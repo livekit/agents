@@ -194,7 +194,6 @@ class TTS(tts.TTS):
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize text into speech in one go using Resemble AI's REST API."""
-
     def __init__(
         self,
         *,
@@ -360,6 +359,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._running = False
         self._websocket = None
         
+        # Create a lock to prevent multiple coroutines from accessing the WebSocket simultaneously
+        self._ws_lock = asyncio.Lock()
+
         # Channels for communication between components
         self._text_ch = asyncio.Queue()
         self._audio_ch = asyncio.Queue()
@@ -418,6 +420,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Start processing if not already running
             self._running = True
             self._processing_task = asyncio.create_task(self._run())
+        
+        # Wait for the text to be processed
+        await self._text_ch.join()
+        
+        # Signal end of input - this will close the channel
+        # Note: We don't call flush() here because it's already done in end_input()
+        self.end_input()
 
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
@@ -453,12 +462,15 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _connect_websocket(self) -> websockets.WebSocketClientProtocol:
         """Connect to the Resemble WebSocket API."""
         logger.debug(f"Connecting to Resemble WebSocket API: {RESEMBLE_WEBSOCKET_URL}")
-        return await websockets.connect(
-            RESEMBLE_WEBSOCKET_URL,
-            extra_headers={"Authorization": f"Bearer {self._api_key}"},
-            ping_interval=5,
-            ping_timeout=10,
-        )
+        
+        # Use the lock to ensure only one coroutine can connect at a time
+        async with self._ws_lock:
+            return await websockets.connect(
+                RESEMBLE_WEBSOCKET_URL,
+                extra_headers={"Authorization": f"Bearer {self._api_key}"},
+                ping_interval=5,
+                ping_timeout=10,
+            )
 
     async def _run(self) -> None:
         """Main processing loop for the streaming synthesis."""
@@ -482,11 +494,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                 segment_id=segment_id,
             )
             
+            # Create a lock to prevent multiple coroutines from receiving simultaneously
+            self._ws_lock = asyncio.Lock()
+            
             # Start a separate task to handle WebSocket messages
             async def _ws_recv_task():
                 try:
                     while not self._closed and self._websocket:
-                        message = await self._websocket.recv()
+                        # Use a lock to ensure only one coroutine can call recv() at a time
+                        async with self._ws_lock:
+                            message = await self._websocket.recv()
                         
                         # Handle binary response (when binary_response=true)
                         if isinstance(message, bytes):
@@ -633,7 +650,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     }
                     
                     # Send synthesis request
-                    await self._websocket.send(json.dumps(payload))
+                    async with self._ws_lock:
+                        await self._websocket.send(json.dumps(payload))
                     logger.debug(f"Sent request {self._request_id}")
                     self._request_id += 1
                     
