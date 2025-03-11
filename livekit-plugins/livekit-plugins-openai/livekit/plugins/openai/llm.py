@@ -561,7 +561,7 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx or [],
             conn_options=conn_options,
-            **extra,
+            extra_kwargs=extra,
         )
 
 
@@ -575,7 +575,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         fnc_ctx: list[AIFunction],
         conn_options: APIConnectOptions,
-        extra_kwargs: dict[str, Any] = {},
+        extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._model = model

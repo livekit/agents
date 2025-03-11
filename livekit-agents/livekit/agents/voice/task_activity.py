@@ -6,7 +6,9 @@ import heapq
 import time
 from typing import (
     TYPE_CHECKING,
+    Any,
     AsyncIterable,
+    Coroutine,
 )
 
 from livekit import rtc
@@ -49,17 +51,6 @@ if TYPE_CHECKING:
 
 _TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
-
-
-# https://github.com/python/cpython/pull/31837
-# def create_task() -> asyncio.Task:
-#     tk = _TaskActivityContextVar.set(self)
-#     from .task import _authorize_inline_task
-
-#     task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
-#     _authorize_inline_task(task)
-#     _TaskActivityContextVar.reset(tk)
-#     return task
 
 
 # NOTE: TaskActivity isn't exposed to the public API
@@ -112,6 +103,28 @@ class TaskActivity(RecognitionHooks):
     def current_speech(self) -> SpeechHandle | None:
         return self._current_speech
 
+    def _create_task(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        *,
+        owned_speech_handle: SpeechHandle | None = None,
+        name: str | None = None,
+    ) -> asyncio.Task:
+        # https://github.com/python/cpython/pull/31837 alternative impl
+        tk = _TaskActivityContextVar.set(self)
+
+        task = asyncio.create_task(coro, name=name)
+        self._tasks.append(task)
+        task.add_done_callback(lambda _: self._tasks.remove(task))
+
+        if owned_speech_handle is not None:
+            # make sure to finish playout in case something goes wrong
+            # the tasks should normally do this before their function calls
+            task.add_done_callback(lambda _: owned_speech_handle._mark_playout_done())
+
+        _TaskActivityContextVar.reset(tk)
+        return task
+
     # TODO(theomonnom): Shoukd pause and resume call on_enter and on_exit? probably not
     async def pause(self) -> None:
         pass
@@ -120,6 +133,8 @@ class TaskActivity(RecognitionHooks):
         pass
 
     async def start(self) -> None:
+        from .agent_task import _authorize_inline_task
+
         async with self._lock:
             self._agent_task._activity = self
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
@@ -181,28 +196,25 @@ class TaskActivity(RecognitionHooks):
 
             self._started = True
 
-            # on_enter callback
-            tk = _TaskActivityContextVar.set(self)
-            from .agent_task import _authorize_inline_task
+            task = self._create_task(
+                self._agent_task.on_enter(),
+                name="AgentTask_on_enter",
+            )
 
-            on_enter_task = asyncio.create_task(self._agent_task.on_enter(), name="_task_on_enter")
-            _authorize_inline_task(on_enter_task)
-            await on_enter_task
-            _TaskActivityContextVar.reset(tk)
+            _authorize_inline_task(task)
 
     async def drain(self) -> None:
+        from .agent_task import _authorize_inline_task
+
         async with self._lock:
             if self._draining:
                 return
 
-            # execute on_exit
-            tk = _TaskActivityContextVar.set(self)
-            from .agent_task import _authorize_inline_task
-
-            on_exit_task = asyncio.create_task(self._agent_task.on_exit(), name="_task_on_exit")
-            _authorize_inline_task(on_exit_task)
-            await on_exit_task
-            _TaskActivityContextVar.reset(tk)
+            task = self._create_task(
+                self._agent_task.on_exit(),
+                name="AgentTask_on_exit",
+            )
+            _authorize_inline_task(task)
 
             self._speech_q_changed.set()  # TODO(theomonnom): we shouldn't need this here
             self._draining = True
@@ -252,18 +264,16 @@ class TaskActivity(RecognitionHooks):
             else self._agent.options.allow_interruptions
         )
 
-        task = asyncio.create_task(
+        self._create_task(
             self._tts_task(
                 speech_handle=handle,
                 text=text,
                 audio=audio or None,
                 add_to_chat_ctx=add_to_chat_ctx,
             ),
-            name="_tts_task",
+            owned_speech_handle=handle,
+            name="TaskActivity.tts_say",
         )
-        self._tasks.append(task)
-        task.add_done_callback(lambda _: handle._mark_playout_done())
-        task.add_done_callback(lambda _: self._tasks.remove(task))
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -288,20 +298,18 @@ class TaskActivity(RecognitionHooks):
         )
 
         if isinstance(self.llm, llm.RealtimeModel):
-            task = asyncio.create_task(
+            self._create_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
                     user_input=user_input or None,
                     instructions=instructions or None,
                 ),
-                name="_realtime_reply_task",
+                owned_speech_handle=handle,
+                name="TaskActivity.realtime_reply",
             )
-            self._tasks.append(task)
-            task.add_done_callback(lambda _: handle._mark_playout_done())
-            task.add_done_callback(lambda _: self._tasks.remove(task))
 
         elif isinstance(self.llm, llm.LLM):
-            task = asyncio.create_task(
+            self._create_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=self._agent_task._chat_ctx,
@@ -309,11 +317,9 @@ class TaskActivity(RecognitionHooks):
                     user_input=user_input or None,
                     instructions=instructions or None,
                 ),
-                name="_pipeline_reply_task",
+                owned_speech_handle=handle,
+                name="TaskActivity.pipeline_reply",
             )
-            self._tasks.append(task)
-            task.add_done_callback(lambda _: handle._mark_playout_done())
-            task.add_done_callback(lambda _: self._tasks.remove(task))
 
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
@@ -394,15 +400,14 @@ class TaskActivity(RecognitionHooks):
             return
 
         handle = SpeechHandle.create(allow_interruptions=self._agent.options.allow_interruptions)
-        task = asyncio.create_task(
+        self._create_task(
             self._realtime_generation_task(
                 speech_handle=handle,
                 generation_ev=ev,
             ),
+            owned_speech_handle=handle,
+            name="TaskActivity.realtime_generation",
         )
-        self._tasks.append(task)
-        task.add_done_callback(lambda _: handle._mark_playout_done())
-        task.add_done_callback(lambda _: self._tasks.remove(task))
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     # region recognition hooks
@@ -650,7 +655,6 @@ class TaskActivity(RecognitionHooks):
             fnc_ctx=fnc_ctx,
             function_stream=llm_gen_data.function_ch,
         )
-        tasks.append(exe_task)
 
         await speech_handle.wait_if_not_interrupted([*tasks])
 
@@ -663,7 +667,7 @@ class TaskActivity(RecognitionHooks):
                 self._agent._update_agent_state(AgentState.LISTENING)
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*tasks)
+            await utils.aio.cancel_and_wait(*tasks, exe_task)
 
             # if the audio playout was enabled, clear the buffer
             if audio_output is not None:
@@ -691,6 +695,11 @@ class TaskActivity(RecognitionHooks):
 
         log_event("playout completed", speech_id=speech_handle.id)
 
+        speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution
+        await exe_task
+
+        # important: no agent ouput should be used after this point
+
         if len(fnc_outputs) > 0:
             if speech_handle.step_index >= self._agent.options.max_fnc_steps:
                 logger.warning(
@@ -707,18 +716,20 @@ class TaskActivity(RecognitionHooks):
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             new_agent_task: AgentTask | None = None
             ignore_task_switch = False
-            for fnc_call, fnc_output, agent_task in fnc_outputs:
-                if fnc_output is not None:
-                    new_calls.append(fnc_call)
-                    new_fnc_outputs.append(fnc_output)
+            for py_out in fnc_outputs:
+                sanitized_out = py_out.sanitize()
 
-                if new_agent_task is not None and agent_task is not None:
+                if sanitized_out.fnc_call_out is not None:
+                    new_calls.append(sanitized_out.fnc_call)
+                    new_fnc_outputs.append(sanitized_out.fnc_call_out)
+
+                if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
-                        "expected to receive only one new task from the tool executions",
+                        "expected to receive only one AgentTask from the tool executions",
                     )
                     ignore_task_switch = True
 
-                new_agent_task = agent_task
+                new_agent_task = sanitized_out.agent_task
 
             if len(new_fnc_outputs) > 0:
                 chat_ctx.items.extend(new_calls)
@@ -728,23 +739,19 @@ class TaskActivity(RecognitionHooks):
                     allow_interruptions=self._agent.options.allow_interruptions,
                     step_index=speech_handle.step_index + 1,
                 )
-                task = asyncio.create_task(
+                self._create_task(
                     self._pipeline_reply_task(
                         speech_handle=handle,
                         chat_ctx=chat_ctx,
                         fnc_ctx=fnc_ctx,
                     ),
-                    name="_pipeline_reply_task",
+                    owned_speech_handle=handle,
+                    name="TaskActivity.pipeline_reply",
                 )
-                self._tasks.append(task)
-                task.add_done_callback(lambda _: handle._mark_playout_done())
-                task.add_done_callback(lambda _: self._tasks.remove(task))
                 self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
             if not ignore_task_switch and new_agent_task is not None:
                 self._agent.update_task(new_agent_task)
-
-        log_event("playout completed", speech_id=speech_handle.id)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -849,9 +856,9 @@ class TaskActivity(RecognitionHooks):
 
         message_outputs: list[tuple[_TextOutput | None, _AudioOutput | None]] = []
         tasks = [
-            asyncio.create_task(
+            self._create_task(
                 _read_messages(message_outputs),
-                name="_realtime_generation_task.read_messages",
+                name="TaskActivity.realtime_generation.read_messages",
             )
         ]
 
@@ -861,7 +868,6 @@ class TaskActivity(RecognitionHooks):
             fnc_ctx=self._agent_task._fnc_ctx,
             function_stream=generation_ev.function_stream,
         )
-        tasks.append(exe_task)
 
         await speech_handle.wait_if_not_interrupted([*tasks])
 
@@ -873,7 +879,7 @@ class TaskActivity(RecognitionHooks):
                 self._agent._update_agent_state(AgentState.LISTENING)
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*tasks)
+            await utils.aio.cancel_and_wait(*tasks, exe_task)
 
             if audio_output is not None:
                 audio_output.clear_buffer()
@@ -889,21 +895,29 @@ class TaskActivity(RecognitionHooks):
             # TODO(theomonnom): truncate message (+ OAI serverside mesage)
             return
 
+        speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution
+        await exe_task
+
+        # important: no agent ouput should be used after this point
+
         if len(fnc_outputs) > 0:
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             new_agent_task: AgentTask | None = None
             ignore_task_switch = False
-            for _, fnc_output, agent_task in fnc_outputs:
-                if fnc_output is not None:
-                    new_fnc_outputs.append(fnc_output)
 
-                if new_agent_task is not None and agent_task is not None:
+            for py_out in fnc_outputs:
+                sanitized_out = py_out.sanitize()
+
+                if sanitized_out.fnc_call_out is not None:
+                    new_fnc_outputs.append(sanitized_out.fnc_call_out)
+
+                if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
-                        "expected to receive only one new task from the tool executions",
+                        "expected to receive only one AgentTask from the tool executions",
                     )
                     ignore_task_switch = True
 
-                new_agent_task = agent_task
+                new_agent_task = sanitized_out.agent_task
 
             if len(new_fnc_outputs) > 0:
                 chat_ctx = self._rt_session.chat_ctx.copy()
@@ -927,5 +941,3 @@ class TaskActivity(RecognitionHooks):
 
             if not ignore_task_switch and new_agent_task is not None:
                 self._agent.update_task(new_agent_task)
-
-        log_event("playout completed", speech_id=speech_handle.id)
