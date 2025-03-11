@@ -52,7 +52,7 @@ class SpeechHandle:
 
     def interrupt(self) -> None:
         if not self._allow_interruptions:
-            raise ValueError("This generation handle does not allow interruptions")
+            raise RuntimeError("This generation handle does not allow interruptions")
 
         if self.done():
             return

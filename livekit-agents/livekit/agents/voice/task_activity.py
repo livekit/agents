@@ -71,6 +71,17 @@ class TaskActivity(RecognitionHooks):
         self._main_atask: asyncio.Task | None = None
         self._tasks: list[asyncio.Task] = []
 
+        from .. import llm as large_language_model
+
+        if (
+            isinstance(self.llm, large_language_model.RealtimeModel)
+            and self.llm.capabilities.turn_detection
+            and not self.allow_interruptions
+        ):
+            raise ValueError(
+                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
+            )
+
     @property
     def draining(self) -> bool:
         return self._draining
@@ -98,6 +109,14 @@ class TaskActivity(RecognitionHooks):
     @property
     def vad(self) -> vad.VAD | None:
         return self._agent_task.vad or self._agent.vad
+
+    @property
+    def allow_interruptions(self) -> bool:
+        return (
+            self._agent_task.allow_interruptions
+            if is_given(self._agent_task.allow_interruptions)
+            else self._agent.options.allow_interruptions
+        )
 
     @property
     def current_speech(self) -> SpeechHandle | None:
@@ -137,16 +156,6 @@ class TaskActivity(RecognitionHooks):
 
         async with self._lock:
             self._agent_task._activity = self
-            self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
-            if self.stt is not None:
-                self._audio_recognition = AudioRecognition(
-                    hooks=self,
-                    stt=self._agent_task.stt_node,
-                    vad=self.vad,
-                    turn_detector=self.turn_detector,
-                    min_endpointing_delay=self._agent.options.min_endpointing_delay,
-                )
-                self._audio_recognition.start()
 
             if isinstance(self.llm, llm.RealtimeModel):
                 self._rt_session = self.llm.session()
@@ -195,6 +204,15 @@ class TaskActivity(RecognitionHooks):
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)
 
+            self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
+            self._audio_recognition = AudioRecognition(
+                hooks=self,
+                stt=self._agent_task.stt_node,
+                vad=self.vad,
+                turn_detector=self.turn_detector,
+                min_endpointing_delay=self._agent.options.min_endpointing_delay,
+            )
+            self._audio_recognition.start()
             self._started = True
 
             task = self._create_task(
@@ -261,12 +279,25 @@ class TaskActivity(RecognitionHooks):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if not is_given(audio) and not self.tts:
-            raise ValueError("trying to generate speech from text without a TTS model")
+            raise RuntimeError("trying to generate speech from text without a TTS model")
+
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.turn_detection
+            and allow_interruptions is False
+        ):
+            logger.warning(
+                (
+                    "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "
+                    "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
+                )
+            )
+            allow_interruptions = NOT_GIVEN
 
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
-            else self._agent.options.allow_interruptions
+            else self.allow_interruptions
         )
 
         self._create_task(
@@ -290,7 +321,20 @@ class TaskActivity(RecognitionHooks):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._current_speech is not None and not self._current_speech.interrupted:
-            raise ValueError("another reply is already in progress")
+            raise RuntimeError("another reply is already in progress")
+
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.turn_detection
+            and allow_interruptions is False
+        ):
+            logger.warning(
+                (
+                    "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "
+                    "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
+                )
+            )
+            allow_interruptions = NOT_GIVEN
 
         log_event(
             "generate_reply", user_input=user_input or None, instructions=instructions or None
@@ -299,7 +343,7 @@ class TaskActivity(RecognitionHooks):
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
-            else self._agent.options.allow_interruptions
+            else self.allow_interruptions
         )
 
         if isinstance(self.llm, llm.RealtimeModel):
@@ -377,10 +421,14 @@ class TaskActivity(RecognitionHooks):
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
-        if self._current_speech and not self._current_speech.allow_interruptions:
-            logger.warning("input_speech_started, but current speech is not interruptable")
-            return
-        self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
+        # self.interrupt() isn't going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.
+        # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
+        try:
+            self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
+        except RuntimeError:
+            logger.exception(
+                "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"
+            )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         log_event("input_speech_stopped")
@@ -407,7 +455,7 @@ class TaskActivity(RecognitionHooks):
             # user_initiated generations are directly handled inside _realtime_reply_task
             return
 
-        handle = SpeechHandle.create(allow_interruptions=self._agent.options.allow_interruptions)
+        handle = SpeechHandle.create(allow_interruptions=self.allow_interruptions)
         self._create_task(
             self._realtime_generation_task(
                 speech_handle=handle,
@@ -593,9 +641,7 @@ class TaskActivity(RecognitionHooks):
         _SpeechHandleContextVar.set(speech_handle)
 
         log_event(
-            "generation started",
-            speech_id=speech_handle.id,
-            step_index=speech_handle.step_index,
+            "generation started", speech_id=speech_handle.id, step_index=speech_handle.step_index
         )
 
         audio_output = self._agent.output.audio
@@ -748,7 +794,7 @@ class TaskActivity(RecognitionHooks):
                 chat_ctx.items.extend(new_fnc_outputs)
 
                 handle = SpeechHandle.create(
-                    allow_interruptions=self._agent.options.allow_interruptions,
+                    allow_interruptions=self.allow_interruptions,
                     step_index=speech_handle.step_index + 1,
                 )
                 self._create_task(

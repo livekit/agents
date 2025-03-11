@@ -34,25 +34,8 @@ class AgentTask:
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        if tts and not tts.capabilities.streaming:
-            from .. import tts as text_to_speech
-
-            tts = text_to_speech.StreamAdapter(
-                tts=tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
-            )
-
-        if stt and not stt.capabilities.streaming:
-            from .. import stt as speech_to_text
-
-            if not vad:
-                raise ValueError("VAD is required when streaming is not supported by the STT")
-
-            stt = speech_to_text.StreamAdapter(
-                stt=stt,
-                vad=vad,
-            )
-
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
         self._fnc_ctx = FunctionContext(ai_functions + find_ai_functions(self))
@@ -61,6 +44,7 @@ class AgentTask:
         self._llm = llm
         self._tts = tts
         self._vad = vad
+        self._allow_interruptions = allow_interruptions
         self._activity: TaskActivity | None = None
 
     @property
@@ -94,6 +78,10 @@ class AgentTask:
     @property
     def vad(self) -> NotGivenOr[vad.VAD | None]:
         return self._vad
+
+    @property
+    def allow_interruptions(self) -> NotGivenOr[bool]:
+        return self._allow_interruptions
 
     @property
     def agent(self) -> VoiceAgent:
@@ -130,7 +118,21 @@ class AgentTask:
     ) -> Optional[AsyncIterable[stt.SpeechEvent]]:
         activity = self.__get_activity_or_raise()
         assert activity.stt is not None, "stt_node called but no STT node is available"
-        async with activity.stt.stream() as stream:
+
+        wrapped_stt = activity.stt
+
+        if not activity.stt.capabilities.streaming:
+            if not activity.vad:
+                raise RuntimeError(
+                    (
+                        f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"
+                        "Or manually wrap your STT in a stt.StreamAdapter"
+                    )
+                )
+
+            wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+
+        async with wrapped_stt.stream() as stream:
 
             @utils.log_exceptions(logger=logger)
             async def _forward_input():
@@ -170,7 +172,14 @@ class AgentTask:
         activity = self.__get_activity_or_raise()
         assert activity.tts is not None, "tts_node called but no TTS node is available"
 
-        async with activity.tts.stream() as stream:
+        wrapped_tts = activity.tts
+
+        if not activity.tts.capabilities.streaming:
+            wrapped_tts = tts.StreamAdapter(
+                tts=wrapped_tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+            )
+
+        async with wrapped_tts.stream() as stream:
 
             async def _forward_input():
                 async for chunk in text:

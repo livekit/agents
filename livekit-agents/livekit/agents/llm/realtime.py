@@ -45,6 +45,7 @@ class ErrorEvent:
 @dataclass
 class RealtimeCapabilities:
     message_truncation: bool
+    turn_detection: bool
 
 
 class RealtimeError(Exception):
@@ -95,11 +96,7 @@ class InputTranscriptionFailed:
     """error message"""
 
 
-class RealtimeSession(
-    ABC,
-    rtc.EventEmitter[Union[EventTypes, TEvent]],
-    Generic[TEvent],
-):
+class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__()
         self._realtime_model = realtime_model

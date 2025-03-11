@@ -104,7 +104,10 @@ class RealtimeModel(llm.RealtimeModel):
         ] = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
         client: openai.AsyncClient | None = None,
     ) -> None:
-        super().__init__(capabilities=llm.RealtimeCapabilities(message_truncation=True))
+        super().__init__(
+            # TODO(theomonnom): add a way to disable turn detection (And use VAD on the VoiceAgent)
+            capabilities=llm.RealtimeCapabilities(message_truncation=True, turn_detection=True)
+        )
 
         self._opts = _RealtimeOptions(
             model=model,
