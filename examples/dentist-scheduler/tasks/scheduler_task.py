@@ -19,8 +19,9 @@ class Scheduler(AgentTask):
     def __init__(self, *, service: str) -> None:
         super().__init__(
             instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
-                            proceeding. Always confirm details with the user. Do not be verbose.""",
-            tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600"),
+                            proceeding. Always confirm details with the user. Do not be verbose. Convert all times given by the user to ISO 8601 format in UTC timezone,
+                            assuming the user is in America/Los Angeles, and do not mention the conversion to the user.""",
+            tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600")
         )
         self._service_requested = service
 
@@ -107,7 +108,7 @@ class Scheduler(AgentTask):
         Args:
             email: The user's email, in the format local-part@domain
             description: Reason for scheduling appointment, either "routine-checkup" or "tooth-extraction"
-            date: Date and time for the appointment, convert it to ISO 8601 format in UTC timezone.
+            date: Date and time for the appointment
         """
         self.agent.userdata["userinfo"].email = email
         response = await self.send_request(
@@ -128,6 +129,7 @@ class Scheduler(AgentTask):
             await self.agent.generate_reply(
                 instructions="Inform the user that the date and time specified are unavailable, and ask the user to choose another date."
             )
+    
 
     @ai_function()
     async def cancel(self, email: str) -> None:
@@ -164,7 +166,7 @@ class Scheduler(AgentTask):
         Reschedules an existing appointment.
         Args:
             email: The user's email formatted local-part@domain
-            new_time: New time for the appointment to be rescheduled to in ISO 8601 format in UTC timezone
+            new_time: New time for the appointment to be rescheduled to
         """
         self.agent.userdata["userinfo"].email = email
         response = await self.send_request(request=APIRequests.GET_APPTS)
@@ -187,6 +189,8 @@ class Scheduler(AgentTask):
                     instructions="Inform the user that they are all set."
                 )
         else:
+            if self.agent.current_speech:
+                    await self.agent.current_speech.wait_for_playout()
             await self.agent.generate_reply(
                 instructions="Inform the user that there are no appointments under their name and ask to create one."
             )

@@ -13,8 +13,7 @@ class Receptionist(AgentTask):
 
     async def on_enter(self) -> None:
         await self.agent.generate_reply(
-            instructions=f"""Welcome the user to the LiveKit Dental Office and ask how you can assist. The user's name is {self.agent.userdata["userinfo"].name}. 
-            If the user wants to manage an appointment or leave a message and their name is not given, ask for it before proceeding."""
+            instructions=f"""Welcome the user to the LiveKit Dental Office and ask how you can assist. The user's name is {self.agent.userdata["userinfo"].name}."""
         )
 
     @ai_function()
@@ -36,7 +35,7 @@ class Receptionist(AgentTask):
     @ai_function()
     async def manage_appointment(self, name: str, service: str):
         """
-        This function allows for users to schedule, reschedule, or cancel an appointment.
+        This function allows for users to schedule, reschedule, or cancel an appointment by transferring to the scheduler.
         The user's name will be confirmed with the user by spelling it out.
         Args:
             name: The user's name
@@ -50,8 +49,8 @@ class Receptionist(AgentTask):
     @ai_function()
     async def leave_message(self, name: str):
         """
-        This function allows for users to leave a message for the office.
-        Confirm the user's name by spelling it out to the user before proceeding.
+        This function allows users to leave a message for the office by transferring to the messenger.
+        The user's name will be confirmed with the user by spelling it out.
 
         Args:
             name: The user's name

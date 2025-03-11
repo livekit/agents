@@ -32,7 +32,7 @@ class Messenger(AgentTask):
         super().__init__(
             instructions="""You are Shimmer, an assistant taking messages for the LiveKit dental office.
             Be sure to confirm details such as phone numbers with the user. Be brief and to the point.""",
-            tts=cartesia.TTS(voice="156fb8d2-335b-4950-9cb3-a2d33befec77"),
+            tts=cartesia.TTS(voice="156fb8d2-335b-4950-9cb3-a2d33befec77")
         )
 
     async def on_enter(self) -> None:
@@ -45,11 +45,11 @@ class Messenger(AgentTask):
 
     @ai_function()
     async def record_message(self, phone_number: str, message: str) -> None:
-        """Records the user's message to be left for the office and the user's phone number, repeat their message to confirm.
+        """Records the user's message to be left for the office and the user's phone number.
 
         Args:
             phone_number: The user's phone number
-            message: The user's message to be left for the office
+            message: The user's message to be left for the office 
         """
         self.agent.userdata["userinfo"].phone = phone_number
         self.agent.userdata["userinfo"].message = message

@@ -2,7 +2,6 @@ import asyncio
 import logging
 import wave
 
-
 from dotenv import load_dotenv
 from livekit.agents import (
     AutoSubscribe,
