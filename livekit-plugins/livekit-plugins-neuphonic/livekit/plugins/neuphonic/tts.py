@@ -319,12 +319,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 request_data[request_id]["recv"]
                 .lower()
                 .replace(" ", "")
+                .replace("\n", "")
                 .replace("<stop>", "")
             )
             sent_text = (
                 request_data[request_id]["sent"]
                 .lower()
                 .replace(" ", "")
+                .replace("\n", "")
                 .replace("<stop>", "")
             )
 

@@ -20,6 +20,7 @@ from livekit.plugins import (
     openai,
     playai,
     rime,
+    neuphonic
 )
 
 from .conftest import TEST_CONNECT_OPTIONS
@@ -54,6 +55,7 @@ SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
     pytest.param(lambda: rime.TTS(), id="rime"),
+    pytest.param(lambda: neuphonic.TTS(), id="neuphonic"),
 ]
 
 
@@ -103,6 +105,7 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
         ),
         id="aws.stream",
     ),
+    pytest.param(lambda: neuphonic.TTS(), id="neuphonic"),
 ]
 
 
