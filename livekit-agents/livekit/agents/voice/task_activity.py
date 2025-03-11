@@ -249,7 +249,7 @@ class TaskActivity(RecognitionHooks):
 
     def say(
         self,
-        text: str,
+        text: str | AsyncIterable[str],
         *,
         audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -493,7 +493,7 @@ class TaskActivity(RecognitionHooks):
     async def _tts_task(
         self,
         speech_handle: SpeechHandle,
-        text: str,
+        text: str | AsyncIterable[str],
         audio: AsyncIterable[rtc.AudioFrame] | None,
         add_to_chat_ctx: bool,
     ) -> None:
@@ -509,30 +509,34 @@ class TaskActivity(RecognitionHooks):
         if speech_handle.interrupted:
             return
 
-        async def _read_text() -> AsyncIterable[str]:
-            yield text
+        text_source: AsyncIterable[str] | None = None
+        audio_source: AsyncIterable[str] | None = None
+
+        if isinstance(text, AsyncIterable):
+            text_source, audio_source = utils.aio.itertools.tee(text, 2)
+        elif isinstance(text, str):
+
+            async def _read_text() -> AsyncIterable[str]:
+                yield text
+
+            text_source = _read_text()
+            audio_source = _read_text()
 
         tasks = []
-        if tr_output is not None:
-            tr_source = _read_text()
-            tr_node = self._agent_task.transcription_node(tr_source)
-            if tr_node is not None:
-                tr_source = tr_node
-            forward_text, text_out = perform_text_forwarding(
-                text_output=tr_output, source=tr_source
+        tr_node = self._agent_task.transcription_node(text_source)
+        forward_text, text_out = perform_text_forwarding(text_output=tr_output, source=tr_node)
+        tasks.append(forward_text)
+        if audio_output is None:
+            # update the agent state based on text if no audio output
+            text_out.first_text_fut.add_done_callback(
+                lambda _: self._agent._update_agent_state(AgentState.SPEAKING)
             )
-            tasks.append(forward_text)
-            if audio_output is None:
-                # update the agent state based on text if no audio output
-                text_out.first_text_fut.add_done_callback(
-                    lambda _: self._agent._update_agent_state(AgentState.SPEAKING)
-                )
 
         if audio_output is not None:
             if audio is None:
                 # generate audio using TTS
                 tts_task, tts_gen_data = perform_tts_inference(
-                    node=self._agent_task.tts_node, input=_read_text()
+                    node=self._agent_task.tts_node, input=audio_source
                 )
                 tasks.append(tts_task)
 
@@ -566,7 +570,7 @@ class TaskActivity(RecognitionHooks):
                 await audio_output.wait_for_playout()
 
         if add_to_chat_ctx:
-            self._agent_task._chat_ctx.add_message(role="assistant", content=text)
+            self._agent_task._chat_ctx.add_message(role="assistant", content=text_out.text)
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(

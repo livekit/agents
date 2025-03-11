@@ -275,7 +275,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def say(
         self,
-        text: str,
+        text: str | AsyncIterable[str],
         *,
         audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
