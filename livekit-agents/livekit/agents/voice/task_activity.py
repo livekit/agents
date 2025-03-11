@@ -932,7 +932,7 @@ class TaskActivity(RecognitionHooks):
 
                 self._rt_session.interrupt()
                 try:
-                    await self._rt_session.generate_reply()
+                    await self.generate_reply()
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to generate the function calls results",
