@@ -20,8 +20,8 @@ class Scheduler(AgentTask):
         super().__init__(
             instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
                             proceeding. Always confirm details with the user. Do not be verbose. Convert all times given by the user to ISO 8601 format in UTC timezone,
-                            assuming the user is in America/Los Angeles, and do not mention the conversion to the user.""",
-            tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600")
+                            assuming the user is in America/Los Angeles, and do not mention the conversion or the UTC timezone to the user. Avoiding repeating words.""",
+            tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600"),
         )
         self._service_requested = service
 
@@ -119,7 +119,7 @@ class Scheduler(AgentTask):
             await self.agent.generate_reply(
                 instructions="Tell the user you were able to schedule the appointment successfully."
             )
-        if (
+        elif (
             response["status"] == "error"
             and response["error"]["message"]
             == "User either already has booking at this time or is not available"
@@ -129,7 +129,6 @@ class Scheduler(AgentTask):
             await self.agent.generate_reply(
                 instructions="Inform the user that the date and time specified are unavailable, and ask the user to choose another date."
             )
-    
 
     @ai_function()
     async def cancel(self, email: str) -> None:
@@ -141,11 +140,6 @@ class Scheduler(AgentTask):
         self.agent.userdata["userinfo"].email = email
         response = await self.send_request(request=APIRequests.GET_APPTS)
         if response["data"]:
-            if self.agent.current_speech:
-                await self.agent.current_speech.wait_for_playout()
-            await self.agent.generate_reply(
-                instructions=f"Confirm with the user that they'd like to cancel the appointment found on {response["data"][0]["start"]} for {response["data"][0]["title"]}."
-            )
             cancel_response = await self.send_request(
                 request=APIRequests.CANCEL, uid=response["data"][0]["uid"]
             )
@@ -163,34 +157,40 @@ class Scheduler(AgentTask):
     @ai_function()
     async def reschedule(self, email: str, new_time: str) -> None:
         """
-        Reschedules an existing appointment.
+        Reschedules an appointment to a new date specified by the user
         Args:
             email: The user's email formatted local-part@domain
-            new_time: New time for the appointment to be rescheduled to
+            new_time: the new time and day for the appointment to be rescheduled to
         """
         self.agent.userdata["userinfo"].email = email
         response = await self.send_request(request=APIRequests.GET_APPTS)
-        if response["data"]:
-            if self.agent.current_speech:
-                await self.agent.current_speech.wait_for_playout()
-            await self.agent.generate_reply(
-                instructions=f"Confirm with the user that you are rescheduling the appointment found on {response["data"][0]["start"]} for {response["data"][0]["title"]} to {new_time}."
-            )
-
+        if response["data"] is not None:
             reschedule_response = await self.send_request(
                 request=APIRequests.RESCHEDULE,
                 uid=response["data"][0]["uid"],
                 time=new_time,
             )
-            if reschedule_response["status"] == "success":
+            if (
+                reschedule_response["status"] == "error"
+                and reschedule_response["error"]["message"]
+                == "User either already has booking at this time or is not available"
+            ):
                 if self.agent.current_speech:
                     await self.agent.current_speech.wait_for_playout()
                 await self.agent.generate_reply(
-                    instructions="Inform the user that they are all set."
+                    instructions="Tell the user that the office is unavailable at the time specified. You were unable to reschedule, so ask the user to choose another time to try again."
                 )
+
+            elif reschedule_response["status"] == "success":
+                if self.agent.current_speech:
+                    await self.agent.current_speech.wait_for_playout()
+                await self.agent.generate_reply(
+                    instructions="Inform the user that they are all set and confirm that the appointment was moved."
+                )
+
         else:
             if self.agent.current_speech:
-                    await self.agent.current_speech.wait_for_playout()
+                await self.agent.current_speech.wait_for_playout()
             await self.agent.generate_reply(
                 instructions="Inform the user that there are no appointments under their name and ask to create one."
             )
