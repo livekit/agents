@@ -20,7 +20,7 @@ async def entrypoint(job: JobContext):
 
     tts = neuphonic.TTS(
         # voice_id=<uuid>,
-        sample_rate = SAMPLE_RATE  # defaults to 22050
+        sample_rate=SAMPLE_RATE  # defaults to 22050
     )
 
     source = rtc.AudioSource(SAMPLE_RATE, NUM_CHANNELS)
