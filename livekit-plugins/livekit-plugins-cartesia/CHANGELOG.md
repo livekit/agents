@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.4.10
+
+### Patch Changes
+
+- Adding new model literals, updating default to sonic-2 - [#1627](https://github.com/livekit/agents/pull/1627) ([@longcw](https://github.com/longcw))
+
 ## 0.4.9
 
 ### Patch Changes
