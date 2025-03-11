@@ -784,6 +784,24 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         finally:
             SpeechDataContextVar.reset(tk)
 
+    def _commit_user_question(self) -> None:
+
+        speech_handle = self._playing_speech
+        synthesis_handle = speech_handle.synthesis_handle
+        play_handle = synthesis_handle.play()
+        join_fut = play_handle.join()
+        user_question = speech_handle.user_question
+        is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
+            speech_handle.source.function_calls
+        )
+
+        user_msg = ChatMessage.create(text=user_question, role="user")
+        self._chat_ctx.messages.append(user_msg)
+        self.emit("user_speech_committed", user_msg)
+
+        self._transcribed_text = self._transcribed_text[len(user_question) :]
+        speech_handle.mark_user_committed()
+
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
         await self._agent_publication.wait_for_subscription()
 
@@ -968,9 +986,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             assert isinstance(speech_handle.source, LLMStream)
-            assert not user_question or speech_handle.user_committed, (
-                "user speech should have been committed before using tools"
-            )
+            assert (
+                not user_question or speech_handle.user_committed
+            ), "user speech should have been committed before using tools"
 
             llm_stream = speech_handle.source
 
@@ -1096,9 +1114,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
-        assert self._agent_output is not None, (
-            "agent output should be initialized when ready"
-        )
+        assert (
+            self._agent_output is not None
+        ), "agent output should be initialized when ready"
 
         tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
