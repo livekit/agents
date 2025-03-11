@@ -1,5 +1,5 @@
-# Understanding AgentTask
-AgentTask allows you to establish a coherent workflow and execute actions appropriately.
+# AgentTask
+[AgentTask](https://github.com/yepher/livekit_info/blob/main/API_GUIDE.md#agenttask-class) allows you to establish a coherent workflow and execute actions appropriately. 
 
 ## Building the Receptionist 
 The Receptionist handles simple inquiries about the office and transfers you to either the Scheduler or Messenger upon request. 

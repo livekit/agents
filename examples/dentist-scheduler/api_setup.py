@@ -3,12 +3,14 @@ import os
 import aiohttp
 from dotenv import load_dotenv
 
-load_dotenv(".env.local")
+load_dotenv()
 
 HEADERS = {
     "cal-api-version": "2024-06-14",
     "Authorization": "Bearer " + os.getenv("CAL_API_KEY"),
 }
+
+SESSION_LENGTH = 60
 
 
 async def get_event_id(slug: str) -> str | None:
@@ -100,7 +102,7 @@ async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
         slug (str): The unique identifier of the event type, typically with dashes in place of spaces
     """
     payload = {
-        "lengthInMinutes": 60,
+        "lengthInMinutes": SESSION_LENGTH,
         "title": title,
         "slug": slug,
         "scheduleId": schedule_id,
@@ -113,7 +115,7 @@ async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
             if response["status"] == "success":
                 return response["data"]["id"]
             else:
-                raise Exception(f"{response["error"]["code"]}")
+                raise Exception(f"{response['error']['code']}")
 
 
 async def setup_event_types() -> dict:

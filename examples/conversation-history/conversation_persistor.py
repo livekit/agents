@@ -1,7 +1,7 @@
 import asyncio
+import datetime
 import logging
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Union
 
 import aiofiles
@@ -11,11 +11,10 @@ from livekit.agents import (
     JobContext,
     WorkerOptions,
     cli,
-    multimodal,
     utils,
 )
-from livekit.agents.llm import ChatMessage
-from livekit.agents.multimodal.multimodal_agent import EventTypes
+from livekit.agents.voice import AgentTask, VoiceAgent
+from livekit.agents.voice.events import EventTypes
 from livekit.plugins import openai
 
 
@@ -41,15 +40,15 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: multimodal.MultimodalAgent | None,
+        model: VoiceAgent | None,
         log: str | None,
         transcriptions_only: bool = False,
     ):
         """
-        Initializes a ConversationPersistor instance which records the events and transcriptions of a MultimodalAgent.
+        Initializes a ConversationPersistor instance which records the events and transcriptions of a VoiceAgent.
 
         Args:
-            model (multimodal.MultimodalAgent): an instance of a MultiModalAgent
+            model (VoiceAgent): an instance of a VoiceAgent
             log (str): name of the external file to record events in
             transcriptions_only (bool): a boolean variable to determine if only transcriptions will be recorded, False by default
             user_transcriptions (arr): list of user transcriptions
@@ -75,7 +74,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         return self._log
 
     @property
-    def model(self) -> multimodal.MultimodalAgent | None:
+    def model(self) -> VoiceAgent | None:
         return self._model
 
     @property
@@ -123,7 +122,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         await self._main_task
 
     def start(self) -> None:
-        # Listens for emitted MultimodalAgent events
+        # Listens for emitted VoiceAgent events
         self._main_task = asyncio.create_task(self._main_atask())
 
         @self._model.on("user_started_speaking")
@@ -153,7 +152,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
             self._log_q.put_nowait(event)
 
         @self._model.on("user_speech_committed")
-        def _user_speech_committed(user_msg: ChatMessage):
+        def _user_speech_committed(user_msg: str):
             transcription = TranscriptionLog(
                 role="user", transcription=user_msg.content
             )
@@ -190,8 +189,9 @@ logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
-    agent = multimodal.MultimodalAgent(
+    agent = VoiceAgent(
         model=openai.realtime.RealtimeModel(
+            task=AgentTask(),
             voice="alloy",
             temperature=0.8,
             instructions="You are a helpful assistant.",
@@ -205,8 +205,7 @@ async def entrypoint(ctx: JobContext):
     cp.start()
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    participant = await ctx.wait_for_participant()
-    agent.start(ctx.room, participant)
+    agent.start(ctx.room)
 
 
 if __name__ == "__main__":

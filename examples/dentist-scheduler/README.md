@@ -69,4 +69,14 @@ userdata = {"event_ids": event_ids, "userinfo": UserInfo()}
     )
 ```
 
+# Running the example
+After setting up the environment, run `python agent.py dev` to meet the Receptionist.
+
+Try out:
+- Scheduling a new appointment 
+- Ask about the office hours and location
+- Leave a message for the office
+
+
+
 

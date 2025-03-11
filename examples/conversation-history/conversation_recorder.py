@@ -9,21 +9,21 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-from livekit.agents.pipeline import PipelineAgent
+from livekit.agents.voice import AgentTask, VoiceAgent
 
 
 class ConversationRecorder:
     def __init__(
         self,
         *,
-        model: PipelineAgent | None,
+        model: VoiceAgent | None,
         file_name: str | None,
     ):
         """
         Initializes a ConversationRecorder instance which records the audio of a conversation.
 
         Args:
-            model (PipelineAgent): an instance of a PipelineAgent
+            model (VoiceAgent): an instance of a VoiceAgent
             file_name (str): the name of the audio file
         """
         super().__init__()
@@ -37,7 +37,7 @@ class ConversationRecorder:
         self._file = file
 
     @property
-    def model(self) -> PipelineAgent | None:
+    def model(self) -> VoiceAgent | None:
         return self._model
 
     async def record_input(self) -> None:
@@ -64,7 +64,7 @@ logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
-    agent = PipelineAgent()
+    agent = VoiceAgent(task=AgentTask())
     recorder = ConversationRecorder(model=agent, file_name="output.wav")
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
