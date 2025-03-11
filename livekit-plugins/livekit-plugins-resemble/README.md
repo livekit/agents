@@ -14,9 +14,9 @@ You'll need an API key from Resemble AI. It can be set as an environment variabl
 
 Additionally, you'll need the voice UUID from your Resemble AI account.
 
-## Usage
+## Examples
 
-### Recommended: Using Context Manager (Best Practice)
+### Recommended
 
 ```python
 import asyncio
