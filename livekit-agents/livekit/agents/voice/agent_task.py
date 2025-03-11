@@ -161,7 +161,7 @@ class AgentTask:
             async for chunk in stream:
                 yield chunk
 
-    async def transcription_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[str]]:
+    async def transcription_node(self, text: AsyncIterable[str]) -> AsyncIterable[str]:
         """Process the LLM output to transcriptions"""
         async for delta in text:
             yield delta

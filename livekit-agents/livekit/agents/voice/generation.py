@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
-import time
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -187,7 +185,7 @@ async def _text_forwarding_task(
 @dataclass
 class _AudioOutput:
     audio: list[rtc.AudioFrame]
-    first_frame_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
+    first_frame_fut: asyncio.Future
 
 
 def perform_audio_forwarding(
@@ -195,7 +193,7 @@ def perform_audio_forwarding(
     audio_output: io.AudioSink,
     tts_output: AsyncIterable[rtc.AudioFrame],
 ) -> tuple[asyncio.Task, _AudioOutput]:
-    out = _AudioOutput(audio=[])
+    out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
     task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
     return task, out
 
@@ -227,9 +225,9 @@ def perform_tool_executions(
     function_stream: AsyncIterable[llm.FunctionCall],
 ) -> tuple[
     asyncio.Task,
-    list[tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]],
+    list[_PythonOutput],
 ]:
-    out: list[tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]] = []
+    out: list[_PythonOutput] = []
     task = asyncio.create_task(
         _execute_tools_task(
             agent=agent,
@@ -250,19 +248,19 @@ async def _execute_tools_task(
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
-    out: list[tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]],
+    out: list[_PythonOutput],
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
+    from .agent_task import _authorize_inline_task
     from .events import CallContext
 
     tasks: list[asyncio.Task] = []
     try:
         async for fnc_call in function_stream:
-            ai_function = fnc_ctx.ai_functions.get(fnc_call.name, None)
-            if ai_function is None:
+            if (ai_function := fnc_ctx.ai_functions.get(fnc_call.name)) is None:
                 logger.warning(
-                    f"LLM called function `{fnc_call.name}` but it was not found in the current task",
+                    f"unknown AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
                         "speech_id": speech_handle.id,
@@ -276,7 +274,7 @@ async def _execute_tools_task(
 
             except ValidationError:
                 logger.exception(
-                    "LLM called function `{fnc.name}` with invalid arguments",
+                    f"tried to call AI function `{fnc_call.name}` with invalid arguments",
                     extra={
                         "function": fnc_call.name,
                         "arguments": fnc_call.arguments,
@@ -289,79 +287,53 @@ async def _execute_tools_task(
                 "executing tool",
                 extra={
                     "function": fnc_call.name,
-                    "speech_id": speech_handle.id,
-                },
-            )
-            debug.Tracing.log_event(
-                "executing tool",
-                {
-                    "function": fnc_call.name,
+                    "arguments": fnc_call.arguments,
                     "speech_id": speech_handle.id,
                 },
             )
 
             fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
-                ai_function=ai_function,
                 model=parsed_args,
+                ai_function=ai_function,
                 call_ctx=CallContext(
                     agent=agent, speech_handle=speech_handle, function_call=fnc_call
                 ),
             )
 
-            fnc_out = _FunctionCallOutput(
-                name=fnc_call.name,
-                arguments=fnc_call.arguments,
-                call_id=fnc_call.call_id,
+            py_out = _PythonOutput(
+                fnc_call=fnc_call,
                 output=None,
                 exception=None,
             )
 
-            if inspect.iscoroutinefunction(ai_function):
-                task = asyncio.create_task(
-                    ai_function(*fnc_args, **fnc_kwargs),
-                    name=f"ai_function_{fnc_call.name}",
-                )
-                tasks.append(task)
+            task = asyncio.create_task(
+                ai_function(*fnc_args, **fnc_kwargs),
+                name=f"ai_function_{fnc_call.name}",
+            )
+            tasks.append(task)
+            _authorize_inline_task(task)
 
-                def _log_exceptions(task: asyncio.Task) -> None:
-                    if task.exception() is not None:
-                        logger.error(
-                            "exception occurred while executing tool",
-                            extra={
-                                "function": fnc_call.name,
-                                "speech_id": speech_handle.id,
-                            },
-                            exc_info=task.exception(),
-                        )
-                        fnc_out.exception = task.exception()
-                        out.append(_sanitize_function_output(fnc_call, fnc_out))
-                        return
-
-                    fnc_out.output = task.result()
-                    out.append(_sanitize_function_output(fnc_call, fnc_out))
-                    tasks.remove(task)
-
-                task.add_done_callback(_log_exceptions)
-            else:
-                start_time = time.monotonic()
-                try:
-                    output = ai_function(*fnc_args, **fnc_kwargs)
-                    fnc_out.output = output
-                    out.append(_sanitize_function_output(fnc_call, fnc_out))
-                except Exception as e:
-                    fnc_out.exception = e
-                    out.append(_sanitize_function_output(fnc_call, fnc_out))
-
-                elapsed = time.monotonic() - start_time
-                if elapsed >= 1.5:
-                    logger.warning(
-                        f"function execution took too long ({elapsed:.2f}s), is `{fnc_call.name}` blocking?",
+            def _log_exceptions(task: asyncio.Task) -> None:
+                if task.exception() is not None:
+                    logger.error(
+                        "exception occurred while executing tool",
                         extra={
                             "function": fnc_call.name,
                             "speech_id": speech_handle.id,
-                            "elapsed": elapsed,
                         },
+                        exc_info=task.exception(),
                     )
+                    py_out.exception = task.exception()
+                    out.append(py_out)
+                    return
+
+                py_out.output = task.result()
+                out.append(py_out)
+                tasks.remove(task)
+
+            task.add_done_callback(_log_exceptions)
+
+        await asyncio.gather(*tasks)
 
     except asyncio.CancelledError:
         if len(tasks) > 0:
@@ -382,6 +354,8 @@ async def _execute_tools_task(
             )
             await asyncio.gather(*tasks)
     finally:
+        await utils.aio.cancel_and_wait(*tasks)
+
         if len(out) > 0:
             logger.debug(
                 "tools execution completed",
@@ -414,110 +388,117 @@ def _is_valid_function_output(value: Any) -> bool:
 
 
 @dataclass
-class _FunctionCallOutput:
-    call_id: str
-    name: str
-    arguments: str
+class _SanitizedOutput:
+    fnc_call: llm.FunctionCall
+    fnc_call_out: llm.FunctionCallOutput | None
+    agent_task: AgentTask | None
+
+
+@dataclass
+class _PythonOutput:
+    fnc_call: llm.FunctionCall
     output: Any
     exception: BaseException | None
 
+    def sanitize(self) -> _SanitizedOutput:
+        from .agent_task import AgentTask
 
-def _sanitize_function_output(
-    fnc_call: llm.FunctionCall,
-    out: _FunctionCallOutput,
-) -> tuple[llm.FunctionCall, llm.FunctionCallOutput | None, AgentTask | None]:
-    from .agent_task import AgentTask
-
-    if isinstance(out.exception, AIError):
-        return (
-            fnc_call,
-            llm.FunctionCallOutput(
-                name=out.name,
-                call_id=out.call_id,
-                output=out.exception.message,
-                is_error=True,
-            ),
-            None,
-        )
-
-    if isinstance(out.exception, StopResponse):
-        return fnc_call, None, None
-
-    if out.exception is not None:
-        logger.error(
-            "exception occurred while executing tool",
-            extra={
-                "call_id": out.call_id,
-                "function": out.name,
-            },
-            exc_info=out.exception,
-        )
-        return (
-            fnc_call,
-            llm.FunctionCallOutput(
-                name=out.name,
-                call_id=out.call_id,
-                output="An internal error occurred",
-                is_error=True,
-            ),
-            None,
-        )
-
-    fnc_out = out.output
-
-    # find task if any
-    task: AgentTask | None = None
-    if isinstance(fnc_out, tuple):
-        agent_tasks = [item for item in fnc_out if isinstance(item, AgentTask)]
-        if len(agent_tasks) > 1:
-            logger.error(
-                "multiple AgentTask instances found in the function output tuple",
-                extra={
-                    "call_id": out.call_id,
-                    "function": out.name,
-                    "output": fnc_out,
-                },
+        if isinstance(self.exception, AIError):
+            return _SanitizedOutput(
+                fnc_call=self.fnc_call.model_copy(),
+                fnc_call_out=llm.FunctionCallOutput(
+                    call_id=self.fnc_call.call_id,
+                    output=self.exception.message,
+                    is_error=True,
+                ),
+                agent_task=None,
             )
-            return fnc_call, None, None
 
-        if agent_tasks:
-            task = agent_tasks[0]
+        if isinstance(self.exception, StopResponse):
+            return _SanitizedOutput(
+                fnc_call=self.fnc_call.model_copy(),
+                fnc_call_out=None,
+                agent_task=None,
+            )
 
-        fnc_out = [item for item in fnc_out if not isinstance(item, AgentTask)]
-        if len(fnc_out) == 1:
-            fnc_out = fnc_out[0]
+        if self.exception is not None:
+            return _SanitizedOutput(
+                fnc_call=self.fnc_call.model_copy(),
+                fnc_call_out=llm.FunctionCallOutput(
+                    call_id=self.fnc_call.call_id,
+                    output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information
+                    is_error=True,
+                ),
+                agent_task=None,
+            )
 
-        if len(fnc_out) == 0:
+        task: AgentTask | None = None
+        fnc_out: Any = self.output
+        if (
+            isinstance(self.output, list)
+            or isinstance(self.output, set)
+            or isinstance(self.output, frozenset)
+            or isinstance(self.output, tuple)
+        ):
+            agent_tasks = [item for item in self.output if isinstance(item, AgentTask)]
+            other_outputs = [item for item in self.output if not isinstance(item, AgentTask)]
+            if len(agent_tasks) > 1:
+                logger.error(
+                    f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",
+                    extra={
+                        "call_id": self.fnc_call.call_id,
+                        "output": self.output,
+                    },
+                )
+
+                return _SanitizedOutput(
+                    fnc_call=self.fnc_call.model_copy(),
+                    fnc_call_out=None,
+                    agent_task=None,
+                )
+
+            task = next(iter(agent_tasks), None)
+
+            # fmt: off
+            fnc_out = (
+                other_outputs if task is None
+                else None if not other_outputs
+                else other_outputs[0] if len(other_outputs) == 1
+                else other_outputs
+            )
+            # fmt: on
+
+        elif isinstance(fnc_out, AgentTask):
+            task = fnc_out
             fnc_out = None
 
-    elif isinstance(fnc_out, AgentTask):
-        task = fnc_out
-        fnc_out = None
+        if not _is_valid_function_output(fnc_out):
+            logger.error(
+                f"AI function `{self.fnc_call.name}` returned an invalid output",
+                extra={
+                    "call_id": self.fnc_call.call_id,
+                    "output": self.output,
+                },
+            )
+            return _SanitizedOutput(
+                fnc_call=self.fnc_call.model_copy(),
+                fnc_call_out=None,
+                agent_task=None,
+            )
 
-    if not _is_valid_function_output(fnc_out):
-        logger.error(
-            "invalid function output type",
-            extra={
-                "call_id": out.call_id,
-                "function": out.name,
-                "output": fnc_out,
-            },
+        return _SanitizedOutput(
+            fnc_call=self.fnc_call.model_copy(),
+            fnc_call_out=(
+                llm.FunctionCallOutput(
+                    call_id=self.fnc_call.call_id,
+                    output=str(fnc_out),  # take the string representation of the output
+                    is_error=False,
+                )
+                if fnc_out is not None
+                else None
+            ),
+            agent_task=task,
         )
-        return fnc_call, None, None
-
-    if fnc_out is None:
-        return fnc_call, None, task
-
-    return (
-        fnc_call,
-        llm.FunctionCallOutput(
-            name=out.name,
-            call_id=out.call_id,
-            output=str(fnc_out),
-            is_error=False,
-        ),
-        task,
-    )
 
 
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
@@ -544,6 +525,7 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
                 "expected the instructions inside the chat_ctx to be of type 'message'"
             )
     elif add_if_missing:
+        # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
             0,
             llm.ChatMessage(
