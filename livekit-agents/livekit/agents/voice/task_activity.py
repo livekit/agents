@@ -138,14 +138,15 @@ class TaskActivity(RecognitionHooks):
         async with self._lock:
             self._agent_task._activity = self
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
-            self._audio_recognition = AudioRecognition(
-                hooks=self,
-                stt=self._agent_task.stt_node,
-                vad=self.vad,
-                turn_detector=self.turn_detector,
-                min_endpointing_delay=self._agent.options.min_endpointing_delay,
-            )
-            self._audio_recognition.start()
+            if self.stt is not None:
+                self._audio_recognition = AudioRecognition(
+                    hooks=self,
+                    stt=self._agent_task.stt_node,
+                    vad=self.vad,
+                    turn_detector=self.turn_detector,
+                    min_endpointing_delay=self._agent.options.min_endpointing_delay,
+                )
+                self._audio_recognition.start()
 
             if isinstance(self.llm, llm.RealtimeModel):
                 self._rt_session = self.llm.session()
@@ -239,6 +240,10 @@ class TaskActivity(RecognitionHooks):
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
+            return
+
+        if self._current_speech and not self._current_speech.allow_interruptions:
+            # drop the audio if the current speech is not interruptable
             return
 
         if self._rt_session is not None:
@@ -372,6 +377,9 @@ class TaskActivity(RecognitionHooks):
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
+        if self._current_speech and not self._current_speech.allow_interruptions:
+            logger.warning("input_speech_started, but current speech is not interruptable")
+            return
         self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
