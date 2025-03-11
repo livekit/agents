@@ -12,7 +12,7 @@ pip install livekit-plugins-resemble
 
 You'll need an API key from Resemble AI. It can be set as an environment variable: `RESEMBLE_API_KEY`
 
-Additionally, you'll need the voice UUID and project UUID from your Resemble AI account.
+Additionally, you'll need the voice UUID from your Resemble AI account.
 
 ## Usage
 
@@ -27,7 +27,6 @@ async def run_tts_example():
     async with TTS(
         api_key="your_api_key",  # or set RESEMBLE_API_KEY environment variable
         voice_uuid="your_voice_uuid",
-        project_uuid="your_project_uuid",
         # Optional parameters
         sample_rate=44100,  # Sample rate in Hz (default: 44100)
         precision="PCM_16",  # Audio precision (PCM_32, PCM_24, PCM_16, MULAW)
@@ -52,8 +51,7 @@ async def run_tts_example():
         stream = tts.stream()
         await stream.synthesize_text("Hello, world!")
         
-        # Wait for stream to complete
-        await stream.wait()
+
 
 # Run the example
 asyncio.run(run_tts_example())
@@ -72,7 +70,6 @@ async def run_tts_example():
     tts = TTS(
         api_key="your_api_key", 
         voice_uuid="your_voice_uuid",
-        project_uuid="your_project_uuid",
     )
 
     try:
@@ -105,7 +102,6 @@ async def with_custom_session():
         async with TTS(
             api_key="your_api_key",
             voice_uuid="your_voice_uuid",
-            project_uuid="your_project_uuid",
             http_session=session
         ) as tts:
             # Use TTS...
