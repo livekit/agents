@@ -940,6 +940,8 @@ class TaskActivity(RecognitionHooks):
 
                 self._rt_session.interrupt()
                 try:
+                    # use self.generate_reply instead of self._rt_session.generate_reply
+                    # the latter won't be played due to the user_initiated flag
                     await self.generate_reply()
                 except llm.RealtimeError as e:
                     logger.warning(
