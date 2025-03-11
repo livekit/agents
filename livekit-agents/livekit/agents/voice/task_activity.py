@@ -138,14 +138,6 @@ class TaskActivity(RecognitionHooks):
         async with self._lock:
             self._agent_task._activity = self
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
-            self._audio_recognition = AudioRecognition(
-                hooks=self,
-                stt=self._agent_task.stt_node,
-                vad=self.vad,
-                turn_detector=self.turn_detector,
-                min_endpointing_delay=self._agent.options.min_endpointing_delay,
-            )
-            self._audio_recognition.start()
 
             if isinstance(self.llm, llm.RealtimeModel):
                 self._rt_session = self.llm.session()
@@ -172,6 +164,15 @@ class TaskActivity(RecognitionHooks):
                     logger.exception("failed to update the fnc_ctx")
 
             elif isinstance(self.llm, llm.LLM):
+                self._audio_recognition = AudioRecognition(
+                    hooks=self,
+                    stt=self._agent_task.stt_node,
+                    vad=self.vad,
+                    turn_detector=self.turn_detector,
+                    min_endpointing_delay=self._agent.options.min_endpointing_delay,
+                )
+                self._audio_recognition.start()
+
                 try:
                     update_instructions(
                         self._agent_task._chat_ctx,
