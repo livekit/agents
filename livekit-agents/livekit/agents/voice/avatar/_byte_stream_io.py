@@ -20,9 +20,9 @@ RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 AUDIO_STREAM_TOPIC = "lk.audio_stream"
 
 
-class DataStreamAudioSink(AudioSink):
+class ByteStreamAudioSink(AudioSink):
     """
-    AudioSink implementation that streams audio to a remote avatar worker using LiveKit DataStream.
+    AudioSink implementation that streams audio to a remote avatar worker using LiveKit ByteStream.
     """
 
     def __init__(self, room: rtc.Room, *, destination_identity: str):
@@ -103,9 +103,9 @@ class DataStreamAudioSink(AudioSink):
         task.add_done_callback(self._tasks.discard)
 
 
-class DataStreamAudioReceiver(AudioReceiver):
+class ByteStreamAudioReceiver(AudioReceiver):
     """
-    Audio receiver that receives streamed audio from a sender participant using LiveKit DataStream.
+    Audio receiver that receives streamed audio from a sender participant using LiveKit ByteStream.
     If the sender_identity is provided, subscribe to the specified participant. If not provided,
     subscribe to the first agent participant in the room.
     """

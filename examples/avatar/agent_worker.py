@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from livekit import api, rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
 from livekit.agents.voice import AgentTask, VoiceAgent
-from livekit.agents.voice.avatar import DataStreamAudioSink
+from livekit.agents.voice.avatar import ByteStreamAudioSink
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_FOR, RoomOutputOptions
 from livekit.plugins import openai
@@ -79,7 +79,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
     # connect the output audio to the avatar runner
-    agent.output.audio = DataStreamAudioSink(ctx.room, destination_identity=AVATAR_IDENTITY)
+    agent.output.audio = ByteStreamAudioSink(ctx.room, destination_identity=AVATAR_IDENTITY)
 
     # start agent with room input and room text output
     await agent.start(
