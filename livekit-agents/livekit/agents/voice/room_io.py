@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    AsyncIterable,
+    Callable,
+    Coroutine,
+    Generic,
+    Optional,
+    TypeVar,
+    Union,
+)
 
 from livekit import rtc
 
@@ -23,6 +32,21 @@ ATTRIBUTE_TRACK_ID = "lk.transcribed_track_id"
 TOPIC_CHAT = "lk.chat"
 
 
+@dataclass
+class TextInputEvent:
+    text: str
+    info: rtc.TextStreamInfo
+    participant: rtc.RemoteParticipant
+
+
+TextInputCallback = Callable[[TextInputEvent, "VoiceAgent"], Coroutine[None, None, None] | None]
+
+
+def _default_text_input_cb(ev: TextInputEvent, agent: "VoiceAgent") -> None:
+    agent.interrupt()
+    agent.generate_reply(user_input=ev.text)
+
+
 @dataclass(frozen=True)
 class RoomInputOptions:
     text_enabled: bool = True
@@ -39,6 +63,7 @@ class RoomInputOptions:
     """Topic for text input"""
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     """Noise cancellation options"""
+    text_input_cb: TextInputCallback | None = _default_text_input_cb
 
 
 @dataclass(frozen=True)
@@ -323,6 +348,11 @@ class RoomIO:
         if participant_identity != self._participant_identity:
             return
 
+        participant = self._room.remote_participants.get(participant_identity)
+        if not participant:
+            logger.warning("participant not found, ignoring text input")
+            return
+
         async def _read_text():
             text = await reader.read_all()
             logger.debug(
@@ -333,8 +363,13 @@ class RoomIO:
                 logger.warning("received text input but agent is not started, ignoring")
                 return
 
-            self._agent.interrupt()
-            self._agent.generate_reply(user_input=text)
+            if self._in_opts.text_input_cb:
+                text_input_result = self._in_opts.text_input_cb(
+                    TextInputEvent(text=text, info=reader.info, participant=participant),
+                    self._agent,
+                )
+                if asyncio.iscoroutine(text_input_result):
+                    await text_input_result
 
         task = asyncio.create_task(_read_text())
         self._tasks.add(task)
