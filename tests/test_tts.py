@@ -17,10 +17,10 @@ from livekit.plugins import (
     deepgram,
     elevenlabs,
     google,
+    neuphonic,
     openai,
     playai,
     rime,
-    neuphonic
 )
 
 from .conftest import TEST_CONNECT_OPTIONS
