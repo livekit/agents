@@ -10,7 +10,7 @@ from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
     AvatarRunner,
-    ByteStreamAudioReceiver,
+    DataStreamAudioReceiver,
     VideoGenerator,
 )
 
@@ -198,7 +198,7 @@ async def main(room: rtc.Room):
         video_gen = AudioWaveGenerator(avatar_options)
         runner = AvatarRunner(
             room,
-            audio_recv=ByteStreamAudioReceiver(room),
+            audio_recv=DataStreamAudioReceiver(room),
             video_gen=video_gen,
             options=avatar_options,
         )

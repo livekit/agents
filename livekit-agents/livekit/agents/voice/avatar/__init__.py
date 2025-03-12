@@ -1,4 +1,4 @@
-from ._byte_stream_io import ByteStreamAudioReceiver, ByteStreamAudioSink
+from ._datastream_io import DataStreamAudioReceiver, DataStreamAudioSink
 from ._queue_io import QueueAudioSink
 from ._runner import AudioReceiver, AudioSegmentEnd, AvatarOptions, AvatarRunner, VideoGenerator
 
@@ -9,6 +9,6 @@ __all__ = [
     "AudioReceiver",
     "AudioSegmentEnd",
     "QueueAudioSink",
-    "ByteStreamAudioReceiver",
-    "ByteStreamAudioSink",
+    "DataStreamAudioReceiver",
+    "DataStreamAudioSink",
 ]
