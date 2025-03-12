@@ -300,9 +300,15 @@ class RoomIO:
             extra={"participant": participant.identity},
         )
 
-        if not self._room.remote_participants:
+        remote_participants = [
+            p
+            for p in self._room.remote_participants.values()
+            if p.attributes.get(ATTRIBUTE_PUBLISH_FOR) != self._room.local_participant.identity
+        ]
+        if not remote_participants:
             # no other participants in the room, interrupt the agent
             try:
+                logger.debug("no other participants in the room, interrupting agent")
                 self._agent.interrupt()
             except RuntimeError as e:
                 logger.warning(
