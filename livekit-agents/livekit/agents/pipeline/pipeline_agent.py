@@ -1168,6 +1168,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """Check if the new agent speech should be played"""
 
         if AppConfig().get_call_metadata().get("is_payment_processing"):
+            print(f"Skipping validation because payment is processing - {self._transcribed_text}")
             self._transcribed_text = ""
             return
 
