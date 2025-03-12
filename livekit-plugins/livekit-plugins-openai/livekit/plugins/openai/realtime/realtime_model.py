@@ -149,6 +149,8 @@ class ServerVadOptions:
 @dataclass
 class InputTranscriptionOptions:
     model: api_proto.InputTranscriptionModel | str
+    language: str | None = None
+    prompt: str | None = None
 
 
 @dataclass
@@ -976,6 +978,14 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             input_audio_transcription_opts = {
                 "model": self._opts.input_audio_transcription.model,
             }
+            if self._opts.input_audio_transcription.language is not None:
+                input_audio_transcription_opts["language"] = (
+                    self._opts.input_audio_transcription.language
+                )
+            if self._opts.input_audio_transcription.prompt is not None:
+                input_audio_transcription_opts["prompt"] = (
+                    self._opts.input_audio_transcription.prompt
+                )
 
         session_data: api_proto.ClientEvent.SessionUpdateData = {
             "modalities": self._opts.modalities,
@@ -1296,6 +1306,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         else:
             input_audio_transcription = InputTranscriptionOptions(
                 model=session["input_audio_transcription"]["model"],
+                language=session["input_audio_transcription"].get("language"),
+                prompt=session["input_audio_transcription"].get("prompt"),
             )
 
         self.emit(

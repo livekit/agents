@@ -69,6 +69,8 @@ class ContentPart(TypedDict):
 
 class InputAudioTranscription(TypedDict):
     model: InputTranscriptionModel | str
+    language: NotRequired[str]
+    prompt: NotRequired[str]
 
 
 class ServerVad(TypedDict):
