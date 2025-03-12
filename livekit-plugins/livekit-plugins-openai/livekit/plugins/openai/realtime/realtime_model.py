@@ -15,7 +15,7 @@ import aiohttp
 from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
-from livekit.agents import llm, utils, io
+from livekit.agents import io, llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from openai.types.beta.realtime import (
     ConversationItem,
@@ -34,7 +34,6 @@ from openai.types.beta.realtime import (
     RealtimeClientEvent,
     ResponseAudioDeltaEvent,
     ResponseAudioDoneEvent,
-    ResponseAudioTranscriptDeltaEvent,
     ResponseAudioTranscriptDoneEvent,
     ResponseCancelEvent,
     ResponseCreatedEvent,
