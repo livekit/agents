@@ -207,7 +207,7 @@ class TaskActivity(RecognitionHooks):
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
                 hooks=self,
-                stt=self._agent_task.stt_node,
+                stt=self._agent_task.stt_node if self.stt else None,
                 vad=self.vad,
                 turn_detector=self.turn_detector,
                 min_endpointing_delay=self._agent.options.min_endpointing_delay,
