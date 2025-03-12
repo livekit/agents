@@ -299,6 +299,16 @@ class RoomIO:
             "participant disconnected",
             extra={"participant": participant.identity},
         )
+
+        if not self._room.remote_participants:
+            # no other participants in the room, interrupt the agent
+            try:
+                self._agent.interrupt()
+            except RuntimeError as e:
+                logger.warning(
+                    "failed to interrupt agent during participant disconnection", extra={"error": e}
+                )
+
         if self._participant_identity is None or self._participant_identity != participant.identity:
             return
 
