@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.11.2
+
+### Patch Changes
+
+- version bump to 0.11.1 - [#1640](https://github.com/livekit/agents/pull/1640) ([@davidzhao](https://github.com/davidzhao))
+
 ## 1.0.1
 
 ### Patch Changes
