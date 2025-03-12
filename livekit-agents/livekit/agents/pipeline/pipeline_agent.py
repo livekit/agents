@@ -16,6 +16,7 @@ from typing import (
     Union,
 )
 
+from app_config import AppConfig
 from livekit import rtc
 
 from .. import metrics, stt, tokenize, tts, utils, vad
@@ -62,6 +63,7 @@ EventTypes = Literal[
 _CallContextVar = contextvars.ContextVar["AgentCallContext"](
     "voice_assistant_contextvar"
 )
+
 
 
 class AgentCallContext:
@@ -1164,6 +1166,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
+
+        if AppConfig().get_call_metadata().get("is_payment_processing"):
+            self._transcribed_text = ""
+            return
 
         if self._playing_speech and not self._playing_speech.interrupted:
             should_ignore_input = False
