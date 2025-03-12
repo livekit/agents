@@ -316,6 +316,7 @@ class RealtimeSession(llm.RealtimeSession):
                 type="session.update",
                 session=session_update_event.Session(
                     model=self._realtime_model._opts.model,  # type: ignore
+                    voice=self._realtime_model._opts.voice,  # type: ignore
                     instructions=instructions,
                 ),
                 event_id=event_id,
