@@ -186,6 +186,38 @@ class TTS(tts.TTS):
     def prewarm(self) -> None:
         self._pool.prewarm()
 
+    def update_options(
+        self,
+        *,
+        model: TTSModels | str = None,
+        voice_id: str | None = None,
+        lang_code: TTSLangCodes | str | None = None,
+        encoding: TTSEncodings | str | None = None,
+        speed: float | None = None,
+        sample_rate: int | None = None,
+    ) -> None:
+        """
+        Update the Text-to-Speech (TTS) configuration options.
+
+        This method allows updating the TTS settings, including model type, voice_id, lang_code, 
+        encoding, speed and sample_rate. If any parameter is not provided, the existing value will be 
+        retained.
+
+        Args:
+            model (TTSModels | str, optional): The Neuphonic model to use.
+            voice_id (str, optional): The voice ID for the desired voice.
+            lang_code (TTSLanguages | str, optional): The language code for synthesis..
+            encoding (TTSEncodings | str, optional): The audio encoding format.
+            speed (float, optional): The audio playback speed.
+            sample_rate (int, optional): The audio sample rate in Hz.
+        """
+        self._opts.model = model or self._opts.model
+        self._opts.voice_id = voice_id or self._opts.voice_id
+        self._opts.lang_code = lang_code or self._opts.lang_code
+        self._opts.encoding = encoding or self._opts.encoding
+        self._opts.speed = speed or self._opts.speed
+        self._opts.sampling_rate = sample_rate or self._opts.sampling_rate
+
     def synthesize(
         self,
         text: str,
