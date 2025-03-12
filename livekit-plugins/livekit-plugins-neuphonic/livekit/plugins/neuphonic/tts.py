@@ -217,6 +217,7 @@ class TTS(tts.TTS):
         self._opts.encoding = encoding or self._opts.encoding
         self._opts.speed = speed or self._opts.speed
         self._opts.sampling_rate = sample_rate or self._opts.sampling_rate
+        self._pool.invalidate()
 
     def synthesize(
         self,
