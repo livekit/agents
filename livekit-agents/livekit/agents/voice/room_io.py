@@ -39,10 +39,10 @@ class TextInputEvent:
     participant: rtc.RemoteParticipant
 
 
-TextInputCallback = Callable[[TextInputEvent, "VoiceAgent"], Coroutine[None, None, None] | None]
+TextInputCallback = Callable[["VoiceAgent", TextInputEvent], Coroutine[None, None, None] | None]
 
 
-def _default_text_input_cb(ev: TextInputEvent, agent: "VoiceAgent") -> None:
+def _default_text_input_cb(agent: "VoiceAgent", ev: TextInputEvent) -> None:
     agent.interrupt()
     agent.generate_reply(user_input=ev.text)
 
@@ -365,8 +365,8 @@ class RoomIO:
 
             if self._in_opts.text_input_cb:
                 text_input_result = self._in_opts.text_input_cb(
-                    TextInputEvent(text=text, info=reader.info, participant=participant),
                     self._agent,
+                    TextInputEvent(text=text, info=reader.info, participant=participant),
                 )
                 if asyncio.iscoroutine(text_input_result):
                     await text_input_result
