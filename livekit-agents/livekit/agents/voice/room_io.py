@@ -249,12 +249,6 @@ class RoomIO:
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         return await self._participant_connected
 
-    def toggle_text_audio_sync(self, enable: bool) -> None:
-        if not self._tr_synchronizer:
-            logger.warning("text audio sync is not enabled, ignoring")
-            return
-        self._tr_synchronizer.toggle_sync(enable)
-
     # -- RPC methods --
     # user can override these methods to handle RPC calls from the room
 
