@@ -18,13 +18,14 @@ import asyncio
 import base64
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Union, AsyncGenerator
-import time
+from typing import Optional, Union
 
 import aiohttp
 import websockets
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -33,11 +34,9 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit import rtc
 
 from .log import logger
 from .models import OutputFormat, Precision
-
 
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
 RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
@@ -603,7 +602,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                         else:
                                             # If we can't find the data chunk, assume standard 44-byte header
                                             pcm_data = audio_data[44:]
-                                            logger.info(f"Using standard 44-byte WAV header offset")
+                                            logger.info("Using standard 44-byte WAV header offset")
                                         
                                         # Create an audio frame from the PCM data
                                         samples_per_channel = len(pcm_data) // (2 * NUM_CHANNELS)  # 2 bytes per sample (16-bit PCM)
