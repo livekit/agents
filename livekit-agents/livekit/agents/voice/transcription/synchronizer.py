@@ -81,6 +81,7 @@ class _TextAudioSynchronizer:
 
         self._text_data: Optional[_TextData] = None
         self._audio_data: Optional[_AudioData] = None
+        self._processing_text_data: Optional[_TextData] = None
 
         self._main_task: Optional[asyncio.Task] = None
 
@@ -152,6 +153,10 @@ class _TextAudioSynchronizer:
         self._closed = True
         self._close_future.set_result(None)
 
+        if self._processing_text_data is not None:
+            await self._processing_text_data.sentence_stream.aclose()
+            self._processing_text_data = None
+
         for text_data in self._text_q:
             if text_data is not None:
                 await text_data.sentence_stream.aclose()
@@ -177,13 +182,14 @@ class _TextAudioSynchronizer:
         seg_index = 0
         q_done = False
 
-        while not q_done:
+        while not q_done and not self._closed:
             await self._text_q_changed.wait()
             await self._audio_q_changed.wait()
 
             while self._text_q and self._audio_q:
                 text_data = self._text_q.pop(0)
                 audio_data = self._audio_q.pop(0)
+                self._processing_text_data = text_data
 
                 if text_data is None or audio_data is None:
                     q_done = True
@@ -203,8 +209,8 @@ class _TextAudioSynchronizer:
                         seg_index, forward_start_time, text_data, audio_data, ev.token
                     )
                     if self._closed:
-                        await sentence_stream.aclose()
-
+                        break
+                self._processing_text_data = None
                 seg_index += 1
 
             self._text_q_changed.clear()
