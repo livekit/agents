@@ -1,7 +1,7 @@
 import asyncio
-import datetime
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Union
 
 import aiofiles
@@ -14,7 +14,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.voice import AgentTask, VoiceAgent
-from livekit.agents.voice.events import EventTypes
+from livekit.agents.voice.events import AgentEvent, EventTypes
 from livekit.plugins import openai
 
 
@@ -40,7 +40,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: VoiceAgent | None,
+        agent: VoiceAgent | None,
         log: str | None,
         transcriptions_only: bool = False,
     ):
@@ -59,7 +59,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
 
-        self._model = model
+        self._agent = agent
         self._log = log
         self._transcriptions_only = transcriptions_only
 
@@ -125,61 +125,42 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         # Listens for emitted VoiceAgent events
         self._main_task = asyncio.create_task(self._main_atask())
 
-        @self._model.on("user_started_speaking")
-        def _user_started_speaking():
-            event = EventLog(eventname="user_started_speaking")
+        @self._agent.on("user_started_speaking")
+        def _user_started_speaking(ev: AgentEvent):
+            event = EventLog(eventname=ev)
             self._log_q.put_nowait(event)
 
-        @self._model.on("user_stopped_speaking")
-        def _user_stopped_speaking():
-            event = EventLog(eventname="user_stopped_speaking")
+        @self._agent.on("user_stopped_speaking")
+        def _user_stopped_speaking(ev: AgentEvent):
+            event = EventLog(eventname=ev)
             self._log_q.put_nowait(event)
 
-        @self._model.on("agent_started_speaking")
-        def _agent_started_speaking():
-            event = EventLog(eventname="agent_started_speaking")
-            self._log_q.put_nowait(event)
+        @self._agent.on("user_input_transcribed")
+        def _user_input_transcribed(ev: AgentEvent):
+            if ev.is_final:
+                event = EventLog(eventname="user_input_transcribed")
+                self._log_q.put_nowait(event)
+                transcription = TranscriptionLog(
+                    role="user", transcription=ev.transcript
+                )
+                self._log_q.put_nowait(transcription)
 
-        @self._model.on("agent_stopped_speaking")
-        def _agent_stopped_speaking():
-            transcription = TranscriptionLog(
-                role="agent",
-                transcription=(self._model._playing_handle._tr_fwd.played_text)[1:],
-            )
-            self._log_q.put_nowait(transcription)
+        # @self._agent.on("agent_state_changed")
+        # def _agent_state_changed(ev: AgentStateChangedEvent):
+        #     """ The state is either "initializing", "listening", or "speaking" """
+        #     name = "agent_state_changed: " + ev.state.value
+        #     event = EventLog(name)
+        #     self._log_q.put_nowait(event)
 
-            event = EventLog(eventname="agent_stopped_speaking")
-            self._log_q.put_nowait(event)
+        # @self._agent.on("agent_started_speaking")
+        # def _agent_started_speaking(ev: AgentEvent):
+        #     event = EventLog("agent_started_speaking")
+        #     self._log_q.put_nowait(event)
 
-        @self._model.on("user_speech_committed")
-        def _user_speech_committed(user_msg: str):
-            transcription = TranscriptionLog(
-                role="user", transcription=user_msg.content
-            )
-            self._log_q.put_nowait(transcription)
-
-            event = EventLog(eventname="user_speech_committed")
-            self._log_q.put_nowait(event)
-
-        @self._model.on("agent_speech_committed")
-        def _agent_speech_committed():
-            event = EventLog(eventname="agent_speech_committed")
-            self._log_q.put_nowait(event)
-
-        @self._model.on("agent_speech_interrupted")
-        def _agent_speech_interrupted():
-            event = EventLog(eventname="agent_speech_interrupted")
-            self._log_q.put_nowait(event)
-
-        @self._model.on("function_calls_collected")
-        def _function_calls_collected():
-            event = EventLog(eventname="function_calls_collected")
-            self._log_q.put_nowait(event)
-
-        @self._model.on("function_calls_finished")
-        def _function_calls_finished():
-            event = EventLog(eventname="function_calls_finished")
-            self._log_q.put_nowait(event)
+        # @self._agent.on("agent_stopped_speaking")
+        # def _agent_stopped_speaking():
+        #     event = EventLog("agent_stopped_speaking")
+        #     self._log_q.put_nowait(event)
 
 
 load_dotenv()
@@ -189,17 +170,7 @@ logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
-    agent = VoiceAgent(
-        model=openai.realtime.RealtimeModel(
-            task=AgentTask(),
-            voice="alloy",
-            temperature=0.8,
-            instructions="You are a helpful assistant.",
-            turn_detection=openai.realtime.ServerVadOptions(
-                threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
-            ),
-        ),
-    )
+    agent = VoiceAgent(task=AgentTask(), llm=openai.realtime.RealtimeModel())
 
     cp = ConversationPersistor(model=agent, log="log.txt")
     cp.start()

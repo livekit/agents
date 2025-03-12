@@ -150,6 +150,8 @@ class Scheduler(AgentTask):
                     instructions="Inform the user that they are all set."
                 )
         else:
+            if self.agent.current_speech:
+                await self.agent.current_speech.wait_for_playout()
             await self.agent.generate_reply(
                 instructions="Inform the user that there are no appointments under their name and ask to create one."
             )
