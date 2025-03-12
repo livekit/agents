@@ -102,6 +102,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Deepgram     | livekit-plugins-deepgram   | ✅        |               | [deepgram.TTS()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.TTS)       |
 | Play.ai      | livekit-plugins-playai     | ✅        | ✅            | [playai.TTS()](https://docs.livekit.io/python/livekit/plugins/playai/index.html#livekit.plugins.playai.TTS)             |
 | Rime         | livekit-plugins-rime       | ✅        |               | [rime.TTS()](https://docs.livekit.io/python/livekit/plugins/rime/index.html#livekit.plugins.rime.TTS)                   |
+| Neuphonic    | livekit-plugins-neuphonic  | ✅        | ✅            | neuphonic.TTS()                                                                                                       |
 | AWS Polly    | livekit-plugins-aws        | ✅        |               | [aws.TTS()](https://docs.livekit.io/python/livekit/plugins/aws/index.html#livekit.plugins.aws.TTS)                      |
 
 ### Other plugins
