@@ -199,8 +199,8 @@ class TTS(tts.TTS):
         """
         Update the Text-to-Speech (TTS) configuration options.
 
-        This method allows updating the TTS settings, including model type, voice_id, lang_code, 
-        encoding, speed and sample_rate. If any parameter is not provided, the existing value will be 
+        This method allows updating the TTS settings, including model type, voice_id, lang_code,
+        encoding, speed and sample_rate. If any parameter is not provided, the existing value will be
         retained.
 
         Args:
