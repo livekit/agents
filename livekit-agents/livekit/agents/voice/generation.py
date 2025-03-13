@@ -204,15 +204,51 @@ async def _audio_forwarding_task(
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
 ) -> None:
+    def _needs_resampling(frame: rtc.AudioFrame) -> bool:
+        if audio_output.sample_rate is not None and frame.sample_rate != audio_output.sample_rate:
+            return True
+        if (
+            audio_output.num_channels is not None
+            and frame.num_channels != audio_output.num_channels
+        ):
+            return True
+        return False
+
     try:
+        resampler: rtc.AudioResampler | None = None
         async for frame in tts_output:
             out.audio.append(frame)
-            await audio_output.capture_frame(frame)
+
+            if not out.first_frame_fut.done() and _needs_resampling(frame) and resampler is None:
+                resampler = rtc.AudioResampler(
+                    input_rate=frame.sample_rate,
+                    output_rate=(
+                        audio_output.sample_rate
+                        if audio_output.sample_rate is not None
+                        else frame.sample_rate
+                    ),
+                    num_channels=(
+                        audio_output.num_channels
+                        if audio_output.num_channels is not None
+                        else frame.num_channels
+                    ),
+                )
+
+            if resampler:
+                for f in resampler.push(frame):
+                    await audio_output.capture_frame(f)
+            else:
+                await audio_output.capture_frame(frame)
+
             if not out.first_frame_fut.done():
                 out.first_frame_fut.set_result(None)
     finally:
         if isinstance(tts_output, _ACloseable):
             await tts_output.aclose()
+
+        if resampler:
+            for frame in resampler.flush():
+                await audio_output.capture_frame(frame)
 
         audio_output.flush()
 
