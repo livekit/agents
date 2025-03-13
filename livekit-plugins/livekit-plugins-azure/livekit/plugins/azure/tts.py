@@ -243,11 +243,26 @@ class TTS(tts.TTS):
         language: str | None = None,
         prosody: ProsodyConfig | None = None,
         style: StyleConfig | None = None,
+        on_bookmark_reached_event: Callable | None = None,
+        on_synthesis_canceled_event: Callable | None = None,
+        on_synthesis_completed_event: Callable | None = None,
+        on_synthesis_started_event: Callable | None = None,
+        on_synthesizing_event: Callable | None = None,
+        on_viseme_event: Callable | None = None,
+        on_word_boundary_event: Callable | None = None
     ) -> None:
         self._opts.voice = voice or self._opts.voice
         self._opts.language = language or self._opts.language
         self._opts.prosody = prosody or self._opts.prosody
         self._opts.style = style or self._opts.style
+
+        self._opts.on_bookmark_reached_event = on_bookmark_reached_event or self._opts.on_bookmark_reached_event
+        self._opts.on_synthesis_canceled_event = on_synthesis_canceled_event or self._opts.on_synthesis_canceled_event
+        self._opts.on_synthesis_completed_event = on_synthesis_completed_event or self._opts.on_synthesis_completed_event
+        self._opts.on_synthesis_started_event = on_synthesis_started_event or self._opts.on_synthesis_started_event
+        self._opts.on_synthesizing_event = on_synthesizing_event or self._opts.on_synthesizing_event
+        self._opts.on_viseme_event = on_viseme_event or self._opts.on_viseme_event
+        self._opts.on_word_boundary_event = on_word_boundary_event or self._opts.on_word_boundary_event
 
     def synthesize(
         self,
