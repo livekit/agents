@@ -208,8 +208,6 @@ class _TextAudioSynchronizer:
                     await self._sync_sentence(
                         seg_index, forward_start_time, text_data, audio_data, ev.token
                     )
-                    if self._closed:
-                        break
                 self._processing_text_data = None
                 seg_index += 1
 
