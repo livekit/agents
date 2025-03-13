@@ -614,6 +614,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 "received user transcript",
                 extra={"user_transcript": new_transcript},
             )
+            AppConfig().received_user_transcript_timestamp = time.time()
 
             self._last_final_transcript_time = time.perf_counter()
 
@@ -626,7 +627,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     self._playing_speech is None
                     or self._playing_speech.allow_interruptions
                 ):
-                    AppConfig().received_user_transcript_timestamp = time.time()
                     self._synthesize_agent_reply()
 
             self._deferred_validation.on_human_final_transcript(
