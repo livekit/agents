@@ -376,11 +376,8 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
-            if (
-                frame.sample_rate != self._input_resampler._input_rate
-                or frame.num_channels != self._input_resampler._num_channels
-            ):
-                # input source changed with a different sample rate or num channels
+            if frame.sample_rate != self._input_resampler._input_rate:
+                # input audio changed to a different sample rate
                 self._input_resampler = None
 
         if self._input_resampler is None and (

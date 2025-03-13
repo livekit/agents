@@ -382,7 +382,7 @@ class TextSynchronizer:
 
 class _AudioSync(AudioSink):
     def __init__(self, base_sink: AudioSink, parent: TextSynchronizer) -> None:
-        super().__init__(sample_rate=base_sink.sample_rate, num_channels=base_sink.num_channels)
+        super().__init__(sample_rate=base_sink.sample_rate)
         self._parent = parent
         self._capturing = False
         self._interrupted = False

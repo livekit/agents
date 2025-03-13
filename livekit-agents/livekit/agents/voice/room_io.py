@@ -462,7 +462,7 @@ class RoomAudioSink(AudioSink):
             queue_size_ms: Size of the internal audio queue in ms.
                 Default to 100s to capture as fast as possible.
         """
-        super().__init__(sample_rate=sample_rate, num_channels=num_channels)
+        super().__init__(sample_rate=sample_rate)
         self._room = room
         self._track_source = track_source
         # buffer the audio frames as soon as they are captured

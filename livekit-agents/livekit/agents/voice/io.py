@@ -50,15 +50,13 @@ class PlaybackFinishedEvent:
 
 
 class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
-    def __init__(self, *, sample_rate: int | None = None, num_channels: int | None = None) -> None:
+    def __init__(self, *, sample_rate: int | None = None) -> None:
         """
         Args:
             sample_rate: The sample rate required by the audio sink, if None, any sample rate is accepted
-            num_channels: The number of channels required, if None, any number of channels is accepted
         """
         super().__init__()
         self._sample_rate = sample_rate
-        self._num_channels = num_channels
         self.__capturing = False
         self.__playback_finished_event = asyncio.Event()
 
@@ -107,11 +105,6 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def sample_rate(self) -> int | None:
         """The sample rate required by the audio sink, if None, any sample rate is accepted"""
         return self._sample_rate
-
-    @property
-    def num_channels(self) -> int | None:
-        """The number of channels required, if None, any number of channels is accepted"""
-        return self._num_channels
 
     @abstractmethod
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
