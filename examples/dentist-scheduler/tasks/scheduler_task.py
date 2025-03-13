@@ -19,7 +19,8 @@ class Scheduler(AgentTask):
     def __init__(self, *, service: str) -> None:
         super().__init__(
             instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
-                            proceeding. Always confirm details with the user. Do not be verbose. Convert all times given by the user to ISO 8601 format in UTC timezone,
+                            scheduling/rescheduling/canceling. When calling functions, return the user's email if already known.
+                            Always confirm details with the user. Convert all times given by the user to ISO 8601 format in UTC timezone,
                             assuming the user is in America/Los Angeles, and do not mention the conversion or the UTC timezone to the user. Avoiding repeating words.""",
             tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600"),
         )
@@ -99,7 +100,7 @@ class Scheduler(AgentTask):
                         data = await response.json()
                 return data
             except Exception as e:
-                print(f"API Communication Error: {e}")
+                raise Exception(f"API Communication Error: {e}")
 
     @ai_function()
     async def schedule(self, email: str, description: str, date: str) -> None:
@@ -166,7 +167,7 @@ class Scheduler(AgentTask):
         """
         self.agent.userdata["userinfo"].email = email
         response = await self.send_request(request=APIRequests.GET_APPTS)
-        if response["data"] is not None:
+        if response["data"]:
             reschedule_response = await self.send_request(
                 request=APIRequests.RESCHEDULE,
                 uid=response["data"][0]["uid"],

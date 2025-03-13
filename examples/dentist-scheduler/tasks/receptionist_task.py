@@ -7,7 +7,7 @@ class Receptionist(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions="""You are Alloy, a receptionist at the LiveKit Dental Office who answers inquiries and manages appointments for users. 
-            If there is an inquiry that can't be answered, suggest to leave a message. Be brief and efficient.""",
+            If there is an inquiry that can't be answered, suggest to leave a message. When calling functions, return the user's name if already known. Be brief and efficient.""",
             tts=cartesia.TTS(emotion=["positivity:high"]),
         )
 
@@ -17,7 +17,7 @@ class Receptionist(AgentTask):
         )
 
     @ai_function()
-    async def hours_inquiry(self):
+    async def hours_inquiry(self) -> None:
         """Answers user inquiries about the LiveKit dental office's hours of operation."""
         await self.agent.current_speech.wait_for_playout()
         await self.agent.generate_reply(
@@ -25,7 +25,7 @@ class Receptionist(AgentTask):
         )
 
     @ai_function()
-    async def location_inquiry(self):
+    async def location_inquiry(self) -> None:
         """Answers user inquiries about the LiveKit dental office's location and parking"""
         await self.agent.current_speech.wait_for_playout()
         await self.agent.generate_reply(

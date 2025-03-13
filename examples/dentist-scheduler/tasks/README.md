@@ -55,7 +55,7 @@ This example allows for full mobility between agents. Before transferring to `Sc
 The docstrings contain function parameter descriptions as well:
 ```
     @ai_function()
-    async def manage_appointment(self, name: str, service: str) -> AgentTask:
+    async def manage_appointment(self, name: str, service: str):
         """
         This function allows for users to schedule, reschedule, or cancel an appointment by transferring to the scheduler.
         The user's name will be confirmed with the user by spelling it out.

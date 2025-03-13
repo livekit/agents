@@ -31,7 +31,8 @@ class Messenger(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions="""You are Shimmer, an assistant taking messages for the LiveKit dental office.
-            Be sure to confirm details such as phone numbers with the user. Be brief and to the point.""",
+            Be sure to confirm details such as phone numbers with the user. If the user's number is not known, ask for it. Otherwise return the user's number during function calls.
+            Be brief and to the point.""",
             tts=cartesia.TTS(voice="156fb8d2-335b-4950-9cb3-a2d33befec77"),
         )
 
