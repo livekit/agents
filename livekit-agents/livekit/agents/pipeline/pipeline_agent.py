@@ -1189,6 +1189,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 )
 
             if should_ignore_input:
+                if "potential_user_question" not in AppConfig().call_metadata:
+                    AppConfig().call_metadata["potential_user_question"] = ""
+                AppConfig().call_metadata["potential_user_question"] += self._transcribed_text
                 self._transcribed_text = ""
                 return
 
