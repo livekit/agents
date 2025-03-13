@@ -46,6 +46,7 @@ class _LLMGenerationData:
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
+    id: str = field(default_factory=lambda: utils.shortuuid("item_"))
 
 
 def perform_llm_inference(
@@ -88,6 +89,7 @@ def perform_llm_inference(
                                     continue
 
                                 fnc_call = llm.FunctionCall(
+                                    id=f"{data.id}/fnc_{len(data.generated_functions)}",
                                     call_id=tool.call_id,
                                     name=tool.name,
                                     arguments=tool.arguments,
@@ -269,9 +271,7 @@ async def _execute_tools_task(
                 continue
 
             try:
-                function_model = llm_utils.function_arguments_to_pydantic_model(
-                    ai_function
-                )
+                function_model = llm_utils.function_arguments_to_pydantic_model(ai_function)
                 parsed_args = function_model.model_validate_json(fnc_call.arguments)
 
             except ValidationError:
@@ -284,6 +284,15 @@ async def _execute_tools_task(
                     },
                 )
                 continue
+
+            logger.debug(
+                "executing tool",
+                extra={
+                    "function": fnc_call.name,
+                    "arguments": fnc_call.arguments,
+                    "speech_id": speech_handle.id,
+                },
+            )
 
             fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
                 model=parsed_args,
@@ -426,7 +435,7 @@ class _PythonOutput:
             )
 
         task: AgentTask | None = None
-        fnc_out: Any = None
+        fnc_out: Any = self.output
         if (
             isinstance(self.output, list)
             or isinstance(self.output, set)
@@ -434,9 +443,7 @@ class _PythonOutput:
             or isinstance(self.output, tuple)
         ):
             agent_tasks = [item for item in self.output if isinstance(item, AgentTask)]
-            other_outputs = [
-                item for item in self.output if not isinstance(item, AgentTask)
-            ]
+            other_outputs = [item for item in self.output if not isinstance(item, AgentTask)]
             if len(agent_tasks) > 1:
                 logger.error(
                     f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",
@@ -465,6 +472,7 @@ class _PythonOutput:
 
         elif isinstance(fnc_out, AgentTask):
             task = fnc_out
+            fnc_out = None
 
         if not _is_valid_function_output(fnc_out):
             logger.error(
@@ -482,10 +490,14 @@ class _PythonOutput:
 
         return _SanitizedOutput(
             fnc_call=self.fnc_call.model_copy(),
-            fnc_call_out=llm.FunctionCallOutput(
-                call_id=self.fnc_call.call_id,
-                output=str(fnc_out),  # take the string representation of the output
-                is_error=False,
+            fnc_call_out=(
+                llm.FunctionCallOutput(
+                    call_id=self.fnc_call.call_id,
+                    output=str(fnc_out),  # take the string representation of the output
+                    is_error=False,
+                )
+                if fnc_out is not None
+                else None
             ),
             agent_task=task,
         )
@@ -497,9 +509,7 @@ The ID of the instructions message in the chat context. (only for stateless LLMs
 """
 
 
-def update_instructions(
-    chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool
-) -> None:
+def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool) -> None:
     """
     Update the instruction message in the chat context or insert a new one if missing.
 

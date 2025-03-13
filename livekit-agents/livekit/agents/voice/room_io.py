@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    AsyncIterable,
+    Callable,
+    Coroutine,
+    Generic,
+    Optional,
+    TypeVar,
+    Union,
+)
 
 from livekit import rtc
 
@@ -19,7 +28,23 @@ if TYPE_CHECKING:
 
 ATTRIBUTE_PUBLISH_FOR = "lk.publish_for"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+ATTRIBUTE_TRACK_ID = "lk.transcribed_track_id"
 TOPIC_CHAT = "lk.chat"
+
+
+@dataclass
+class TextInputEvent:
+    text: str
+    info: rtc.TextStreamInfo
+    participant: rtc.RemoteParticipant
+
+
+TextInputCallback = Callable[["VoiceAgent", TextInputEvent], Coroutine[None, None, None] | None]
+
+
+def _default_text_input_cb(agent: "VoiceAgent", ev: TextInputEvent) -> None:
+    agent.interrupt()
+    agent.generate_reply(user_input=ev.text)
 
 
 @dataclass(frozen=True)
@@ -38,6 +63,7 @@ class RoomInputOptions:
     """Topic for text input"""
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     """Noise cancellation options"""
+    text_input_cb: TextInputCallback | None = _default_text_input_cb
 
 
 @dataclass(frozen=True)
@@ -249,12 +275,6 @@ class RoomIO:
     async def wait_for_participant(self) -> rtc.RemoteParticipant:
         return await self._participant_connected
 
-    def toggle_text_audio_sync(self, enable: bool) -> None:
-        if not self._tr_synchronizer:
-            logger.warning("text audio sync is not enabled, ignoring")
-            return
-        self._tr_synchronizer.toggle_sync(enable)
-
     # -- RPC methods --
     # user can override these methods to handle RPC calls from the room
 
@@ -328,6 +348,11 @@ class RoomIO:
         if participant_identity != self._participant_identity:
             return
 
+        participant = self._room.remote_participants.get(participant_identity)
+        if not participant:
+            logger.warning("participant not found, ignoring text input")
+            return
+
         async def _read_text():
             text = await reader.read_all()
             logger.debug(
@@ -338,8 +363,13 @@ class RoomIO:
                 logger.warning("received text input but agent is not started, ignoring")
                 return
 
-            self._agent.interrupt()
-            self._agent.generate_reply(user_input=text)
+            if self._in_opts.text_input_cb:
+                text_input_result = self._in_opts.text_input_cb(
+                    self._agent,
+                    TextInputEvent(text=text, info=reader.info, participant=participant),
+                )
+                if asyncio.iscoroutine(text_input_result):
+                    await text_input_result
 
         task = asyncio.create_task(_read_text())
         self._tasks.add(task)
@@ -371,7 +401,7 @@ class RoomIO:
             return
 
         for sink in self._user_transcription._sinks:
-            assert isinstance(sink, (DataStreamTextSink, RoomTranscriptEventSink))
+            assert isinstance(sink, (TextStreamSink, RoomTranscriptEventSink))
             sink.set_participant(participant_identity)
 
     def _create_transcription_sink(
@@ -383,7 +413,7 @@ class RoomIO:
                 participant=participant_identity,
                 is_delta_stream=is_delta_stream,
             ),
-            DataStreamTextSink(
+            TextStreamSink(
                 room=self._room,
                 participant=participant_identity,
                 topic=topic,
@@ -620,8 +650,7 @@ class RoomTranscriptEventSink(TextSink):
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
         if (
-            self._track_id is not None
-            or self._participant_identity is None
+            self._participant_identity is None
             or participant.identity != self._participant_identity
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
@@ -630,8 +659,7 @@ class RoomTranscriptEventSink(TextSink):
 
     def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
         if (
-            self._track_id is not None
-            or self._participant_identity is None
+            self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
@@ -639,7 +667,7 @@ class RoomTranscriptEventSink(TextSink):
         self._track_id = track.sid
 
 
-class DataStreamTextSink(TextSink):
+class TextStreamSink(TextSink):
     """TextSink implementation that publishes transcriptions as text streams to a LiveKit room"""
 
     def __init__(
@@ -648,6 +676,7 @@ class DataStreamTextSink(TextSink):
         participant: rtc.Participant | str | None,
         *,
         topic: str | None = None,
+        track: rtc.Track | rtc.TrackPublication | str | None = None,
         is_delta_stream: bool = True,
     ):
         super().__init__()
@@ -656,6 +685,7 @@ class DataStreamTextSink(TextSink):
         self._tasks: set[asyncio.Task] = set()
 
         self._participant_identity: str | None = None
+        self._track_id: str | None = None
 
         self._topic = topic or TOPIC_CHAT
         self._text_writer: rtc.TextStreamWriter | None = None
@@ -664,7 +694,10 @@ class DataStreamTextSink(TextSink):
         self._latest_text = ""
         self._current_id = utils.shortuuid("SG_")
         self._is_capturing = False
-        self.set_participant(participant)
+
+        self._room.on("track_published", self._on_track_published)
+        self._room.on("local_track_published", self._on_local_track_published)
+        self.set_participant(participant, track)
 
     def set_participant(
         self,
@@ -672,6 +705,19 @@ class DataStreamTextSink(TextSink):
         track: rtc.Track | rtc.TrackPublication | str | None = None,
     ) -> None:
         identity = participant.identity if isinstance(participant, rtc.Participant) else participant
+
+        # set micro track id if possible
+        if identity is None:
+            self._track_id = None
+        else:
+            if isinstance(track, (rtc.TrackPublication, rtc.Track)):
+                track = track.sid
+            else:
+                try:
+                    track = find_micro_track_id(self._room, identity)
+                except ValueError:
+                    track = None
+            self._track_id = track
 
         if identity == self._participant_identity:
             return
@@ -696,11 +742,15 @@ class DataStreamTextSink(TextSink):
             self._is_capturing = True
 
         async def _create_writer() -> rtc.TextStreamWriter:
+            attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "false"}
+            if self._track_id:
+                attributes[ATTRIBUTE_TRACK_ID] = self._track_id
+
             return await self._room.local_participant.stream_text(
                 topic=self._topic,
                 stream_id=self._current_id,
                 sender_identity=self._participant_identity,
-                attributes={ATTRIBUTE_TRANSCRIPTION_FINAL: "false"},
+                attributes=attributes,
             )
 
         try:
@@ -740,6 +790,8 @@ class DataStreamTextSink(TextSink):
 
         async def _close_writer():
             attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
+            if self._track_id:
+                attributes[ATTRIBUTE_TRACK_ID] = self._track_id
             try:
                 if self._is_delta_stream:
                     # for delta streams, close the existing writer
@@ -762,6 +814,26 @@ class DataStreamTextSink(TextSink):
         task = asyncio.create_task(_close_writer())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _on_track_published(
+        self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> None:
+        if (
+            self._participant_identity is None
+            or participant.identity != self._participant_identity
+            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+        ):
+            return
+        self._track_id = track.sid
+
+    def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
+        if (
+            self._participant_identity is None
+            or self._participant_identity != self._room.local_participant.identity
+            or track.source != rtc.TrackSource.SOURCE_MICROPHONE
+        ):
+            return
+        self._track_id = track.sid
 
 
 # -- Input Streams --

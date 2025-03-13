@@ -47,7 +47,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
-        max_fnc_steps: int = 5,
+        max_fnc_steps: int = 3,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
@@ -62,7 +62,6 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_fnc_steps=max_fnc_steps,
         )
         self._started = False
-
         self._turn_detector = turn_detector or None
         self._stt = stt or None
         self._vad = vad or None
@@ -275,14 +274,14 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def say(
         self,
-        text: str,
+        text: str | AsyncIterable[str],
         *,
         audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise ValueError("VoiceAgent isn't running")
+            raise RuntimeError("VoiceAgent isn't running")
 
         return self._activity.say(
             text,
@@ -299,7 +298,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise ValueError("VoiceAgent isn't running")
+            raise RuntimeError("VoiceAgent isn't running")
 
         return self._activity.generate_reply(
             user_input=user_input,
@@ -309,7 +308,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def interrupt(self) -> None:
         if self._activity is None:
-            raise ValueError("VoiceAgent isn't running")
+            raise RuntimeError("VoiceAgent isn't running")
 
         self._activity.interrupt()
 
