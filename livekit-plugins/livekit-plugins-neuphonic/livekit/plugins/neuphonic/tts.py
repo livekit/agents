@@ -130,7 +130,7 @@ class TTS(tts.TTS):
             encoding (TTSEncodings | str, optional): The audio encoding format. Defaults to "pcm_mulaw".
             speed (float, optional): The audio playback speed. Defaults to 1.0.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 22050.
-            api_key (str | None, optional): The Neuphonic API key. If not provided, it will be read from the NEUPHONIC_API_TOKEN environment variable.
+            api_key (str | None, optional): The Neuphonic API key. If not provided, it will be read from the NEUPHONIC_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Neuphonic API. Defaults to "api.neuphonic.com".
         """
@@ -140,10 +140,10 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.environ.get("NEUPHONIC_API_TOKEN")
+        api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
 
         if not api_key:
-            raise ValueError("NEUPHONIC_API_TOKEN must be set")
+            raise ValueError("NEUPHONIC_API_KEY must be set")
 
         self._opts = _TTSOptions(
             model=model,
