@@ -143,7 +143,9 @@ class TTS(tts.TTS):
         api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
 
         if not api_key:
-            raise ValueError("NEUPHONIC_API_KEY must be set")
+            raise ValueError(
+                "NEUPHONIC_API_KEY must be set using the argument or by setting the NEUPHONIC_API_KEY environment variable."
+            )
 
         self._opts = _TTSOptions(
             model=model,
