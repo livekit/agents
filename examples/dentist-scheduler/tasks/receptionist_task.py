@@ -61,28 +61,20 @@ class Receptionist(AgentTask):
         ].messenger, "I'll be transferring you to Shimmer."
 
     @ai_function()
-    async def update_name(self, name: str) -> None:
-        """Updates the user's name
+    async def update_information(self, field: str, updated_info: str) -> str:
+        """Updates the user's information on record.
 
         Args:
-            name: User's name
+            field: Either "name", "email", or "phone_number"
+            updated_info: The user's name, email, or phone number
         """
-        self.agent.userdata["userinfo"].name = name
+        if field == "name":
+            self.agent.userdata["userinfo"].name = updated_info
 
-    @ai_function()
-    async def update_email(self, email: str) -> None:
-        """Updates email associated with the user
+        if field == "email":
+            self.agent.userdata["userinfo"].email = updated_info
 
-        Args:
-            email: The user's email
-        """
-        self.agent.userdata["userinfo"].email = email
+        if field == "phone_number":
+            self.agent.userdata["userinfo"].phone = updated_info
 
-    @ai_function()
-    async def update_phone_number(self, phone_number: str) -> None:
-        """Updates phone number associated with the user
-
-        Args:
-            phone number: The user's phone number
-        """
-        self.agent.userdata["userinfo"].phone = phone_number
+        return "Got it, thank you!"

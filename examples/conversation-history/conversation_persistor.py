@@ -127,18 +127,18 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
 
         @self._agent.on("user_started_speaking")
         def _user_started_speaking(ev: AgentEvent):
-            event = EventLog(eventname=ev)
+            event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
         @self._agent.on("user_stopped_speaking")
         def _user_stopped_speaking(ev: AgentEvent):
-            event = EventLog(eventname=ev)
+            event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
         @self._agent.on("user_input_transcribed")
         def _user_input_transcribed(ev: AgentEvent):
             if ev.is_final:
-                event = EventLog(eventname="user_input_transcribed")
+                event = EventLog(eventname=ev.type)
                 self._log_q.put_nowait(event)
                 transcription = TranscriptionLog(
                     role="user", transcription=ev.transcript
@@ -152,15 +152,15 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         #     event = EventLog(name)
         #     self._log_q.put_nowait(event)
 
-        # @self._agent.on("agent_started_speaking")
-        # def _agent_started_speaking(ev: AgentEvent):
-        #     event = EventLog("agent_started_speaking")
-        #     self._log_q.put_nowait(event)
+        @self._agent.on("agent_started_speaking")
+        def _agent_started_speaking(ev: AgentEvent):
+            event = EventLog(eventname=ev.type)
+            self._log_q.put_nowait(event)
 
-        # @self._agent.on("agent_stopped_speaking")
-        # def _agent_stopped_speaking():
-        #     event = EventLog("agent_stopped_speaking")
-        #     self._log_q.put_nowait(event)
+        @self._agent.on("agent_stopped_speaking")
+        def _agent_stopped_speaking(ev: AgentEvent):
+            event = EventLog(eventname=ev.type)
+            self._log_q.put_nowait(event)
 
 
 load_dotenv()
