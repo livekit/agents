@@ -26,6 +26,8 @@ from openai.types.beta.realtime import (
     InputAudioBufferAppendEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
+    InputAudioBufferClearEvent,
+    InputAudioBufferCommitEvent,
     RealtimeClientEvent,
     ResponseAudioDeltaEvent,
     ResponseAudioDoneEvent,
@@ -41,6 +43,7 @@ from openai.types.beta.realtime import (
     session_update_event,
 )
 from openai.types.beta.realtime.response_create_event import Response
+from openai.types.beta.realtime.session_update_event import SessionTurnDetection
 
 from .log import logger
 
@@ -69,13 +72,21 @@ class _InputAudioTranscription:
 
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = _InputAudioTranscription()
 
+DEFAULT_TURN_DETECTION_OPTIONS = SessionTurnDetection(
+    create_response=True,
+    interrupt_response=True,
+    prefix_padding_ms=300,
+    silence_duration_ms=500,
+    threshold=0.5,
+    type="server_vad",
+)
 
 @dataclass
 class _RealtimeOptions:
     model: str
     voice: str
     input_audio_transcription: Optional[_InputAudioTranscription]
-
+    turn_detection: Optional[SessionTurnDetection]
 
 @dataclass
 class _MessageGeneration:
@@ -102,6 +113,7 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: Optional[
             _InputAudioTranscription
         ] = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: SessionTurnDetection | None = DEFAULT_TURN_DETECTION_OPTIONS,
         client: openai.AsyncClient | None = None,
     ) -> None:
         super().__init__(
@@ -113,6 +125,7 @@ class RealtimeModel(llm.RealtimeModel):
             model=model,
             voice=voice,
             input_audio_transcription=input_audio_transcription,
+            turn_detection=turn_detection,
         )
         self._client = client or openai.AsyncClient(base_url=base_url or None)
 
@@ -328,6 +341,22 @@ class RealtimeSession(llm.RealtimeSession):
                 type="input_audio_buffer.append",
                 audio=base64.b64encode(frame.data).decode("utf-8"),
             )
+        )
+    
+    async def commit_audio_buffer(self) -> None:
+        """Manually commits the audio buffer when turn_detection is disabled.
+        This creates a new user input item for the conversation.
+        """
+        self._msg_ch.send_nowait(
+            InputAudioBufferCommitEvent(type="input_audio_buffer.commit")
+        )
+
+    async def clear_audio_buffer(self) -> None:
+        """Clears the audio buffer.
+        Should be called before beginning a new user input when turn_detection is disabled.
+        """
+        self._msg_ch.send_nowait(
+            InputAudioBufferClearEvent(type="input_audio_buffer.clear")
         )
 
     def generate_reply(
