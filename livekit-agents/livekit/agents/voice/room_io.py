@@ -98,6 +98,7 @@ class RoomIO:
     async def start(self) -> None:
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
+        self._room.on("disconnected", self._on_room_disconnected)
         for participant in self._room.remote_participants.values():
             self._on_participant_connected(participant)
 
@@ -320,6 +321,15 @@ class RoomIO:
 
         self._participant_connected = asyncio.Future[rtc.RemoteParticipant]()
 
+    def _on_room_disconnected(self, reason: rtc.DisconnectReason.ValueType) -> None:
+        logger.debug("room disconnected", extra={"reason": rtc.DisconnectReason.Name(reason)})
+        try:
+            self._agent.interrupt()
+        except RuntimeError as e:
+            logger.warning(
+                "failed to interrupt agent during room disconnection", extra={"error": e}
+            )
+
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcription is None:
             return
@@ -404,6 +414,7 @@ class RoomIO:
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
+        self._room.off("disconnected", self._on_room_disconnected)
 
         if self._audio_input_handle:
             await self._audio_input_handle.aclose()
