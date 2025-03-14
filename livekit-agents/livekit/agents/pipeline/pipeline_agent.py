@@ -966,7 +966,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         _commit_user_question_if_needed()
 
-        collected_text = self._get_current_spoken_text()
+        collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text
         interrupted = speech_handle.interrupted
         is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
             speech_handle.source.function_calls
@@ -994,9 +994,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     if collected_text in (
                         AppConfig().call_metadata.get("agent_interrupted_text") or ""
                     ):
+                        app_config_text = AppConfig().call_metadata.get('agent_interrupted_text')
+                        current_text = self._get_current_spoken_text()
+                        text_to_replace = current_text if current_text else app_config_text
                         logger.info(
-                            f"Replacing interrupted text=`{collected_text}` with `{collected_text}`"
+                            f"Replacing interrupted text=`{collected_text}` with `{text_to_replace}`"
                         )
+                        collected_text = text_to_replace
                     collected_text += "..."
 
                 msg = ChatMessage.create(text=collected_text, role="assistant")
