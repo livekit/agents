@@ -104,8 +104,6 @@ class SpeechCreatedEvent(BaseModel):
     """Source indicating how the speech handle was created"""
     speech_handle: SpeechHandle = Field(..., exclude=True)
     """The speech handle that was created"""
-    initiator_speech_handle: Optional[SpeechHandle] = Field(None, exclude=True)
-    """The speech handle that initiated the creation of this speech handle. This happens when a tool call is made, a new SpeechHandle will be created for the tool response."""
 
 
 AgentEvent = Union[
