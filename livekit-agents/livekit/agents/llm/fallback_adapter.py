@@ -121,10 +121,10 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.chat_ctx
 
     @property
-    def fnc_ctx(self) -> ToolContext | None:
+    def tools(self) -> ToolContext | None:
         if self._current_stream is None:
             return self._tools
-        return self._current_stream.fnc_ctx
+        return self._current_stream.tools
 
     def execute_functions(self) -> list[CalledFunction]:
         # this function is unused, but putting it in place for completeness

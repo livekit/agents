@@ -196,12 +196,10 @@ class LLMStream(ABC):
 
     @property
     def chat_ctx(self) -> ChatContext:
-        """The chat context of this stream."""
         return self._chat_ctx
 
     @property
-    def fnc_ctx(self) -> list[FunctionTool]:
-        """The function context of this stream."""
+    def tools(self) -> list[FunctionTool]:
         return self._tools
 
     async def aclose(self) -> None:

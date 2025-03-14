@@ -147,7 +147,7 @@ class Agent:
                 await utils.aio.cancel_and_wait(forward_task)
 
     async def llm_node(
-        self, chat_ctx: llm.ChatContext, fnc_ctx: list[FunctionTool]
+        self, chat_ctx: llm.ChatContext, tools: list[FunctionTool]
     ) -> Union[
         Optional[AsyncIterable[llm.ChatChunk]],
         Optional[AsyncIterable[str]],
@@ -159,7 +159,7 @@ class Agent:
             "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
         )
 
-        async with activity.llm.chat(chat_ctx=chat_ctx, tools=fnc_ctx) as stream:
+        async with activity.llm.chat(chat_ctx=chat_ctx, tools=tools) as stream:
             async for chunk in stream:
                 yield chunk
 
