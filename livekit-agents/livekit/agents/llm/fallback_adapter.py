@@ -99,7 +99,7 @@ class FallbackLLMStream(LLMStream):
         parallel_tool_calls: bool | None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=fnc_ctx, conn_options=conn_options)
         self._fallback_adapter = llm
         self._temperature = temperature
         self._n = n
@@ -123,7 +123,7 @@ class FallbackLLMStream(LLMStream):
     @property
     def fnc_ctx(self) -> ToolContext | None:
         if self._current_stream is None:
-            return self._fnc_ctx
+            return self._tools
         return self._current_stream.fnc_ctx
 
     def execute_functions(self) -> list[CalledFunction]:
@@ -147,7 +147,7 @@ class FallbackLLMStream(LLMStream):
         try:
             async with llm.chat(
                 chat_ctx=self._chat_ctx,
-                fnc_ctx=self._fnc_ctx,
+                tools=self._tools,
                 temperature=self._temperature,
                 n=self._n,
                 parallel_tool_calls=self._parallel_tool_calls,

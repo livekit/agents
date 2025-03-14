@@ -362,7 +362,7 @@ class TaskActivity(RecognitionHooks):
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=self._agent_task._chat_ctx,
-                    fnc_ctx=self._agent_task._fnc_ctx,
+                    fnc_ctx=self._agent_task._tool_ctx,
                     user_input=user_input or None,
                     instructions=instructions or None,
                 ),
@@ -925,7 +925,7 @@ class TaskActivity(RecognitionHooks):
         exe_task, fnc_outputs = perform_tool_executions(
             agent=self._agent,
             speech_handle=speech_handle,
-            fnc_ctx=self._agent_task._fnc_ctx,
+            fnc_ctx=self._agent_task._tool_ctx,
             function_stream=generation_ev.function_stream,
         )
 

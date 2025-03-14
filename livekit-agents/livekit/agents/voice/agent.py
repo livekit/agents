@@ -11,7 +11,7 @@ from ..llm import (
     FunctionTool,
     ChatContext,
     ToolContext,
-    find_ai_functions,
+    find_function_tools,
 )
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -28,7 +28,7 @@ class Agent:
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.FunctionTool] = [],
+        tools: list[llm.FunctionTool] = [],
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -38,7 +38,7 @@ class Agent:
     ) -> None:
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
-        self._fnc_ctx = ToolContext(ai_functions + find_ai_functions(self))
+        self._tool_ctx = ToolContext(tools + find_function_tools(self))
         self._eou = turn_detector
         self._stt = stt
         self._llm = llm
@@ -53,7 +53,7 @@ class Agent:
 
     @property
     def ai_functions(self) -> list[llm.FunctionTool]:
-        return list(self._fnc_ctx.tools.values())
+        return list(self._tool_ctx.tools.values())
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -159,7 +159,7 @@ class Agent:
             "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
         )
 
-        async with activity.llm.chat(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx) as stream:
+        async with activity.llm.chat(chat_ctx=chat_ctx, tools=fnc_ctx) as stream:
             async for chunk in stream:
                 yield chunk
 
@@ -221,7 +221,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            ai_functions=ai_functions,
+            tools=ai_functions,
             turn_detector=turn_detector,
             stt=stt,
             vad=vad,

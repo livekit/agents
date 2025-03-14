@@ -100,7 +100,7 @@ def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
     return getattr(f, "__livekit_agents_ai_callable")
 
 
-def find_ai_functions(cls_or_obj: Any) -> list[FunctionTool]:
+def find_function_tools(cls_or_obj: Any) -> list[FunctionTool]:
     methods: list[FunctionTool] = []
     for _, member in inspect.getmembers(cls_or_obj):
         if is_ai_function(member):
@@ -125,7 +125,7 @@ class ToolContext:
     def update_tools(self, tools: list[FunctionTool]) -> None:
         self._ai_functions = tools
 
-        for method in find_ai_functions(self):
+        for method in find_function_tools(self):
             tools.append(method)
 
         self._ai_functions_map = {}

@@ -93,7 +93,7 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[FunctionTool] | None = None,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
@@ -120,12 +120,12 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[FunctionTool],
+        tools: list[FunctionTool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
         self._chat_ctx = chat_ctx
-        self._fnc_ctx = fnc_ctx
+        self._tools = tools
         self._conn_options = conn_options
 
         self._event_ch = aio.Chan[ChatChunk]()
@@ -202,7 +202,7 @@ class LLMStream(ABC):
     @property
     def fnc_ctx(self) -> list[FunctionTool]:
         """The function context of this stream."""
-        return self._fnc_ctx
+        return self._tools
 
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._task)

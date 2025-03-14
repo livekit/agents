@@ -17,7 +17,7 @@ from .tool_context import (
     ToolContext,
     StopResponse,
     function_tool,
-    find_ai_functions,
+    find_function_tools,
     is_ai_function,
 )
 from .llm import (
@@ -64,7 +64,7 @@ __all__ = [
     "ToolChoice",
     "is_ai_function",
     "function_tool",
-    "find_ai_functions",
+    "find_function_tools",
     "FunctionTool",
     "ToolContext",
     "ToolError",
