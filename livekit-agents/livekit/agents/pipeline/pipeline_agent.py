@@ -852,8 +852,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         logger.info(f"playout_start_time: {app_config.playout_start_time}")
         elapsed_ms = (time.time() - app_config.playout_start_time) * 1000
         logger.info(f"elapsed_ms: {elapsed_ms}")
+
         logger.info(
-            f"_get_current_spoken_text: {self._get_spoken_text_at_time(elapsed_ms)}"
+            f"Inside _get_current_spoken_text, about to return: {self._get_spoken_text_at_time(elapsed_ms)}"
         )
         return self._get_spoken_text_at_time(elapsed_ms)
 
@@ -1011,6 +1012,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     #     "agent_interrupted_text"
                     # )
                     current_text = self._get_current_spoken_text() or ""
+                    logger.info(f"current_text: {current_text}")
                     if (
                         collected_text in current_text
                         and collected_text != current_text
