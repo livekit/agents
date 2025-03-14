@@ -32,7 +32,7 @@ from ..types import (
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .function_context import AIFunction
+from .function_context import FunctionTool
 
 
 class CompletionUsage(BaseModel):
@@ -93,7 +93,7 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        fnc_ctx: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
@@ -120,7 +120,7 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[AIFunction],
+        fnc_ctx: list[FunctionTool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
@@ -200,7 +200,7 @@ class LLMStream(ABC):
         return self._chat_ctx
 
     @property
-    def fnc_ctx(self) -> list[AIFunction]:
+    def fnc_ctx(self) -> list[FunctionTool]:
         """The function context of this stream."""
         return self._fnc_ctx
 

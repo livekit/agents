@@ -57,14 +57,14 @@ class StopResponse(Exception):
 
 
 @dataclass
-class _AIFunctionInfo:
+class _FunctionToolInfo:
     name: str
     description: str | None
 
 
 @runtime_checkable
-class AIFunction(Protocol):
-    __livekit_agents_ai_callable: _AIFunctionInfo
+class FunctionTool(Protocol):
+    __livekit_agents_ai_callable: _FunctionToolInfo
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -74,12 +74,12 @@ def function_tool(
     *,
     name: str | None = None,
     description: str | None = None,
-) -> Callable[[Callable], AIFunction]:
-    def deco(func) -> AIFunction:
+) -> Callable[[Callable], FunctionTool]:
+    def deco(func) -> FunctionTool:
         from docstring_parser import parse_from_object
 
         docstring = parse_from_object(func)
-        info = _AIFunctionInfo(
+        info = _FunctionToolInfo(
             name=name or func.__name__,
             description=description or docstring.description,
         )
@@ -92,49 +92,49 @@ def function_tool(
     return deco
 
 
-def is_ai_function(f: Callable) -> TypeGuard[AIFunction]:
+def is_ai_function(f: Callable) -> TypeGuard[FunctionTool]:
     return hasattr(f, "__livekit_agents_ai_callable")
 
 
-def get_function_info(f: AIFunction) -> _AIFunctionInfo:
+def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
     return getattr(f, "__livekit_agents_ai_callable")
 
 
-def find_ai_functions(cls_or_obj: Any) -> list[AIFunction]:
-    methods: list[AIFunction] = []
+def find_ai_functions(cls_or_obj: Any) -> list[FunctionTool]:
+    methods: list[FunctionTool] = []
     for _, member in inspect.getmembers(cls_or_obj):
         if is_ai_function(member):
             methods.append(member)
     return methods
 
 
-class FunctionContext:
+class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, ai_functions: list[AIFunction]) -> None:
-        self.update_ai_functions(ai_functions)
+    def __init__(self, ai_functions: list[FunctionTool]) -> None:
+        self.update_tools(ai_functions)
 
     @classmethod
-    def empty(cls) -> FunctionContext:
+    def empty(cls) -> ToolContext:
         return cls([])
 
     @property
-    def ai_functions(self) -> dict[str, AIFunction]:
+    def tools(self) -> dict[str, FunctionTool]:
         return self._ai_functions_map.copy()
 
-    def update_ai_functions(self, ai_functions: list[AIFunction]) -> None:
-        self._ai_functions = ai_functions
+    def update_tools(self, tools: list[FunctionTool]) -> None:
+        self._ai_functions = tools
 
         for method in find_ai_functions(self):
-            ai_functions.append(method)
+            tools.append(method)
 
         self._ai_functions_map = {}
-        for fnc in ai_functions:
+        for fnc in tools:
             info = get_function_info(fnc)
             if info.name in self._ai_functions_map:
                 raise ValueError(f"duplicate function name: {info.name}")
 
             self._ai_functions_map[info.name] = fnc
 
-    def copy(self) -> FunctionContext:
-        return FunctionContext(self._ai_functions.copy())
+    def copy(self) -> ToolContext:
+        return ToolContext(self._ai_functions.copy())

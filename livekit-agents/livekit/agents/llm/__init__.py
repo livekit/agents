@@ -13,8 +13,8 @@ from .chat_context import (
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .function_context import (
     ToolError,
-    AIFunction,
-    FunctionContext,
+    FunctionTool,
+    ToolContext,
     StopResponse,
     function_tool,
     find_ai_functions,
@@ -65,8 +65,8 @@ __all__ = [
     "is_ai_function",
     "function_tool",
     "find_ai_functions",
-    "AIFunction",
-    "FunctionContext",
+    "FunctionTool",
+    "ToolContext",
     "ToolError",
     "StopResponse",
     "utils",

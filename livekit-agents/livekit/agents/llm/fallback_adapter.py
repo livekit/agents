@@ -11,7 +11,7 @@ from livekit.agents._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
-from .function_context import FunctionContext
+from .function_context import ToolContext
 from .llm import LLM, ChatChunk, LLMStream, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -68,7 +68,7 @@ class FallbackAdapter(
         *,
         chat_ctx: ChatContext,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
-        fnc_ctx: FunctionContext | None = None,
+        fnc_ctx: ToolContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
@@ -93,7 +93,7 @@ class FallbackLLMStream(LLMStream):
         llm: FallbackAdapter,
         conn_options: APIConnectOptions,
         chat_ctx: ChatContext,
-        fnc_ctx: FunctionContext | None,
+        fnc_ctx: ToolContext | None,
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
@@ -121,7 +121,7 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.chat_ctx
 
     @property
-    def fnc_ctx(self) -> FunctionContext | None:
+    def fnc_ctx(self) -> ToolContext | None:
         if self._current_stream is None:
             return self._fnc_ctx
         return self._current_stream.fnc_ctx

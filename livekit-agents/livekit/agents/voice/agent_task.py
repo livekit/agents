@@ -8,9 +8,9 @@ from livekit import rtc
 from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     ToolError,
-    AIFunction,
+    FunctionTool,
     ChatContext,
-    FunctionContext,
+    ToolContext,
     find_ai_functions,
 )
 from ..log import logger
@@ -28,7 +28,7 @@ class Agent:
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.AIFunction] = [],
+        ai_functions: list[llm.FunctionTool] = [],
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -38,7 +38,7 @@ class Agent:
     ) -> None:
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
-        self._fnc_ctx = FunctionContext(ai_functions + find_ai_functions(self))
+        self._fnc_ctx = ToolContext(ai_functions + find_ai_functions(self))
         self._eou = turn_detector
         self._stt = stt
         self._llm = llm
@@ -52,8 +52,8 @@ class Agent:
         return self._instructions
 
     @property
-    def ai_functions(self) -> list[llm.AIFunction]:
-        return list(self._fnc_ctx.ai_functions.values())
+    def ai_functions(self) -> list[llm.FunctionTool]:
+        return list(self._fnc_ctx.tools.values())
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -147,7 +147,7 @@ class Agent:
                 await utils.aio.cancel_and_wait(forward_task)
 
     async def llm_node(
-        self, chat_ctx: llm.ChatContext, fnc_ctx: list[AIFunction]
+        self, chat_ctx: llm.ChatContext, fnc_ctx: list[FunctionTool]
     ) -> Union[
         Optional[AsyncIterable[llm.ChatChunk]],
         Optional[AsyncIterable[str]],
@@ -211,7 +211,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.AIFunction] = [],
+        ai_functions: list[llm.FunctionTool] = [],
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,

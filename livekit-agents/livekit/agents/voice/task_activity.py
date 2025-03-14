@@ -634,7 +634,7 @@ class TaskActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.FunctionContext,
+        fnc_ctx: llm.ToolContext,
         user_input: str | None = None,
         instructions: str | None = None,
     ) -> None:
