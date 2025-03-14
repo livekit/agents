@@ -846,7 +846,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             return "", 0
 
         elapsed_ms = (time.time() - app_config.playout_start_time) * 1000
-        return self.get_spoken_text_at_time(elapsed_ms)
+        return self._get_spoken_text_at_time(elapsed_ms)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
         await self._agent_publication.wait_for_subscription()
@@ -993,7 +993,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     if collected_text in (
                         AppConfig().call_metadata.get("agent_interrupted_text") or ""
                     ):
-                        # AppConfig().agent_interrupted = True
+                        AppConfig().agent_interrupted = True
                         app_config_text = AppConfig().call_metadata.get(
                             "agent_interrupted_text"
                         )
