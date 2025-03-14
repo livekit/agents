@@ -1263,6 +1263,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if self._playing_speech is None:
             return False
 
+        if AppConfig().get_call_metadata().get("is_speaking_uninterruptible_message"):
+            logger.info(f"Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}")
+            self._transcribed_text = ""
+            return False
+
         if (
             not self._playing_speech.allow_interruptions
             or self._playing_speech.interrupted
