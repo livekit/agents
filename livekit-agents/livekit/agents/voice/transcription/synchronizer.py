@@ -12,7 +12,7 @@ from ... import tokenize, utils
 from ...log import logger
 from ...tokenize.tokenizer import PUNCTUATIONS
 from ...types import NOT_GIVEN, NotGivenOr
-from ...voice.io import AudioSink, PlaybackFinishedEvent, TextSink
+from ...voice.io import AudioOutput, PlaybackFinishedEvent, TextOutput
 from . import _utils
 
 # Standard speech rate in hyphens per second
@@ -312,8 +312,8 @@ class _TextAudioSynchronizer:
 class TextSynchronizer:
     def __init__(
         self,
-        audio_sink: AudioSink,
-        text_sink: TextSink,
+        audio_output: AudioOutput,
+        text_output: TextOutput,
         *,
         sync_options: NotGivenOr[TextSyncOptions] = NOT_GIVEN,
     ) -> None:
@@ -323,9 +323,9 @@ class TextSynchronizer:
         self._synchronizer = _TextAudioSynchronizer(options=self._sync_options)
         self._sync_enabled = True
 
-        self._base_text_sink = text_sink
-        self._text_sink = _TextSink(self)
-        self._audio_sink = _AudioSync(audio_sink, self)
+        self._base_text_output = text_output
+        self._text_output = _TextOutput(self)
+        self._audio_output = _AudioSyncOutput(audio_output, self)
 
         self._tasks: set[asyncio.Task] = set()
         self._main_task = asyncio.create_task(self._forward_event())
@@ -338,14 +338,14 @@ class TextSynchronizer:
         self._flush()
 
     @property
-    def audio_sink(self) -> "_AudioSync":
-        """Get the audio sink wrapper"""
-        return self._audio_sink
+    def audio_output(self) -> "_AudioSyncOutput":
+        """Get the audio output wrapper"""
+        return self._audio_output
 
     @property
-    def text_sink(self) -> "_TextSink":
-        """Get the text sink wrapper"""
-        return self._text_sink
+    def text_output(self) -> "_TextOutput":
+        """Get the text output wrapper"""
+        return self._text_output
 
     async def _forward_event(self) -> None:
         last_stream_id: str | None = None
@@ -353,12 +353,12 @@ class TextSynchronizer:
         while not self._closed:
             async for segment in self._synchronizer:
                 if last_stream_id != segment.stream_id:
-                    self._base_text_sink.flush()
+                    self._base_text_output.flush()
                     last_stream_id = segment.stream_id
 
-                await self._base_text_sink.capture_text(segment.delta)
+                await self._base_text_output.capture_text(segment.delta)
 
-            self._base_text_sink.flush()
+            self._base_text_output.flush()
 
     def _flush(self) -> None:
         """Close the old transcription segment and create a new one"""
@@ -377,28 +377,28 @@ class TextSynchronizer:
         await utils.aio.cancel_and_wait(self._main_task)
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
-        self._base_text_sink.flush()
+        self._base_text_output.flush()
 
 
-class _AudioSync(AudioSink):
-    def __init__(self, base_sink: AudioSink, parent: TextSynchronizer) -> None:
-        super().__init__(sample_rate=base_sink.sample_rate)
+class _AudioSyncOutput(AudioOutput):
+    def __init__(self, base_output: AudioOutput, parent: TextSynchronizer) -> None:
+        super().__init__(sample_rate=base_output.sample_rate)
         self._parent = parent
         self._capturing = False
         self._interrupted = False
 
-        self._base_sink = base_sink
-        self._base_sink.on("playback_finished", self._on_playback_finished)
+        self._base_output = base_output
+        self._base_output.on("playback_finished", self._on_playback_finished)
 
-    def set_base_sink(self, base_sink: AudioSink) -> None:
-        if self._base_sink:
-            self._base_sink.off("playback_finished", self._on_playback_finished)
-        self._base_sink = base_sink
-        self._base_sink.on("playback_finished", self._on_playback_finished)
+    def set_base_output(self, base_output: AudioOutput) -> None:
+        if self._base_output:
+            self._base_output.off("playback_finished", self._on_playback_finished)
+        self._base_output = base_output
+        self._base_output.on("playback_finished", self._on_playback_finished)
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
-        await self._base_sink.capture_frame(frame)
+        await self._base_output.capture_frame(frame)
         if not self._parent._sync_enabled:
             return
 
@@ -411,7 +411,7 @@ class _AudioSync(AudioSink):
 
     def flush(self) -> None:
         super().flush()
-        self._base_sink.flush()
+        self._base_output.flush()
         if not self._parent._sync_enabled:
             return
 
@@ -421,7 +421,7 @@ class _AudioSync(AudioSink):
 
     def clear_buffer(self) -> None:
         self._interrupted = True
-        self._base_sink.clear_buffer()
+        self._base_output.clear_buffer()
 
     def on_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
         super().on_playback_finished(playback_position=playback_position, interrupted=interrupted)
@@ -439,21 +439,21 @@ class _AudioSync(AudioSink):
         )
 
 
-class _TextSink(TextSink):
+class _TextOutput(TextOutput):
     def __init__(self, parent: TextSynchronizer) -> None:
         super().__init__()
         self._parent = parent
 
     async def capture_text(self, text: str) -> None:
         if not self._parent._sync_enabled:
-            await self._parent._base_text_sink.capture_text(text)
+            await self._parent._base_text_output.capture_text(text)
             return
 
         self._parent._synchronizer.push_text(text)
 
     def flush(self) -> None:
         if not self._parent._sync_enabled:
-            self._parent._base_text_sink.flush()
+            self._parent._base_text_output.flush()
             return
 
         self._parent._synchronizer.mark_text_segment_end()

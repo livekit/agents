@@ -160,11 +160,7 @@ class RoomIO:
             audio_output = self._audio_output or self._agent_session.output.audio
             if audio_output:
                 self._tr_output_synchronizer = TextSynchronizer(
-                    audio_output, text_sink=self._agent_tr_output
-                )
-                self._agent_session.output.on("audio_changed", self._on_agent_output_changed)
-                self._agent_session.output.on(
-                    "transcription_changed", self._on_agent_output_changed
+                    audio_output, text_output=self._agent_tr_output
                 )
 
         # TODO(theomonnom): ideally we're consistent and every input/output has a start method
@@ -208,13 +204,13 @@ class RoomIO:
     @property
     def audio_output(self) -> AudioOutput | None:
         if self._tr_output_synchronizer:
-            return self._tr_output_synchronizer.audio_sink
+            return self._tr_output_synchronizer.audio_output
         return self._audio_output
 
     @property
     def transcription_output(self) -> TextOutput | None:
         if self._tr_output_synchronizer:
-            return self._tr_output_synchronizer.text_sink
+            return self._tr_output_synchronizer.text_output
         return self._agent_tr_output
 
     @property
@@ -349,6 +345,7 @@ class RoomIO:
         self._update_state_task = asyncio.create_task(_set_state())
 
     def _on_agent_output_changed(self, sink: AudioOutput | TextOutput | None) -> None:
+        # TODO(long): replace with output.on_attached and output.on_detached
         if not self._tr_output_synchronizer:
             return
 

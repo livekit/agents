@@ -28,7 +28,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.function_context import AIFunction
+from livekit.agents.llm.tool_context import FunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -518,7 +518,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
@@ -559,7 +559,7 @@ class LLM(llm.LLM):
             model=self._opts.model,
             client=self._client,
             chat_ctx=chat_ctx,
-            fnc_ctx=fnc_ctx or [],
+            tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
         )
@@ -573,11 +573,11 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: list[AIFunction],
+        tools: list[FunctionTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._client = client
         self._llm = llm
@@ -598,7 +598,7 @@ class LLMStream(llm.LLMStream):
                 ChatCompletionChunk
             ] = await self._client.chat.completions.create(
                 messages=to_chat_ctx(self._chat_ctx, id(self._llm)),
-                tools=to_fnc_ctx(self._fnc_ctx) if self._fnc_ctx else openai.NOT_GIVEN,
+                tools=to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,

@@ -102,7 +102,10 @@ class _ParticipantInputStream(Generic[T], ABC):
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        if self._participant != participant or publication.source != self._track_source:
+        if (
+            self._participant_identity != participant.identity
+            or publication.source != self._track_source
+        ):
             return
 
         self._close_stream()

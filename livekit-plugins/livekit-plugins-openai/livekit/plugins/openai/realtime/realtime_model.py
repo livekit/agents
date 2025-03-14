@@ -126,7 +126,7 @@ class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
-        self._fnc_ctx = llm.FunctionContext.empty()
+        self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent]()
         self._input_resampler: rtc.AudioResampler | None = None
 
@@ -227,8 +227,8 @@ class RealtimeSession(llm.RealtimeSession):
         return self._remote_chat_ctx.to_chat_ctx()
 
     @property
-    def fnc_ctx(self) -> llm.FunctionContext:
-        return self._fnc_ctx.copy()
+    def tools(self) -> llm.ToolContext:
+        return self._tools.copy()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
@@ -271,20 +271,20 @@ class RealtimeSession(llm.RealtimeSession):
             except asyncio.TimeoutError:
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
-    async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]) -> None:
+    async def update_tools(self, tool_ctx: llm.ToolContext | list[llm.FunctionTool]) -> None:
         async with self._update_fnc_ctx_lock:
-            if isinstance(fnc_ctx, list):
-                fnc_ctx = llm.FunctionContext(fnc_ctx)
+            if isinstance(tool_ctx, list):
+                tool_ctx = llm.ToolContext(tool_ctx)
 
             tools: list[session_update_event.SessionTool] = []
-            retained_functions: list[llm.AIFunction] = []
+            retained_tools: list[llm.FunctionTool] = []
 
-            for ai_fnc in fnc_ctx.ai_functions.values():
-                tool_desc = llm.utils.build_legacy_openai_schema(ai_fnc, internally_tagged=True)
+            for tool in tool_ctx.tools.values():
+                tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
                 try:
                     session_tool = session_update_event.SessionTool.model_validate(tool_desc)
                     tools.append(session_tool)
-                    retained_functions.append(ai_fnc)
+                    retained_tools.append(tool)
                 except ValidationError:
                     logger.error(
                         "OpenAI Realtime API doesn't support this tool",
@@ -292,7 +292,7 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                     continue
 
-            event_id = utils.shortuuid("fnc_ctx_update_")
+            event_id = utils.shortuuid("tools_update_")
             # f = asyncio.Future()
             # self._response_futures[event_id] = f
             self._msg_ch.send_nowait(
@@ -306,7 +306,7 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             )
 
-            self._fnc_ctx = llm.FunctionContext(retained_functions)
+            self._tools = llm.ToolContext(retained_tools)
 
     async def update_instructions(self, instructions: str) -> None:
         event_id = utils.shortuuid("instructions_update_")

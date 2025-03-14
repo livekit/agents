@@ -114,6 +114,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_task: asyncio.Task | None = None
 
+        self._reset_state()
         self.set_participant(participant)
 
     def set_participant(
@@ -231,6 +232,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_atask: asyncio.Task | None = None
 
+        self._reset_state()
         self.set_participant(participant)
 
     def set_participant(
