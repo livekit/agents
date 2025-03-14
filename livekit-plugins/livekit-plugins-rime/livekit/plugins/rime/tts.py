@@ -114,7 +114,7 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: TTSModels | None,
+        model: TTSModels | str | None,
         speaker: str | None,
     ) -> None:
         self._opts.model = model or self._opts.model

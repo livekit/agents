@@ -87,7 +87,7 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        model: WhisperModels | GroqAudioModels | None = None,
+        model: WhisperModels | GroqAudioModels | str | None = None,
         language: str | None = None,
     ) -> None:
         self._opts.model = model or self._opts.model

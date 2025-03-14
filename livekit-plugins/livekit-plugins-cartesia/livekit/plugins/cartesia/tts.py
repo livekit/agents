@@ -149,7 +149,7 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: TTSModels | None = None,
+        model: TTSModels | str | None = None,
         language: str | None = None,
         voice: str | list[float] | None = None,
         speed: TTSVoiceSpeed | float | None = None,
