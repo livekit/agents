@@ -204,8 +204,8 @@ async def _audio_forwarding_task(
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
 ) -> None:
+    resampler: rtc.AudioResampler | None = None
     try:
-        resampler: rtc.AudioResampler | None = None
         async for frame in tts_output:
             out.audio.append(frame)
 
@@ -424,7 +424,7 @@ class _PythonOutput:
     exception: BaseException | None
 
     def sanitize(self) -> _SanitizedOutput:
-        from .agent_task import Agent
+        from .agent import Agent
 
         if isinstance(self.exception, ToolError):
             return _SanitizedOutput(
