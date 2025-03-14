@@ -83,6 +83,7 @@ class SynthesisHandle:
             "agent interrupted",
             extra={"speech_id": self.speech_id},
         )
+        logger.info(f"AGENT INTERRUPTED TEXT: {self.tts_forwarder.played_text}")
 
         if self._play_handle is not None:
             self._play_handle.interrupt()
