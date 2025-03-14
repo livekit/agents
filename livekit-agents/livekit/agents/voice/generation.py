@@ -46,6 +46,7 @@ class _LLMGenerationData:
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
+    id: str = field(default_factory=lambda: utils.shortuuid("item_"))
 
 
 def perform_llm_inference(
@@ -88,6 +89,7 @@ def perform_llm_inference(
                                     continue
 
                                 fnc_call = llm.FunctionCall(
+                                    id=f"{data.id}/fnc_{len(data.generated_functions)}",
                                     call_id=tool.call_id,
                                     name=tool.name,
                                     arguments=tool.arguments,

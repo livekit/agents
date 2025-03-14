@@ -741,14 +741,16 @@ class TaskActivity(RecognitionHooks):
                 truncated_text = truncate_message(
                     message=text_out.text, played_duration=playback_ev.playback_position
                 )
-                msg = chat_ctx.add_message(role="assistant", content=truncated_text)
+                msg = chat_ctx.add_message(
+                    role="assistant", content=truncated_text, id=llm_gen_data.id
+                )
                 self._agent_task._chat_ctx.items.append(msg)
                 self._agent._update_agent_state(AgentState.LISTENING)
 
             return
 
         if text_out.text:
-            msg = chat_ctx.add_message(role="assistant", content=text_out.text)
+            msg = chat_ctx.add_message(role="assistant", content=text_out.text, id=llm_gen_data.id)
             self._agent_task._chat_ctx.items.append(msg)
 
         log_event("playout completed", speech_id=speech_handle.id)
