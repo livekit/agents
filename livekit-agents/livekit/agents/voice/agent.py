@@ -18,7 +18,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
 
 if TYPE_CHECKING:
-    from .task_activity import TaskActivity
+    from .agent_activity import AgentActivity
     from .agent_session import AgentSession
 
 

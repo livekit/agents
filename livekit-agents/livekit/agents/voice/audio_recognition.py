@@ -202,7 +202,7 @@ class AudioRecognition:
     async def _stt_task(
         self,
         stt_node: io.STTNode,
-        audio_input: io.AudioStream,
+        audio_input: io.AudioInput,
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
@@ -222,7 +222,7 @@ class AudioRecognition:
 
     @utils.log_exceptions(logger=logger)
     async def _vad_task(
-        self, vad: vad.VAD, audio_input: io.AudioStream, task: asyncio.Task[None] | None
+        self, vad: vad.VAD, audio_input: io.AudioInput, task: asyncio.Task[None] | None
     ) -> None:
         if task is not None:
             await aio.cancel_and_wait(task)
