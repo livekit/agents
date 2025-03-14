@@ -2,13 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import (
-    TYPE_CHECKING,
-    AsyncIterable,
-    Callable,
-    Coroutine,
-    Optional,
-)
+from typing import TYPE_CHECKING, Callable, Coroutine, Optional
 
 from livekit import rtc
 
@@ -16,7 +10,7 @@ from ... import utils
 from ...log import logger
 from ...types import ATTRIBUTE_AGENT_STATE, TOPIC_CHAT
 from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
-from ..io import AudioOutput, TextOutput
+from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TextSynchronizer
 
 if TYPE_CHECKING:
@@ -32,6 +26,8 @@ from ._output import (
 )
 
 ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
+RPC_SET_PARTICIPANT = "lk.set_participant"
+RPC_UNSET_PARTICIPANT = "lk.unset_participant"
 
 
 @dataclass
@@ -185,9 +181,11 @@ class RoomIO:
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
 
-        self._room.local_participant.register_rpc_method("set_participant", self.on_set_participant)
         self._room.local_participant.register_rpc_method(
-            "unset_participant", self.on_unset_participant
+            RPC_SET_PARTICIPANT, self.on_set_participant
+        )
+        self._room.local_participant.register_rpc_method(
+            RPC_UNSET_PARTICIPANT, self.on_unset_participant
         )
 
     async def aclose(self) -> None:
@@ -219,16 +217,12 @@ class RoomIO:
         return self._agent_tr_output
 
     @property
-    def audio_input(self) -> AsyncIterable[rtc.AudioFrame] | None:
-        if not self._audio_input:
-            return None
-        return self._audio_input.stream
+    def audio_input(self) -> AudioInput | None:
+        return self._audio_input
 
     @property
-    def video_input(self) -> AsyncIterable[rtc.VideoFrame] | None:
-        if not self._video_input:
-            return None
-        return self._video_input.stream
+    def video_input(self) -> VideoInput | None:
+        return self._video_input
 
     @property
     def linked_participant(self) -> rtc.RemoteParticipant | None:
@@ -375,6 +369,7 @@ class RoomIO:
 
     # -- RPC methods --
     # user can override these methods to handle RPC calls from the room
+    # TODO(long): add it back to test the set_participant, may remove or rename later
 
     async def on_set_participant(self, data: rtc.RpcInvocationData) -> None:
         target_identity = data.payload or data.caller_identity

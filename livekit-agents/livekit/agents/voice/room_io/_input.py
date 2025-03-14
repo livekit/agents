@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import AsyncIterable, Generic, TypeVar, Union
+from typing import AsyncIterator, Generic, TypeVar, Union
 
 import livekit.rtc as rtc
 from livekit.agents import utils
 from typing_extensions import override
 
 from ...log import logger
+from ..io import AudioInput, VideoInput
 
 T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
 
@@ -26,18 +27,41 @@ class _ParticipantInputStream(Generic[T], ABC):
         track_source: rtc.TrackSource.ValueType,
     ) -> None:
         self._room, self._track_source = room, track_source
-        self._data_ch = utils.aio.Chan()
+        self._data_ch = utils.aio.Chan[T]()
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
         self._participant_identity: str | None = None
+        self._attached = True
 
         self._forward_atask: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
 
         self._room.on("track_subscribed", self._on_track_available)
 
-    @property
-    def stream(self) -> AsyncIterable[T]:
-        return self._data_ch
+    async def __anext__(self) -> T:
+        return await self._data_ch.recv()
+
+    def __aiter__(self) -> AsyncIterator[T]:
+        return self
+
+    def on_attached(self) -> None:
+        logger.debug(
+            "input stream attached",
+            extra={
+                "participant": self._participant_identity,
+                "source": rtc.TrackSource.Name(self._track_source),
+            },
+        )
+        self._attached = True
+
+    def on_detached(self) -> None:
+        logger.debug(
+            "input stream detached",
+            extra={
+                "participant": self._participant_identity,
+                "source": rtc.TrackSource.Name(self._track_source),
+            },
+        )
+        self._attached = False
 
     def set_participant(self, participant: rtc.Participant | str | None) -> None:
         # set_participant can be called before the participant is connected
@@ -79,9 +103,15 @@ class _ParticipantInputStream(Generic[T], ABC):
         if old_task:
             await utils.aio.cancel_and_wait(old_task)
 
-        extra = {"participant": self._participant_identity, "stream": stream.__class__.__name__}
+        extra = {
+            "participant": self._participant_identity,
+            "source": rtc.TrackSource.Name(self._track_source),
+        }
         logger.debug("start reading stream", extra=extra)
         async for event in stream:
+            if not self._attached:
+                # drop frames if the stream is detached
+                continue
             await self._data_ch.send(event.frame)
 
         logger.debug("stream closed", extra=extra)
@@ -115,7 +145,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         )
 
 
-class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame]):
+class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
     def __init__(
         self,
         room: rtc.Room,
@@ -124,7 +154,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame]):
         num_channels: int,
         noise_cancellation: rtc.NoiseCancellationOptions | None,
     ) -> None:
-        super().__init__(room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE)
+        _ParticipantInputStream.__init__(
+            self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
+        )
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._noise_cancellation = noise_cancellation
@@ -139,9 +171,11 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame]):
         )
 
 
-class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame]):
+class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):
     def __init__(self, room: rtc.Room) -> None:
-        super().__init__(room=room, track_source=rtc.TrackSource.SOURCE_CAMERA)
+        _ParticipantInputStream.__init__(
+            self, room=room, track_source=rtc.TrackSource.SOURCE_CAMERA
+        )
 
     @override
     def _create_stream(self, track: rtc.Track) -> rtc.VideoStream:

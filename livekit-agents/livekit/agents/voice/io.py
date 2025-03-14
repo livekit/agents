@@ -186,8 +186,9 @@ class AgentInput:
         self._video_changed = video_changed
         self._audio_changed = audio_changed
 
-        self._audio_enabled = False
-        self._video_enabled = False
+        # enabled by default
+        self._audio_enabled = True
+        self._video_enabled = True
 
     def set_audio_enabled(self, enable: bool):
         if enable == self._audio_enabled:
