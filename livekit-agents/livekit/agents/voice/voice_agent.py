@@ -81,10 +81,9 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
 
-        # room io and transcription sync
+        # used to keep a reference to the room io (not exposed)
         self._room_io: room_io.RoomIO | None = None
 
-        # agent tasks
         self._agent_task: AgentTask
 
         if utils.is_given(task):
@@ -130,10 +129,6 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def vad(self) -> vad.VAD | None:
         return self._vad
-
-    @property
-    def room_io(self) -> room_io.RoomIO | None:
-        return self._room_io
 
     @property
     def input(self) -> io.AgentInput:

@@ -71,13 +71,15 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
                 elif isinstance(content, ImageContent):
                     current_content.append(_build_image(content, cache_key))
         elif msg.type == "function_call":
-            current_content.append({
-                "toolUse": {
-                    "toolUseId": msg.call_id,
-                    "name": msg.name,
-                    "input": json.loads(msg.arguments),
+            current_content.append(
+                {
+                    "toolUse": {
+                        "toolUseId": msg.call_id,
+                        "name": msg.name,
+                        "input": json.loads(msg.arguments),
+                    }
                 }
-            })
+            )
         elif msg.type == "function_call_output":
             tool_response = {
                 "toolResult": {
@@ -106,11 +108,13 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
 def _build_tool_spec(fnc: AIFunction) -> dict:
     fnc = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
     return {
-        "toolSpec": _strip_nones({
-            "name": fnc["name"],
-            "description": fnc["description"] if fnc["description"] else None,
-            "inputSchema": {"json": fnc["parameters"] if fnc["parameters"] else {}},
-        })
+        "toolSpec": _strip_nones(
+            {
+                "name": fnc["name"],
+                "description": fnc["description"] if fnc["description"] else None,
+                "inputSchema": {"json": fnc["parameters"] if fnc["parameters"] else {}},
+            }
+        )
     }
 
 
