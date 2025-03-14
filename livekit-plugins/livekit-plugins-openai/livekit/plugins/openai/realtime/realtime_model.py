@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Iterator, Literal, Optional
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -128,6 +128,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._realtime_model = realtime_model
         self._fnc_ctx = llm.FunctionContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent]()
+        self._input_resampler: rtc.AudioResampler | None = None
 
         self._conn: AsyncRealtimeConnection | None = None
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
@@ -324,12 +325,13 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        self._msg_ch.send_nowait(
-            InputAudioBufferAppendEvent(
-                type="input_audio_buffer.append",
-                audio=base64.b64encode(frame.data).decode("utf-8"),
+        for f in self._resample_audio(frame):
+            self._msg_ch.send_nowait(
+                InputAudioBufferAppendEvent(
+                    type="input_audio_buffer.append",
+                    audio=base64.b64encode(f.data).decode("utf-8"),
+                )
             )
-        )
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
@@ -372,6 +374,27 @@ class RealtimeSession(llm.RealtimeSession):
     async def aclose(self) -> None:
         if self._conn is not None:
             await self._conn.close()
+
+    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
+        if self._input_resampler:
+            if frame.sample_rate != self._input_resampler._input_rate:
+                # input audio changed to a different sample rate
+                self._input_resampler = None
+
+        if self._input_resampler is None and (
+            frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
+        ):
+            self._input_resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate,
+                output_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
+            )
+
+        if self._input_resampler:
+            # TODO(long): flush the resampler when the input source is changed
+            yield from self._input_resampler.push(frame)
+        else:
+            yield frame
 
     def _handle_input_audio_buffer_speech_started(
         self, _: InputAudioBufferSpeechStartedEvent
