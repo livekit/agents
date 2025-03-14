@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, CallContext
-from livekit.agents.voice.room_io import RoomInputOptions
+from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
 from livekit.plugins import cartesia, deepgram, openai
 
 # from livekit.plugins import noise_cancellation
@@ -53,7 +53,17 @@ async def entrypoint(ctx: JobContext):
         room_input_options=RoomInputOptions(
             # noise_cancellation=noise_cancellation.BVC(),
         ),
+        room_output_options=RoomOutputOptions(transcription_enabled=True)
     )
+
+    from livekit.agents.voice.io import PlaybackFinishedEvent
+
+    @session.output.audio.on("playback_finished")
+    def on_playback_finished(ev: PlaybackFinishedEvent):
+        logger.info(
+            "playback finished",
+            extra={"playback_position": ev.playback_position, "interrupted": ev.interrupted},
+        )
 
 
 if __name__ == "__main__":

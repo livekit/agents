@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 
 from livekit import rtc
 
@@ -55,7 +54,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
 
-        if self._flush_task:
+        if self._flush_task and not self._flush_task.done():
+            logger.error("capture_frame called while flush is in progress")
             await self._flush_task
 
         self._pushed_duration += frame.duration
@@ -67,20 +67,19 @@ class _ParticipantAudioOutput(io.AudioOutput):
         if not self._pushed_duration:
             return
 
-        if self._flush_task:
+        if self._flush_task and not self._flush_task.done():
+            # shouldn't happen if only one active speech handle at a time
+            logger.error("flush called while playback is in progress")
             self._flush_task.cancel()
 
-        def _on_playout_finished(pushed_duration: float, task: asyncio.Task) -> None:
-            if task.cancelled():
-                return
-
-            self.on_playback_finished(playback_position=pushed_duration, interrupted=False)
-            self._pushed_duration = 0.0
+        def _playback_finished(task: asyncio.Task[None]) -> None:
+            pushed_duration, interrupted = self._pushed_duration, self._interrupted
+            self._pushed_duration = 0
+            self._interrupted = False
+            self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
         self._flush_task = asyncio.create_task(self._audio_source.wait_for_playout())
-        self._flush_task.add_done_callback(
-            functools.partial(_on_playout_finished, self._pushed_duration)
-        )
+        self._flush_task.add_done_callback(_playback_finished)
 
     def clear_buffer(self) -> None:
         super().clear_buffer()
@@ -88,13 +87,10 @@ class _ParticipantAudioOutput(io.AudioOutput):
         if not self._pushed_duration:
             return
 
-        if self._flush_task:
-            self._flush_task.cancel()
-
-        played_duration = self._pushed_duration - self._audio_source.queued_duration
+        queued_duration = self._audio_source.queued_duration
+        self._pushed_duration = max(self._pushed_duration - queued_duration, 0)
+        self._interrupted = True
         self._audio_source.clear_queue()
-        self.on_playback_finished(playback_position=played_duration, interrupted=True)
-        self._pushed_duration = 0.0
 
 
 class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
@@ -140,6 +136,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         self._capturing = False
         self._pushed_text = ""
 
+    @utils.log_exceptions(logger=logger)
     async def capture_text(self, text: str) -> None:
         if self._participant_identity is None or self._track_id is None:
             return
@@ -158,6 +155,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
 
         await self._publish_transcription(self._current_id, self._pushed_text, final=False)
 
+    @utils.log_exceptions(logger=logger)
     def flush(self) -> None:
         if self._participant_identity is None or self._track_id is None or not self._capturing:
             return
@@ -278,6 +276,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             attributes=attributes,
         )
 
+    @utils.log_exceptions(logger=logger)
     async def capture_text(self, text: str) -> None:
         if self._participant_identity is None:
             return
@@ -301,8 +300,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             await tmp_writer.write(text)
             await tmp_writer.aclose()
 
-    @utils.log_exceptions(logger=logger)
-    async def _flush_task(self):
+    async def _flush_task(self, writer: rtc.TextStreamWriter | None):
         attributes = {
             ATTRIBUTE_TRANSCRIPTION_FINAL: "true",
         }
@@ -310,8 +308,8 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
 
         if self._is_delta_stream:
-            if self._writer:
-                await self._writer.aclose(attributes=attributes)
+            if writer:
+                await writer.aclose(attributes=attributes)
         else:
             tmp_writer = await self._create_text_writer(attributes=attributes)
             await tmp_writer.write(self._latest_text)
@@ -322,7 +320,9 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             return
 
         self._capturing = False
-        self._flush_atask = asyncio.create_task(self._flush_task())
+        curr_writer = self._writer
+        self._writer = None
+        self._flush_atask = asyncio.create_task(self._flush_task(curr_writer))
 
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
