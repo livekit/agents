@@ -1181,6 +1181,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             logger.info(f"Skipping validation because the initial greeting was not delivered - {self._transcribed_text}")
             self._transcribed_text = ""
             return
+    
+        if AppConfig().get_call_metadata().get("is_speaking_uninterruptible_message"):
+            logger.info(f"Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}")
+            self._transcribed_text = ""
+            return
 
         if self._playing_speech and not self._playing_speech.interrupted:
             should_ignore_input = False
