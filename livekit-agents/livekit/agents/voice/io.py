@@ -18,15 +18,19 @@ from livekit import rtc
 from .. import llm, stt
 from ..log import logger
 
+# TODO(theomonnom): can those types be simplified?
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame]],
-    Union[Awaitable[Optional[AsyncIterable[stt.SpeechEvent]]]],  # TODO: support str
+    Union[
+        Optional[Union[AsyncIterable[stt.SpeechEvent], AsyncIterable[str]]],
+        Awaitable[Optional[Union[AsyncIterable[stt.SpeechEvent], AsyncIterable[str]]]],
+    ],
 ]
 LLMNode = Callable[
     [llm.ChatContext, list[llm.FunctionTool]],
     Union[
         Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]],
-        Awaitable[Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]],],
+        Awaitable[Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]]],
     ],
 ]
 TTSNode = Callable[
