@@ -45,7 +45,6 @@ BeforeTTSCallback = Callable[
     SpeechSource,
 ]
 
-
 EventTypes = Literal[
     "user_started_speaking",
     "user_stopped_speaking",
@@ -165,7 +164,9 @@ class _TurnDetector(Protocol):
     # When endpoint probability is below this threshold we think the user is not finished speaking
     # so we will use a long delay
     def unlikely_threshold(self) -> float: ...
+
     def supports_language(self, language: str | None) -> bool: ...
+
     async def predict_end_of_turn(self, chat_ctx: ChatContext) -> float: ...
 
 
@@ -772,8 +773,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 handle.cancel()
                 return
 
-            # fallback to default impl if no custom/user stream is returned
-            if not isinstance(llm_stream, LLMStream):
+            # fallback to default impl if no custom/user stream or llm processed str is returned
+            if not isinstance(llm_stream, LLMStream) and not isinstance(
+                llm_stream, str
+            ):
                 llm_stream = _default_before_llm_cb(self, chat_ctx=copied_ctx)
 
             if handle.interrupted:
