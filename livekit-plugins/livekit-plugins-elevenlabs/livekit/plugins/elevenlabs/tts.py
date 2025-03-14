@@ -563,9 +563,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                         continue
 
                     data = json.loads(msg.data)
+                    logger.info(f"data: {data}")
                     if data.get("audio"):
                         received_text_to_print = ""
                         if alignment := data.get("normalizedAlignment"):
+                            # Add character timing data to the forwarder
+
+                            # Store characters and their durations together
+                            chars = alignment.get("chars", [])
+                            durations = alignment.get("charDurationsMs", [])
+                            AppConfig().playout_buffer += "".join(chars)
+                            logger.info(
+                                f"just added to playout_buffer, current={AppConfig().playout_buffer}"
+                            )
+                            AppConfig().char_timings.extend(durations)
+
                             received_text_to_print = "".join(
                                 alignment.get("chars", [])
                             ).replace(" ", "")

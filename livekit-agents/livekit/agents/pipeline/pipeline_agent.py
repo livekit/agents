@@ -13,6 +13,7 @@ from typing import (
     Literal,
     Optional,
     Protocol,
+    Tuple,
     Union,
 )
 
@@ -787,7 +788,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             SpeechDataContextVar.reset(tk)
 
     def _commit_user_question(self) -> None:
-
         speech_handle = self._playing_speech
         synthesis_handle = speech_handle.synthesis_handle
         play_handle = synthesis_handle.play()
@@ -803,6 +803,60 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._transcribed_text = self._transcribed_text[len(user_question) :]
         speech_handle.mark_user_committed()
+
+    def _get_spoken_text_at_time(self, elapsed_ms: float) -> str:
+        """
+        Get the text that has been spoken up to a specific elapsed time.
+
+        Args:
+            elapsed_ms: Time elapsed since playout started in milliseconds
+
+        Returns:
+            Tuple containing:
+            - The text spoken up to that time
+            - The index of the last spoken character
+        """
+        spoken_chars = []
+        duration_sum = 0
+
+        logger.info(
+            f"inside _get_spoken_text_at_time, playout_buffer: {AppConfig().playout_buffer}"
+        )
+        # Find the last character that should have been spoken
+        for i, char in enumerate(AppConfig().playout_buffer):
+            logger.info(f"char: {char}")
+            duration = AppConfig().char_timings[i]
+            duration_sum += duration
+            # If this character's end time is beyond our elapsed time, we've found our cutoff
+            if duration_sum > elapsed_ms:
+                break
+
+            spoken_chars.append(char)
+
+        return "".join(spoken_chars)
+
+    def _get_current_spoken_text(self) -> str:
+        """
+        Get the text that has been spoken so far based on current time.
+
+        Returns:
+            Tuple containing:
+            - The text spoken up to current time
+            - The index of the last spoken character
+        """
+        app_config = AppConfig()
+        if not app_config.playout_start_time:
+            logger.info("No playout start time found")
+            return ""
+
+        logger.info(f"playout_start_time: {app_config.playout_start_time}")
+        elapsed_ms = (time.time() - app_config.playout_start_time) * 1000
+        logger.info(f"elapsed_ms: {elapsed_ms}")
+
+        logger.info(
+            f"Inside _get_current_spoken_text, about to return: {self._get_spoken_text_at_time(elapsed_ms)}"
+        )
+        return self._get_spoken_text_at_time(elapsed_ms)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
         await self._agent_publication.wait_for_subscription()
@@ -945,17 +999,46 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
             if collected_text:
+                logger.info(
+                    f"collected_text: {collected_text}, last_llm_message: {AppConfig().last_llm_message}"
+                )
                 if interrupted:
-                    if collected_text in (
-                        AppConfig().call_metadata.get("agent_interrupted_text") or ""
+                    logger.info(f"interrupted=True")
+                    # if collected_text in (
+                    #     AppConfig().call_metadata.get("agent_interrupted_text") or ""
+                    # ):
+                    AppConfig().agent_interrupted = True
+                    # app_config_text = AppConfig().call_metadata.get(
+                    #     "agent_interrupted_text"
+                    # )
+                    current_text = self._get_current_spoken_text() or ""
+                    logger.info(f"current_text: {current_text}")
+                    if (
+                        collected_text.replace(" ", "").lower()
+                        in current_text.replace(" ", "").lower()
+                        and collected_text.replace(" ", "").lower()
+                        != current_text.replace(" ", "").lower()
                     ):
                         logger.info(
-                            f"Replacing interrupted text=`{collected_text}` with `{AppConfig().call_metadata.get('agent_interrupted_text')}`"
+                            f"Replacing interrupted text=`{collected_text}` with `{current_text}`"
                         )
-                        collected_text = AppConfig().call_metadata.get(
-                            "agent_interrupted_text"
+                        collected_text = current_text + "..."
+                        logger.info(
+                            f"inside interrupt case, about to clear playout_buffer: {AppConfig().playout_buffer}"
                         )
-                    collected_text += "..."
+                        AppConfig().playout_buffer = ""
+                        AppConfig().char_timings = []
+                else:
+                    logger.info(f"interrupted=False")
+                    if (
+                        collected_text.replace(" ", "").lower()
+                        == AppConfig().last_llm_message.replace(" ", "").lower()
+                    ):
+                        logger.info(
+                            f"inside collected_text == AppConfig().last_llm_message, about to clear playout_buffer: {AppConfig().playout_buffer}"
+                        )
+                        AppConfig().playout_buffer = ""
+                        AppConfig().char_timings = []
 
                 msg = ChatMessage.create(text=collected_text, role="assistant")
                 self._chat_ctx.messages.append(msg)
@@ -997,9 +1080,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             assert isinstance(speech_handle.source, LLMStream)
-            assert (
-                not user_question or speech_handle.user_committed
-            ), "user speech should have been committed before using tools"
+            assert not user_question or speech_handle.user_committed, (
+                "user speech should have been committed before using tools"
+            )
 
             llm_stream = speech_handle.source
 
@@ -1125,9 +1208,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
-        assert (
-            self._agent_output is not None
-        ), "agent output should be initialized when ready"
+        assert self._agent_output is not None, (
+            "agent output should be initialized when ready"
+        )
 
         tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
