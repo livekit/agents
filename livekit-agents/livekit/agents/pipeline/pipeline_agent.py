@@ -1014,8 +1014,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     current_text = self._get_current_spoken_text() or ""
                     logger.info(f"current_text: {current_text}")
                     if (
-                        collected_text in current_text
-                        and collected_text != current_text
+                        collected_text.replace(" ", "").lower()
+                        in current_text.replace(" ", "").lower()
+                        and collected_text.replace(" ", "").lower()
+                        != current_text.replace(" ", "").lower()
                     ):
                         logger.info(
                             f"Replacing interrupted text=`{collected_text}` with `{current_text}`"
