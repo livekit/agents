@@ -181,13 +181,6 @@ class RoomIO:
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
 
-        self._room.local_participant.register_rpc_method(
-            RPC_SET_PARTICIPANT, self.on_set_participant
-        )
-        self._room.local_participant.register_rpc_method(
-            RPC_UNSET_PARTICIPANT, self.on_unset_participant
-        )
-
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
@@ -366,29 +359,3 @@ class RoomIO:
                 sink, (_ParticipantLegacyTranscriptionOutput, _ParticipantTranscriptionOutput)
             )
             sink.set_participant(participant_identity)
-
-    # -- RPC methods --
-    # user can override these methods to handle RPC calls from the room
-    # TODO(long): add it back to test the set_participant, may remove or rename later
-
-    async def on_set_participant(self, data: rtc.RpcInvocationData) -> None:
-        target_identity = data.payload or data.caller_identity
-        logger.debug(
-            "set participant called",
-            extra={
-                "caller_identity": data.caller_identity,
-                "payload": data.payload,
-                "target_identity": target_identity,
-            },
-        )
-
-        self.set_participant(target_identity)
-
-    async def on_unset_participant(self, data: rtc.RpcInvocationData) -> None:
-        logger.debug(
-            "unset participant called",
-            extra={"caller_identity": data.caller_identity, "payload": data.payload},
-        )
-        self.unset_participant()
-
-    # -- end of RPC methods --
