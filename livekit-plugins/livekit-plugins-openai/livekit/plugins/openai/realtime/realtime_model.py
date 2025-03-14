@@ -271,19 +271,16 @@ class RealtimeSession(llm.RealtimeSession):
             except asyncio.TimeoutError:
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
-    async def update_tools(self, tool_ctx: llm.ToolContext | list[llm.FunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
         async with self._update_fnc_ctx_lock:
-            if isinstance(tool_ctx, list):
-                tool_ctx = llm.ToolContext(tool_ctx)
-
-            tools: list[session_update_event.SessionTool] = []
+            oai_tools: list[session_update_event.SessionTool] = []
             retained_tools: list[llm.FunctionTool] = []
 
-            for tool in tool_ctx.tools.values():
+            for tool in tools:
                 tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
                 try:
                     session_tool = session_update_event.SessionTool.model_validate(tool_desc)
-                    tools.append(session_tool)
+                    oai_tools.append(session_tool)
                     retained_tools.append(tool)
                 except ValidationError:
                     logger.error(
@@ -300,7 +297,7 @@ class RealtimeSession(llm.RealtimeSession):
                     type="session.update",
                     session=session_update_event.Session(
                         model=self._realtime_model._opts.model,  # type: ignore (str -> Literal)
-                        tools=tools,
+                        tools=oai_tools,
                     ),
                     event_id=event_id,
                 )
@@ -477,9 +474,10 @@ class RealtimeSession(llm.RealtimeSession):
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
-        remote_item = self._remote_chat_ctx.get(event.item_id)
-        if remote_item:
+        if remote_item := self._remote_chat_ctx.get(event.item_id):
+            assert isinstance(remote_item.item, llm.ChatMessage)
             remote_item.item.content.append(event.transcript)
+
         self.emit(
             "input_audio_transcription_completed",
             llm.InputTranscriptionCompleted(item_id=event.item_id, transcript=event.transcript),
@@ -491,10 +489,6 @@ class RealtimeSession(llm.RealtimeSession):
         logger.error(
             "OpenAI Realtime API failed to transcribe input audio",
             extra={"error": event.error},
-        )
-        self.emit(
-            "input_audio_transcription_failed",
-            llm.InputTranscriptionFailed(item_id=event.item_id, message=event.error.message),
         )
 
     def _handle_response_audio_transcript_delta(
