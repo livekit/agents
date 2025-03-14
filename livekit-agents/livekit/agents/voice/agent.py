@@ -45,7 +45,7 @@ class Agent:
         self._tts = tts
         self._vad = vad
         self._allow_interruptions = allow_interruptions
-        self._activity: TaskActivity | None = None
+        self._activity: AgentActivity | None = None
 
     @property
     def instructions(self) -> str:
@@ -194,7 +194,7 @@ class Agent:
             finally:
                 await utils.aio.cancel_and_wait(forward_task)
 
-    def __get_activity_or_raise(self) -> TaskActivity:
+    def __get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:
             raise RuntimeError("no activity context found, this task is not running")

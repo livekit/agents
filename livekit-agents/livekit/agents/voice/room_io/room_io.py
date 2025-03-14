@@ -41,7 +41,9 @@ class TextInputEvent:
     participant: rtc.RemoteParticipant
 
 
-TextInputCallback = Callable[["VoiceAgent", TextInputEvent], Optional[Coroutine[None, None, None]]]
+TextInputCallback = Callable[
+    ["AgentSession", TextInputEvent], Optional[Coroutine[None, None, None]]
+]
 
 
 def _default_text_input_cb(agent: "AgentSession", ev: TextInputEvent) -> None:
@@ -49,7 +51,7 @@ def _default_text_input_cb(agent: "AgentSession", ev: TextInputEvent) -> None:
     agent.generate_reply(user_input=ev.text)
 
 
-@dataclass(frozen=True)
+@dataclass
 class RoomInputOptions:
     text_enabled: bool = True
     audio_enabled: bool = True
@@ -60,7 +62,7 @@ class RoomInputOptions:
     text_input_cb: TextInputCallback = _default_text_input_cb
 
 
-@dataclass(frozen=True)
+@dataclass
 class RoomOutputOptions:
     transcription_enabled: bool = True
     audio_enabled: bool = True
