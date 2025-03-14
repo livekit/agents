@@ -11,7 +11,7 @@ class TranscriptionConfig:
     language: str = "en"
     """ISO 639-1 language code. eg. `en`"""
 
-    operating_point: Optional[str] = None
+    operating_point: str = "enhanced"
     """Specifies which acoustic model to use."""
 
     output_locale: Optional[str] = None
@@ -24,12 +24,12 @@ class TranscriptionConfig:
     """Additional vocabulary that is not part of the standard language."""
 
     punctuation_overrides: Optional[Dict] = None
-    """Permitted puctuation marks for advanced punctuation."""
+    """Permitted punctuation marks for advanced punctuation."""
 
     enable_entities: Optional[bool] = None
     """Indicates if inverse text normalization entity output is enabled."""
 
-    max_delay: Optional[float] = None
+    max_delay: float = 0.7
     """Maximum acceptable delay."""
 
     max_delay_mode: Optional[str] = None
@@ -42,7 +42,7 @@ class TranscriptionConfig:
     streaming_mode: Optional[bool] = None
     """Indicates if we run the engine in streaming mode, or regular RT mode."""
 
-    enable_partials: Optional[bool] = None
+    enable_partials: bool = True
     """Indicates if partials for transcription, where words are produced
     immediately, is enabled."""
 
@@ -76,7 +76,7 @@ class AudioSettings:
 class ConnectionSettings:
     """Defines connection parameters."""
 
-    url: str
+    url: str = "wss://eu2.rt.speechmatics.com/v2"
     """Websocket server endpoint."""
 
     ssl_context: ssl.SSLContext = field(default_factory=ssl.create_default_context)
