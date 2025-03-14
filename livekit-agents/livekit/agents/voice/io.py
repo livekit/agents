@@ -4,6 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import (
+    AsyncIterator,
     AsyncIterable,
     Awaitable,
     Callable,
@@ -37,8 +38,26 @@ TTSNode = Callable[
 ]
 
 
-AudioInput = AsyncIterable[rtc.AudioFrame]
-VideoInput = AsyncIterable[rtc.VideoFrame]
+class AudioInput:
+    def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
+        return self
+
+    async def __anext__(self) -> rtc.AudioFrame: ...
+
+    def on_attached(self) -> None: ...
+
+    def on_detached(self) -> None: ...
+
+
+class VideoInput:
+    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame]:
+        return self
+
+    async def __anext__(self) -> rtc.VideoFrame: ...
+
+    def on_attached(self) -> None: ...
+
+    def on_detached(self) -> None: ...
 
 
 @dataclass
@@ -122,11 +141,9 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def clear_buffer(self) -> None:
         """Clear the buffer, stopping playback immediately"""
 
-    def on_attached(self) -> None:
-        ...
+    def on_attached(self) -> None: ...
 
-    def on_detached(self) -> None:
-        ...
+    def on_detached(self) -> None: ...
 
 
 class TextOutput(ABC):
@@ -140,11 +157,9 @@ class TextOutput(ABC):
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
         ...
 
-    def on_attached(self) -> None:
-        ...
+    def on_attached(self) -> None: ...
 
-    def on_detached(self) -> None:
-        ...
+    def on_detached(self) -> None: ...
 
 
 # TODO(theomonnom): Add documentation to VideoSink
@@ -155,11 +170,9 @@ class VideoOutput(ABC):
     @abstractmethod
     def flush(self) -> None: ...
 
-    def on_attached(self) -> None:
-        ...
+    def on_attached(self) -> None: ...
 
-    def on_detached(self) -> None:
-        ...
+    def on_detached(self) -> None: ...
 
 
 class AgentInput:
@@ -169,11 +182,44 @@ class AgentInput:
         self._video_changed = video_changed
         self._audio_changed = audio_changed
 
+        self._audio_enabled = False
+        self._video_enabled = False
+
     def set_audio_enabled(self, enable: bool):
-        return False
+        if enable == self._audio_enabled:
+            return
+
+        self._audio_enabled = enable
+
+        if not self._audio_stream:
+            return
+
+        if enable:
+            self._audio_stream.on_attached()
+        else:
+            self._audio_stream.on_detached()
 
     def set_video_enabled(self, enable: bool):
-        return False
+        if enable == self._video_enabled:
+            return
+
+        self._video_enabled = enable
+
+        if not self._video_stream:
+            return
+
+        if enable:
+            self._video_stream.on_attached()
+        else:
+            self._video_stream.on_detached()
+
+    @property
+    def audio_enabled(self) -> bool:
+        return self._audio_enabled
+
+    @property
+    def video_enabled(self) -> bool:
+        return self._video_enabled
 
     @property
     def video(self) -> VideoInput | None:
@@ -205,14 +251,63 @@ class AgentOutput:
         self._audio_changed = audio_changed
         self._transcription_changed = transcription_changed
 
+        self._audio_enabled = False
+        self._video_enabled = False
+        self._transcription_enabled = False
+
     def set_video_enabled(self, enabled: bool):
-        return False
+        if enabled == self._video_enabled:
+            return
+
+        self._video_enabled = enabled
+
+        if not self._video_sink:
+            return
+
+        if enabled:
+            self._video_sink.on_attached()
+        else:
+            self._video_sink.on_detached()
 
     def set_audio_enabled(self, enabled: bool):
-        return False
+        if enabled == self._audio_enabled:
+            return
+
+        self._audio_enabled = enabled
+
+        if not self._audio_sink:
+            return
+
+        if enabled:
+            self._audio_sink.on_attached()
+        else:
+            self._audio_sink.on_detached()
 
     def set_transcription_enabled(self, enabled: bool):
-        return False
+        if enabled == self._transcription_enabled:
+            return
+
+        self._transcription_enabled = enabled
+
+        if not self._transcription_sink:
+            return
+
+        if enabled:
+            self._transcription_sink.on_attached()
+        else:
+            self._transcription_sink.on_detached()
+
+    @property
+    def audio_enabled(self) -> bool:
+        return self._audio_enabled
+
+    @property
+    def video_enabled(self) -> bool:
+        return self._video_enabled
+
+    @property
+    def transcription_enabled(self) -> bool:
+        return self._transcription_enabled
 
     @property
     def video(self) -> VideoOutput | None:
