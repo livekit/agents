@@ -52,7 +52,7 @@ class Agent:
         return self._instructions
 
     @property
-    def ai_functions(self) -> list[llm.FunctionTool]:
+    def tools(self) -> list[llm.FunctionTool]:
         return list(self._tool_ctx.tools.values())
 
     @property
@@ -205,6 +205,7 @@ class Agent:
 TaskResult_T = TypeVar("TaskResult_T")
 
 
+# TODO: rename to InlineAgent?
 class InlineTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,

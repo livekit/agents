@@ -92,7 +92,7 @@ def function_tool(
     return deco
 
 
-def is_ai_function(f: Callable) -> TypeGuard[FunctionTool]:
+def is_function_tool(f: Callable) -> TypeGuard[FunctionTool]:
     return hasattr(f, "__livekit_agents_ai_callable")
 
 
@@ -103,7 +103,7 @@ def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool]:
     methods: list[FunctionTool] = []
     for _, member in inspect.getmembers(cls_or_obj):
-        if is_ai_function(member):
+        if is_function_tool(member):
             methods.append(member)
     return methods
 

@@ -18,7 +18,7 @@ from .tool_context import (
     StopResponse,
     function_tool,
     find_function_tools,
-    is_ai_function,
+    is_function_tool,
 )
 from .llm import (
     LLM,
@@ -62,7 +62,7 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "ToolChoice",
-    "is_ai_function",
+    "is_function_tool",
     "function_tool",
     "find_function_tools",
     "FunctionTool",

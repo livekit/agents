@@ -177,7 +177,7 @@ class TaskActivity(RecognitionHooks):
                     logger.exception("failed to update the chat_ctx")
 
                 try:
-                    await self._rt_session.update_fnc_ctx(self._agent_task.ai_functions)
+                    await self._rt_session.update_tools(self._agent_task.tools)
                 except llm.RealtimeError:
                     logger.exception("failed to update the fnc_ctx")
 
