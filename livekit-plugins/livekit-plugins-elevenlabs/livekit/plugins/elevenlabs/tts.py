@@ -568,13 +568,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         received_text_to_print = ""
                         if alignment := data.get("normalizedAlignment"):
                             # Add character timing data to the forwarder
-                            if AppConfig().was_last_batch_of_char_timings:
-                                logger.info(
-                                    f"just cleared playout_buffer, current={AppConfig().playout_buffer}"
-                                )
-                                AppConfig().playout_buffer = ""
-                                AppConfig().char_timings = []
-                                AppConfig().was_last_batch_of_char_timings = False
 
                             # Store characters and their durations together
                             chars = alignment.get("chars", [])
@@ -584,9 +577,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 f"just added to playout_buffer, current={AppConfig().playout_buffer}"
                             )
                             AppConfig().char_timings.extend(durations)
-                            AppConfig().was_last_batch_of_char_timings = data.get(
-                                "isFinal", False
-                            )
 
                             received_text_to_print = "".join(
                                 alignment.get("chars", [])
