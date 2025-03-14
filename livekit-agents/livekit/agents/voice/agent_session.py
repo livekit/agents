@@ -18,7 +18,7 @@ from .agent import Agent
 from .audio_recognition import _TurnDetector
 from .events import AgentEvent, AgentStateChangedEvent, EventTypes
 from .speech_handle import SpeechHandle
-from .task_activity import TaskActivity
+from .agent_activity import AgentActivity
 
 
 @dataclass
@@ -94,7 +94,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._agent_task = Agent(instructions=instructions)
 
-        self._activity: TaskActivity | None = None
+        self._activity: AgentActivity | None = None
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
 
         self._agent_state: AgentState | None = None
@@ -322,7 +322,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._activity.drain()
                 await self._activity.aclose()
 
-            self._activity = TaskActivity(task, self)
+            self._activity = AgentActivity(task, self)
             await self._activity.start()
 
     @utils.log_exceptions(logger=logger)

@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 
-_TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")
+_AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
 
@@ -130,7 +130,7 @@ class AgentActivity(RecognitionHooks):
         name: str | None = None,
     ) -> asyncio.Task:
         # https://github.com/python/cpython/pull/31837 alternative impl
-        tk = _TaskActivityContextVar.set(self)
+        tk = _AgentActivityContextVar.set(self)
 
         task = asyncio.create_task(coro, name=name)
         self._tasks.append(task)
@@ -141,7 +141,7 @@ class AgentActivity(RecognitionHooks):
             # the tasks should normally do this before their function calls
             task.add_done_callback(lambda _: owned_speech_handle._mark_playout_done())
 
-        _TaskActivityContextVar.reset(tk)
+        _AgentActivityContextVar.reset(tk)
         return task
 
     # TODO(theomonnom): Shoukd pause and resume call on_enter and on_exit? probably not
