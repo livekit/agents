@@ -846,6 +846,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             return "", 0
 
         elapsed_ms = (time.time() - app_config.playout_start_time) * 1000
+        logger.info(f"elapsed_ms: {elapsed_ms}")
+        logger.info(f"spoken so far: {self._get_spoken_text_at_time(elapsed_ms)}")
         return self._get_spoken_text_at_time(elapsed_ms)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
