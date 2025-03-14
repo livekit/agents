@@ -1,5 +1,11 @@
 # livekit-plugins-rime
 
+## 0.2.2
+
+### Patch Changes
+
+- Add string type support to model parameter - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.2.1
 
 ### Patch Changes
