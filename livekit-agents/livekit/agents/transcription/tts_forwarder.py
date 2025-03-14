@@ -14,6 +14,9 @@ from ..log import logger
 from ..tokenize.tokenizer import PUNCTUATIONS
 from . import _utils
 
+from app_config import AppConfig
+
+
 # 3.83 is the "baseline", the number of hyphens per second TTS returns in avg.
 STANDARD_SPEECH_RATE = 3.83
 
@@ -308,6 +311,7 @@ class TTSSegmentsForwarder:
 
                     sentence_stream = text_data.sentence_stream
                     forward_start_time = time.time()
+                    AppConfig().playout_start_time = forward_start_time
 
                     async for ev in sentence_stream:
                         await self._sync_sentence_co(

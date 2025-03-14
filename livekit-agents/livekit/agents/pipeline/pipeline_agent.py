@@ -14,6 +14,7 @@ from typing import (
     Optional,
     Protocol,
     Union,
+    Tuple,
 )
 
 from app_config import AppConfig
@@ -803,6 +804,50 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._transcribed_text = self._transcribed_text[len(user_question) :]
         speech_handle.mark_user_committed()
+    
+    def _get_spoken_text_at_time(self, elapsed_ms: float) -> Tuple[str, int]:
+        """
+        Get the text that has been spoken up to a specific elapsed time.
+
+        Args:
+            elapsed_ms: Time elapsed since playout started in milliseconds
+
+        Returns:
+            Tuple containing:
+            - The text spoken up to that time
+            - The index of the last spoken character
+        """
+        app_config = AppConfig()
+        spoken_chars = []
+        duration_sum = 0
+
+        # Find the last character that should have been spoken
+        for i, char in enumerate(app_config.playout_buffer):
+            duration = app_config.char_timings[i]
+            duration_sum += duration
+            # If this character's end time is beyond our elapsed time, we've found our cutoff
+            if duration_sum > elapsed_ms:
+                break
+
+            spoken_chars.append(char)
+
+        return "".join(spoken_chars)
+
+    def _get_current_spoken_text(self) -> Tuple[str, int]:
+        """
+        Get the text that has been spoken so far based on current time.
+
+        Returns:
+            Tuple containing:
+            - The text spoken up to current time
+            - The index of the last spoken character
+        """
+        app_config = AppConfig()
+        if not app_config.playout_start_time:
+            return "", 0
+
+        elapsed_ms = (time.time() - app_config.playout_start_time) * 1000
+        return self.get_spoken_text_at_time(elapsed_ms)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
         await self._agent_publication.wait_for_subscription()
@@ -921,7 +966,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         _commit_user_question_if_needed()
 
-        collected_text = speech_handle.synthesis_handle.tts_forwarder.played_text
+        collected_text = self._get_current_spoken_text()
         interrupted = speech_handle.interrupted
         is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
             speech_handle.source.function_calls
@@ -950,10 +995,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         AppConfig().call_metadata.get("agent_interrupted_text") or ""
                     ):
                         logger.info(
-                            f"Replacing interrupted text=`{collected_text}` with `{AppConfig().call_metadata.get('agent_interrupted_text')}`"
-                        )
-                        collected_text = AppConfig().call_metadata.get(
-                            "agent_interrupted_text"
+                            f"Replacing interrupted text=`{collected_text}` with `{collected_text}`"
                         )
                     collected_text += "..."
 
