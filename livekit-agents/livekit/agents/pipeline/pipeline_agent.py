@@ -804,7 +804,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._transcribed_text = self._transcribed_text[len(user_question) :]
         speech_handle.mark_user_committed()
 
-    def _get_spoken_text_at_time(self, elapsed_ms: float) -> Tuple[str, int]:
+    def _get_spoken_text_at_time(self, elapsed_ms: float) -> str:
         """
         Get the text that has been spoken up to a specific elapsed time.
 
@@ -822,6 +822,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # Find the last character that should have been spoken
         for i, char in enumerate(app_config.playout_buffer):
+            logger.info(f"char: {char}")
             duration = app_config.char_timings[i]
             duration_sum += duration
             # If this character's end time is beyond our elapsed time, we've found our cutoff
@@ -843,8 +844,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """
         app_config = AppConfig()
         if not app_config.playout_start_time:
-            return "", 0
+            logger.info("No playout start time found")
+            return ""
 
+        logger.info(f"playout_start_time: {app_config.playout_start_time}")
         elapsed_ms = (time.time() - app_config.playout_start_time) * 1000
         logger.info(f"elapsed_ms: {elapsed_ms}")
         logger.info(f"spoken so far: {self._get_spoken_text_at_time(elapsed_ms)}")
