@@ -815,7 +815,7 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
             if not ignore_task_switch and new_agent_task is not None:
-                self._agent.update_task(new_agent_task)
+                self._agent.update_agent(new_agent_task)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -1006,4 +1006,4 @@ class AgentActivity(RecognitionHooks):
                     )
 
             if not ignore_task_switch and new_agent_task is not None:
-                self._agent.update_task(new_agent_task)
+                self._agent.update_agent(new_agent_task)

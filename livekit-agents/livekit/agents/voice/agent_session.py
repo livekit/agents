@@ -306,8 +306,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.interrupt()
 
-    def update_task(self, task: Agent) -> None:
-        self._agent_task = task
+    def update_agent(self, agent: Agent) -> None:
+        self._agent_task = agent
 
         if self._started:
             self._update_activity_atask = asyncio.create_task(
