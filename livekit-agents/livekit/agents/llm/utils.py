@@ -21,7 +21,7 @@ from pydantic_core import PydanticUndefined
 
 from . import _strict
 from .chat_context import ChatContext
-from .function_context import FunctionTool, get_function_info
+from .tool_context import FunctionTool, get_function_info
 
 if TYPE_CHECKING:
     from ..voice.events import CallContext

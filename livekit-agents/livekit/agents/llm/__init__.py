@@ -11,7 +11,7 @@ from .chat_context import (
     ImageContent,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
-from .function_context import (
+from .tool_context import (
     ToolError,
     FunctionTool,
     ToolContext,
