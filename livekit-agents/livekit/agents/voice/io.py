@@ -151,47 +151,10 @@ class AgentInput:
         self._video_changed = video_changed
         self._audio_changed = audio_changed
 
-        self._inactive_video_stream: VideoStream | None = None
-        self._inactive_audio_stream: AudioStream | None = None
-        self._consume_video_task: asyncio.Task | None = None
-        self._consume_audio_task: asyncio.Task | None = None
-
-    def set_audio_enabled(self, enable: bool) -> bool:
-        if enable and not self._audio_stream and self._inactive_audio_stream:
-            self.audio = self._inactive_audio_stream
-            return True
-
-        if not enable and self._audio_stream:
-            self._inactive_audio_stream = self._audio_stream
-            self.audio = None
-
-            # consume the stream in the background
-            if self._consume_audio_task:
-                self._consume_audio_task.cancel()
-            self._consume_audio_task = asyncio.create_task(
-                self._consume_stream(self._inactive_audio_stream)
-            )
-            return True
-
+    def set_audio_enabled(self, enable: bool):
         return False
 
-    def set_video_enabled(self, enable: bool) -> bool:
-        if enable and not self._video_stream and self._inactive_video_stream:
-            self.video = self._inactive_video_stream
-            return True
-
-        if not enable and self._video_stream:
-            self._inactive_video_stream = self._video_stream
-            self.video = None
-
-            # consume the stream in the background
-            if self._consume_video_task:
-                self._consume_video_task.cancel()
-            self._consume_video_task = asyncio.create_task(
-                self._consume_stream(self._inactive_video_stream)
-            )
-            return True
-
+    def set_video_enabled(self, enable: bool)-> bool:
         return False
 
     @property
@@ -201,12 +164,6 @@ class AgentInput:
     @video.setter
     def video(self, stream: VideoStream | None) -> None:
         self._video_stream = stream
-        if stream is not None:
-            # reset the inactive stream
-            self._inactive_video_stream = None
-            if self._consume_video_task:
-                self._consume_video_task.cancel()
-                self._consume_video_task = None
         self._video_changed()
 
     @property
@@ -216,35 +173,13 @@ class AgentInput:
     @audio.setter
     def audio(self, stream: AudioStream | None) -> None:
         self._audio_stream = stream
-        if stream is not None:
-            # reset the inactive stream
-            self._inactive_audio_stream = None
-            if self._consume_audio_task:
-                self._consume_audio_task.cancel()
-                self._consume_audio_task = None
         self._audio_changed()
 
-    async def _consume_stream(self, stream: AudioStream | VideoStream) -> None:
-        async for frame in stream:
-            pass
 
-    def close(self) -> None:
-        if self._consume_audio_task:
-            self._consume_audio_task.cancel()
-        if self._consume_video_task:
-            self._consume_video_task.cancel()
-
-        self._consume_audio_task = None
-        self._consume_video_task = None
-
-
-class AgentOutput(
-    rtc.EventEmitter[Literal["video_changed", "audio_changed", "transcription_changed"]]
-):
+class AgentOutput:
     def __init__(
         self, video_changed: Callable, audio_changed: Callable, transcription_changed: Callable
     ) -> None:
-        super().__init__()
         self._video_sink: VideoSink | None = None
         self._audio_sink: AudioSink | None = None
         self._transcription_sink: TextSink | None = None
@@ -252,45 +187,13 @@ class AgentOutput(
         self._audio_changed = audio_changed
         self._transcription_changed = transcription_changed
 
-        # used to pause/resume streams
-        self._inactive_video_sink: VideoSink | None = None
-        self._inactive_audio_sink: AudioSink | None = None
-        self._inactive_tr_sink: TextSink | None = None
-
-    def set_video_enabled(self, enable: bool) -> bool:
-        if enable and not self._video_sink and self._inactive_video_sink:
-            self.video = self._inactive_video_sink
-            return True
-
-        if not enable and self._video_sink:
-            self._inactive_video_sink = self._video_sink
-            self.video = None
-            return True
-
+    def set_video_enabled(self, enable: bool):
         return False
 
-    def set_audio_enabled(self, enable: bool) -> bool:
-        if enable and not self._audio_sink and self._inactive_audio_sink:
-            self.audio = self._inactive_audio_sink
-            return True
-
-        if not enable and self._audio_sink:
-            self._inactive_audio_sink = self._audio_sink
-            self.audio = None
-            return True
-
+    def set_audio_enabled(self, enable: bool):
         return False
 
-    def set_transcription_enabled(self, enable: bool) -> bool:
-        if enable and not self._transcription_sink and self._inactive_tr_sink:
-            self.transcription = self._inactive_tr_sink
-            return True
-
-        if not enable and self._transcription_sink:
-            self._inactive_tr_sink = self._transcription_sink
-            self.transcription = None
-            return True
-
+    def set_transcription_enabled(self, enable: bool):
         return False
 
     @property
@@ -300,9 +203,6 @@ class AgentOutput(
     @video.setter
     def video(self, sink: VideoSink | None) -> None:
         self._video_sink = sink
-        if sink is not None:
-            self._inactive_video_sink = None
-        self.emit("video_changed", sink)
         self._video_changed()
 
     @property
@@ -312,9 +212,6 @@ class AgentOutput(
     @audio.setter
     def audio(self, sink: AudioSink | None) -> None:
         self._audio_sink = sink
-        if sink is not None:
-            self._inactive_audio_sink = None
-        self.emit("audio_changed", sink)
         self._audio_changed()
 
     @property
@@ -324,7 +221,4 @@ class AgentOutput(
     @transcription.setter
     def transcription(self, sink: TextSink | None) -> None:
         self._transcription_sink = sink
-        if sink is not None:
-            self._inactive_tr_sink = None
-        self.emit("transcription_changed", sink)
         self._transcription_changed()

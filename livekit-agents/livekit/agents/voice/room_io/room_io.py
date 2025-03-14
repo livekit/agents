@@ -99,6 +99,8 @@ class RoomIO:
         self._agent_tr_output: _ParallelTextSink | None = None
         self._tr_output_synchronizer: TextSynchronizer | None = None
 
+        self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+
         self._tasks: set[asyncio.Task] = set()
         self._update_state_task: Optional[asyncio.Task] = None
 
@@ -154,16 +156,18 @@ class RoomIO:
             await self._audio_output.start()
 
         # wait for the specified participant or the first participant joined
-        input_participant = await self.wait_for_participant()
+        input_participant = await self._participant_available_fut
         self.set_participant(input_participant.identity)
 
         if self.audio_input:
             self._agent.input.audio = self.audio_input
+
         if self.video_input:
             self._agent.input.video = self.video_input
 
         if self.audio_output:
             self._agent.output.audio = self.audio_output
+
         if self.transcription_output:
             self._agent.output.transcription = self.transcription_output
 
@@ -242,11 +246,6 @@ class RoomIO:
             self._video_input.set_participant(participant_identity)
 
         self._update_user_transcription(participant_identity)
-
-        logger.debug(
-            "set participant",
-            extra={"participant": participant_identity},
-        )
 
     def unset_participant(self) -> None:
         self._participant_identity = None
