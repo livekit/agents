@@ -993,22 +993,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             if collected_text:
                 if interrupted:
                     logger.info(f"interrupted=True; collected_text: {collected_text}")
-                    if collected_text in (
-                        AppConfig().call_metadata.get("agent_interrupted_text") or ""
-                    ):
-                        AppConfig().agent_interrupted = True
-                        app_config_text = AppConfig().call_metadata.get(
-                            "agent_interrupted_text"
-                        )
-                        current_text = self._get_current_spoken_text()
-                        text_to_replace = (
-                            current_text if current_text else app_config_text
-                        )
+                    # if collected_text in (
+                    #     AppConfig().call_metadata.get("agent_interrupted_text") or ""
+                    # ):
+                    AppConfig().agent_interrupted = True
+                    # app_config_text = AppConfig().call_metadata.get(
+                    #     "agent_interrupted_text"
+                    # )
+                    current_text = self._get_current_spoken_text()
+                    if collected_text in current_text and collected_text != current_text
                         logger.info(
-                            f"Replacing interrupted text=`{collected_text}` with `{text_to_replace}`"
+                            f"Replacing interrupted text=`{collected_text}` with `{current_text}`"
                         )
-                        collected_text = text_to_replace
-                    collected_text += "..."
+                        collected_text = current_text + "..."
 
                 msg = ChatMessage.create(text=collected_text, role="assistant")
                 self._chat_ctx.messages.append(msg)
