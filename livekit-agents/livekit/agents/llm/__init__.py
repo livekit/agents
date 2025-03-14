@@ -11,15 +11,6 @@ from .chat_context import (
     ImageContent,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
-from .tool_context import (
-    ToolError,
-    FunctionTool,
-    ToolContext,
-    StopResponse,
-    function_tool,
-    find_function_tools,
-    is_function_tool,
-)
 from .llm import (
     LLM,
     ChatChunk,
@@ -41,6 +32,15 @@ from .realtime import (
     RealtimeError,
     RealtimeModel,
     RealtimeSession,
+)
+from .tool_context import (
+    FunctionTool,
+    StopResponse,
+    ToolContext,
+    ToolError,
+    find_function_tools,
+    function_tool,
+    is_function_tool,
 )
 
 __all__ = [

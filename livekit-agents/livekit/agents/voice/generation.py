@@ -16,11 +16,11 @@ from pydantic import ValidationError
 
 from .. import debug, llm, utils
 from ..llm import (
-    ToolError,
     ChatChunk,
     ChatContext,
-    ToolContext,
     StopResponse,
+    ToolContext,
+    ToolError,
 )
 from ..llm import (
     utils as llm_utils,

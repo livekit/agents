@@ -11,8 +11,8 @@ from livekit.agents._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
-from .tool_context import ToolContext
 from .llm import LLM, ChatChunk, LLMStream, ToolChoice
+from .tool_context import ToolContext
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout

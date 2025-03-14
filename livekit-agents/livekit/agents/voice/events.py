@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union, Optional
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, Field
 
@@ -9,8 +9,8 @@ from ..metrics import AgentMetrics
 from ..types import AgentState
 
 if TYPE_CHECKING:
-    from .speech_handle import SpeechHandle
     from .agent_session import AgentSession
+    from .speech_handle import SpeechHandle
 
 
 Userdata_T = TypeVar("Userdata_T")

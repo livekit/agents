@@ -9,7 +9,6 @@ from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import (
     ChatContext,
     FunctionTool,
-    ToolContext,
     ToolError,
     find_function_tools,
 )

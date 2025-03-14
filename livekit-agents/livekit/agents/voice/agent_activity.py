@@ -21,10 +21,10 @@ from ..utils.misc import is_given
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
 from .events import (
     MetricsCollectedEvent,
+    SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStartedSpeakingEvent,
     UserStoppedSpeakingEvent,
-    SpeechCreatedEvent,
 )
 from .generation import (
     _AudioOutput,
