@@ -852,7 +852,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         logger.info(f"playout_start_time: {app_config.playout_start_time}")
         elapsed_ms = (time.time() - app_config.playout_start_time) * 1000
         logger.info(f"elapsed_ms: {elapsed_ms}")
-        logger.info(f"spoken so far: {self._get_spoken_text_at_time(elapsed_ms)}")
+        logger.info(
+            f"_get_current_spoken_text: {self._get_spoken_text_at_time(elapsed_ms)}"
+        )
         return self._get_spoken_text_at_time(elapsed_ms)
 
     async def _play_speech(self, speech_handle: SpeechHandle) -> None:
@@ -996,8 +998,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 self._chat_ctx.messages.extend(speech_handle.extra_tools_messages)
 
             if collected_text:
+                logger.info(
+                    f"collected_text: {collected_text}, last_llm_message: {AppConfig().last_llm_message}"
+                )
                 if interrupted:
-                    logger.info(f"interrupted=True; collected_text: {collected_text}")
+                    logger.info(f"interrupted=True")
                     # if collected_text in (
                     #     AppConfig().call_metadata.get("agent_interrupted_text") or ""
                     # ):
@@ -1020,6 +1025,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         AppConfig().playout_buffer = ""
                         AppConfig().char_timings = []
                 else:
+                    logger.info(f"interrupted=False")
                     if collected_text == AppConfig().last_llm_message:
                         logger.info(
                             f"inside collected_text == AppConfig().last_llm_message, about to clear playout_buffer: {AppConfig().playout_buffer}"
