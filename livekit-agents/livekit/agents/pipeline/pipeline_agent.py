@@ -994,6 +994,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     if collected_text in (
                         AppConfig().call_metadata.get("agent_interrupted_text") or ""
                     ):
+                        AppConfig().agent_interrupted = True
                         app_config_text = AppConfig().call_metadata.get('agent_interrupted_text')
                         current_text = self._get_current_spoken_text()
                         text_to_replace = current_text if current_text else app_config_text
