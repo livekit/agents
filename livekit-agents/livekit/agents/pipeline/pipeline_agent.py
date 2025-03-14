@@ -992,6 +992,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             if collected_text:
                 if interrupted:
+                    logger.info(f"interrupted=True; collected_text: {collected_text}")
                     if collected_text in (
                         AppConfig().call_metadata.get("agent_interrupted_text") or ""
                     ):
