@@ -167,7 +167,6 @@ class RealtimeSession(
         async def _listen_for_events() -> None:
             async for event in conn:
                 self.emit("openai_server_event_received", event)
-
                 if event.type == "input_audio_buffer.speech_started":
                     self._handle_input_audio_buffer_speech_started(event)
                 elif event.type == "input_audio_buffer.speech_stopped":
