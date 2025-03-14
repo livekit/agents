@@ -1168,8 +1168,17 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
 
+        if "potential_user_question" not in AppConfig().call_metadata:
+            AppConfig().call_metadata["potential_user_question"] = ""
+        AppConfig().call_metadata["potential_user_question"] += self._transcribed_text
+
         if AppConfig().get_call_metadata().get("is_payment_processing"):
-            print(f"Skipping validation because payment is processing - {self._transcribed_text}")
+            logger.info(f"Skipping validation because payment is processing - {self._transcribed_text}")
+            self._transcribed_text = ""
+            return
+        
+        if not AppConfig().call_metadata.get("initial_greeting_delivered"):
+            logger.info(f"Skipping validation because the initial greeting was not delivered - {self._transcribed_text}")
             self._transcribed_text = ""
             return
 
@@ -1189,9 +1198,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 )
 
             if should_ignore_input:
-                if "potential_user_question" not in AppConfig().call_metadata:
-                    AppConfig().call_metadata["potential_user_question"] = ""
-                AppConfig().call_metadata["potential_user_question"] += self._transcribed_text
                 self._transcribed_text = ""
                 return
 
