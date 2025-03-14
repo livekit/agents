@@ -1,4 +1,4 @@
-from .agent_task import Agent, InlineTask
+from .agent import Agent, InlineTask
 from .chat_cli import ChatCLI
 from .events import (
     AgentEvent,
@@ -12,7 +12,7 @@ from .events import (
     UserStoppedSpeakingEvent,
 )
 from .speech_handle import SpeechHandle
-from .voice_agent import AgentSession
+from .agent_session import AgentSession
 
 __all__ = [
     "ChatCLI",

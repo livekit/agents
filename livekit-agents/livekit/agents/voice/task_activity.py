@@ -45,8 +45,8 @@ def log_event(event: str, **kwargs) -> None:
 
 
 if TYPE_CHECKING:
-    from .agent_task import Agent
-    from .voice_agent import AgentSession
+    from .agent import Agent
+    from .agent_session import AgentSession
 
 
 _TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")

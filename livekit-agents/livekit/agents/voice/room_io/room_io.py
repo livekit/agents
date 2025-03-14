@@ -20,7 +20,7 @@ from ..io import AudioOutput, TextOutput
 from ..transcription import TextSynchronizer
 
 if TYPE_CHECKING:
-    from ..voice_agent import AgentSession
+    from ..agent_session import AgentSession
 
 
 from ._input import _ParticipantAudioInputStream, _ParticipantVideoInputStream

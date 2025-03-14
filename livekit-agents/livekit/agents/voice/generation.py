@@ -31,8 +31,8 @@ from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .agent_task import Agent
-    from .voice_agent import AgentSession
+    from .agent import Agent
+    from .agent_session import AgentSession
 
 
 @runtime_checkable
@@ -252,7 +252,7 @@ async def _execute_tools_task(
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
-    from .agent_task import _authorize_inline_task
+    from .agent import _authorize_inline_task
     from .events import CallContext
 
     tasks: list[asyncio.Task] = []

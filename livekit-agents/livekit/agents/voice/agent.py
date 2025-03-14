@@ -19,7 +19,7 @@ from .audio_recognition import _TurnDetector
 
 if TYPE_CHECKING:
     from .task_activity import TaskActivity
-    from .voice_agent import AgentSession
+    from .agent_session import AgentSession
 
 
 class Agent:

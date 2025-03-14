@@ -13,7 +13,7 @@ from livekit import rtc
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
-from .voice_agent import AgentSession
+from .agent_session import AgentSession
 
 if TYPE_CHECKING:
     import sounddevice as sd

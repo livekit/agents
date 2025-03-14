@@ -10,7 +10,7 @@ from ..types import AgentState
 
 if TYPE_CHECKING:
     from .speech_handle import SpeechHandle
-    from .voice_agent import AgentSession
+    from .agent_session import AgentSession
 
 
 Userdata_T = TypeVar("Userdata_T")

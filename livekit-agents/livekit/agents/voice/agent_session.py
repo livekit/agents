@@ -14,7 +14,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
-from .agent_task import Agent
+from .agent import Agent
 from .audio_recognition import _TurnDetector
 from .events import AgentEvent, AgentStateChangedEvent, EventTypes
 from .speech_handle import SpeechHandle
