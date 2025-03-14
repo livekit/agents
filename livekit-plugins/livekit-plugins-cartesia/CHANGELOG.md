@@ -1,5 +1,11 @@
 # livekit-plugins-cartesia
 
+## 0.4.11
+
+### Patch Changes
+
+- Add string type support to model parameter - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.4.10
 
 ### Patch Changes

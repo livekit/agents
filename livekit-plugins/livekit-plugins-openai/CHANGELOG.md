@@ -1,5 +1,13 @@
 # livekit-plugins-openai
 
+## 0.11.3
+
+### Patch Changes
+
+- Support more input transcription parameters for openai realtime - [#1637](https://github.com/livekit/agents/pull/1637) ([@adambenali](https://github.com/adambenali))
+
+- Add string type support to model parameter - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.11.2
 
 ### Patch Changes
