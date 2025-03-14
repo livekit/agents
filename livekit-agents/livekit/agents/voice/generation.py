@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from .. import debug, llm, utils
 from ..llm import (
-    AIError,
+    ToolError,
     ChatChunk,
     ChatContext,
     FunctionContext,
@@ -405,7 +405,7 @@ class _PythonOutput:
     def sanitize(self) -> _SanitizedOutput:
         from .agent_task import Agent
 
-        if isinstance(self.exception, AIError):
+        if isinstance(self.exception, ToolError):
             return _SanitizedOutput(
                 fnc_call=self.fnc_call.model_copy(),
                 fnc_call_out=llm.FunctionCallOutput(

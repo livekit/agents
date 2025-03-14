@@ -7,7 +7,7 @@ from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import (
-    AIError,
+    ToolError,
     AIFunction,
     ChatContext,
     FunctionContext,
@@ -232,11 +232,11 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
 
-    def complete(self, result: TaskResult_T | AIError) -> None:
+    def complete(self, result: TaskResult_T | ToolError) -> None:
         if self.__fut.done():
             raise RuntimeError(f"{self.__class__.__name__} is already done")
 
-        if isinstance(result, AIError):
+        if isinstance(result, ToolError):
             self.__fut.set_exception(result)
         else:
             self.__fut.set_result(result)

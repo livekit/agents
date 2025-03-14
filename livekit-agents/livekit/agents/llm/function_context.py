@@ -26,7 +26,7 @@ from typing import (
 from typing_extensions import TypeGuard
 
 
-class AIError(Exception):
+class ToolError(Exception):
     def __init__(self, message: str) -> None:
         """
         Exception raised within AI functions.
@@ -69,7 +69,7 @@ class AIFunction(Protocol):
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
-def ai_function(
+def function_tool(
     f: Callable | None = None,
     *,
     name: str | None = None,
