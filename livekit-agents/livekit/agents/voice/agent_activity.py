@@ -205,7 +205,7 @@ class AgentActivity(RecognitionHooks):
                 try:
                     await self._rt_session.update_tools(self._agent.tools)
                 except llm.RealtimeError:
-                    logger.exception("failed to update the fnc_ctx")
+                    logger.exception("failed to update the tools")
 
             elif isinstance(self.llm, llm.LLM):
                 try:
@@ -396,7 +396,7 @@ class AgentActivity(RecognitionHooks):
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=self._agent._chat_ctx,
-                    fnc_ctx=self._agent._tool_ctx,
+                    tool_ctx=llm.ToolContext(self._agent.tools),
                     user_input=user_input or None,
                     instructions=instructions or None,
                 ),
@@ -579,9 +579,6 @@ class AgentActivity(RecognitionHooks):
 
         self.generate_reply(user_input=new_transcript)
 
-    def retrieve_chat_ctx(self) -> llm.ChatContext:
-        return self._agent.chat_ctx
-
     # endregion
 
     @utils.log_exceptions(logger=logger)
@@ -673,7 +670,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.ToolContext,
+        tool_ctx: llm.ToolContext,
         user_input: str | None = None,
         instructions: str | None = None,
     ) -> None:
@@ -686,7 +683,7 @@ class AgentActivity(RecognitionHooks):
         audio_output = self._session.output.audio
         text_output = self._session.output.transcription
         chat_ctx = chat_ctx.copy()
-        fnc_ctx = fnc_ctx.copy()
+        tool_ctx = tool_ctx.copy()
 
         if user_input is not None:
             chat_ctx.add_message(role="user", content=user_input)
@@ -702,7 +699,7 @@ class AgentActivity(RecognitionHooks):
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
             chat_ctx=chat_ctx,
-            fnc_ctx=fnc_ctx,
+            tool_ctx=tool_ctx,
         )
         tasks.append(llm_task)
         tts_text_input, llm_output = utils.aio.itertools.tee(llm_gen_data.text_ch)
@@ -749,7 +746,7 @@ class AgentActivity(RecognitionHooks):
         exe_task, fnc_outputs = perform_tool_executions(
             agent=self._session,
             speech_handle=speech_handle,
-            fnc_ctx=fnc_ctx,
+            tool_ctx=tool_ctx,
             function_stream=llm_gen_data.function_ch,
         )
 
@@ -849,7 +846,7 @@ class AgentActivity(RecognitionHooks):
                     self._pipeline_reply_task(
                         speech_handle=handle,
                         chat_ctx=chat_ctx,
-                        fnc_ctx=fnc_ctx,
+                        tool_ctx=tool_ctx,
                     ),
                     owned_speech_handle=handle,
                     name="TaskActivity.pipeline_reply",
@@ -971,7 +968,7 @@ class AgentActivity(RecognitionHooks):
         exe_task, fnc_outputs = perform_tool_executions(
             agent=self._session,
             speech_handle=speech_handle,
-            fnc_ctx=self._agent._tool_ctx,
+            tool_ctx=self._agent._tool_ctx,
             function_stream=generation_ev.function_stream,
         )
 

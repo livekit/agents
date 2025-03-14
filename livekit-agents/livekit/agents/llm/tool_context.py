@@ -119,7 +119,7 @@ class ToolContext:
         return cls([])
 
     @property
-    def tools(self) -> dict[str, FunctionTool]:
+    def function_tools(self) -> dict[str, FunctionTool]:
         return self._ai_functions_map.copy()
 
     def update_tools(self, tools: list[FunctionTool]) -> None:

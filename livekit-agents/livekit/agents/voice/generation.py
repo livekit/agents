@@ -50,7 +50,7 @@ class _LLMGenerationData:
 
 
 def perform_llm_inference(
-    *, node: io.LLMNode, chat_ctx: ChatContext, fnc_ctx: ToolContext | None
+    *, node: io.LLMNode, chat_ctx: ChatContext, tool_ctx: ToolContext | None
 ) -> Tuple[asyncio.Task, _LLMGenerationData]:
     text_ch = aio.Chan()
     function_ch = aio.Chan()
@@ -59,7 +59,9 @@ def perform_llm_inference(
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
-        llm_node = node(chat_ctx, list(fnc_ctx.tools.values()) if fnc_ctx is not None else [])
+        llm_node = node(
+            chat_ctx, list(tool_ctx.function_tools.values()) if tool_ctx is not None else []
+        )
         if asyncio.iscoroutine(llm_node):
             llm_node = await llm_node
 
@@ -244,7 +246,7 @@ def perform_tool_executions(
     *,
     agent: AgentSession,
     speech_handle: SpeechHandle,
-    fnc_ctx: ToolContext,
+    tool_ctx: ToolContext,
     function_stream: AsyncIterable[llm.FunctionCall],
 ) -> tuple[
     asyncio.Task,
@@ -255,7 +257,7 @@ def perform_tool_executions(
         _execute_tools_task(
             agent=agent,
             speech_handle=speech_handle,
-            fnc_ctx=fnc_ctx,
+            tool_ctx=tool_ctx,
             function_stream=function_stream,
             out=out,
         ),
@@ -269,7 +271,7 @@ async def _execute_tools_task(
     *,
     agent: AgentSession,
     speech_handle: SpeechHandle,
-    fnc_ctx: ToolContext,
+    tool_ctx: ToolContext,
     function_stream: AsyncIterable[llm.FunctionCall],
     out: list[_PythonOutput],
 ) -> None:
@@ -281,7 +283,7 @@ async def _execute_tools_task(
     tasks: list[asyncio.Task] = []
     try:
         async for fnc_call in function_stream:
-            if (ai_function := fnc_ctx.tools.get(fnc_call.name)) is None:
+            if (ai_function := tool_ctx.function_tools.get(fnc_call.name)) is None:
                 logger.warning(
                     f"unknown AI function `{fnc_call.name}`",
                     extra={
