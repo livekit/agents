@@ -13,8 +13,8 @@ from typing import (
     Literal,
     Optional,
     Protocol,
-    Union,
     Tuple,
+    Union,
 )
 
 from app_config import AppConfig
@@ -788,7 +788,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             SpeechDataContextVar.reset(tk)
 
     def _commit_user_question(self) -> None:
-
         speech_handle = self._playing_speech
         synthesis_handle = speech_handle.synthesis_handle
         play_handle = synthesis_handle.play()
@@ -804,7 +803,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         self._transcribed_text = self._transcribed_text[len(user_question) :]
         speech_handle.mark_user_committed()
-    
+
     def _get_spoken_text_at_time(self, elapsed_ms: float) -> Tuple[str, int]:
         """
         Get the text that has been spoken up to a specific elapsed time.
@@ -994,10 +993,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     if collected_text in (
                         AppConfig().call_metadata.get("agent_interrupted_text") or ""
                     ):
-                        AppConfig().agent_interrupted = True
-                        app_config_text = AppConfig().call_metadata.get('agent_interrupted_text')
+                        # AppConfig().agent_interrupted = True
+                        app_config_text = AppConfig().call_metadata.get(
+                            "agent_interrupted_text"
+                        )
                         current_text = self._get_current_spoken_text()
-                        text_to_replace = current_text if current_text else app_config_text
+                        text_to_replace = (
+                            current_text if current_text else app_config_text
+                        )
                         logger.info(
                             f"Replacing interrupted text=`{collected_text}` with `{text_to_replace}`"
                         )
@@ -1044,9 +1047,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             assert isinstance(speech_handle.source, LLMStream)
-            assert (
-                not user_question or speech_handle.user_committed
-            ), "user speech should have been committed before using tools"
+            assert not user_question or speech_handle.user_committed, (
+                "user speech should have been committed before using tools"
+            )
 
             llm_stream = speech_handle.source
 
@@ -1172,9 +1175,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
-        assert (
-            self._agent_output is not None
-        ), "agent output should be initialized when ready"
+        assert self._agent_output is not None, (
+            "agent output should be initialized when ready"
+        )
 
         tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
