@@ -185,6 +185,11 @@ class RoomIO:
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
 
+        self._room.local_participant.register_rpc_method("set_participant", self.on_set_participant)
+        self._room.local_participant.register_rpc_method(
+            "unset_participant", self.on_unset_participant
+        )
+
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
@@ -237,11 +242,13 @@ class RoomIO:
             self.unset_participant()
             return
 
-        # reset future if switching to a different participant
         if (
             self._participant_identity is not None
             and self._participant_identity != participant_identity
         ):
+            # reset future if switching to a different participant
+            self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+
             # check if new participant is already connected
             for participant in self._room.remote_participants.values():
                 if participant.identity == participant_identity:
@@ -260,6 +267,7 @@ class RoomIO:
 
     def unset_participant(self) -> None:
         self._participant_identity = None
+        self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
         if self._audio_input:
             self._audio_input.set_participant(None)
         if self._video_input:
@@ -364,3 +372,28 @@ class RoomIO:
                 sink, (_ParticipantLegacyTranscriptionOutput, _ParticipantTranscriptionOutput)
             )
             sink.set_participant(participant_identity)
+
+    # -- RPC methods --
+    # user can override these methods to handle RPC calls from the room
+
+    async def on_set_participant(self, data: rtc.RpcInvocationData) -> None:
+        target_identity = data.payload or data.caller_identity
+        logger.debug(
+            "set participant called",
+            extra={
+                "caller_identity": data.caller_identity,
+                "payload": data.payload,
+                "target_identity": target_identity,
+            },
+        )
+
+        self.set_participant(target_identity)
+
+    async def on_unset_participant(self, data: rtc.RpcInvocationData) -> None:
+        logger.debug(
+            "unset participant called",
+            extra={"caller_identity": data.caller_identity, "payload": data.payload},
+        )
+        self.unset_participant()
+
+    # -- end of RPC methods --
