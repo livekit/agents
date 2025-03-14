@@ -522,7 +522,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     self._mark_started()
                     logger.info(f"send_task: sending text: ~{text}~")
                     await ws_conn.send_str(json.dumps(data_pkt))
-                    await ws_conn.send_str(json.dumps({"flush": True}))
                     if any(char in text.strip() for char in [".", "!", "?"]):
                         if (
                             not AppConfig()
