@@ -54,7 +54,7 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 
 
 # NOTE: TaskActivity isn't exposed to the public API
-class TaskActivity(RecognitionHooks):
+class AgentActivity(RecognitionHooks):
     def __init__(self, task: Agent, agent: AgentSession) -> None:
         self._agent_task, self._agent = task, agent
         self._rt_session: llm.RealtimeSession | None = None
