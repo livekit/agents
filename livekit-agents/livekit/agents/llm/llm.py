@@ -32,7 +32,7 @@ from ..types import (
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .function_context import FunctionTool
+from .tool_context import FunctionTool
 
 
 class CompletionUsage(BaseModel):
