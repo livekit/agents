@@ -563,6 +563,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         continue
 
                     data = json.loads(msg.data)
+                    logger.info(f"data: {data}")
                     if data.get("audio"):
                         received_text_to_print = ""
                         if alignment := data.get("normalizedAlignment"):
