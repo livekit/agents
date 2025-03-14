@@ -37,7 +37,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         instructions: str | None = None,
-        task: NotGivenOr[Agent] = NOT_GIVEN,
+        agent: NotGivenOr[Agent] = NOT_GIVEN,
         turn_detector: NotGivenOr[_TurnDetector] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
@@ -86,8 +86,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent_task: Agent
 
-        if utils.is_given(task):
-            self._agent_task = task
+        if utils.is_given(agent):
+            self._agent_task = agent
         else:
             if instructions is None:
                 raise ValueError("instructions must be provided if no agent task is given")
