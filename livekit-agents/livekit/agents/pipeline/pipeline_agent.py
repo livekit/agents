@@ -1279,7 +1279,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         if AppConfig().get_call_metadata().get("is_speaking_uninterruptible_message"):
             logger.info(
-                f"Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}"
+                f"_validate_reply_if_possible: Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}"
             )
             self._transcribed_text = ""
             return
@@ -1360,9 +1360,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         if self._playing_speech is None:
             return False
 
+        if "potential_user_question" not in AppConfig().call_metadata:
+            AppConfig().call_metadata["potential_user_question"] = ""
+        AppConfig().call_metadata["potential_user_question"] += self._transcribed_text
+
         if AppConfig().get_call_metadata().get("is_speaking_uninterruptible_message"):
             logger.info(
-                f"Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}"
+                f"_should_interrupt: Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}"
             )
             self._transcribed_text = ""
             return False
