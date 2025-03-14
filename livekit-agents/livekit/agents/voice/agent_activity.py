@@ -579,6 +579,10 @@ class AgentActivity(RecognitionHooks):
 
         self.generate_reply(user_input=new_transcript)
 
+    # AudioRecognition is calling this method to retrieve the chat context before running the TurnDetector model
+    def retrieve_chat_ctx(self) -> llm.ChatContext:
+        return self._agent.chat_ctx
+
     # endregion
 
     @utils.log_exceptions(logger=logger)
