@@ -522,6 +522,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     self._mark_started()
                     logger.info(f"send_task: sending text: ~{text}~")
                     await ws_conn.send_str(json.dumps(data_pkt))
+                    await ws_conn.send_str(json.dumps({"flush": True}))
                     if any(char in text.strip() for char in [".", "!", "?"]):
                         if (
                             not AppConfig()
@@ -623,9 +624,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 f"recv_task: received text: {received_text}\n\nexpected_text_without_spaces: {expected_text_without_spaces}"
                             )
                             logger.info(
-                                f"recv_task: safe_for_tts_to_break: {AppConfig()
+                                f"recv_task: safe_for_tts_to_break: {
+                                    AppConfig()
                                     .get_call_metadata()
-                                    .get('safe_for_tts_to_break')}"
+                                    .get('safe_for_tts_to_break')
+                                }"
                             )
                             if (
                                 received_text == expected_text_without_spaces
