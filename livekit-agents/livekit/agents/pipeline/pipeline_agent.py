@@ -1014,6 +1014,18 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                             f"Replacing interrupted text=`{collected_text}` with `{current_text}`"
                         )
                         collected_text = current_text + "..."
+                        logger.info(
+                            f"inside interrupt case, about to clear playout_buffer: {AppConfig().playout_buffer}"
+                        )
+                        AppConfig().playout_buffer = ""
+                        AppConfig().char_timings = []
+                else:
+                    if collected_text == AppConfig().last_llm_message:
+                        logger.info(
+                            f"inside collected_text == AppConfig().last_llm_message, about to clear playout_buffer: {AppConfig().playout_buffer}"
+                        )
+                        AppConfig().playout_buffer = ""
+                        AppConfig().char_timings = []
 
                 msg = ChatMessage.create(text=collected_text, role="assistant")
                 self._chat_ctx.messages.append(msg)
