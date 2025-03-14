@@ -65,7 +65,6 @@ _CallContextVar = contextvars.ContextVar["AgentCallContext"](
 )
 
 
-
 class AgentCallContext:
     def __init__(self, assistant: "VoicePipelineAgent", llm_stream: LLMStream) -> None:
         self._assistant = assistant
@@ -947,6 +946,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             if collected_text:
                 if interrupted:
+                    if collected_text in (
+                        AppConfig().call_metadata.get("agent_interrupted_text") or ""
+                    ):
+                        logger.info(
+                            f"Replacing interrupted text=`{collected_text}` with `{AppConfig().call_metadata.get('agent_interrupted_text')}`"
+                        )
+                        collected_text = AppConfig().call_metadata.get(
+                            "agent_interrupted_text"
+                        )
                     collected_text += "..."
 
                 msg = ChatMessage.create(text=collected_text, role="assistant")
@@ -1173,17 +1181,23 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         AppConfig().call_metadata["potential_user_question"] += self._transcribed_text
 
         if AppConfig().get_call_metadata().get("is_payment_processing"):
-            logger.info(f"Skipping validation because payment is processing - {self._transcribed_text}")
+            logger.info(
+                f"Skipping validation because payment is processing - {self._transcribed_text}"
+            )
             self._transcribed_text = ""
             return
-        
+
         if not AppConfig().call_metadata.get("initial_greeting_delivered"):
-            logger.info(f"Skipping validation because the initial greeting was not delivered - {self._transcribed_text}")
+            logger.info(
+                f"Skipping validation because the initial greeting was not delivered - {self._transcribed_text}"
+            )
             self._transcribed_text = ""
             return
-    
+
         if AppConfig().get_call_metadata().get("is_speaking_uninterruptible_message"):
-            logger.info(f"Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}")
+            logger.info(
+                f"Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}"
+            )
             self._transcribed_text = ""
             return
 
@@ -1264,7 +1278,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             return False
 
         if AppConfig().get_call_metadata().get("is_speaking_uninterruptible_message"):
-            logger.info(f"Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}")
+            logger.info(
+                f"Skipping validation because the agent is speaking an uninterruptible message - {self._transcribed_text}"
+            )
             self._transcribed_text = ""
             return False
 
