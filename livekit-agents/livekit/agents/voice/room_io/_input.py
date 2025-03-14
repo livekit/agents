@@ -28,27 +28,41 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._room, self._track_source = room, track_source
         self._data_ch = utils.aio.Chan()
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
-        self._participant: rtc.RemoteParticipant | None = None
+        self._participant_identity: str | None = None
+
         self._forward_atask: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
+
         self._room.on("track_subscribed", self._on_track_available)
 
     @property
     def stream(self) -> AsyncIterable[T]:
         return self._data_ch
 
-    def set_participant(self, participant: rtc.RemoteParticipant | None) -> None:
-        self._participant = participant
+    def set_participant(self, participant: rtc.Participant | str | None) -> None:
+        # set_participant can be called before the participant is connected
+        participant_identity = (
+            participant.identity if isinstance(participant, rtc.Participant) else participant
+        )
+        if self._participant_identity == participant_identity:
+            return
 
-        if participant is None:
+        self._participant_identity = participant_identity
+
+        if participant_identity is None:
             self._close_stream()
             return
 
-        for publication in participant.track_publications.values():
-            if not publication.track:
-                continue
-
-            self._on_track_available(publication.track, publication, participant)
+        participant = (
+            participant
+            if isinstance(participant, rtc.Participant)
+            else self._room.remote_participants.get(participant_identity)
+        )
+        if participant:
+            for publication in participant.track_publications.values():
+                if not publication.track:
+                    continue
+                self._on_track_available(publication.track, publication, participant)
 
     async def aclose(self) -> None:
         if self._forward_atask:
@@ -65,8 +79,12 @@ class _ParticipantInputStream(Generic[T], ABC):
         if old_task:
             await utils.aio.cancel_and_wait(old_task)
 
+        extra = {"participant": self._participant_identity, "stream": stream.__class__.__name__}
+        logger.debug("start reading stream", extra=extra)
         async for event in stream:
             await self._data_ch.send(event.frame)
+
+        logger.debug("stream closed", extra=extra)
 
     @abstractmethod
     def _create_stream(self, track: rtc.RemoteTrack) -> rtc.VideoStream | rtc.AudioStream: ...

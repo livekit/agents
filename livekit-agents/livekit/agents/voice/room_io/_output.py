@@ -7,14 +7,12 @@ from livekit import rtc
 
 from ... import utils
 from ...log import logger
+from ...types import ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TOPIC_CHAT
 from .. import io
 from ..transcription import find_micro_track_id
 
 
-from ...types import ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TOPIC_CHAT
-
-
-class _ParticipantAudioSink(io.AudioOutput):
+class _ParticipantAudioOutput(io.AudioOutput):
     def __init__(
         self,
         room: rtc.Room,
@@ -22,16 +20,19 @@ class _ParticipantAudioSink(io.AudioOutput):
         sample_rate: int,
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
+        queue_size_ms: int = 100_000,  # TODO(long): move buffer to python
     ) -> None:
         super().__init__(sample_rate=sample_rate)
         self._room = room
         self._lock = asyncio.Lock()
-        self._audio_source = rtc.AudioSource(sample_rate, num_channels)
+        self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
-        self._pushed_duration: float = 0.0
         self._republish_task: asyncio.Task | None = None  # used to republish track on reconnection
         self._flush_task: asyncio.Task | None = None
+
+        self._pushed_duration: float = 0.0
+        self._interrupted: bool = False
 
     async def _publish_track(self) -> None:
         async with self._lock:
@@ -91,18 +92,21 @@ class _ParticipantAudioSink(io.AudioOutput):
             self._flush_task.cancel()
 
         played_duration = self._pushed_duration - self._audio_source.queued_duration
-        self.on_playback_finished(playback_position=played_duration, interrupted=True)
         self._audio_source.clear_queue()
+        self.on_playback_finished(playback_position=played_duration, interrupted=True)
         self._pushed_duration = 0.0
 
 
-class _ParticipantLegacyTranscriptionSink(io.TextOutput):
+class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
     def __init__(
         self,
         room: rtc.Room,
+        *,
+        is_delta_stream: bool = True,
+        participant: rtc.Participant | str | None = None,
     ):
         super().__init__()
-        self._room = room
+        self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
 
@@ -110,11 +114,15 @@ class _ParticipantLegacyTranscriptionSink(io.TextOutput):
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_task: asyncio.Task | None = None
 
+        self.set_participant(participant)
+
     def set_participant(
         self,
-        participant: rtc.Participant | None = None,
+        participant: rtc.Participant | str | None,
     ) -> None:
-        self._participant_identity = participant.identity if participant else None
+        self._participant_identity = (
+            participant.identity if isinstance(participant, rtc.Participant) else participant
+        )
         if self._participant_identity is None:
             return
 
@@ -142,7 +150,11 @@ class _ParticipantLegacyTranscriptionSink(io.TextOutput):
             self._reset_state()
             self._capturing = True
 
-        self._pushed_text += text
+        if self._is_delta_stream:
+            self._pushed_text += text
+        else:
+            self._pushed_text = text
+
         await self._publish_transcription(self._current_id, self._pushed_text, final=False)
 
     def flush(self) -> None:
@@ -200,12 +212,13 @@ class _ParticipantLegacyTranscriptionSink(io.TextOutput):
         self._track_id = track.sid
 
 
-class _ParticipantTranscriptionSink(io.TextOutput):
+class _ParticipantTranscriptionOutput(io.TextOutput):
     def __init__(
         self,
         room: rtc.Room,
         *,
         is_delta_stream: bool = True,
+        participant: rtc.Participant | str | None = None,
     ):
         super().__init__()
         self._room, self._is_delta_stream = room, is_delta_stream
@@ -218,18 +231,23 @@ class _ParticipantTranscriptionSink(io.TextOutput):
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_atask: asyncio.Task | None = None
 
+        self.set_participant(participant)
+
     def set_participant(
         self,
-        participant: rtc.Participant | None,
+        participant: rtc.Participant | str | None,
     ) -> None:
-        self._participant_identity = participant.identity if participant else None
+        self._participant_identity = (
+            participant.identity if isinstance(participant, rtc.Participant) else participant
+        )
         if self._participant_identity is None:
             return
 
         try:
             self._track_id = find_micro_track_id(self._room, self._participant_identity)
         except ValueError:
-            return
+            # track id is optional for TextStream when audio is not published
+            self._track_id = None
 
         self.flush()
         self._reset_state()
@@ -239,14 +257,17 @@ class _ParticipantTranscriptionSink(io.TextOutput):
         self._capturing = False
         self._latest_text = ""
 
-    async def _create_text_writer(self) -> rtc.TextStreamWriter:
+    async def _create_text_writer(
+        self, attributes: dict[str, str] | None = None
+    ) -> rtc.TextStreamWriter:
         assert self._participant_identity is not None, "participant_identity is not set"
-        assert self._track_id is not None, "track_id is not set"
 
-        attributes = {
-            ATTRIBUTE_TRANSCRIPTION_FINAL: "false",
-            ATTRIBUTE_TRANSCRIPTION_TRACK_ID: self._track_id,
-        }
+        if not attributes:
+            attributes = {
+                ATTRIBUTE_TRANSCRIPTION_FINAL: "false",
+            }
+            if self._track_id:
+                attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_CHAT,
@@ -256,7 +277,7 @@ class _ParticipantTranscriptionSink(io.TextOutput):
         )
 
     async def capture_text(self, text: str) -> None:
-        if self._participant_identity is None or self._track_id is None:
+        if self._participant_identity is None:
             return
 
         if self._flush_atask and not self._flush_atask.done():
@@ -282,19 +303,20 @@ class _ParticipantTranscriptionSink(io.TextOutput):
     async def _flush_task(self):
         attributes = {
             ATTRIBUTE_TRANSCRIPTION_FINAL: "true",
-            ATTRIBUTE_TRANSCRIPTION_TRACK_ID: self._track_id,
         }
+        if self._track_id:
+            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
 
         if self._is_delta_stream:
             if self._writer:
                 await self._writer.aclose(attributes=attributes)
         else:
-            tmp_writer = await self._create_text_writer()
+            tmp_writer = await self._create_text_writer(attributes=attributes)
             await tmp_writer.write(self._latest_text)
             await tmp_writer.aclose()
 
     def flush(self) -> None:
-        if self._participant_identity is None or self._track_id is None or not self._capturing:
+        if self._participant_identity is None or not self._capturing:
             return
 
         self._capturing = False
@@ -324,7 +346,7 @@ class _ParticipantTranscriptionSink(io.TextOutput):
 
 
 # Keep this utility private for now
-class _ParallelTextSink(io.TextOutput):
+class _ParallelTextOutput(io.TextOutput):
     def __init__(self, *sinks: io.TextOutput) -> None:
         self._sinks = sinks
 
