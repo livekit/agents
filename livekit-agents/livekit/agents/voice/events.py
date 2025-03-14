@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..llm import ChatMessage, FunctionCall
 from ..metrics import AgentMetrics
@@ -30,7 +30,7 @@ class CallContext(Generic[Userdata_T]):
         self._function_call = function_call
 
     @property
-    def session(self) -> AgentSession[Userdata_T]:
+    def agent(self) -> AgentSession[Userdata_T]:
         return self._agent
 
     @property
@@ -43,7 +43,7 @@ class CallContext(Generic[Userdata_T]):
 
     @property
     def userdata(self) -> Userdata_T:
-        return self.session.userdata
+        return self.agent.userdata
 
 
 EventTypes = Literal[
@@ -55,6 +55,7 @@ EventTypes = Literal[
     "agent_state_changed",
     "conversation_item_added",
     "metrics_collected",
+    "speech_handle_created",
 ]
 
 
@@ -95,6 +96,18 @@ class ConversationItemAddedEvent(BaseModel):
     message: ChatMessage
 
 
+class SpeechCreatedEvent(BaseModel):
+    type: Literal["speech_created"] = "speech_created"
+    user_initiated: bool
+    """True if the speech was created using public methods like `say` or `generate_reply`"""
+    source: Literal["say", "generate_reply", "tool_response"]
+    """Source indicating how the speech handle was created"""
+    speech_handle: SpeechHandle = Field(..., exclude=True)
+    """The speech handle that was created"""
+    initiator_speech_handle: Optional[SpeechHandle] = Field(None, exclude=True)
+    """The speech handle that initiated the creation of this speech handle. This happens when a tool call is made, a new SpeechHandle will be created for the tool response."""
+
+
 AgentEvent = Union[
     UserStartedSpeakingEvent,
     UserStoppedSpeakingEvent,
@@ -104,4 +117,5 @@ AgentEvent = Union[
     AgentStateChangedEvent,
     MetricsCollectedEvent,
     ConversationItemAddedEvent,
+    SpeechCreatedEvent,
 ]

@@ -38,7 +38,7 @@ class Agent:
     ) -> None:
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
-        self._tool_ctx = ToolContext(tools + find_function_tools(self))
+        self._tools = tools + find_function_tools(self)
         self._eou = turn_detector
         self._stt = stt
         self._llm = llm
@@ -53,11 +53,59 @@ class Agent:
 
     @property
     def tools(self) -> list[llm.FunctionTool]:
-        return list(self._tool_ctx.tools.values())
+        return self._tools.copy()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx
+        return self._chat_ctx.copy()
+
+    async def update_instructions(self, instructions: str) -> None:
+        """
+        Updates the agent's instructions.
+
+        If the agent is running in realtime mode, this method also updates the instructions
+        for the ongoing realtime session.
+
+        Raises:
+            llm.RealtimeError: If updating the realtime session instructions fails.
+        """
+        if self._activity is None:
+            self._instructions = instructions
+            return
+
+        await self._activity.update_instructions(instructions)
+
+    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
+        """
+        Updates the agent's tools.
+
+        If the agent is running in realtime mode, this method also updates the tools
+        for the ongoing realtime session.
+
+        Raises:
+            llm.RealtimeError: If updating the realtime session tools fails.
+        """
+        if self._activity is None:
+            self._tools = list(set(tools))
+            return
+
+        await self._activity.update_tools(tools)
+
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        """
+        Updates the agent's chat context.
+
+        If the agent is running in realtime mode, this method also updates the chat
+        context for the ongoing realtime session.
+
+        Raises:
+            llm.RealtimeError: If updating the realtime session chat context fails.
+        """
+        if self._activity is None:
+            self._chat_ctx = chat_ctx.copy()
+            return
+
+        await self._activity.update_chat_ctx(chat_ctx)
 
     @property
     def turn_detector(self) -> NotGivenOr[_TurnDetector | None]:
