@@ -43,7 +43,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: ClovaSttLanguages = "en-US",
+        language: ClovaSttLanguages | str = "en-US",
         secret: Optional[str] = None,
         invoke_url: Optional[str] = None,
         http_session: Optional[aiohttp.ClientSession] = None,

@@ -96,7 +96,7 @@ class STTOptions:
     detect_language: bool
     interim_results: bool
     punctuate: bool
-    model: DeepgramModels
+    model: DeepgramModels | str
     smart_format: bool
     no_delay: bool
     endpointing_ms: int
@@ -113,8 +113,8 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: DeepgramModels = "nova-2-general",
-        language: DeepgramLanguages = "en-US",
+        model: DeepgramModels | str = "nova-2-general",
+        language: DeepgramLanguages | str = "en-US",
         detect_language: bool = False,
         interim_results: bool = True,
         punctuate: bool = True,
@@ -278,8 +278,8 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        language: DeepgramLanguages | None = None,
-        model: DeepgramModels | None = None,
+        language: DeepgramLanguages | str | None = None,
+        model: DeepgramModels | str | None = None,
         interim_results: bool | None = None,
         punctuate: bool | None = None,
         smart_format: bool | None = None,
@@ -388,8 +388,8 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        language: DeepgramLanguages | None = None,
-        model: DeepgramModels | None = None,
+        language: DeepgramLanguages | str | None = None,
+        model: DeepgramModels | str | None = None,
         interim_results: bool | None = None,
         punctuate: bool | None = None,
         smart_format: bool | None = None,
@@ -739,8 +739,8 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
 
 
 def _validate_model(
-    model: DeepgramModels, language: DeepgramLanguages | str | None
-) -> DeepgramModels:
+    model: DeepgramModels | str, language: DeepgramLanguages | str | None
+) -> DeepgramModels | str:
     en_only_models = {
         "nova-2-meeting",
         "nova-2-phonecall",
