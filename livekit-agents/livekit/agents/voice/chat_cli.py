@@ -13,7 +13,7 @@ from livekit import rtc
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
-from .voice_agent import VoiceAgent
+from .voice_agent import AgentSession
 
 if TYPE_CHECKING:
     import sounddevice as sd
@@ -129,7 +129,7 @@ class _AudioSink(io.AudioOutput):
 class ChatCLI:
     def __init__(
         self,
-        agent: VoiceAgent,
+        agent: AgentSession,
         *,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:

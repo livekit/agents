@@ -45,8 +45,8 @@ def log_event(event: str, **kwargs) -> None:
 
 
 if TYPE_CHECKING:
-    from .agent_task import AgentTask
-    from .voice_agent import VoiceAgent
+    from .agent_task import Agent
+    from .voice_agent import AgentSession
 
 
 _TaskActivityContextVar = contextvars.ContextVar["TaskActivity"]("agents_task_activity")
@@ -55,7 +55,7 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 
 # NOTE: TaskActivity isn't exposed to the public API
 class TaskActivity(RecognitionHooks):
-    def __init__(self, task: AgentTask, agent: VoiceAgent) -> None:
+    def __init__(self, task: Agent, agent: AgentSession) -> None:
         self._agent_task, self._agent = task, agent
         self._rt_session: llm.RealtimeSession | None = None
         self._audio_recognition: AudioRecognition | None = None
@@ -87,7 +87,7 @@ class TaskActivity(RecognitionHooks):
         return self._draining
 
     @property
-    def agent(self) -> VoiceAgent:
+    def agent(self) -> AgentSession:
         return self._agent
 
     @property
@@ -774,7 +774,7 @@ class TaskActivity(RecognitionHooks):
 
             new_calls: list[llm.FunctionCall] = []
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
-            new_agent_task: AgentTask | None = None
+            new_agent_task: Agent | None = None
             ignore_task_switch = False
             for py_out in fnc_outputs:
                 sanitized_out = py_out.sanitize()
@@ -962,7 +962,7 @@ class TaskActivity(RecognitionHooks):
 
         if len(fnc_outputs) > 0:
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
-            new_agent_task: AgentTask | None = None
+            new_agent_task: Agent | None = None
             ignore_task_switch = False
 
             for py_out in fnc_outputs:

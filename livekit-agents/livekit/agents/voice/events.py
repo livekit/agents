@@ -10,7 +10,7 @@ from ..types import AgentState
 
 if TYPE_CHECKING:
     from .speech_handle import SpeechHandle
-    from .voice_agent import VoiceAgent
+    from .voice_agent import AgentSession
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -21,7 +21,7 @@ class CallContext(Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        agent: VoiceAgent,
+        agent: AgentSession,
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
     ) -> None:
@@ -30,7 +30,7 @@ class CallContext(Generic[Userdata_T]):
         self._function_call = function_call
 
     @property
-    def agent(self) -> VoiceAgent[Userdata_T]:
+    def agent(self) -> AgentSession[Userdata_T]:
         return self._agent
 
     @property

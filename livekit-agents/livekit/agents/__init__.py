@@ -43,7 +43,7 @@ from .types import (
     NotGivenOr,
 )
 from .version import __version__
-from .voice import VoiceAgent
+from .voice import AgentSession
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
@@ -68,7 +68,7 @@ __all__ = [
     "llm",
     "metrics",
     "voice",
-    "VoiceAgent",
+    "AgentSession",
     "cli",
     "AssignmentTimeoutError",
     "APIConnectionError",

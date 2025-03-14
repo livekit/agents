@@ -14,7 +14,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
-from .agent_task import AgentTask
+from .agent_task import Agent
 from .audio_recognition import _TurnDetector
 from .events import AgentEvent, AgentStateChangedEvent, EventTypes
 from .speech_handle import SpeechHandle
@@ -32,12 +32,12 @@ class VoiceOptions:
 Userdata_T = TypeVar("Userdata_T")
 
 
-class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
         instructions: str | None = None,
-        task: NotGivenOr[AgentTask] = NOT_GIVEN,
+        task: NotGivenOr[Agent] = NOT_GIVEN,
         turn_detector: NotGivenOr[_TurnDetector] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
@@ -84,7 +84,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io (not exposed)
         self._room_io: room_io.RoomIO | None = None
 
-        self._agent_task: AgentTask
+        self._agent_task: Agent
 
         if utils.is_given(task):
             self._agent_task = task
@@ -92,7 +92,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if instructions is None:
                 raise ValueError("instructions must be provided if no agent task is given")
 
-            self._agent_task = AgentTask(instructions=instructions)
+            self._agent_task = Agent(instructions=instructions)
 
         self._activity: TaskActivity | None = None
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
@@ -143,7 +143,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._activity.current_speech if self._activity is not None else None
 
     @property
-    def current_task(self) -> AgentTask:
+    def current_task(self) -> Agent:
         return self._agent_task
 
     async def start(
@@ -306,7 +306,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.interrupt()
 
-    def update_task(self, task: AgentTask) -> None:
+    def update_task(self, task: Agent) -> None:
         self._agent_task = task
 
         if self._started:
@@ -316,7 +316,7 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
 
     @utils.log_exceptions(logger=logger)
-    async def _update_activity_task(self, task: AgentTask) -> None:
+    async def _update_activity_task(self, task: Agent) -> None:
         async with self._activity_lock:
             if self._activity is not None:
                 await self._activity.drain()

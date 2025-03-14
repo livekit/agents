@@ -31,8 +31,8 @@ from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .agent_task import AgentTask
-    from .voice_agent import VoiceAgent
+    from .agent_task import Agent
+    from .voice_agent import AgentSession
 
 
 @runtime_checkable
@@ -221,7 +221,7 @@ async def _audio_forwarding_task(
 
 def perform_tool_executions(
     *,
-    agent: VoiceAgent,
+    agent: AgentSession,
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -246,7 +246,7 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    agent: VoiceAgent,
+    agent: AgentSession,
     speech_handle: SpeechHandle,
     fnc_ctx: FunctionContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -393,7 +393,7 @@ def _is_valid_function_output(value: Any) -> bool:
 class _SanitizedOutput:
     fnc_call: llm.FunctionCall
     fnc_call_out: llm.FunctionCallOutput | None
-    agent_task: AgentTask | None
+    agent_task: Agent | None
 
 
 @dataclass
@@ -403,7 +403,7 @@ class _PythonOutput:
     exception: BaseException | None
 
     def sanitize(self) -> _SanitizedOutput:
-        from .agent_task import AgentTask
+        from .agent_task import Agent
 
         if isinstance(self.exception, AIError):
             return _SanitizedOutput(
@@ -434,7 +434,7 @@ class _PythonOutput:
                 agent_task=None,
             )
 
-        task: AgentTask | None = None
+        task: Agent | None = None
         fnc_out: Any = self.output
         if (
             isinstance(self.output, list)
@@ -442,8 +442,8 @@ class _PythonOutput:
             or isinstance(self.output, frozenset)
             or isinstance(self.output, tuple)
         ):
-            agent_tasks = [item for item in self.output if isinstance(item, AgentTask)]
-            other_outputs = [item for item in self.output if not isinstance(item, AgentTask)]
+            agent_tasks = [item for item in self.output if isinstance(item, Agent)]
+            other_outputs = [item for item in self.output if not isinstance(item, Agent)]
             if len(agent_tasks) > 1:
                 logger.error(
                     f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",
@@ -470,7 +470,7 @@ class _PythonOutput:
             )
             # fmt: on
 
-        elif isinstance(fnc_out, AgentTask):
+        elif isinstance(fnc_out, Agent):
             task = fnc_out
             fnc_out = None
 

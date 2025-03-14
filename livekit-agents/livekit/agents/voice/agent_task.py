@@ -19,10 +19,10 @@ from .audio_recognition import _TurnDetector
 
 if TYPE_CHECKING:
     from .task_activity import TaskActivity
-    from .voice_agent import VoiceAgent
+    from .voice_agent import AgentSession
 
 
-class AgentTask:
+class Agent:
     def __init__(
         self,
         *,
@@ -84,7 +84,7 @@ class AgentTask:
         return self._allow_interruptions
 
     @property
-    def agent(self) -> VoiceAgent:
+    def agent(self) -> AgentSession:
         """
         Retrieve the VoiceAgent associated with the current task;.
 
@@ -205,7 +205,7 @@ class AgentTask:
 TaskResult_T = TypeVar("TaskResult_T")
 
 
-class InlineTask(AgentTask, Generic[TaskResult_T]):
+class InlineTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,
         *,

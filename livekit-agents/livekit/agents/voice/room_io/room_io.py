@@ -20,7 +20,7 @@ from ..io import AudioOutput, TextOutput
 from ..transcription import TextSynchronizer
 
 if TYPE_CHECKING:
-    from ..voice_agent import VoiceAgent
+    from ..voice_agent import AgentSession
 
 
 from ._input import _ParticipantAudioInputStream, _ParticipantVideoInputStream
@@ -44,7 +44,7 @@ class TextInputEvent:
 TextInputCallback = Callable[["VoiceAgent", TextInputEvent], Optional[Coroutine[None, None, None]]]
 
 
-def _default_text_input_cb(agent: "VoiceAgent", ev: TextInputEvent) -> None:
+def _default_text_input_cb(agent: "AgentSession", ev: TextInputEvent) -> None:
     agent.interrupt()
     agent.generate_reply(user_input=ev.text)
 
@@ -78,7 +78,7 @@ DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 class RoomIO:
     def __init__(
         self,
-        agent: "VoiceAgent",
+        agent: "AgentSession",
         room: rtc.Room,
         *,
         participant: rtc.RemoteParticipant | str | None = None,
