@@ -341,6 +341,7 @@ class TTSSegmentsForwarder:
         """Synchronize the transcription with the audio playout for a given sentence."""
         # put each sentence in a different transcription segment
 
+        logger.info(f"about to split sentence: {sentence}")
         real_speed = None
         if audio_data.pushed_duration > 0 and audio_data.done:
             real_speed = (
