@@ -740,7 +740,7 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
 
 def _validate_model(
     model: DeepgramModels | str, language: DeepgramLanguages | str | None
-) -> DeepgramModels:
+) -> DeepgramModels | str:
     en_only_models = {
         "nova-2-meeting",
         "nova-2-phonecall",
