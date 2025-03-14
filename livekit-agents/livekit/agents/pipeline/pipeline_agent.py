@@ -816,14 +816,16 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             - The text spoken up to that time
             - The index of the last spoken character
         """
-        app_config = AppConfig()
         spoken_chars = []
         duration_sum = 0
 
+        logger.info(
+            f"inside _get_spoken_text_at_time, playout_buffer: {AppConfig().playout_buffer}"
+        )
         # Find the last character that should have been spoken
-        for i, char in enumerate(app_config.playout_buffer):
+        for i, char in enumerate(AppConfig().playout_buffer):
             logger.info(f"char: {char}")
-            duration = app_config.char_timings[i]
+            duration = AppConfig().char_timings[i]
             duration_sum += duration
             # If this character's end time is beyond our elapsed time, we've found our cutoff
             if duration_sum > elapsed_ms:
