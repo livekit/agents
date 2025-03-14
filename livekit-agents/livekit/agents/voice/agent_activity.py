@@ -24,7 +24,7 @@ from .events import (
     UserInputTranscribedEvent,
     UserStartedSpeakingEvent,
     UserStoppedSpeakingEvent,
-    SpeechHandleCreatedEvent,
+    SpeechCreatedEvent,
 )
 from .generation import (
     _AudioOutput,
@@ -325,7 +325,10 @@ class AgentActivity(RecognitionHooks):
             if is_given(allow_interruptions)
             else self.allow_interruptions
         )
-        self._session.emit("speech_handle_created", SpeechHandleCreatedEvent(speech_handle=handle))
+        self._session.emit(
+            "speech_created",
+            SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
+        )
 
         self._create_task(
             self._tts_task(
@@ -371,6 +374,10 @@ class AgentActivity(RecognitionHooks):
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
             else self.allow_interruptions
+        )
+        self._session.emit(
+            "speech_created",
+            SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="generate_reply"),
         )
 
         if isinstance(self.llm, llm.RealtimeModel):
@@ -483,6 +490,11 @@ class AgentActivity(RecognitionHooks):
             return
 
         handle = SpeechHandle.create(allow_interruptions=self.allow_interruptions)
+        self._session.emit(
+            "speech_created",
+            SpeechCreatedEvent(speech_handle=handle, user_initiated=False, source="generate_reply"),
+        )
+
         self._create_task(
             self._realtime_generation_task(
                 speech_handle=handle,
@@ -823,8 +835,15 @@ class AgentActivity(RecognitionHooks):
                 chat_ctx.items.extend(new_fnc_outputs)
 
                 handle = SpeechHandle.create(
-                    allow_interruptions=self.allow_interruptions,
+                    allow_interruptions=speech_handle.allow_interruptions,
                     step_index=speech_handle.step_index + 1,
+                    parent=speech_handle,
+                )
+                self._session.emit(
+                    "speech_created",
+                    SpeechCreatedEvent(
+                        speech_handle=handle, user_initiated=False, source="tool_response"
+                    ),
                 )
                 self._create_task(
                     self._pipeline_reply_task(
@@ -1018,15 +1037,24 @@ class AgentActivity(RecognitionHooks):
                     )
 
                 self._rt_session.interrupt()
-                try:
-                    # use self.generate_reply instead of self._rt_session.generate_reply
-                    # the latter won't be played due to the user_initiated flag
-                    await self.generate_reply()
-                except llm.RealtimeError as e:
-                    logger.warning(
-                        "failed to generate the function calls results",
-                        extra={"error": str(e)},
-                    )
+
+                handle = SpeechHandle.create(
+                    allow_interruptions=speech_handle.allow_interruptions,
+                    step_index=speech_handle.step_index + 1,
+                    parent=speech_handle,
+                )
+                self._session.emit(
+                    "speech_created",
+                    SpeechCreatedEvent(
+                        speech_handle=handle, user_initiated=False, source="tool_response"
+                    ),
+                )
+                self._create_task(
+                    self._realtime_reply_task(speech_handle=handle),
+                    owned_speech_handle=handle,
+                    name="TaskActivity.realtime_reply",
+                )
+                self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
             if not ignore_task_switch and new_agent_task is not None:
                 self._session.update_agent(new_agent_task)

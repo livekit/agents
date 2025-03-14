@@ -55,7 +55,7 @@ EventTypes = Literal[
     "agent_state_changed",
     "conversation_item_added",
     "metrics_collected",
-    "speech_handle_created",
+    "speech_created",
 ]
 
 
