@@ -396,7 +396,7 @@ class AgentActivity(RecognitionHooks):
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=self._agent._chat_ctx,
-                    tool_ctx=llm.ToolContext(self._agent.tools),
+                    tools=self._agent.tools,
                     user_input=user_input or None,
                     instructions=instructions or None,
                 ),
@@ -670,7 +670,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tool_ctx: llm.ToolContext,
+        tools: list[llm.FunctionTool],
         user_input: str | None = None,
         instructions: str | None = None,
     ) -> None:
@@ -683,7 +683,7 @@ class AgentActivity(RecognitionHooks):
         audio_output = self._session.output.audio
         text_output = self._session.output.transcription
         chat_ctx = chat_ctx.copy()
-        tool_ctx = tool_ctx.copy()
+        tool_ctx = llm.ToolContext(tools)
 
         if user_input is not None:
             chat_ctx.add_message(role="user", content=user_input)
@@ -846,7 +846,7 @@ class AgentActivity(RecognitionHooks):
                     self._pipeline_reply_task(
                         speech_handle=handle,
                         chat_ctx=chat_ctx,
-                        tool_ctx=tool_ctx,
+                        tools=tools,
                     ),
                     owned_speech_handle=handle,
                     name="TaskActivity.pipeline_reply",
@@ -902,6 +902,7 @@ class AgentActivity(RecognitionHooks):
 
         audio_output = self._session.output.audio
         text_output = self._session.output.transcription
+        tool_ctx = llm.ToolContext(self._agent.tools)
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
@@ -968,7 +969,7 @@ class AgentActivity(RecognitionHooks):
         exe_task, fnc_outputs = perform_tool_executions(
             agent=self._session,
             speech_handle=speech_handle,
-            tool_ctx=self._agent._tool_ctx,
+            tool_ctx=tool_ctx,
             function_stream=generation_ev.function_stream,
         )
 
