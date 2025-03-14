@@ -36,7 +36,7 @@ def _normalize_db(amplitude_db: float, db_min: float, db_max: float) -> float:
     return (amplitude_db - db_min) / (db_max - db_min)
 
 
-class _TextSink(io.TextSink):
+class _TextSink(io.TextOutput):
     def __init__(self, cli: "ChatCLI") -> None:
         self._cli = cli
         self._capturing = False
@@ -56,7 +56,7 @@ class _TextSink(io.TextSink):
             self._capturing = False
 
 
-class _AudioSink(io.AudioSink):
+class _AudioSink(io.AudioOutput):
     def __init__(self, cli: "ChatCLI") -> None:
         super().__init__(sample_rate=24000)
         self._cli = cli

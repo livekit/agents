@@ -250,7 +250,6 @@ class VoiceAgent(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._room_io:
                 await self._room_io.aclose()
-            self._input.close()
 
     @property
     def options(self) -> VoiceOptions:

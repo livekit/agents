@@ -155,7 +155,7 @@ class _TextOutput:
 
 
 def perform_text_forwarding(
-    *, text_output: io.TextSink | None, source: AsyncIterable[str]
+    *, text_output: io.TextOutput | None, source: AsyncIterable[str]
 ) -> tuple[asyncio.Task, _TextOutput]:
     out = _TextOutput(text="", first_text_fut=asyncio.Future())
     task = asyncio.create_task(_text_forwarding_task(text_output, source, out))
@@ -164,7 +164,7 @@ def perform_text_forwarding(
 
 @utils.log_exceptions(logger=logger)
 async def _text_forwarding_task(
-    text_output: io.TextSink | None,
+    text_output: io.TextOutput | None,
     source: AsyncIterable[str],
     out: _TextOutput,
 ) -> None:
@@ -192,7 +192,7 @@ class _AudioOutput:
 
 def perform_audio_forwarding(
     *,
-    audio_output: io.AudioSink,
+    audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
 ) -> tuple[asyncio.Task, _AudioOutput]:
     out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
@@ -202,7 +202,7 @@ def perform_audio_forwarding(
 
 @utils.log_exceptions(logger=logger)
 async def _audio_forwarding_task(
-    audio_output: io.AudioSink,
+    audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
 ) -> None:

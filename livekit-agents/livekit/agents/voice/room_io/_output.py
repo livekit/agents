@@ -14,7 +14,7 @@ from ..transcription import find_micro_track_id
 from ...types import ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TOPIC_CHAT
 
 
-class _ParticipantAudioSink(io.AudioSink):
+class _ParticipantAudioSink(io.AudioOutput):
     def __init__(
         self,
         room: rtc.Room,
@@ -96,7 +96,7 @@ class _ParticipantAudioSink(io.AudioSink):
         self._pushed_duration = 0.0
 
 
-class _ParticipantLegacyTranscriptionSink(io.TextSink):
+class _ParticipantLegacyTranscriptionSink(io.TextOutput):
     def __init__(
         self,
         room: rtc.Room,
@@ -200,7 +200,7 @@ class _ParticipantLegacyTranscriptionSink(io.TextSink):
         self._track_id = track.sid
 
 
-class _ParticipantTranscriptionSink(io.TextSink):
+class _ParticipantTranscriptionSink(io.TextOutput):
     def __init__(
         self,
         room: rtc.Room,
@@ -324,8 +324,8 @@ class _ParticipantTranscriptionSink(io.TextSink):
 
 
 # Keep this utility private for now
-class _ParallelTextSink(io.TextSink):
-    def __init__(self, *sinks: io.TextSink) -> None:
+class _ParallelTextSink(io.TextOutput):
+    def __init__(self, *sinks: io.TextOutput) -> None:
         self._sinks = sinks
 
     async def capture_text(self, text: str) -> None:

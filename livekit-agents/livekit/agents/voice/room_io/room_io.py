@@ -16,7 +16,7 @@ from ... import utils
 from ...log import logger
 from ...types import ATTRIBUTE_AGENT_STATE, TOPIC_CHAT
 from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
-from ..io import AudioSink, TextSink
+from ..io import AudioOutput, TextOutput
 from ..transcription import TextSynchronizer
 
 if TYPE_CHECKING:
