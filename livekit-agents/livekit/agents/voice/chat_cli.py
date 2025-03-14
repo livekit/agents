@@ -36,7 +36,7 @@ def _normalize_db(amplitude_db: float, db_min: float, db_max: float) -> float:
     return (amplitude_db - db_min) / (db_max - db_min)
 
 
-class _TextSink(io.TextOutput):
+class _TextOutput(io.TextOutput):
     def __init__(self, cli: "ChatCLI") -> None:
         self._cli = cli
         self._capturing = False
@@ -146,7 +146,7 @@ class ChatCLI:
 
         self._text_input_buf = []
 
-        self._text_sink = _TextSink(self)
+        self._text_sink = _TextOutput(self)
         self._audio_sink = _AudioOutput(self)
 
         self._apm = rtc.AudioProcessingModule(
