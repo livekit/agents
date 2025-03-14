@@ -30,7 +30,7 @@ class CallContext(Generic[Userdata_T]):
         self._function_call = function_call
 
     @property
-    def agent(self) -> AgentSession[Userdata_T]:
+    def session(self) -> AgentSession[Userdata_T]:
         return self._agent
 
     @property
@@ -43,7 +43,7 @@ class CallContext(Generic[Userdata_T]):
 
     @property
     def userdata(self) -> Userdata_T:
-        return self.agent.userdata
+        return self.session.userdata
 
 
 EventTypes = Literal[

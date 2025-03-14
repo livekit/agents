@@ -36,8 +36,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        instructions: str | None = None,
-        agent: NotGivenOr[Agent] = NOT_GIVEN,
         turn_detector: NotGivenOr[_TurnDetector] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
@@ -81,23 +79,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
 
-        # used to keep a reference to the room io (not exposed)
+        # used to keep a reference to the room io
+        # this is not exposed, if users want access to it, they can create their own RoomIO
         self._room_io: room_io.RoomIO | None = None
 
-        self._agent_task: Agent
-
-        if utils.is_given(agent):
-            self._agent_task = agent
-        else:
-            if instructions is None:
-                raise ValueError("instructions must be provided if no agent task is given")
-
-            self._agent_task = Agent(instructions=instructions)
-
+        self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
-        self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
-
         self._agent_state: AgentState | None = None
+
+        self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -151,11 +141,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._activity.current_speech if self._activity is not None else None
 
     @property
-    def current_task(self) -> Agent:
-        return self._agent_task
+    def current_agent(self) -> Agent:
+        if self._agent is None:
+            raise RuntimeError("VoiceAgent isn't running")
+
+        return self._agent
 
     async def start(
         self,
+        agent: Agent,
         *,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -175,6 +169,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return
 
+            self.update_agent(agent)
             self._update_agent_state(AgentState.INITIALIZING)
 
             if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
@@ -236,7 +231,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._room_io.start()
 
             # it is ok to await it directly, there is no previous task to drain
-            await self._update_activity_task(self._agent_task)
+            await self._update_activity_task(self._agent)
 
             # important: no await should be done after this!
 
@@ -307,11 +302,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity.interrupt()
 
     def update_agent(self, agent: Agent) -> None:
-        self._agent_task = agent
+        self._agent = agent
 
         if self._started:
             self._update_activity_atask = asyncio.create_task(
-                self._update_activity_task(self._agent_task),
+                self._update_activity_task(self._agent),
                 name="_update_activity_task",
             )
 
