@@ -4,6 +4,7 @@ import asyncio
 import inspect
 from typing import Any, AsyncIterable, Awaitable, Callable, Union
 
+from app_config import AppConfig
 from livekit import rtc
 
 from .. import llm, tokenize, utils
@@ -84,6 +85,9 @@ class SynthesisHandle:
             extra={"speech_id": self.speech_id},
         )
         logger.info(f"AGENT INTERRUPTED TEXT: {self.tts_forwarder.played_text}")
+        AppConfig().call_metadata.update(
+            {"agent_interrupted_text": self.tts_forwarder.played_text}
+        )
 
         if self._play_handle is not None:
             self._play_handle.interrupt()
