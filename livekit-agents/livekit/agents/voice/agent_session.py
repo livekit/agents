@@ -139,6 +139,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._output
 
     @property
+    def options(self) -> VoiceOptions:
+        return self._opts
+
+    @property
+    def history(self) -> llm.ChatContext:
+        return self._chat_ctx
+
+    @property
     def current_speech(self) -> SpeechHandle | None:
         return self._activity.current_speech if self._activity is not None else None
 
@@ -251,17 +259,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._room_io:
                 await self._room_io.aclose()
 
-    @property
-    def options(self) -> VoiceOptions:
-        return self._opts
-
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
         return super().emit(event, ev)
-
-    @property
-    def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx
 
     def update_options(self) -> None:
         pass
