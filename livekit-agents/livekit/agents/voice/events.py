@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..llm import ChatMessage, FunctionCall
+from .speech_handle import SpeechHandle
 from ..metrics import AgentMetrics
 from ..types import AgentState
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
-    from .speech_handle import SpeechHandle
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -97,6 +97,8 @@ class ConversationItemAddedEvent(BaseModel):
 
 
 class SpeechCreatedEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     type: Literal["speech_created"] = "speech_created"
     user_initiated: bool
     """True if the speech was created using public methods like `say` or `generate_reply`"""

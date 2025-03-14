@@ -36,6 +36,14 @@ def _normalize_db(amplitude_db: float, db_min: float, db_max: float) -> float:
     return (amplitude_db - db_min) / (db_max - db_min)
 
 
+class _AudioInput(io.AudioInput):
+    def __init__(self, cli: "ChatCLI") -> None:
+        self._cli = cli
+
+    async def __anext__(self) -> rtc.AudioFrame:
+        return await self._cli._audio_input_ch.__anext__()
+
+
 class _TextOutput(io.TextOutput):
     def __init__(self, cli: "ChatCLI") -> None:
         self._cli = cli
@@ -236,7 +244,7 @@ class ChatCLI:
                 blocksize=240,
             )
             self._input_stream.start()
-            self._agent.input.audio = self._audio_input_ch
+            self._agent.input.audio = _AudioInput(self)
         elif self._input_stream is not None:
             self._input_stream.stop()
             self._input_stream.close()
