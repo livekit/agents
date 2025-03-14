@@ -1026,7 +1026,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         AppConfig().char_timings = []
                 else:
                     logger.info(f"interrupted=False")
-                    if collected_text == AppConfig().last_llm_message:
+                    if (
+                        collected_text.replace(" ", "").lower()
+                        == AppConfig().last_llm_message.replace(" ", "").lower()
+                    ):
                         logger.info(
                             f"inside collected_text == AppConfig().last_llm_message, about to clear playout_buffer: {AppConfig().playout_buffer}"
                         )
