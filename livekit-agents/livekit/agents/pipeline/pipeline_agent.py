@@ -832,7 +832,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         return "".join(spoken_chars)
 
-    def _get_current_spoken_text(self) -> Tuple[str, int]:
+    def _get_current_spoken_text(self) -> str:
         """
         Get the text that has been spoken so far based on current time.
 
@@ -1000,8 +1000,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     # app_config_text = AppConfig().call_metadata.get(
                     #     "agent_interrupted_text"
                     # )
-                    current_text = self._get_current_spoken_text()
-                    if collected_text in current_text and collected_text != current_text
+                    current_text = self._get_current_spoken_text() or ""
+                    if (
+                        collected_text in current_text
+                        and collected_text != current_text
+                    ):
                         logger.info(
                             f"Replacing interrupted text=`{collected_text}` with `{current_text}`"
                         )
