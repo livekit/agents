@@ -122,7 +122,20 @@ class RealtimeModel(llm.RealtimeModel):
     async def aclose(self) -> None: ...
 
 
-class RealtimeSession(llm.RealtimeSession):
+class RealtimeSession(
+    llm.RealtimeSession[Literal["openai_server_event_received", "openai_client_event_queued"]]
+):
+    """
+    A session for the OpenAI Realtime API.
+
+    This class is used to interact with the OpenAI Realtime API.
+    It is responsible for sending events to the OpenAI Realtime API and receiving events from it.
+
+    It exposes two more events:
+    - openai_server_event_received: expose the raw server events from the OpenAI Realtime API
+    - openai_client_event_queued: expose the raw client events sent to the OpenAI Realtime API
+    """
+
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
@@ -153,6 +166,8 @@ class RealtimeSession(llm.RealtimeSession):
         @utils.log_exceptions(logger=logger)
         async def _listen_for_events() -> None:
             async for event in conn:
+                self.emit("openai_server_event_received", event)
+
                 if event.type == "input_audio_buffer.speech_started":
                     self._handle_input_audio_buffer_speech_started(event)
                 elif event.type == "input_audio_buffer.speech_stopped":
@@ -188,6 +203,7 @@ class RealtimeSession(llm.RealtimeSession):
         async def _forward_input() -> None:
             async for msg in self._msg_ch:
                 try:
+                    self.emit("openai_client_event_queued", msg)
                     await conn.send(msg)
                 except Exception:
                     break
