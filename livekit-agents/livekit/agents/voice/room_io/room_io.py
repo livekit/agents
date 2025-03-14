@@ -147,7 +147,9 @@ class RoomIO:
 
             audio_output = self._audio_output or self._agent.output.audio
             if audio_output:
-                self._tr_synchronizer = TextSynchronizer(audio_output, text_sink=self._agent_tr_output)
+                self._tr_synchronizer = TextSynchronizer(
+                    audio_output, text_sink=self._agent_tr_output
+                )
                 self._agent.output.on("audio_changed", self._on_agent_output_changed)
                 self._agent.output.on("transcription_changed", self._on_agent_output_changed)
 
@@ -350,5 +352,3 @@ class RoomIO:
         for sink in self._user_transcription._sinks:
             assert isinstance(sink, (TextStreamSink, RoomTranscriptEventSink))
             sink.set_participant(participant_identity)
-
-

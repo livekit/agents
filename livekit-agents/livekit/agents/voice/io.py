@@ -37,8 +37,8 @@ TTSNode = Callable[
 ]
 
 
-AudioStream = AsyncIterable[rtc.AudioFrame]
-VideoStream = AsyncIterable[rtc.VideoFrame]
+AudioInput = AsyncIterable[rtc.AudioFrame]
+VideoInput = AsyncIterable[rtc.VideoFrame]
 
 
 @dataclass
@@ -49,7 +49,7 @@ class PlaybackFinishedEvent:
     """interrupted is True if playback was interrupted (clear_buffer() was called)"""
 
 
-class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
+class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def __init__(self, *, sample_rate: int | None = None) -> None:
         """
         Args:
@@ -122,8 +122,14 @@ class AudioSink(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def clear_buffer(self) -> None:
         """Clear the buffer, stopping playback immediately"""
 
+    def on_attached(self) -> None:
+        ...
 
-class TextSink(ABC):
+    def on_detached(self) -> None:
+        ...
+
+
+class TextOutput(ABC):
     @abstractmethod
     async def capture_text(self, text: str) -> None:
         """Capture a text segment (Used by the output of LLM nodes)"""
@@ -134,44 +140,56 @@ class TextSink(ABC):
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
         ...
 
+    def on_attached(self) -> None:
+        ...
+
+    def on_detached(self) -> None:
+        ...
+
 
 # TODO(theomonnom): Add documentation to VideoSink
-class VideoSink(ABC):
+class VideoOutput(ABC):
     @abstractmethod
     async def capture_frame(self, text: rtc.VideoFrame) -> None: ...
 
     @abstractmethod
     def flush(self) -> None: ...
 
+    def on_attached(self) -> None:
+        ...
+
+    def on_detached(self) -> None:
+        ...
+
 
 class AgentInput:
     def __init__(self, video_changed: Callable, audio_changed: Callable) -> None:
-        self._video_stream: VideoStream | None = None
-        self._audio_stream: AudioStream | None = None
+        self._video_stream: VideoInput | None = None
+        self._audio_stream: AudioInput | None = None
         self._video_changed = video_changed
         self._audio_changed = audio_changed
 
     def set_audio_enabled(self, enable: bool):
         return False
 
-    def set_video_enabled(self, enable: bool)-> bool:
+    def set_video_enabled(self, enable: bool):
         return False
 
     @property
-    def video(self) -> VideoStream | None:
+    def video(self) -> VideoInput | None:
         return self._video_stream
 
     @video.setter
-    def video(self, stream: VideoStream | None) -> None:
+    def video(self, stream: VideoInput | None) -> None:
         self._video_stream = stream
         self._video_changed()
 
     @property
-    def audio(self) -> AudioStream | None:
+    def audio(self) -> AudioInput | None:
         return self._audio_stream
 
     @audio.setter
-    def audio(self, stream: AudioStream | None) -> None:
+    def audio(self, stream: AudioInput | None) -> None:
         self._audio_stream = stream
         self._audio_changed()
 
@@ -180,45 +198,45 @@ class AgentOutput:
     def __init__(
         self, video_changed: Callable, audio_changed: Callable, transcription_changed: Callable
     ) -> None:
-        self._video_sink: VideoSink | None = None
-        self._audio_sink: AudioSink | None = None
-        self._transcription_sink: TextSink | None = None
+        self._video_sink: VideoOutput | None = None
+        self._audio_sink: AudioOutput | None = None
+        self._transcription_sink: TextOutput | None = None
         self._video_changed = video_changed
         self._audio_changed = audio_changed
         self._transcription_changed = transcription_changed
 
-    def set_video_enabled(self, enable: bool):
+    def set_video_enabled(self, enabled: bool):
         return False
 
-    def set_audio_enabled(self, enable: bool):
+    def set_audio_enabled(self, enabled: bool):
         return False
 
-    def set_transcription_enabled(self, enable: bool):
+    def set_transcription_enabled(self, enabled: bool):
         return False
 
     @property
-    def video(self) -> VideoSink | None:
+    def video(self) -> VideoOutput | None:
         return self._video_sink
 
     @video.setter
-    def video(self, sink: VideoSink | None) -> None:
+    def video(self, sink: VideoOutput | None) -> None:
         self._video_sink = sink
         self._video_changed()
 
     @property
-    def audio(self) -> AudioSink | None:
+    def audio(self) -> AudioOutput | None:
         return self._audio_sink
 
     @audio.setter
-    def audio(self, sink: AudioSink | None) -> None:
+    def audio(self, sink: AudioOutput | None) -> None:
         self._audio_sink = sink
         self._audio_changed()
 
     @property
-    def transcription(self) -> TextSink | None:
+    def transcription(self) -> TextOutput | None:
         return self._transcription_sink
 
     @transcription.setter
-    def transcription(self, sink: TextSink | None) -> None:
+    def transcription(self, sink: TextOutput | None) -> None:
         self._transcription_sink = sink
         self._transcription_changed()
