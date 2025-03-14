@@ -84,12 +84,25 @@ class Agent:
         return self._allow_interruptions
 
     @property
-    def agent(self) -> AgentSession:
+    def realtime_llm_session(self) -> llm.RealtimeSession:
         """
-        Retrieve the VoiceAgent associated with the current task;.
+        Retrieve the realtime LLM session associated with the current agent.
 
         Raises:
-            RuntimeError: If the task is not running
+            RuntimeError: If the agent is not running or the realtime LLM session is not available
+        """
+        if (rt_session := self.__get_activity_or_raise().realtime_llm_session) is None:
+            raise RuntimeError("no realtime LLM session")
+
+        return rt_session
+
+    @property
+    def session(self) -> AgentSession:
+        """
+        Retrieve the VoiceAgent associated with the current agent.
+
+        Raises:
+            RuntimeError: If the agent is not running
         """
         return self.__get_activity_or_raise().agent
 

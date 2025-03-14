@@ -119,6 +119,10 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
+    def realtime_llm_session(self) -> llm.RealtimeSession | None:
+        return self._rt_session
+
+    @property
     def current_speech(self) -> SpeechHandle | None:
         return self._current_speech
 
