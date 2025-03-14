@@ -1,8 +1,9 @@
 from .room_io import (
-    RoomIO,
+    ATTRIBUTE_PUBLISH_ON_BEHALF,
     DEFAULT_ROOM_INPUT_OPTIONS,
     DEFAULT_ROOM_OUTPUT_OPTIONS,
     RoomInputOptions,
+    RoomIO,
     RoomOutputOptions,
 )
 
@@ -12,4 +13,5 @@ __all__ = [
     "DEFAULT_ROOM_OUTPUT_OPTIONS",
     "RoomInputOptions",
     "RoomOutputOptions",
+    "ATTRIBUTE_PUBLISH_ON_BEHALF",
 ]

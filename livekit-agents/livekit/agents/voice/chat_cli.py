@@ -56,7 +56,7 @@ class _TextSink(io.TextOutput):
             self._capturing = False
 
 
-class _AudioSink(io.AudioOutput):
+class _AudioOutput(io.AudioOutput):
     def __init__(self, cli: "ChatCLI") -> None:
         super().__init__(sample_rate=24000)
         self._cli = cli
@@ -147,7 +147,7 @@ class ChatCLI:
         self._text_input_buf = []
 
         self._text_sink = _TextSink(self)
-        self._audio_sink = _AudioSink(self)
+        self._audio_sink = _AudioOutput(self)
 
         self._apm = rtc.AudioProcessingModule(
             echo_cancellation=True,

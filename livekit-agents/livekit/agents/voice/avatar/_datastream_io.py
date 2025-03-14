@@ -10,7 +10,7 @@ from typing import AsyncGenerator, AsyncIterator, Optional
 from livekit import rtc
 
 from ... import utils
-from ..io import AudioSink, PlaybackFinishedEvent
+from ..io import AudioOutput, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
 logger = logging.getLogger(__name__)
@@ -20,9 +20,9 @@ RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 AUDIO_STREAM_TOPIC = "lk.audio_stream"
 
 
-class DataStreamAudioSink(AudioSink):
+class DataStreamAudioOutput(AudioOutput):
     """
-    AudioSink implementation that streams audio to a remote avatar worker using LiveKit DataStream.
+    AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.
     """
 
     def __init__(self, room: rtc.Room, *, destination_identity: str):

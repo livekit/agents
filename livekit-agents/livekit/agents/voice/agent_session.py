@@ -15,10 +15,10 @@ from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent
+from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import AgentEvent, AgentStateChangedEvent, EventTypes
 from .speech_handle import SpeechHandle
-from .agent_activity import AgentActivity
 
 
 @dataclass
