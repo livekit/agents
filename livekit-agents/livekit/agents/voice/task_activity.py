@@ -152,7 +152,7 @@ class TaskActivity(RecognitionHooks):
         pass
 
     async def start(self) -> None:
-        from .agent_task import _authorize_inline_task
+        from .agent import _authorize_inline_task
 
         async with self._lock:
             self._agent_task._activity = self
@@ -223,7 +223,7 @@ class TaskActivity(RecognitionHooks):
             _authorize_inline_task(task)
 
     async def drain(self) -> None:
-        from .agent_task import _authorize_inline_task
+        from .agent import _authorize_inline_task
 
         async with self._lock:
             if self._draining:
