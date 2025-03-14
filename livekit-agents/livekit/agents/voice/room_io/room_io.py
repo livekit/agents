@@ -26,8 +26,6 @@ from ._output import (
 )
 
 ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
-RPC_SET_PARTICIPANT = "lk.set_participant"
-RPC_UNSET_PARTICIPANT = "lk.unset_participant"
 
 
 @dataclass
