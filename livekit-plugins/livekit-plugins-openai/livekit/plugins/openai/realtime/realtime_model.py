@@ -236,6 +236,7 @@ class RealtimeSession(
                     voice=self._realtime_model._opts.voice,  # type: ignore
                     input_audio_format="pcm16",
                     output_audio_format="pcm16",
+                    modalities=["text", "audio"],
                     turn_detection=session_update_event.SessionTurnDetection(
                         type="server_vad",
                         create_response=True,
