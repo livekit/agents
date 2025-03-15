@@ -26,7 +26,6 @@ from .realtime import (
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
     InputTranscriptionCompleted,
-    InputTranscriptionFailed,
     MessageGeneration,
     RealtimeCapabilities,
     RealtimeError,

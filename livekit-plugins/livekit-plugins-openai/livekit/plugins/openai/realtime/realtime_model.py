@@ -42,7 +42,7 @@ from openai.types.beta.realtime import (
 )
 from openai.types.beta.realtime.response_create_event import Response
 
-from .log import logger
+from ..log import logger
 
 # When a response is created with the OpenAI Realtime API, those events are sent in this order:
 # 1. response.created (contains resp_id)
@@ -102,6 +102,7 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: Optional[
             _InputAudioTranscription
         ] = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
     ) -> None:
         super().__init__(
@@ -114,7 +115,9 @@ class RealtimeModel(llm.RealtimeModel):
             voice=voice,
             input_audio_transcription=input_audio_transcription,
         )
-        self._client = client or openai.AsyncClient(base_url=base_url or None)
+        self._client = client or openai.AsyncClient(
+            base_url=base_url or None, api_key=api_key or None
+        )
 
     def session(self) -> "RealtimeSession":
         return RealtimeSession(self)
@@ -156,6 +159,12 @@ class RealtimeSession(
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
 
+        self._bstream = utils.audio.AudioByteStream(
+            SAMPLE_RATE,
+            NUM_CHANNELS,
+            samples_per_channel=SAMPLE_RATE // 10,  # 100ms
+        )
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         # TODO(theomonnom): handle reconnections
@@ -167,36 +176,40 @@ class RealtimeSession(
         async def _listen_for_events() -> None:
             async for event in conn:
                 self.emit("openai_server_event_received", event)
-                if event.type == "input_audio_buffer.speech_started":
-                    self._handle_input_audio_buffer_speech_started(event)
-                elif event.type == "input_audio_buffer.speech_stopped":
-                    self._handle_input_audio_buffer_speech_stopped(event)
-                elif event.type == "response.created":
-                    self._handle_response_created(event)
-                elif event.type == "response.output_item.added":
-                    self._handle_response_output_item_added(event)
-                elif event.type == "conversation.item.created":
-                    self._handle_conversion_item_created(event)
-                elif event.type == "conversation.item.deleted":
-                    self._handle_conversion_item_deleted(event)
-                elif event.type == "conversation.item.input_audio_transcription.completed":
-                    self._handle_conversion_item_input_audio_transcription_completed(event)
-                elif event.type == "conversation.item.input_audio_transcription.failed":
-                    self._handle_conversion_item_input_audio_transcription_failed(event)
-                elif event.type == "response.audio_transcript.delta":
-                    self._handle_response_audio_transcript_delta(event)
-                elif event.type == "response.audio.delta":
-                    self._handle_response_audio_delta(event)
-                elif event.type == "response.audio_transcript.done":
-                    self._handle_response_audio_transcript_done(event)
-                elif event.type == "response.audio.done":
-                    self._handle_response_audio_done(event)
-                elif event.type == "response.output_item.done":
-                    self._handle_response_output_item_done(event)
-                elif event.type == "response.done":
-                    self._handle_response_done(event)
-                elif event.type == "error":
-                    self._handle_error(event)
+
+                try:
+                    if event.type == "input_audio_buffer.speech_started":
+                        self._handle_input_audio_buffer_speech_started(event)
+                    elif event.type == "input_audio_buffer.speech_stopped":
+                        self._handle_input_audio_buffer_speech_stopped(event)
+                    elif event.type == "response.created":
+                        self._handle_response_created(event)
+                    elif event.type == "response.output_item.added":
+                        self._handle_response_output_item_added(event)
+                    elif event.type == "conversation.item.created":
+                        self._handle_conversion_item_created(event)
+                    elif event.type == "conversation.item.deleted":
+                        self._handle_conversion_item_deleted(event)
+                    elif event.type == "conversation.item.input_audio_transcription.completed":
+                        self._handle_conversion_item_input_audio_transcription_completed(event)
+                    elif event.type == "conversation.item.input_audio_transcription.failed":
+                        self._handle_conversion_item_input_audio_transcription_failed(event)
+                    elif event.type == "response.audio_transcript.delta":
+                        self._handle_response_audio_transcript_delta(event)
+                    elif event.type == "response.audio.delta":
+                        self._handle_response_audio_delta(event)
+                    elif event.type == "response.audio_transcript.done":
+                        self._handle_response_audio_transcript_done(event)
+                    elif event.type == "response.audio.done":
+                        self._handle_response_audio_done(event)
+                    elif event.type == "response.output_item.done":
+                        self._handle_response_output_item_done(event)
+                    elif event.type == "response.done":
+                        self._handle_response_done(event)
+                    elif event.type == "error":
+                        self._handle_error(event)
+                except Exception as e:
+                    logger.exception("failed to handle event", extra={"event": event})
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input() -> None:
@@ -221,6 +234,16 @@ class RealtimeSession(
                 session=session_update_event.Session(
                     model=self._realtime_model._opts.model,  # type: ignore
                     voice=self._realtime_model._opts.voice,  # type: ignore
+                    input_audio_format="pcm16",
+                    output_audio_format="pcm16",
+                    turn_detection=session_update_event.SessionTurnDetection(
+                        type="server_vad",
+                        create_response=True,
+                        interrupt_response=True,
+                        prefix_padding_ms=300,
+                        silence_duration_ms=500,
+                        threshold=0.65,
+                    ),
                     input_audio_transcription=input_audio_transcription,
                 ),
                 event_id=utils.shortuuid("session_update_"),
@@ -338,12 +361,13 @@ class RealtimeSession(
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
-            self._msg_ch.send_nowait(
-                InputAudioBufferAppendEvent(
-                    type="input_audio_buffer.append",
-                    audio=base64.b64encode(f.data).decode("utf-8"),
+            for f in self._bstream.write(f.data.tobytes()):
+                self._msg_ch.send_nowait(
+                    InputAudioBufferAppendEvent(
+                        type="input_audio_buffer.append",
+                        audio=base64.b64encode(f.data).decode("utf-8"),
+                    )
                 )
-            )
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
@@ -472,16 +496,27 @@ class RealtimeSession(
     def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
 
-        self._remote_chat_ctx.insert(
-            event.previous_item_id, _openai_item_to_livekit_item(event.item)
-        )
+        try:
+            self._remote_chat_ctx.insert(
+                event.previous_item_id, _openai_item_to_livekit_item(event.item)
+            )
+        except ValueError as e:
+            logger.warning(
+                f"failed to insert item `{event.item.id}`: {str(e)}",
+            )
+
         if fut := self._item_create_future.pop(event.item.id, None):
             fut.set_result(None)
 
     def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         assert event.item_id is not None, "item_id is None"
 
-        self._remote_chat_ctx.delete(event.item_id)
+        try:
+            self._remote_chat_ctx.delete(event.item_id)
+        except ValueError as e:
+            logger.warning(
+                f"failed to delete item `{event.item_id}`: {str(e)}",
+            )
 
         if fut := self._item_delete_future.pop(event.item_id, None):
             fut.set_result(None)
