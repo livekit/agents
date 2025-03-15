@@ -108,6 +108,8 @@ class _TextAudioSynchronizer:
 
         self._text_data.pushed_text += text
         self._text_data.sentence_stream.push_text(text)
+        # when delta is received not at the sentence boundary, flush sentence stream
+        self._text_data.sentence_stream.flush()
 
     def mark_audio_segment_end(self) -> None:
         """Mark the current audio segment as complete."""

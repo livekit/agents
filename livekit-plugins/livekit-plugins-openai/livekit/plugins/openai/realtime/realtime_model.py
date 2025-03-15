@@ -148,6 +148,7 @@ class RealtimeSession(
 
         self._conn: AsyncRealtimeConnection | None = None
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
+        self._prev_instructions: str | None = None
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
@@ -187,13 +188,13 @@ class RealtimeSession(
                     elif event.type == "response.output_item.added":
                         self._handle_response_output_item_added(event)
                     elif event.type == "conversation.item.created":
-                        self._handle_conversion_item_created(event)
+                        self._handle_conversation_item_created(event)
                     elif event.type == "conversation.item.deleted":
-                        self._handle_conversion_item_deleted(event)
+                        self._handle_conversation_item_deleted(event)
                     elif event.type == "conversation.item.input_audio_transcription.completed":
-                        self._handle_conversion_item_input_audio_transcription_completed(event)
+                        self._handle_conversation_item_input_audio_transcription_completed(event)
                     elif event.type == "conversation.item.input_audio_transcription.failed":
-                        self._handle_conversion_item_input_audio_transcription_failed(event)
+                        self._handle_conversation_item_input_audio_transcription_failed(event)
                     elif event.type == "response.audio_transcript.delta":
                         self._handle_response_audio_transcript_delta(event)
                     elif event.type == "response.audio.delta":
@@ -232,6 +233,8 @@ class RealtimeSession(
             SessionUpdateEvent(
                 type="session.update",
                 session=session_update_event.Session(
+                    # restore previous instructions on reconnect
+                    instructions=self._prev_instructions,
                     model=self._realtime_model._opts.model,  # type: ignore
                     voice=self._realtime_model._opts.voice,  # type: ignore
                     input_audio_format="pcm16",
@@ -347,6 +350,7 @@ class RealtimeSession(
         event_id = utils.shortuuid("instructions_update_")
         # f = asyncio.Future()
         # self._response_futures[event_id] = f
+        self._prev_instructions = instructions
         self._msg_ch.send_nowait(
             SessionUpdateEvent(
                 type="session.update",
@@ -493,7 +497,7 @@ class RealtimeSession(
             )
             self._current_generation.messages[item_id] = item_generation
 
-    def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
+    def _handle_conversation_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
 
         try:
@@ -508,7 +512,7 @@ class RealtimeSession(
         if fut := self._item_create_future.pop(event.item.id, None):
             fut.set_result(None)
 
-    def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
+    def _handle_conversation_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         assert event.item_id is not None, "item_id is None"
 
         try:
@@ -521,7 +525,7 @@ class RealtimeSession(
         if fut := self._item_delete_future.pop(event.item_id, None):
             fut.set_result(None)
 
-    def _handle_conversion_item_input_audio_transcription_completed(
+    def _handle_conversation_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
         if remote_item := self._remote_chat_ctx.get(event.item_id):
@@ -533,7 +537,7 @@ class RealtimeSession(
             llm.InputTranscriptionCompleted(item_id=event.item_id, transcript=event.transcript),
         )
 
-    def _handle_conversion_item_input_audio_transcription_failed(
+    def _handle_conversation_item_input_audio_transcription_failed(
         self, event: ConversationItemInputAudioTranscriptionFailedEvent
     ) -> None:
         logger.error(
