@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "livekit-plugins-assemblyai"
+name = "livekit-plugins-speechmatics"
 dynamic = ["version"]
-description = "Agent Framework plugin for AssemblyAI"
+description = "Agent Framework plugin for Speechmatics"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
@@ -30,7 +30,7 @@ Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
-path = "livekit/plugins/assemblyai/version.py"
+path = "livekit/plugins/speechmatics/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]

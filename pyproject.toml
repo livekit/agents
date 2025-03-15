@@ -1,0 +1,30 @@
+[tool.uv]
+constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
+
+[tool.uv.sources]
+livekit-agents = { workspace = true }
+livekit-plugins-anthropic = { workspace = true }
+livekit-plugins-assemblyai = { workspace = true }
+livekit-plugins-aws = { workspace = true }
+livekit-plugins-azure = { workspace = true }
+livekit-plugins-cartesia = { workspace = true }
+livekit-plugins-clova = { workspace = true }
+livekit-plugins-deepgram = { workspace = true }
+livekit-plugins-elevenlabs = { workspace = true }
+livekit-plugins-fal = { workspace = true }
+livekit-plugins-google = { workspace = true }
+livekit-plugins-llama-index = { workspace = true }
+livekit-plugins-nltk = { workspace = true }
+livekit-plugins-openai = { workspace = true }
+livekit-plugins-rag = { workspace = true }
+livekit-plugins-rime = { workspace = true }
+livekit-plugins-silero = { workspace = true }
+livekit-plugins-speechematic = { workspace = true }
+livekit-plugins-turn-detector = { workspace = true }
+
+[tool.uv.workspace]
+members = ["livekit-plugins/*", "livekit-agents"]
+exclude = ["livekit-plugins/livekit-plugins-browser"]
+
+[dependency-groups]
+dev = ["python-dotenv>=1.0.1"]
