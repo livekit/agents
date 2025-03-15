@@ -375,10 +375,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._mark_started()
 
                 if isinstance(data, self._FlushSentinel):
-                    await ws.send_str(json.dumps({"text": "<STOP>"}))
+                    # await ws.send_str(json.dumps({"text": "<STOP>"}))
                     continue
-
                 request_data[request_id]["sent"] += data
+                print("sent", request_data[request_id]["sent"])
                 await ws.send_str(json.dumps({"text": data}))
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
@@ -416,6 +416,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         emitter.push(frame)
 
                     request_data[request_id]["recv"] += recv_text
+                    print("recv", request_data[request_id]["recv"])
                 else:
                     logger.error("Unexpected Neuphonic message %s", data)
 
@@ -426,6 +427,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break  # we are not going to receive any more audio
 
         async with self._pool.connection() as ws:
+            print("Connected to Neuphonic")
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),
