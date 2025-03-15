@@ -1256,6 +1256,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         if time_diff <= 3:
                             logger.debug(f"Dont interrupt as {time_diff} <= 3")
                             return False, True
+                    else:
+                        logger.debug("_playing_speech_since is None, dont interrupt")
+                        return False, False
             elif len(interim_words) > 1:
                 if interim_words[len(interim_words) - 1].lower() not in ExcludedWords:
                     if self._playing_speech_since is not None:
@@ -1264,6 +1267,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         if time_diff <= 3:
                             logger.info(f"Dont interrupt as {time_diff} <= 3")
                             return False, False
+                    else:
+                        logger.debug("_playing_speech_since is None, dont interrupt")
+                        return False, False
                     logger.debug("agent_playout_start is None")
                     return True, False
                 logger.debug("interim_words has excluded_words")
