@@ -596,6 +596,12 @@ class RealtimeSession(
             return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)
 
         assert self._current_generation is not None, "current_generation is None"
+        for generation in self._current_generation.messages.values():
+            # close all messages that haven't been closed yet
+            if not generation.text_ch.closed:
+                generation.text_ch.close()
+            if not generation.audio_ch.closed:
+                generation.audio_ch.close()
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
         self._current_generation = None
