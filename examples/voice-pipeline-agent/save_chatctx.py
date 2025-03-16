@@ -1,7 +1,6 @@
 import asyncio
 from datetime import datetime
 
-from aiofile import async_open as open
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.pipeline import VoicePipelineAgent
