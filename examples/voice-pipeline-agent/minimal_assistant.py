@@ -67,21 +67,6 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(log_usage)
 
-    # listen to incoming chat messages, only required if you'd like the agent to
-    # answer incoming messages from Chat
-    chat = rtc.ChatManager(ctx.room)
-
-    async def answer_from_text(txt: str):
-        chat_ctx = agent.chat_ctx.copy()
-        chat_ctx.append(role="user", text=txt)
-        stream = agent.llm.chat(chat_ctx=chat_ctx)
-        await agent.say(stream)
-
-    @chat.on("message_received")
-    def on_chat_received(msg: rtc.ChatMessage):
-        if msg.message:
-            asyncio.create_task(answer_from_text(msg.message))
-
     await agent.say("Hey, how can I help you today?", allow_interruptions=True)
 
 
