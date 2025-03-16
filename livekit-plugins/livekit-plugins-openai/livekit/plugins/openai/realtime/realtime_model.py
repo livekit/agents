@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Literal, Optional
+from typing import Literal, Optional
 
-from livekit import rtc
-from livekit.agents import llm, utils
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from pydantic import ValidationError
 
 import openai
+from livekit import rtc
+from livekit.agents import llm, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from openai.resources.beta.realtime.realtime import AsyncRealtimeConnection
 from openai.types.beta.realtime import (
     ConversationItem,
@@ -119,7 +120,7 @@ class RealtimeModel(llm.RealtimeModel):
             base_url=base_url or None, api_key=api_key or None
         )
 
-    def session(self) -> "RealtimeSession":
+    def session(self) -> RealtimeSession:
         return RealtimeSession(self)
 
     async def aclose(self) -> None: ...
@@ -208,7 +209,7 @@ class RealtimeSession(
                         self._handle_response_done(event)
                     elif event.type == "error":
                         self._handle_error(event)
-                except Exception as e:
+                except Exception:
                     logger.exception("failed to handle event", extra={"event": event})
 
         @utils.log_exceptions(logger=logger)

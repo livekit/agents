@@ -1,6 +1,7 @@
 import logging
 
 from dotenv import load_dotenv
+
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, CallContext
@@ -53,7 +54,7 @@ async def entrypoint(ctx: JobContext):
         room_input_options=RoomInputOptions(
             # noise_cancellation=noise_cancellation.BVC(),
         ),
-        room_output_options=RoomOutputOptions(transcription_enabled=True)
+        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
     from livekit.agents.voice.io import PlaybackFinishedEvent

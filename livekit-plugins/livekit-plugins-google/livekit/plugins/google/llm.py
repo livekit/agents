@@ -25,7 +25,7 @@ from google.auth._default_async import default_async
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import AIFunction, ToolChoice
+from livekit.agents.llm import FunctionTool, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -144,7 +144,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        fnc_ctx: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,

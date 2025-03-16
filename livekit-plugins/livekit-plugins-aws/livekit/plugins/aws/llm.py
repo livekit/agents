@@ -22,7 +22,7 @@ from typing import Any, Literal
 import boto3
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
-from livekit.agents.llm import AIFunction, ChatContext, FunctionToolCall, ToolChoice
+from livekit.agents.llm import ChatContext, FunctionTool, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -104,7 +104,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        fnc_ctx: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
@@ -178,7 +178,7 @@ class LLMStream(llm.LLMStream):
         region_name: str,
         chat_ctx: ChatContext,
         conn_options: APIConnectOptions,
-        fnc_ctx: list[AIFunction] | None,
+        fnc_ctx: list[FunctionTool] | None,
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
