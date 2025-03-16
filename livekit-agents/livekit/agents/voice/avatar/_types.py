@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Coroutine, Literal
+from collections.abc import AsyncIterator, Coroutine
+from typing import Literal
 
 from livekit import rtc
 

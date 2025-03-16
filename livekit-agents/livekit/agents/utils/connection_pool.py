@@ -1,10 +1,9 @@
 import asyncio
 import time
 import weakref
+from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
 from typing import (
-    AsyncGenerator,
-    Awaitable,
     Callable,
     Generic,
     Optional,

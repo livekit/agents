@@ -1,7 +1,8 @@
 import pathlib
 import pickle
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 import annoy
 

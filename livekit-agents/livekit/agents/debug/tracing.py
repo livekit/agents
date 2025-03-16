@@ -145,7 +145,7 @@ def _create_tracing_app(w: Worker) -> web.Application:
         import aiofiles
 
         with importlib.resources.path("livekit.agents.debug", "index.html") as path:
-            async with aiofiles.open(path, mode="r") as f:
+            async with aiofiles.open(path) as f:
                 content = await f.read()
 
         return web.Response(text=content, content_type="text/html")

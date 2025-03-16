@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import dataclasses
 import time
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import AsyncGenerator, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 from livekit import rtc
 
@@ -117,7 +118,7 @@ class FallbackAdapter(
         text: str,
         *,
         conn_options: Optional[APIConnectOptions] = None,
-    ) -> "FallbackChunkedStream":
+    ) -> FallbackChunkedStream:
         return FallbackChunkedStream(
             tts=self,
             input_text=text,
@@ -128,7 +129,7 @@ class FallbackAdapter(
         self,
         *,
         conn_options: Optional[APIConnectOptions] = None,
-    ) -> "FallbackSynthesizeStream":
+    ) -> FallbackSynthesizeStream:
         return FallbackSynthesizeStream(
             tts=self,
             conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS,

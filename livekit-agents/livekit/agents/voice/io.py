@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from dataclasses import dataclass
 from typing import (
-    AsyncIterable,
-    AsyncIterator,
-    Awaitable,
     Callable,
     Literal,
     Optional,

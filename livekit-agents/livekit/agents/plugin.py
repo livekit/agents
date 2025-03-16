@@ -11,7 +11,7 @@ EventTypes = Literal["plugin_registered",]
 
 
 class Plugin(ABC):
-    registered_plugins: List["Plugin"] = []
+    registered_plugins: List[Plugin] = []
     emitter: utils.EventEmitter[EventTypes] = utils.EventEmitter()
 
     # TODO(theomonnom): make logger mandatory once all plugins have been updated
@@ -28,7 +28,7 @@ class Plugin(ABC):
         self._logger = logger
 
     @classmethod
-    def register_plugin(cls, plugin: "Plugin") -> None:
+    def register_plugin(cls, plugin: Plugin) -> None:
         if threading.current_thread() != threading.main_thread():
             raise RuntimeError("Plugins must be registered on the main thread")
 

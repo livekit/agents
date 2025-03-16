@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import AsyncIterator, Literal
+from collections.abc import AsyncIterator
+from typing import Literal
 
 from livekit import rtc
 

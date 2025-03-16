@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Coroutine, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from livekit import rtc
 
@@ -40,7 +41,7 @@ TextInputCallback = Callable[
 ]
 
 
-def _default_text_input_cb(sess: "AgentSession", ev: TextInputEvent) -> None:
+def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
     sess.interrupt()
     sess.generate_reply(user_input=ev.text)
 
@@ -74,7 +75,7 @@ DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 class RoomIO:
     def __init__(
         self,
-        agent_session: "AgentSession",
+        agent_session: AgentSession,
         room: rtc.Room,
         *,
         participant: rtc.RemoteParticipant | str | None = None,

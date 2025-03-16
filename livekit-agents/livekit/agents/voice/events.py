@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..llm import ChatMessage, FunctionCall
-from .speech_handle import SpeechHandle
 from ..metrics import AgentMetrics
 from ..types import AgentState
+from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession

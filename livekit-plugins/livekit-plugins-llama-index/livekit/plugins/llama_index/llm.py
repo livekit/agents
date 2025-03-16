@@ -37,7 +37,7 @@ class LLM(llm.LLM):
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
-    ) -> "LLMStream":
+    ) -> LLMStream:
         if fnc_ctx is not None:
             logger.warning("fnc_ctx is currently not supported with llama_index.LLM")
 

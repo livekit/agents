@@ -37,7 +37,7 @@ def _normalize_db(amplitude_db: float, db_min: float, db_max: float) -> float:
 
 
 class _AudioInput(io.AudioInput):
-    def __init__(self, cli: "ChatCLI") -> None:
+    def __init__(self, cli: ChatCLI) -> None:
         self._cli = cli
 
     async def __anext__(self) -> rtc.AudioFrame:
@@ -45,7 +45,7 @@ class _AudioInput(io.AudioInput):
 
 
 class _TextOutput(io.TextOutput):
-    def __init__(self, cli: "ChatCLI") -> None:
+    def __init__(self, cli: ChatCLI) -> None:
         self._cli = cli
         self._capturing = False
 
@@ -65,7 +65,7 @@ class _TextOutput(io.TextOutput):
 
 
 class _AudioOutput(io.AudioOutput):
-    def __init__(self, cli: "ChatCLI") -> None:
+    def __init__(self, cli: ChatCLI) -> None:
         super().__init__(sample_rate=24000)
         self._cli = cli
         self._capturing = False

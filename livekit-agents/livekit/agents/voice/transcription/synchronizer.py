@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Callable, Optional
+from typing import Callable, Optional
 
 from livekit import rtc
 
@@ -338,12 +339,12 @@ class TextSynchronizer:
         self._flush()
 
     @property
-    def audio_output(self) -> "_AudioSyncOutput":
+    def audio_output(self) -> _AudioSyncOutput:
         """Get the audio output wrapper"""
         return self._audio_output
 
     @property
-    def text_output(self) -> "_TextOutput":
+    def text_output(self) -> _TextOutput:
         """Get the text output wrapper"""
         return self._text_output
 

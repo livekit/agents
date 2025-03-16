@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import time
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 from livekit.agents._exceptions import APIConnectionError, APIError
 
@@ -73,7 +74,7 @@ class FallbackAdapter(
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
-    ) -> "LLMStream":
+    ) -> LLMStream:
         return FallbackLLMStream(
             llm=self,
             conn_options=conn_options,

@@ -119,7 +119,7 @@ class STT(stt.STT):
         languages: list[str] | None = None,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = deepcopy(self._config)
         if language and not languages:
             languages = [language]

@@ -111,7 +111,7 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             text=text,

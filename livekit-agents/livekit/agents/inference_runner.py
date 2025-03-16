@@ -17,7 +17,7 @@ class _InferenceRunner(ABC, _RunnerMeta):
     registered_runners: _RunnersDict = {}
 
     @classmethod
-    def register_runner(cls, runner_class: Type["_InferenceRunner"]) -> None:
+    def register_runner(cls, runner_class: Type[_InferenceRunner]) -> None:
         if threading.current_thread() != threading.main_thread():
             raise RuntimeError("InferenceRunner must be registered on the main thread")
 

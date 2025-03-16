@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
+from typing import Literal
 
 from livekit import rtc
 from livekit.agents import llm, utils

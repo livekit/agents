@@ -3,7 +3,8 @@ from __future__ import annotations
 import base64
 import os
 from collections import OrderedDict
-from typing import Any, Awaitable, Callable, Optional, Union
+from collections.abc import Awaitable
+from typing import Any, Callable, Optional, Union
 
 from livekit.agents import llm
 

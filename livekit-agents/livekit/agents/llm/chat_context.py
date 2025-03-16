@@ -133,7 +133,7 @@ class ChatContext:
         self._items: list[ChatItem] = items if is_given(items) else []
 
     @classmethod
-    def empty(cls) -> "ChatContext":
+    def empty(cls) -> ChatContext:
         return cls([])
 
     @property
@@ -162,7 +162,7 @@ class ChatContext:
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
 
-    def copy(self) -> "ChatContext":
+    def copy(self) -> ChatContext:
         return ChatContext(self.items.copy())
 
     def to_dict(
@@ -191,7 +191,7 @@ class ChatContext:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ChatContext":
+    def from_dict(cls, data: dict) -> ChatContext:
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)

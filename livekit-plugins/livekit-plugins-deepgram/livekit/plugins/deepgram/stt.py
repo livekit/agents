@@ -258,7 +258,7 @@ class STT(stt.STT):
         *,
         language: DeepgramLanguages | str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,

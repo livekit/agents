@@ -18,9 +18,10 @@ import asyncio
 import contextvars
 import functools
 import multiprocessing as mp
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Any, Callable, Coroutine, Tuple, Union
+from typing import Any, Callable, Tuple, Union
 
 from livekit import api, rtc
 from livekit.protocol import agent, models

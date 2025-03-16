@@ -105,7 +105,7 @@ class STT(stt.STT):
         *,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         return SpeechStream(
             stt=self,
             conn_options=conn_options,

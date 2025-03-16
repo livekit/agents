@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar, Union
+from collections.abc import AsyncIterable
+from typing import TYPE_CHECKING, Generic, Optional, TypeVar, Union
 
 from livekit import rtc
 
@@ -184,10 +185,10 @@ class Agent:
         if not activity.stt.capabilities.streaming:
             if not activity.vad:
                 raise RuntimeError(
-                    (
+
                         f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"
                         "Or manually wrap your STT in a stt.StreamAdapter"
-                    )
+
                 )
 
             wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)

@@ -1,13 +1,10 @@
 import asyncio
 from collections import deque
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Iterator
 from typing import (
     Any,
-    AsyncGenerator,
-    AsyncIterable,
-    AsyncIterator,
     Deque,
     Generic,
-    Iterator,
     List,
     Protocol,
     Tuple,

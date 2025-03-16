@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
 from typing import (
     Any,
-    AsyncIterable,
-    AsyncIterator,
     Generic,
     Literal,
     Optional,
@@ -98,7 +97,7 @@ class LLM(
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "LLMStream": ...
+    ) -> LLMStream: ...
 
     async def aclose(self) -> None: ...
 

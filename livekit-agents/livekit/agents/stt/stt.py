@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import AsyncIterable, AsyncIterator, Generic, List, Literal, TypeVar, Union
+from typing import Generic, List, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -146,7 +147,7 @@ class STT(
         *,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "RecognizeStream":
+    ) -> RecognizeStream:
         raise NotImplementedError(
             "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
         )

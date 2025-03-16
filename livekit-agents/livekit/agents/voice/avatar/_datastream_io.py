@@ -4,8 +4,9 @@ import asyncio
 import ctypes
 import json
 import logging
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import asdict
-from typing import AsyncGenerator, AsyncIterator, Optional
+from typing import Optional
 
 from livekit import rtc
 

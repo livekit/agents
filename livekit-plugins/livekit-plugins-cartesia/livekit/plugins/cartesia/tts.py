@@ -194,7 +194,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> "SynthesizeStream":
+    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> SynthesizeStream:
         return SynthesizeStream(
             tts=self,
             pool=self._pool,

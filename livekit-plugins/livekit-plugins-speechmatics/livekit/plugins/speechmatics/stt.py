@@ -93,7 +93,7 @@ class STT(stt.STT):
         *,
         language: Optional[str] = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = dataclasses.replace(self._audio_settings)
         stream = SpeechStream(
             stt=self,

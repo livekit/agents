@@ -1,9 +1,10 @@
-from __future__ import annotations, print_function
+from __future__ import annotations
 
 import asyncio
 import copy
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import AsyncIterable, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from livekit import rtc
 

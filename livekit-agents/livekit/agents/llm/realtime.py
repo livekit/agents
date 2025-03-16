@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import AsyncIterable, Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -62,7 +63,7 @@ class RealtimeModel:
         return self._capabilities
 
     @abstractmethod
-    def session(self) -> "RealtimeSession": ...
+    def session(self) -> RealtimeSession: ...
 
     @abstractmethod
     async def aclose(self) -> None: ...

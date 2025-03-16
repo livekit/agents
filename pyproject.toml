@@ -27,4 +27,23 @@ members = ["livekit-plugins/*", "livekit-agents"]
 exclude = ["livekit-plugins/livekit-plugins-browser"]
 
 [dependency-groups]
-dev = ["python-dotenv>=1.0.1"]
+dev = ["python-dotenv>=1.0.1", "mypy", "pytest", "ruff"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+isort = { combine-as-imports = true, known-first-party = ["livekit-agents"] }
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
 from typing import (
-    AsyncIterable,
-    AsyncIterator,
     Generic,
     Literal,
     Optional,

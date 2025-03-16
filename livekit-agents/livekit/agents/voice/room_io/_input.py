@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Generic, TypeVar, Union
+from collections.abc import AsyncIterator
+from typing import Generic, TypeVar, Union
 
 import livekit.rtc as rtc
 from livekit.agents import utils

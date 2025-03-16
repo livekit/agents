@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterable
+from collections.abc import AsyncIterable
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
@@ -40,14 +40,14 @@ class StreamAdapter(TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "ChunkedStream":
+    ) -> ChunkedStream:
         return self._tts.synthesize(text=text, conn_options=conn_options)
 
     def stream(
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "StreamAdapterWrapper":
+    ) -> StreamAdapterWrapper:
         return StreamAdapterWrapper(
             tts=self,
             conn_options=conn_options,

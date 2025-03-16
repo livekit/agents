@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterable,
     Protocol,
     Tuple,
     runtime_checkable,
@@ -21,8 +21,6 @@ from ..llm import (
     StopResponse,
     ToolContext,
     ToolError,
-)
-from ..llm import (
     utils as llm_utils,
 )
 from ..log import logger

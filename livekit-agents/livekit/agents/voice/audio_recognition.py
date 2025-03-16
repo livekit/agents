@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterable, Protocol
+from collections.abc import AsyncIterable
+from typing import Protocol
 
 from livekit import rtc
 

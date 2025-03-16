@@ -57,7 +57,7 @@ class CGroupV2CPUMonitor(CPUMonitor):
 
     def _read_cpu_max(self) -> tuple[str, int]:
         try:
-            with open("/sys/fs/cgroup/cpu.max", "r") as f:
+            with open("/sys/fs/cgroup/cpu.max") as f:
                 data = f.read().strip().split()
             quota = data[0]
             period = int(data[1])
@@ -67,7 +67,7 @@ class CGroupV2CPUMonitor(CPUMonitor):
         return quota, period
 
     def _read_cpu_usage(self) -> int:
-        with open("/sys/fs/cgroup/cpu.stat", "r") as f:
+        with open("/sys/fs/cgroup/cpu.stat") as f:
             for line in f:
                 if line.startswith("usage_usec"):
                     return int(line.split()[1])

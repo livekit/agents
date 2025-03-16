@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations, print_function
+from __future__ import annotations
 
 import asyncio
 import time
@@ -62,7 +62,7 @@ class VAD(agents.vad.VAD):
         force_cpu: bool = True,
         # deprecated
         padding_duration: float | None = None,
-    ) -> "VAD":
+    ) -> VAD:
         """
         Load and initialize the Silero VAD model.
 
@@ -136,7 +136,7 @@ class VAD(agents.vad.VAD):
         self._opts = opts
         self._streams = weakref.WeakSet[VADStream]()
 
-    def stream(self) -> "VADStream":
+    def stream(self) -> VADStream:
         """
         Create a new VADStream for processing audio data.
 

@@ -42,7 +42,7 @@ class Interval:
         self._last_sleep = loop.time()
         return self._i
 
-    def __aiter__(self) -> "Interval":
+    def __aiter__(self) -> Interval:
         return self
 
     async def __anext__(self):

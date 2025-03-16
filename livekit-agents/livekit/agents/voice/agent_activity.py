@@ -4,11 +4,10 @@ import asyncio
 import contextvars
 import heapq
 import time
+from collections.abc import AsyncIterable, Coroutine
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterable,
-    Coroutine,
 )
 
 from livekit import rtc
@@ -313,10 +312,10 @@ class AgentActivity(RecognitionHooks):
             and allow_interruptions is False
         ):
             logger.warning(
-                (
+
                     "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "
                     "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
-                )
+
             )
             allow_interruptions = NOT_GIVEN
 
@@ -359,10 +358,10 @@ class AgentActivity(RecognitionHooks):
             and allow_interruptions is False
         ):
             logger.warning(
-                (
+
                     "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "
                     "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
-                )
+
             )
             allow_interruptions = NOT_GIVEN
 

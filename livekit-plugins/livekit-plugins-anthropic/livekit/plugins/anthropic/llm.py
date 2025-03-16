@@ -15,10 +15,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import (
     Any,
-    Awaitable,
     Literal,
     Union,
 )
@@ -132,7 +132,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "LLMStream":
+    ) -> LLMStream:
         extra = {}
 
         if is_given(extra_kwargs):

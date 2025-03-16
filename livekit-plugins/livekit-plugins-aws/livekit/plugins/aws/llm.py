@@ -120,7 +120,7 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
-    ) -> "LLMStream":
+    ) -> LLMStream:
         opts = {}
 
         if is_given(self._opts.model):
