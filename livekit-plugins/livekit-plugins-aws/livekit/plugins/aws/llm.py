@@ -104,7 +104,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[FunctionTool] | None = None,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
@@ -117,11 +117,10 @@ class LLM(llm.LLM):
         def _get_tool_config() -> dict[str, Any] | None:
             nonlocal tool_choice
 
-            if not fnc_ctx:
+            if not tools:
                 return None
 
-            tools = to_fnc_ctx(fnc_ctx)
-            tool_config: dict[str, Any] = {"tools": tools}
+            tool_config: dict[str, Any] = {"tools": to_fnc_ctx(tools)}
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 if isinstance(tool_choice, ToolChoice):
@@ -162,7 +161,7 @@ class LLM(llm.LLM):
             aws_secret_access_key=self._api_secret,
             region_name=self._region,
             chat_ctx=chat_ctx,
-            fnc_ctx=fnc_ctx,
+            tools=tools,
             conn_options=conn_options,
             extra_kwargs=opts,
         )
@@ -178,10 +177,10 @@ class LLMStream(llm.LLMStream):
         region_name: str,
         chat_ctx: ChatContext,
         conn_options: APIConnectOptions,
-        fnc_ctx: list[FunctionTool] | None,
+        tools: list[FunctionTool] | None,
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = boto3.client(
             "bedrock-runtime",
             region_name=region_name,
