@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from typing import Literal
 
 import websockets
-from livekit import rtc
-from livekit.agents import APIConnectionError, APIStatusError, utils
 
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
+from livekit import rtc
+from livekit.agents import APIConnectionError, APIStatusError, utils
 
 from ...log import logger
 from .api_proto import ClientEvents, LiveAPIModels

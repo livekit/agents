@@ -57,7 +57,7 @@ class RemoteChatContext:
 
         prev_node = self._id_to_item.get(previous_item_id)
         if prev_node is None:
-            raise ValueError(f"No item found with ID {previous_item_id} to insert after.")
+            raise ValueError(f"previous_item_id `{previous_item_id}` not found")
 
         new_node._prev = prev_node
         new_node._next = prev_node._next
@@ -74,7 +74,7 @@ class RemoteChatContext:
     def delete(self, item_id: str) -> None:
         node = self._id_to_item.get(item_id)
         if node is None:
-            raise ValueError(f"No item found with ID {item_id} to delete.")
+            raise ValueError(f"item_id `{item_id}` not found")
 
         prev_node = node._prev
         next_node = node._next

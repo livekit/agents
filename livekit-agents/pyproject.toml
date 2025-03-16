@@ -1,3 +1,60 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-agents"
+dynamic = ["version"]
+description = "LiveKit Python Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "click~=8.1",
+    "livekit>=0.21.1",
+    "livekit-api>=0.8.2",
+    "livekit-protocol>=0.8.2",
+    "protobuf>=3",
+    "pyjwt>=2.0",
+    "types-protobuf>=4,<5",
+    "watchfiles>=1.0",
+    "psutil>=7.0",
+    "aiohttp~=3.10",
+    "typing-extensions>=4.12",
+    "sounddevice>=0.5",
+    "docstring_parser>=0.16",
+]
+
+[project.optional-dependencies]
+codecs = ["av>=12.0.0", "numpy>=1.26.0"]
+images = ["pillow>=10.3.0"]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/agents/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"livekit/agents/debug/index.html" = "livekit/agents/debug/index.html"

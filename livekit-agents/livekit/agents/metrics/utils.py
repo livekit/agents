@@ -3,12 +3,7 @@ from __future__ import annotations
 import logging
 
 from ..log import logger as default_logger
-from .base import (
-    AgentMetrics,
-    LLMMetrics,
-    STTMetrics,
-    TTSMetrics,
-)
+from .base import AgentMetrics, LLMMetrics, STTMetrics, TTSMetrics
 
 
 def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None):

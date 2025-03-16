@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import aiohttp
 from aiobotocore.session import AioSession, get_session
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -110,8 +111,8 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions | None = None,
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             text=text,
@@ -127,7 +128,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         text: str,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
         opts: _TTSOptions,
         get_client: Callable[[], Any],
     ) -> None:

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import ctypes
-from typing import List, Union
+from typing import Union
 
 from livekit import rtc
 
 from ..log import logger
 
 # deprecated aliases
-AudioBuffer = Union[List[rtc.AudioFrame], rtc.AudioFrame]
+AudioBuffer = Union[list[rtc.AudioFrame], rtc.AudioFrame]
 
 combine_frames = rtc.combine_audio_frames
 merge_frames = rtc.combine_audio_frames

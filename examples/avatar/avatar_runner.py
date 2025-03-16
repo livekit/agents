@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import sys
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from pathlib import Path
-from typing import AsyncGenerator, AsyncIterator, Generator, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
+
 from livekit import rtc
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,

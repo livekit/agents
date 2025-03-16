@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import AsyncIterable, AsyncIterator, List, Literal, Union
+from typing import Literal, Union
 
 from livekit import rtc
 
@@ -41,7 +42,7 @@ class VADEvent:
     silence_duration: float
     """Duration of the silence segment in seconds."""
 
-    frames: List[rtc.AudioFrame] = field(default_factory=list)
+    frames: list[rtc.AudioFrame] = field(default_factory=list)
     """
     List of audio frames associated with the speech.
 
@@ -82,7 +83,7 @@ class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         return self._capabilities
 
     @abstractmethod
-    def stream(self) -> "VADStream": ...
+    def stream(self) -> VADStream: ...
 
 
 class VADStream(ABC):

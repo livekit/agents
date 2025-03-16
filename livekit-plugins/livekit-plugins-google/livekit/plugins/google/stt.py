@@ -19,8 +19,14 @@ import dataclasses
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Callable, List, Union
+from typing import Callable, Union
 
+from google.api_core.client_options import ClientOptions
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
+from google.auth import default as gauth_default
+from google.auth.exceptions import DefaultCredentialsError
+from google.cloud.speech_v2 import SpeechAsyncClient
+from google.cloud.speech_v2.types import cloud_speech
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -32,18 +38,11 @@ from livekit.agents import (
     utils,
 )
 
-from google.api_core.client_options import ClientOptions
-from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
-from google.auth import default as gauth_default
-from google.auth.exceptions import DefaultCredentialsError
-from google.cloud.speech_v2 import SpeechAsyncClient
-from google.cloud.speech_v2.types import cloud_speech
-
 from .log import logger
 from .models import SpeechLanguages, SpeechModels
 
 LgType = Union[SpeechLanguages, str]
-LanguageCode = Union[LgType, List[LgType]]
+LanguageCode = Union[LgType, list[LgType]]
 
 # Google STT has a timeout of 5 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -56,14 +55,14 @@ _min_confidence = 0.65
 # This class is only be used internally to encapsulate the options
 @dataclass
 class STTOptions:
-    languages: List[LgType]
+    languages: list[LgType]
     detect_language: bool
     interim_results: bool
     punctuate: bool
     spoken_punctuation: bool
     model: SpeechModels | str
     sample_rate: int
-    keywords: List[tuple[str, float]] | None
+    keywords: list[tuple[str, float]] | None
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
         if self.keywords:
@@ -96,7 +95,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
-        keywords: List[tuple[str, float]] | None = None,
+        keywords: list[tuple[str, float]] | None = None,
     ):
         """
         Create a new instance of Google STT.
@@ -258,7 +257,7 @@ class STT(stt.STT):
         *,
         language: SpeechLanguages | str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
@@ -280,7 +279,7 @@ class STT(stt.STT):
         spoken_punctuation: bool | None = None,
         model: SpeechModels | None = None,
         location: str | None = None,
-        keywords: List[tuple[str, float]] | None = None,
+        keywords: list[tuple[str, float]] | None = None,
     ):
         if languages is not None:
             if isinstance(languages, str):
@@ -346,7 +345,7 @@ class SpeechStream(stt.SpeechStream):
         punctuate: bool | None = None,
         spoken_punctuation: bool | None = None,
         model: SpeechModels | None = None,
-        keywords: List[tuple[str, float]] | None = None,
+        keywords: list[tuple[str, float]] | None = None,
     ):
         if languages is not None:
             if isinstance(languages, str):

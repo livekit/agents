@@ -1,38 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterable,
-    Protocol,
-    Tuple,
-    runtime_checkable,
-)
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from livekit import rtc
 from pydantic import ValidationError
 
+from livekit import rtc
+
 from .. import debug, llm, utils
-from ..llm import (
-    AIError,
-    ChatChunk,
-    ChatContext,
-    FunctionContext,
-    StopResponse,
-)
-from ..llm import (
-    utils as llm_utils,
-)
+from ..llm import ChatChunk, ChatContext, StopResponse, ToolContext, ToolError, utils as llm_utils
 from ..log import logger
 from ..utils import aio
 from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .agent_task import AgentTask
-    from .voice_agent import VoiceAgent
+    from .agent import Agent
+    from .agent_session import AgentSession
 
 
 @runtime_checkable
@@ -46,11 +32,12 @@ class _LLMGenerationData:
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
+    id: str = field(default_factory=lambda: utils.shortuuid("item_"))
 
 
 def perform_llm_inference(
-    *, node: io.LLMNode, chat_ctx: ChatContext, fnc_ctx: FunctionContext | None
-) -> Tuple[asyncio.Task, _LLMGenerationData]:
+    *, node: io.LLMNode, chat_ctx: ChatContext, tool_ctx: ToolContext | None
+) -> tuple[asyncio.Task, _LLMGenerationData]:
     text_ch = aio.Chan()
     function_ch = aio.Chan()
 
@@ -59,7 +46,7 @@ def perform_llm_inference(
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
         llm_node = node(
-            chat_ctx, list(fnc_ctx.ai_functions.values()) if fnc_ctx is not None else []
+            chat_ctx, list(tool_ctx.function_tools.values()) if tool_ctx is not None else []
         )
         if asyncio.iscoroutine(llm_node):
             llm_node = await llm_node
@@ -88,6 +75,7 @@ def perform_llm_inference(
                                     continue
 
                                 fnc_call = llm.FunctionCall(
+                                    id=f"{data.id}/fnc_{len(data.generated_functions)}",
                                     call_id=tool.call_id,
                                     name=tool.name,
                                     arguments=tool.arguments,
@@ -123,7 +111,7 @@ class _TTSGenerationData:
 
 def perform_tts_inference(
     *, node: io.TTSNode, input: AsyncIterable[str]
-) -> Tuple[asyncio.Task, _TTSGenerationData]:
+) -> tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 
     @utils.log_exceptions(logger=logger)
@@ -153,7 +141,7 @@ class _TextOutput:
 
 
 def perform_text_forwarding(
-    *, text_output: io.TextSink | None, source: AsyncIterable[str]
+    *, text_output: io.TextOutput | None, source: AsyncIterable[str]
 ) -> tuple[asyncio.Task, _TextOutput]:
     out = _TextOutput(text="", first_text_fut=asyncio.Future())
     task = asyncio.create_task(_text_forwarding_task(text_output, source, out))
@@ -162,7 +150,7 @@ def perform_text_forwarding(
 
 @utils.log_exceptions(logger=logger)
 async def _text_forwarding_task(
-    text_output: io.TextSink | None,
+    text_output: io.TextOutput | None,
     source: AsyncIterable[str],
     out: _TextOutput,
 ) -> None:
@@ -190,7 +178,7 @@ class _AudioOutput:
 
 def perform_audio_forwarding(
     *,
-    audio_output: io.AudioSink,
+    audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
 ) -> tuple[asyncio.Task, _AudioOutput]:
     out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
@@ -200,28 +188,51 @@ def perform_audio_forwarding(
 
 @utils.log_exceptions(logger=logger)
 async def _audio_forwarding_task(
-    audio_output: io.AudioSink,
+    audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
 ) -> None:
+    resampler: rtc.AudioResampler | None = None
     try:
         async for frame in tts_output:
             out.audio.append(frame)
-            await audio_output.capture_frame(frame)
+
+            if (
+                not out.first_frame_fut.done()
+                and audio_output.sample_rate is not None
+                and frame.sample_rate != audio_output.sample_rate
+                and resampler is None
+            ):
+                resampler = rtc.AudioResampler(
+                    input_rate=frame.sample_rate,
+                    output_rate=audio_output.sample_rate,
+                    num_channels=frame.num_channels,
+                )
+
+            if resampler:
+                for f in resampler.push(frame):
+                    await audio_output.capture_frame(f)
+            else:
+                await audio_output.capture_frame(frame)
+
             if not out.first_frame_fut.done():
                 out.first_frame_fut.set_result(None)
     finally:
         if isinstance(tts_output, _ACloseable):
             await tts_output.aclose()
 
+        if resampler:
+            for frame in resampler.flush():
+                await audio_output.capture_frame(frame)
+
         audio_output.flush()
 
 
 def perform_tool_executions(
     *,
-    agent: VoiceAgent,
+    agent: AgentSession,
     speech_handle: SpeechHandle,
-    fnc_ctx: FunctionContext,
+    tool_ctx: ToolContext,
     function_stream: AsyncIterable[llm.FunctionCall],
 ) -> tuple[
     asyncio.Task,
@@ -232,7 +243,7 @@ def perform_tool_executions(
         _execute_tools_task(
             agent=agent,
             speech_handle=speech_handle,
-            fnc_ctx=fnc_ctx,
+            tool_ctx=tool_ctx,
             function_stream=function_stream,
             out=out,
         ),
@@ -244,21 +255,21 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    agent: VoiceAgent,
+    agent: AgentSession,
     speech_handle: SpeechHandle,
-    fnc_ctx: FunctionContext,
+    tool_ctx: ToolContext,
     function_stream: AsyncIterable[llm.FunctionCall],
     out: list[_PythonOutput],
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
-    from .agent_task import _authorize_inline_task
+    from .agent import _authorize_inline_task
     from .events import CallContext
 
     tasks: list[asyncio.Task] = []
     try:
         async for fnc_call in function_stream:
-            if (ai_function := fnc_ctx.ai_functions.get(fnc_call.name)) is None:
+            if (ai_function := tool_ctx.function_tools.get(fnc_call.name)) is None:
                 logger.warning(
                     f"unknown AI function `{fnc_call.name}`",
                     extra={
@@ -391,7 +402,7 @@ def _is_valid_function_output(value: Any) -> bool:
 class _SanitizedOutput:
     fnc_call: llm.FunctionCall
     fnc_call_out: llm.FunctionCallOutput | None
-    agent_task: AgentTask | None
+    agent_task: Agent | None
 
 
 @dataclass
@@ -401,9 +412,9 @@ class _PythonOutput:
     exception: BaseException | None
 
     def sanitize(self) -> _SanitizedOutput:
-        from .agent_task import AgentTask
+        from .agent import Agent
 
-        if isinstance(self.exception, AIError):
+        if isinstance(self.exception, ToolError):
             return _SanitizedOutput(
                 fnc_call=self.fnc_call.model_copy(),
                 fnc_call_out=llm.FunctionCallOutput(
@@ -432,7 +443,7 @@ class _PythonOutput:
                 agent_task=None,
             )
 
-        task: AgentTask | None = None
+        task: Agent | None = None
         fnc_out: Any = self.output
         if (
             isinstance(self.output, list)
@@ -440,8 +451,8 @@ class _PythonOutput:
             or isinstance(self.output, frozenset)
             or isinstance(self.output, tuple)
         ):
-            agent_tasks = [item for item in self.output if isinstance(item, AgentTask)]
-            other_outputs = [item for item in self.output if not isinstance(item, AgentTask)]
+            agent_tasks = [item for item in self.output if isinstance(item, Agent)]
+            other_outputs = [item for item in self.output if not isinstance(item, Agent)]
             if len(agent_tasks) > 1:
                 logger.error(
                     f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",
@@ -468,7 +479,7 @@ class _PythonOutput:
             )
             # fmt: on
 
-        elif isinstance(fnc_out, AgentTask):
+        elif isinstance(fnc_out, Agent):
             task = fnc_out
             fnc_out = None
 

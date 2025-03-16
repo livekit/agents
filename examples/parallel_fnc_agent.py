@@ -1,6 +1,7 @@
 import logging
 
 from dotenv import load_dotenv
+
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import ai_function
 from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
@@ -18,7 +19,10 @@ load_dotenv()
 class EchoTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are Echo. Call the get_weather_today and get_weather_tomorrow functions when user asks for the weather.",
+            instructions=(
+                "You are Echo. Call the get_weather_today and get_weather_tomorrow functions when user asks for the weather."
+                "Tell the user when you are calling the functions."
+            ),
             # llm=openai.realtime.RealtimeModel(voice="echo"),
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
@@ -43,7 +47,10 @@ class EchoTask(AgentTask):
 class AlloyTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are Alloy. Call the get_weather_today and get_weather_tomorrow functions when user asks for the weather.",
+            instructions=(
+                "You are Alloy. Call the get_weather_today and get_weather_tomorrow functions when user asks for the weather."
+                "Tell the user when you are calling the functions."
+            ),
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
 

@@ -15,20 +15,31 @@ class SpeechHandle:
     SPEECH_PRIORITY_HIGH = 10
     """Priority for important messages that should be played before others."""
 
-    def __init__(self, *, speech_id: str, allow_interruptions: bool, step_index: int) -> None:
+    def __init__(
+        self,
+        *,
+        speech_id: str,
+        allow_interruptions: bool,
+        step_index: int,
+        parent: SpeechHandle | None,
+    ) -> None:
         self._id = speech_id
         self._step_index = step_index
         self._allow_interruptions = allow_interruptions
         self._interrupt_fut = asyncio.Future()
         self._authorize_fut = asyncio.Future()
         self._playout_done_fut = asyncio.Future()
+        self._parent = parent
 
     @staticmethod
-    def create(allow_interruptions: bool = True, step_index: int = 0) -> SpeechHandle:
+    def create(
+        allow_interruptions: bool = True, step_index: int = 0, parent: SpeechHandle | None = None
+    ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
             step_index=step_index,
+            parent=parent,
         )
 
     @property
@@ -47,12 +58,20 @@ class SpeechHandle:
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
+    @property
+    def parent(self) -> SpeechHandle | None:
+        """
+        The parent handle that initiated the creation of the current speech handle.
+        This happens when a tool call is made, a new SpeechHandle will be created for the tool response.
+        """
+        return self._parent
+
     def done(self) -> bool:
         return self._playout_done_fut.done()
 
     def interrupt(self) -> None:
         if not self._allow_interruptions:
-            raise ValueError("This generation handle does not allow interruptions")
+            raise RuntimeError("This generation handle does not allow interruptions")
 
         if self.done():
             return

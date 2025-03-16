@@ -7,7 +7,7 @@ import traceback
 from collections import OrderedDict
 from datetime import date, datetime, time, timezone
 from inspect import istraceback
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from ..plugin import Plugin
 
@@ -35,7 +35,7 @@ def _silence_noisy_loggers() -> None:
 
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
-_RESERVED_ATTRS: Tuple[str, ...] = (
+_RESERVED_ATTRS: tuple[str, ...] = (
     "args",
     "asctime",
     "created",
@@ -62,7 +62,7 @@ _RESERVED_ATTRS: Tuple[str, ...] = (
 )
 
 
-def _merge_record_extra(record: logging.LogRecord, target: Dict[Any, Any]):
+def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]):
     for key, value in record.__dict__.items():
         if key not in _RESERVED_ATTRS and not (hasattr(key, "startswith") and key.startswith("_")):
             target[key] = value
@@ -77,7 +77,7 @@ def _parse_style(formatter: logging.Formatter) -> list[str]:
     elif isinstance(formatter._style, logging.PercentStyle):
         formatter_style_pattern = re.compile(r"%\((.+?)\)", re.IGNORECASE)
     else:
-        raise ValueError("Invalid format: %s" % formatter._fmt)
+        raise ValueError(f"Invalid format: {formatter._fmt}")
 
     if formatter._fmt:
         return formatter_style_pattern.findall(formatter._fmt)
@@ -110,7 +110,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         """Formats a log record and serializes to json"""
-        message_dict: Dict[str, Any] = {}
+        message_dict: dict[str, Any] = {}
         message_dict["level"] = record.levelname
         message_dict["name"] = record.name
 
@@ -130,7 +130,7 @@ class JsonFormatter(logging.Formatter):
         if record.stack_info and not message_dict.get("stack_info"):
             message_dict["stack_info"] = self.formatStack(record.stack_info)
 
-        log_record: Dict[str, Any] = OrderedDict()
+        log_record: dict[str, Any] = OrderedDict()
 
         for field in self._required_fields:
             log_record[field] = record.__dict__.get(field)
@@ -176,7 +176,7 @@ class ColoredFormatter(logging.Formatter):
     def formatMessage(self, record: logging.LogRecord) -> str:
         """Formats a log record with colors"""
 
-        extra: Dict[Any, Any] = {}
+        extra: dict[Any, Any] = {}
         _merge_record_extra(record, extra)
 
         args = {}

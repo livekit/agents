@@ -4,11 +4,6 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from typing import Optional
-
-from livekit import rtc
-from livekit.agents import llm, utils
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from google import genai
 from google.genai._api_client import HttpOptions
@@ -27,14 +22,12 @@ from google.genai.types import (
     Tool,
     VoiceConfig,
 )
+from livekit import rtc
+from livekit.agents import llm, utils
 
 from ...log import logger
 from ...utils import _build_gemini_fnc, to_chat_ctx
-from .api_proto import (
-    ClientEvents,
-    LiveAPIModels,
-    Voice,
-)
+from .api_proto import ClientEvents, LiveAPIModels, Voice
 
 # from .transcriber import TranscriberSession, TranscriptionContent
 
@@ -94,7 +87,7 @@ class RealtimeModel(llm.RealtimeModel):
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = [Modality.AUDIO],
+        modalities: list[Modality] = None,
         enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
@@ -141,6 +134,8 @@ class RealtimeModel(llm.RealtimeModel):
         Raises:
             ValueError: If the API key is required but not found.
         """
+        if modalities is None:
+            modalities = ["AUDIO"]
         super().__init__(capabilities=llm.RealtimeCapabilities(message_truncation=False))
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
@@ -182,7 +177,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions=instructions_content,
         )
 
-    def session(self) -> "RealtimeSession":
+    def session(self) -> RealtimeSession:
         return RealtimeSession(self)
 
     async def aclose(self) -> None: ...

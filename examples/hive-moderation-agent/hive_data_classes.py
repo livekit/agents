@@ -1,5 +1,5 @@
 from dataclasses import dataclass, is_dataclass
-from typing import List, get_type_hints
+from typing import get_type_hints
 
 
 def from_dict(cls, data):
@@ -18,7 +18,7 @@ def from_dict(cls, data):
                 # Determine if the field_type is itself a dataclass
                 if is_dataclass(field_type):
                     processed_value = from_dict(field_type, value)
-                elif hasattr(field_type, "__origin__") and issubclass(field_type.__origin__, List):
+                elif hasattr(field_type, "__origin__") and issubclass(field_type.__origin__, list):
                     # Handle List fields, assuming all elements are of the same type
                     item_type = field_type.__args__[0]
                     processed_value = [from_dict(item_type, item) for item in value]
@@ -66,13 +66,13 @@ class ModClass:
 @dataclass
 class ModOutput:
     time: int
-    classes: List[ModClass]
+    classes: list[ModClass]
 
 
 @dataclass
 class Response:
     input: ModInput
-    output: List[ModOutput]
+    output: list[ModOutput]
 
 
 @dataclass
@@ -88,5 +88,5 @@ class HiveResponse:
     project_id: int
     user_id: int
     created_on: str
-    status: List[ModResponse]
+    status: list[ModResponse]
     from_cache: bool

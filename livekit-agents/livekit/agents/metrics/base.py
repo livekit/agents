@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Optional, Union
+from typing import Literal, Union
 
 from pydantic import BaseModel
 
@@ -21,8 +21,8 @@ class LLMMetrics(BaseModel):
     prompt_tokens: int
     total_tokens: int
     tokens_per_second: float
-    speech_id: Optional[str] = None
-    error: Optional[Error] = None
+    speech_id: str | None = None
+    error: Error | None = None
 
 
 class STTMetrics(BaseModel):
@@ -33,8 +33,8 @@ class STTMetrics(BaseModel):
     duration: float
     audio_duration: float
     streamed: bool
-    speech_id: Optional[str] = None
-    error: Optional[Error] = None
+    speech_id: str | None = None
+    error: Error | None = None
 
 
 class TTSMetrics(BaseModel):
@@ -48,8 +48,8 @@ class TTSMetrics(BaseModel):
     cancelled: bool
     characters_count: int
     streamed: bool
-    speech_id: Optional[str] = None
-    error: Optional[Error] = None
+    speech_id: str | None = None
+    error: Error | None = None
 
 
 class VADMetrics(BaseModel):
@@ -59,8 +59,8 @@ class VADMetrics(BaseModel):
     idle_time: float
     inference_duration_total: float
     inference_count: int
-    speech_id: Optional[str] = None
-    error: Optional[Error] = None
+    speech_id: str | None = None
+    error: Error | None = None
 
 
 class EOUMetrics(BaseModel):
@@ -72,8 +72,8 @@ class EOUMetrics(BaseModel):
     transcription_delay: float
     """Time taken to obtain the transcript after the end of the user's speech."""
 
-    speech_id: Optional[str] = None
-    error: Optional[Error] = None
+    speech_id: str | None = None
+    error: Error | None = None
 
 
 AgentMetrics = Union[

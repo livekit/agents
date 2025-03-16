@@ -1,10 +1,11 @@
 import datetime
-from typing import List, Optional
+from typing import Optional
 
 import pytest
 from google.genai import types
-from livekit.plugins.google import utils
 from pydantic import BaseModel, Field
+
+from livekit.plugins.google import utils
 
 #  Gemini Schema Tests
 
@@ -16,7 +17,7 @@ async def test_json_def_replaced():
         lng: float = 1.1
 
     class Locations(BaseModel):
-        locations: List[Location]
+        locations: list[Location]
 
     json_schema = Locations.model_json_schema()
     # Original schema with $defs as produced by Pydantic.
@@ -104,7 +105,7 @@ async def test_json_def_recursive():
     class Location(BaseModel):
         lat: float
         lng: float
-        nested_locations: List["Location"]
+        nested_locations: list["Location"]
 
     Location.model_rebuild()
     json_schema = Location.model_json_schema()

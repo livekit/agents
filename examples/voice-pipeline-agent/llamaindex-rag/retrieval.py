@@ -1,9 +1,6 @@
 import os
 
 from dotenv import load_dotenv
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, openai, silero
 from llama_index.core import (
     SimpleDirectoryReader,
     StorageContext,
@@ -11,6 +8,10 @@ from llama_index.core import (
     load_index_from_storage,
 )
 from llama_index.core.schema import MetadataMode
+
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
+from livekit.agents.pipeline import VoicePipelineAgent
+from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
 

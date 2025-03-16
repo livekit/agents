@@ -3,25 +3,18 @@ from __future__ import annotations
 import base64
 import inspect
 from dataclasses import dataclass
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Any,
-    Callable,
-    get_args,
-    get_origin,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Annotated, Any, Callable, get_args, get_origin, get_type_hints
 
-from livekit import rtc
-from livekit.agents import llm, utils
 from pydantic import BaseModel, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined
 
+from livekit import rtc
+from livekit.agents import llm, utils
+
 from . import _strict
 from .chat_context import ChatContext
-from .function_context import AIFunction, get_function_info
+from .tool_context import FunctionTool, get_function_info
 
 if TYPE_CHECKING:
     from ..voice.events import CallContext
@@ -148,7 +141,7 @@ def serialize_image(image: llm.ImageContent) -> SerializedImage:
 
 
 def build_legacy_openai_schema(
-    ai_function: AIFunction, *, internally_tagged: bool = False
+    ai_function: FunctionTool, *, internally_tagged: bool = False
 ) -> dict[str, Any]:
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
@@ -175,7 +168,7 @@ def build_legacy_openai_schema(
 
 
 def build_strict_openai_schema(
-    ai_function: AIFunction,
+    ai_function: FunctionTool,
 ) -> dict[str, Any]:
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(ai_function)

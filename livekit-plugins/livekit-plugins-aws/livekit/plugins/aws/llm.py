@@ -17,20 +17,12 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 import boto3
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    llm,
-)
-from livekit.agents.llm import (
-    AIFunction,
-    ChatContext,
-    FunctionToolCall,
-    ToolChoice,
-)
+
+from livekit.agents import APIConnectionError, APIStatusError, llm
+from livekit.agents.llm import AIFunction, ChatContext, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -40,11 +32,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import (
-    get_aws_credentials,
-    to_chat_ctx,
-    to_fnc_ctx,
-)
+from .utils import get_aws_credentials, to_chat_ctx, to_fnc_ctx
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
 DEFAULT_REGION = "us-east-1"
@@ -54,7 +42,7 @@ DEFAULT_REGION = "us-east-1"
 class _LLMOptions:
     model: str | TEXT_MODEL
     temperature: NotGivenOr[float]
-    tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]]
+    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
     max_output_tokens: NotGivenOr[int]
     top_p: NotGivenOr[float]
     additional_request_fields: NotGivenOr[dict[str, Any]]
@@ -71,7 +59,7 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """
@@ -119,8 +107,8 @@ class LLM(llm.LLM):
         fnc_ctx: list[AIFunction] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
-    ) -> "LLMStream":
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+    ) -> LLMStream:
         opts = {}
 
         if is_given(self._opts.model):

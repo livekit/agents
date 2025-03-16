@@ -18,14 +18,13 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, Union, cast
+from typing import Any, Literal, cast
 
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    llm,
-    utils,
-)
+from google import genai
+from google.auth._default_async import default_async
+from google.genai import types
+from google.genai.errors import APIError, ClientError, ServerError
+from livekit.agents import APIConnectionError, APIStatusError, llm, utils
 from livekit.agents.llm import AIFunction, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -34,11 +33,6 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-
-from google import genai
-from google.auth._default_async import default_async
-from google.genai import types
-from google.genai.errors import APIError, ClientError, ServerError
 
 from .log import logger
 from .models import ChatModels
@@ -49,7 +43,7 @@ from .utils import to_chat_ctx, to_fnc_ctx
 class _LLMOptions:
     model: ChatModels | str
     temperature: NotGivenOr[float]
-    tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]]
+    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
     vertexai: NotGivenOr[bool]
     project: NotGivenOr[str]
     location: NotGivenOr[str]
@@ -75,7 +69,7 @@ class LLM(llm.LLM):
         top_k: NotGivenOr[float] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -153,9 +147,9 @@ class LLM(llm.LLM):
         fnc_ctx: list[AIFunction] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "LLMStream":
+    ) -> LLMStream:
         extra = {}
 
         if is_given(extra_kwargs):

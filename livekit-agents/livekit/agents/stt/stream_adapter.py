@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterable
+from collections.abc import AsyncIterable
 
 from .. import utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions

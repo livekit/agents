@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import Any, Awaitable, Callable, Optional, Union
+from collections import OrderedDict
+from collections.abc import Awaitable
+from typing import Any, Callable, Union
 
 from livekit.agents import llm
-
 from openai.types.chat import (
     ChatCompletionContentPartParam,
     ChatCompletionMessageParam,
@@ -15,7 +16,7 @@ from openai.types.chat import (
 AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
 
 
-def get_base_url(base_url: Optional[str]) -> str:
+def get_base_url(base_url: str | None) -> str:
     if not base_url:
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     return base_url
@@ -26,7 +27,40 @@ def to_fnc_ctx(fnc_ctx: list[llm.AIFunction]) -> list[ChatCompletionToolParam]:
 
 
 def to_chat_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> list[ChatCompletionMessageParam]:
-    return [_to_chat_item(msg, cache_key) for msg in chat_ctx.items]
+    # group the message and function_calls
+    item_groups: dict[str, list[llm.ChatItem]] = OrderedDict()
+    for item in chat_ctx.items:
+        if (item.type == "message" and item.role == "assistant") or item.type == "function_call":
+            group_id = item.id.split("/")[0]
+            if group_id not in item_groups:
+                item_groups[group_id] = []
+            item_groups[group_id].append(item)
+        else:
+            item_groups[item.id] = [item]
+
+    return [_group_to_chat_item(items, cache_key) for items in item_groups.values()]
+
+
+def _group_to_chat_item(items: list[llm.ChatItem], cache_key: Any) -> ChatCompletionMessageParam:
+    if len(items) == 1:
+        return _to_chat_item(items[0], cache_key)
+    else:
+        msg = {"role": "assistant", "tool_calls": []}
+        for item in items:
+            if item.type == "message":
+                assert item.role == "assistant", "only assistant messages can be grouped"
+                assert "content" not in msg, "only one assistant message is allowed in a group"
+
+                msg.update(_to_chat_item(item, cache_key))
+            elif item.type == "function_call":
+                msg["tool_calls"].append(
+                    {
+                        "id": item.call_id,
+                        "type": "function",
+                        "function": {"name": item.name, "arguments": item.arguments},
+                    }
+                )
+        return msg
 
 
 def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessageParam:

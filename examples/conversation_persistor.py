@@ -6,14 +6,8 @@ from typing import Union
 
 import aiofiles
 from dotenv import load_dotenv
-from livekit.agents import (
-    AutoSubscribe,
-    JobContext,
-    WorkerOptions,
-    cli,
-    multimodal,
-    utils,
-)
+
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, multimodal, utils
 from livekit.agents.llm import ChatMessage
 from livekit.agents.multimodal.multimodal_agent import EventTypes
 from livekit.plugins import openai

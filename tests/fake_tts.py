@@ -54,11 +54,11 @@ class FakeTTS(TTS):
             self._fake_exception = fake_exception
 
     @property
-    def synthesize_ch(self) -> utils.aio.ChanReceiver["FakeChunkedStream"]:
+    def synthesize_ch(self) -> utils.aio.ChanReceiver[FakeChunkedStream]:
         return self._synthesize_ch
 
     @property
-    def stream_ch(self) -> utils.aio.ChanReceiver["FakeSynthesizeStream"]:
+    def stream_ch(self) -> utils.aio.ChanReceiver[FakeSynthesizeStream]:
         return self._stream_ch
 
     def synthesize(
@@ -66,14 +66,14 @@ class FakeTTS(TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "FakeChunkedStream":
+    ) -> FakeChunkedStream:
         stream = FakeChunkedStream(tts=self, input_text=text, conn_options=conn_options)
         self._synthesize_ch.send_nowait(stream)
         return stream
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "FakeSynthesizeStream":
+    ) -> FakeSynthesizeStream:
         stream = FakeSynthesizeStream(
             tts=self,
             conn_options=conn_options,

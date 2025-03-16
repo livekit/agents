@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
 from livekit.agents import APIConnectionError, utils
 from livekit.agents.stt import STT, AvailabilityChangedEvent, FallbackAdapter
 from livekit.agents.utils.aio.channel import ChanEmpty

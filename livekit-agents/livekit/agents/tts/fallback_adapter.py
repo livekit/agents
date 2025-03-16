@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import dataclasses
 import time
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import AsyncGenerator, Literal, Optional, Union
+from typing import Literal, Union
 
 from livekit import rtc
 
@@ -79,7 +80,7 @@ class FallbackAdapter(
         if len(tts) < 1:
             raise ValueError("at least one TTS instance must be provided.")
 
-        if len(set(t.num_channels for t in tts)) != 1:
+        if len({t.num_channels for t in tts}) != 1:
             raise ValueError("all TTS must have the same number of channels")
 
         if sample_rate is None:
@@ -116,8 +117,8 @@ class FallbackAdapter(
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "FallbackChunkedStream":
+        conn_options: APIConnectOptions | None = None,
+    ) -> FallbackChunkedStream:
         return FallbackChunkedStream(
             tts=self,
             input_text=text,
@@ -127,8 +128,8 @@ class FallbackAdapter(
     def stream(
         self,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "FallbackSynthesizeStream":
+        conn_options: APIConnectOptions | None = None,
+    ) -> FallbackSynthesizeStream:
         return FallbackSynthesizeStream(
             tts=self,
             conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
@@ -150,7 +151,7 @@ class FallbackChunkedStream(ChunkedStream):
         *,
         tts: FallbackAdapter,
         input_text: str,
-        conn_options: Optional[APIConnectOptions],
+        conn_options: APIConnectOptions | None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._fallback_adapter = tts
@@ -308,11 +309,7 @@ class FallbackChunkedStream(ChunkedStream):
             self._try_recovery(tts)
 
         raise APIConnectionError(
-            "all TTSs failed (%s) after %s seconds"
-            % (
-                [tts.label for tts in self._tts._tts_instances],
-                time.time() - start_time,
-            )
+            f"all TTSs failed ({[tts.label for tts in self._tts._tts_instances]}) after {time.time() - start_time} seconds"
         )
 
 
@@ -321,7 +318,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         self,
         *,
         tts: FallbackAdapter,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ):
         super().__init__(tts=tts, conn_options=conn_options or DEFAULT_FALLBACK_API_CONNECT_OPTIONS)
         self._fallback_adapter = tts
@@ -560,11 +557,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 self._try_recovery(tts)
 
             raise APIConnectionError(
-                "all TTSs failed (%s) after %s seconds"
-                % (
-                    [tts.label for tts in self._fallback_adapter._tts_instances],
-                    time.time() - start_time,
-                )
+                f"all TTSs failed ({[tts.label for tts in self._fallback_adapter._tts_instances]}) after {time.time() - start_time} seconds"
             )
         finally:
             await utils.aio.cancel_and_wait(input_task)

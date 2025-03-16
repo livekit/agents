@@ -8,7 +8,7 @@ import socket
 import urllib.parse
 import urllib.request
 from importlib.metadata import Distribution, PackageNotFoundError
-from typing import Any, Callable, Set
+from typing import Any, Callable
 
 import watchfiles
 
@@ -98,7 +98,7 @@ class WatchServer:
             await utils.aio.cancel_and_wait(read_ipc_task)
             await self._pch.aclose()
 
-    async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:
+    async def _on_reload(self, _: set[watchfiles.main.FileChange]) -> None:
         if self._worker_reloading:
             return
 
