@@ -231,9 +231,11 @@ class RealtimeSession(
         self._msg_ch.send_nowait(
             SessionUpdateEvent(
                 type="session.update",
-                session=session_update_event.Session(
-                    model=self._realtime_model._opts.model,  # type: ignore
-                    voice=self._realtime_model._opts.voice,  # type: ignore
+                # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.
+                # Other providers support different voices, so we need to accommodate that.
+                session=session_update_event.Session.model_construct(
+                    model=self._realtime_model._opts.model,
+                    voice=self._realtime_model._opts.voice,
                     input_audio_format="pcm16",
                     output_audio_format="pcm16",
                     modalities=["text", "audio"],
@@ -334,8 +336,8 @@ class RealtimeSession(
             self._msg_ch.send_nowait(
                 SessionUpdateEvent(
                     type="session.update",
-                    session=session_update_event.Session(
-                        model=self._realtime_model._opts.model,  # type: ignore (str -> Literal)
+                    session=session_update_event.Session.model_construct(
+                        model=self._realtime_model._opts.model,
                         tools=oai_tools,
                     ),
                     event_id=event_id,
@@ -351,9 +353,9 @@ class RealtimeSession(
         self._msg_ch.send_nowait(
             SessionUpdateEvent(
                 type="session.update",
-                session=session_update_event.Session(
-                    model=self._realtime_model._opts.model,  # type: ignore
-                    voice=self._realtime_model._opts.voice,  # type: ignore
+                session=session_update_event.Session.model_construct(
+                    model=self._realtime_model._opts.model,
+                    voice=self._realtime_model._opts.voice,
                     instructions=instructions,
                 ),
                 event_id=event_id,
