@@ -16,12 +16,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Callable,
-    Protocol,
-    runtime_checkable,
-)
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from typing_extensions import TypeGuard
 

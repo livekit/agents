@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
-from typing import TYPE_CHECKING, Generic, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
-from ..llm import (
-    ChatContext,
-    FunctionTool,
-    ToolError,
-    find_function_tools,
-)
+from ..llm import ChatContext, FunctionTool, ToolError, find_function_tools
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
@@ -28,7 +23,7 @@ class Agent:
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool] = [],
+        tools: list[llm.FunctionTool] = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -36,6 +31,8 @@ class Agent:
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        if tools is None:
+            tools = []
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
         self._tools = tools + find_function_tools(self)
@@ -176,7 +173,7 @@ class Agent:
 
     async def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame]
-    ) -> Optional[AsyncIterable[stt.SpeechEvent]]:
+    ) -> AsyncIterable[stt.SpeechEvent] | None:
         activity = self.__get_activity_or_raise()
         assert activity.stt is not None, "stt_node called but no STT node is available"
 
@@ -185,10 +182,8 @@ class Agent:
         if not activity.stt.capabilities.streaming:
             if not activity.vad:
                 raise RuntimeError(
-
-                        f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"
-                        "Or manually wrap your STT in a stt.StreamAdapter"
-
+                    f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"
+                    "Or manually wrap your STT in a stt.StreamAdapter"
                 )
 
             wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
@@ -209,11 +204,7 @@ class Agent:
 
     async def llm_node(
         self, chat_ctx: llm.ChatContext, tools: list[FunctionTool]
-    ) -> Union[
-        Optional[AsyncIterable[llm.ChatChunk]],
-        Optional[AsyncIterable[str]],
-        Optional[str],
-    ]:
+    ) -> AsyncIterable[llm.ChatChunk] | None | AsyncIterable[str] | None | str | None:
         activity = self.__get_activity_or_raise()
         assert activity.llm is not None, "llm_node called but no LLM node is available"
         assert isinstance(activity.llm, llm.LLM), (
@@ -229,7 +220,7 @@ class Agent:
         async for delta in text:
             yield delta
 
-    async def tts_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[rtc.AudioFrame]]:
+    async def tts_node(self, text: AsyncIterable[str]) -> AsyncIterable[rtc.AudioFrame] | None:
         activity = self.__get_activity_or_raise()
         assert activity.tts is not None, "tts_node called but no TTS node is available"
 
@@ -273,13 +264,15 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.FunctionTool] = [],
+        ai_functions: list[llm.FunctionTool] = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
+        if ai_functions is None:
+            ai_functions = []
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,

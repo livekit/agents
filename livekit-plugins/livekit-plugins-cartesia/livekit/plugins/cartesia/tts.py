@@ -20,9 +20,10 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -34,13 +35,7 @@ from livekit.agents import (
 )
 
 from .log import logger
-from .models import (
-    TTSDefaultVoiceId,
-    TTSEncoding,
-    TTSModels,
-    TTSVoiceEmotion,
-    TTSVoiceSpeed,
-)
+from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels, TTSVoiceEmotion, TTSVoiceSpeed
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
@@ -184,7 +179,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -194,7 +189,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         return SynthesizeStream(
             tts=self,
             pool=self._pool,
@@ -219,7 +214,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._session = opts, session

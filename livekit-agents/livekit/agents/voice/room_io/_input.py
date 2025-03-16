@@ -5,9 +5,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Generic, TypeVar, Union
 
+from typing_extensions import override
+
 import livekit.rtc as rtc
 from livekit.agents import utils
-from typing_extensions import override
 
 from ...log import logger
 from ..io import AudioInput, VideoInput

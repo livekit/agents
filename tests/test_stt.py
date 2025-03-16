@@ -7,18 +7,10 @@ import time
 from typing import Callable
 
 import pytest
+
 from livekit import agents
 from livekit.agents import stt
-from livekit.plugins import (
-    assemblyai,
-    aws,
-    azure,
-    deepgram,
-    fal,
-    openai,
-    silero,
-    speechmatics,
-)
+from livekit.plugins import assemblyai, aws, azure, deepgram, fal, openai, silero, speechmatics
 
 from .utils import make_test_speech, wer
 

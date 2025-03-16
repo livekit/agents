@@ -3,26 +3,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Protocol,
-    Tuple,
-    runtime_checkable,
-)
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from livekit import rtc
 from pydantic import ValidationError
 
+from livekit import rtc
+
 from .. import debug, llm, utils
-from ..llm import (
-    ChatChunk,
-    ChatContext,
-    StopResponse,
-    ToolContext,
-    ToolError,
-    utils as llm_utils,
-)
+from ..llm import ChatChunk, ChatContext, StopResponse, ToolContext, ToolError, utils as llm_utils
 from ..log import logger
 from ..utils import aio
 from . import io
@@ -49,7 +37,7 @@ class _LLMGenerationData:
 
 def perform_llm_inference(
     *, node: io.LLMNode, chat_ctx: ChatContext, tool_ctx: ToolContext | None
-) -> Tuple[asyncio.Task, _LLMGenerationData]:
+) -> tuple[asyncio.Task, _LLMGenerationData]:
     text_ch = aio.Chan()
     function_ch = aio.Chan()
 
@@ -123,7 +111,7 @@ class _TTSGenerationData:
 
 def perform_tts_inference(
     *, node: io.TTSNode, input: AsyncIterable[str]
-) -> Tuple[asyncio.Task, _TTSGenerationData]:
+) -> tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 
     @utils.log_exceptions(logger=logger)

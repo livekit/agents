@@ -28,18 +28,13 @@ from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import reduce
-from typing import (
-    Any,
-    Callable,
-    Generic,
-    Literal,
-    TypeVar,
-)
+from typing import Any, Callable, Generic, Literal, TypeVar
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
 from aiohttp import web
+
 from livekit import api, rtc
 from livekit.protocol import agent, models
 

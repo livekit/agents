@@ -14,17 +14,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
 
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import Result, TranscriptEvent
+
 from livekit import rtc
-from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
-    stt,
-    utils,
-)
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
 
 from .log import logger
 from .utils import get_aws_credentials
@@ -36,16 +31,16 @@ class STTOptions:
     sample_rate: int
     language: str
     encoding: str
-    vocabulary_name: Optional[str]
-    session_id: Optional[str]
-    vocab_filter_method: Optional[str]
-    vocab_filter_name: Optional[str]
-    show_speaker_label: Optional[bool]
-    enable_channel_identification: Optional[bool]
-    number_of_channels: Optional[int]
-    enable_partial_results_stabilization: Optional[bool]
-    partial_results_stability: Optional[str]
-    language_model_name: Optional[str]
+    vocabulary_name: str | None
+    session_id: str | None
+    vocab_filter_method: str | None
+    vocab_filter_name: str | None
+    show_speaker_label: bool | None
+    enable_channel_identification: bool | None
+    number_of_channels: int | None
+    enable_partial_results_stabilization: bool | None
+    partial_results_stability: str | None
+    language_model_name: str | None
 
 
 class STT(stt.STT):
@@ -58,16 +53,16 @@ class STT(stt.STT):
         sample_rate: int = 48000,
         language: str = "en-US",
         encoding: str = "pcm",
-        vocabulary_name: Optional[str] = None,
-        session_id: Optional[str] = None,
-        vocab_filter_method: Optional[str] = None,
-        vocab_filter_name: Optional[str] = None,
-        show_speaker_label: Optional[bool] = None,
-        enable_channel_identification: Optional[bool] = None,
-        number_of_channels: Optional[int] = None,
-        enable_partial_results_stabilization: Optional[bool] = None,
-        partial_results_stability: Optional[str] = None,
-        language_model_name: Optional[str] = None,
+        vocabulary_name: str | None = None,
+        session_id: str | None = None,
+        vocab_filter_method: str | None = None,
+        vocab_filter_name: str | None = None,
+        show_speaker_label: bool | None = None,
+        enable_channel_identification: bool | None = None,
+        number_of_channels: int | None = None,
+        enable_partial_results_stabilization: bool | None = None,
+        partial_results_stability: str | None = None,
+        language_model_name: str | None = None,
     ):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 

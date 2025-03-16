@@ -5,13 +5,7 @@ from collections.abc import AsyncIterable
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from .tts import (
-    TTS,
-    ChunkedStream,
-    SynthesizedAudio,
-    SynthesizeStream,
-    TTSCapabilities,
-)
+from .tts import TTS, ChunkedStream, SynthesizedAudio, SynthesizeStream, TTSCapabilities
 
 
 class StreamAdapter(TTS):

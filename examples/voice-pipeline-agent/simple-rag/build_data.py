@@ -3,9 +3,10 @@ import pickle
 import uuid
 
 import aiohttp
+from tqdm import tqdm
+
 from livekit.agents import tokenize
 from livekit.plugins import openai, rag
-from tqdm import tqdm
 
 # from this blog https://openai.com/index/new-embedding-models-and-api-updates/
 # 512 seems to provide good MTEB score with text-embedding-3-small

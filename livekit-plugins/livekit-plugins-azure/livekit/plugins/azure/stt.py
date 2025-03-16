@@ -19,10 +19,9 @@ import weakref
 from copy import deepcopy
 from dataclasses import dataclass
 
+import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
-
-import azure.cognitiveservices.speech as speechsdk  # type: ignore
 
 
 @dataclass
@@ -59,7 +58,7 @@ class STT(stt.STT):
         segmentation_max_time_ms: int | None = None,
         segmentation_strategy: str | None = None,
         # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.
-        languages: list[str] = ["en-US"],
+        languages: list[str] = None,
         # for compatibility with other STT plugins
         language: str | None = None,
         profanity: speechsdk.enums.ProfanityOption | None = None,
@@ -74,6 +73,8 @@ class STT(stt.STT):
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
         """
 
+        if languages is None:
+            languages = ["en-US"]
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
         speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")

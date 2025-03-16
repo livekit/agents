@@ -2,10 +2,9 @@ import base64
 import json
 from typing import Any, Literal
 
+import anthropic
 from livekit.agents import llm
 from livekit.agents.llm.function_context import AIFunction
-
-import anthropic
 
 CACHE_CONTROL_EPHEMERAL = anthropic.types.CacheControlEphemeralParam(type="ephemeral")
 

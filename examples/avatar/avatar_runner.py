@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
+
 from livekit import rtc
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,

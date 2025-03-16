@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 import click
 import numpy as np
+
 from livekit import rtc
 
 from ..log import logger

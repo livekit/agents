@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, List, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -53,7 +53,7 @@ class RecognitionUsage:
 class SpeechEvent:
     type: SpeechEventType
     request_id: str = ""
-    alternatives: List[SpeechData] = field(default_factory=list)
+    alternatives: list[SpeechData] = field(default_factory=list)
     recognition_usage: RecognitionUsage | None = None
 
 

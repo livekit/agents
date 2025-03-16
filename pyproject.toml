@@ -43,7 +43,10 @@ select = [
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
 ]
-isort = { combine-as-imports = true, known-first-party = ["livekit-agents"] }
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["livekit"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

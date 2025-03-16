@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from abc import ABC
-from typing import List, Literal
+from typing import Literal
 
 from . import utils
 
@@ -11,7 +11,7 @@ EventTypes = Literal["plugin_registered",]
 
 
 class Plugin(ABC):
-    registered_plugins: List[Plugin] = []
+    registered_plugins: list[Plugin] = []
     emitter: utils.EventEmitter[EventTypes] = utils.EventEmitter()
 
     # TODO(theomonnom): make logger mandatory once all plugins have been updated

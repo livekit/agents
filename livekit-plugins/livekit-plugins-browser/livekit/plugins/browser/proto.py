@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 import numpy as np
+
 from livekit.agents.ipc import channel
 
 # there is no risk to increase these values. just using these defaults for now

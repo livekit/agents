@@ -16,17 +16,10 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from typing import Callable, Literal, Optional
-
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APITimeoutError,
-    tts,
-    utils,
-)
+from typing import Callable, Literal
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
+from livekit.agents import APIConnectionError, APIConnectOptions, APITimeoutError, tts, utils
 
 from .log import logger
 
@@ -249,7 +242,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options, opts=self._opts)
 
@@ -261,7 +254,7 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _TTSOptions,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts

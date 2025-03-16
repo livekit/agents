@@ -5,7 +5,7 @@ import dataclasses
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Literal
 
 from livekit.agents._exceptions import APIConnectionError, APIError
 
@@ -73,7 +73,7 @@ class FallbackAdapter(
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] | None = None,
     ) -> LLMStream:
         return FallbackLLMStream(
             llm=self,
@@ -98,7 +98,7 @@ class FallbackLLMStream(LLMStream):
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] | None = None,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=fnc_ctx, conn_options=conn_options)
         self._fallback_adapter = llm
@@ -107,7 +107,7 @@ class FallbackLLMStream(LLMStream):
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
 
-        self._current_stream: Optional[LLMStream] = None
+        self._current_stream: LLMStream | None = None
 
     @property
     def function_calls(self) -> list[FunctionCallInfo]:
@@ -255,9 +255,5 @@ class FallbackLLMStream(LLMStream):
             self._try_recovery(llm)
 
         raise APIConnectionError(
-            "all LLMs failed (%s) after %s seconds"
-            % (
-                [llm.label for llm in self._fallback_adapter._llm_instances],
-                time.time() - start_time,
-            )
+            f"all LLMs failed ({[llm.label for llm in self._fallback_adapter._llm_instances]}) after {time.time() - start_time} seconds"
         )

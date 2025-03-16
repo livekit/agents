@@ -5,30 +5,18 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
-from typing import (
-    Any,
-    Generic,
-    Literal,
-    Optional,
-    TypedDict,
-    TypeVar,
-    Union,
-)
+from typing import Any, Generic, Literal, TypedDict, TypeVar, Union
+
+from pydantic import BaseModel, Field
+from typing_extensions import Required
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
-from pydantic import BaseModel, Field
-from typing_extensions import Required
 
 from .. import utils
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    APIConnectOptions,
-    NotGivenOr,
-)
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
 from .tool_context import FunctionTool
@@ -50,15 +38,15 @@ class FunctionToolCall(BaseModel):
 
 
 class ChoiceDelta(BaseModel):
-    role: Optional[ChatRole] = None
-    content: Optional[str] = None
+    role: ChatRole | None = None
+    content: str | None = None
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
 
 
 class ChatChunk(BaseModel):
     id: str
-    delta: Optional[ChoiceDelta] = None
-    usage: Optional[CompletionUsage] = None
+    delta: ChoiceDelta | None = None
+    usage: CompletionUsage | None = None
 
 
 # Used by ToolChoice
@@ -95,7 +83,7 @@ class LLM(
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream: ...
 

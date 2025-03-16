@@ -17,19 +17,12 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Literal,
-    Union,
-)
+from typing import Any, Literal
 
 import httpx
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    llm,
-)
+
+import anthropic
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.function_context import AIFunction
@@ -41,8 +34,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-import anthropic
-
 from .models import ChatModels
 from .utils import to_chat_ctx, to_fnc_ctx
 
@@ -53,7 +44,7 @@ class _LLMOptions:
     user: NotGivenOr[str]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
-    tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]]
+    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
@@ -73,7 +64,7 @@ class LLM(llm.LLM):
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
     ) -> None:
         """
@@ -130,7 +121,7 @@ class LLM(llm.LLM):
         fnc_ctx: list[AIFunction] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}

@@ -4,17 +4,15 @@ import asyncio
 import os
 import weakref
 from dataclasses import dataclass, fields
-from typing import Optional
 
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    tokenize,
-    tts,
-    utils,
-)
 from pyht import AsyncClient as PlayHTAsyncClient  # type: ignore
-from pyht.client import Format, Language, TTSOptions  # type: ignore
+from pyht.client import (
+    Format,  # type: ignore
+    Language,  # type: ignore
+    TTSOptions,  # type: ignore
+)
+
+from livekit.agents import APIConnectionError, APIConnectOptions, tokenize, tts, utils
 
 from .log import logger
 from .models import TTSModel
@@ -126,7 +124,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -135,7 +133,7 @@ class TTS(tts.TTS):
             opts=self._opts,
         )
 
-    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -152,7 +150,7 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _Options,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._client = tts._client
@@ -167,7 +165,7 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=NUM_CHANNELS,
         )
 
-        decode_task: Optional[asyncio.Task] = None
+        decode_task: asyncio.Task | None = None
         try:
             # Create a task to push data to the decoder
             async def _decode_loop():
@@ -207,7 +205,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         opts: _Options,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._client = tts._client

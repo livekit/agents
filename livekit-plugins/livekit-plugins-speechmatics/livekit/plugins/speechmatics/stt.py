@@ -20,9 +20,9 @@ import dataclasses
 import json
 import os
 import weakref
-from typing import Dict, List, Optional
 
 import aiohttp
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
@@ -57,8 +57,8 @@ class STT(stt.STT):
             url="wss://eu2.rt.speechmatics.com/v2",
         ),
         audio_settings: AudioSettings = AudioSettings(),
-        http_session: Optional[aiohttp.ClientSession] = None,
-        extra_headers: Optional[Dict] = None,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_headers: dict | None = None,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -91,7 +91,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: Optional[str] = None,
+        language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._audio_settings)
@@ -118,7 +118,7 @@ class SpeechStream(stt.SpeechStream):
         connection_settings: ConnectionSettings,
         conn_options: APIConnectOptions,
         http_session: aiohttp.ClientSession,
-        extra_headers: Optional[Dict] = None,
+        extra_headers: dict | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=audio_settings.sample_rate)
         self._transcription_config = transcription_config
@@ -285,8 +285,8 @@ class SpeechStream(stt.SpeechStream):
                 raise Exception("Speechmatics connection closed unexpectedly")
 
 
-def live_transcription_to_speech_data(data: dict) -> List[stt.SpeechData]:
-    speech_data: List[stt.SpeechData] = []
+def live_transcription_to_speech_data(data: dict) -> list[stt.SpeechData]:
+    speech_data: list[stt.SpeechData] = []
 
     for result in data.get("results", []):
         start_time, end_time, is_eos = (

@@ -4,9 +4,9 @@ import io
 import os
 import pathlib
 import wave
-from typing import Tuple
 
 import jiwer as tr
+
 from livekit import rtc
 from livekit.agents import utils
 
@@ -60,7 +60,7 @@ async def make_test_speech(
     *,
     chunk_duration_ms: int | None = None,
     sample_rate: int | None = None,  # resample if not None
-) -> Tuple[list[rtc.AudioFrame], str]:
+) -> tuple[list[rtc.AudioFrame], str]:
     input_audio = await read_mp3_file(TEST_AUDIO_FILEPATH)
 
     if sample_rate is not None and input_audio.sample_rate != sample_rate:

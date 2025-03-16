@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import boto3
+
 from livekit.agents import llm
 from livekit.agents.llm import AIFunction, ChatContext, ImageContent, utils
 
 __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
 
 
-def get_aws_credentials(api_key: Optional[str], api_secret: Optional[str], region: Optional[str]):
+def get_aws_credentials(api_key: str | None, api_secret: str | None, region: str | None):
     region = region or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         raise ValueError(

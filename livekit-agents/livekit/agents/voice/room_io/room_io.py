@@ -99,7 +99,7 @@ class RoomIO:
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
 
         self._tasks: set[asyncio.Task] = set()
-        self._update_state_task: Optional[asyncio.Task] = None
+        self._update_state_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         self._room.on("participant_connected", self._on_participant_connected)

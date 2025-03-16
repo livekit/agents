@@ -80,11 +80,11 @@ class _TextAudioSynchronizer:
         self._audio_q_changed = asyncio.Event()
         self._audio_q = list[Optional[_AudioData]]()
 
-        self._text_data: Optional[_TextData] = None
-        self._audio_data: Optional[_AudioData] = None
-        self._processing_text_data: Optional[_TextData] = None
+        self._text_data: _TextData | None = None
+        self._audio_data: _AudioData | None = None
+        self._processing_text_data: _TextData | None = None
 
-        self._main_task: Optional[asyncio.Task] = None
+        self._main_task: asyncio.Task | None = None
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """Push an audio frame for the current segment."""
@@ -234,7 +234,7 @@ class _TextAudioSynchronizer:
         processed_words: list[str] = []
 
         sent_text = ""
-        for word, start_pos, end_pos in words:
+        for word, _start_pos, end_pos in words:
             if segment_index <= self._finished_seg_index:
                 break
 

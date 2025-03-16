@@ -3,26 +3,25 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
-from typing import Any, List, Optional
-
-from livekit.agents import llm
-from livekit.agents.llm.function_context import AIFunction
+from typing import Any
 
 from google.genai import types
+from livekit.agents import llm
+from livekit.agents.llm.function_context import AIFunction
 
 __all__ = ["to_chat_ctx", "to_fnc_ctx"]
 
 
-def to_fnc_ctx(fncs: list[llm.AIFunction]) -> List[types.FunctionDeclaration]:
+def to_fnc_ctx(fncs: list[llm.AIFunction]) -> list[types.FunctionDeclaration]:
     return [_build_gemini_fnc(fnc) for fnc in fncs]
 
 
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, cache_key: Any
-) -> tuple[list[types.Content], Optional[types.Content]]:
+) -> tuple[list[types.Content], types.Content | None]:
     turns: list[types.Content] = []
-    system_instruction: Optional[types.Content] = None
-    current_role: Optional[str] = None
+    system_instruction: types.Content | None = None
+    current_role: str | None = None
     parts: list[types.Part] = []
 
     for msg in chat_ctx.items:

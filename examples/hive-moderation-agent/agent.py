@@ -19,8 +19,9 @@ from io import BytesIO
 import aiohttp
 from dotenv import load_dotenv
 from hive_data_classes import HiveResponse, from_dict
-from livekit import agents, rtc
 from PIL import Image
+
+from livekit import agents, rtc
 
 load_dotenv()
 
@@ -137,14 +138,7 @@ async def entrypoint(ctx: agents.JobContext):
                             # TODO: should also include "general_nsfw" class
                             if mod_class.score >= CONFIDENCE_THRESHOLD:
                                 class_name = mod_class.class_[4:]
-                                message = (
-                                    'FOUND %s for participant "%s" (confidence score: %0.3f)'
-                                    % (
-                                        class_name,
-                                        participant.identity,
-                                        mod_class.score,
-                                    )
-                                )
+                                message = f'FOUND {class_name} for participant "{participant.identity}" (confidence score: {mod_class.score:0.3f})'
                                 logger.info(message)
                                 await chat.send_message(message)
 

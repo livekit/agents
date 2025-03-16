@@ -75,10 +75,8 @@ class _EUORunner(_InferenceRunner):
             )
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
-
-                    f"Could not find model {HG_MODEL}. Make sure you have downloaded the model before running the agent. "
-                    "Use `python3 your_agent.py download-files` to download the models."
-
+                f"Could not find model {HG_MODEL}. Make sure you have downloaded the model before running the agent. "
+                "Use `python3 your_agent.py download-files` to download the models."
             )
             raise RuntimeError(
                 f"livekit-plugins-turn-detector initialization failed. Could not find model {HG_MODEL}."

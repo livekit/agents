@@ -6,7 +6,6 @@ import json
 import logging
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import asdict
-from typing import Optional
 
 from livekit import rtc
 
@@ -30,7 +29,7 @@ class DataStreamAudioOutput(AudioOutput):
         super().__init__()
         self._room = room
         self._destination_identity = destination_identity
-        self._stream_writer: Optional[rtc.ByteStreamWriter] = None
+        self._stream_writer: rtc.ByteStreamWriter | None = None
         self._pushed_duration: float = 0.0
         self._tasks: set[asyncio.Task] = set()
 
@@ -111,16 +110,16 @@ class DataStreamAudioReceiver(AudioReceiver):
     subscribe to the first agent participant in the room.
     """
 
-    def __init__(self, room: rtc.Room, *, sender_identity: Optional[str] = None):
+    def __init__(self, room: rtc.Room, *, sender_identity: str | None = None):
         super().__init__()
         self._room = room
         self._sender_identity = sender_identity
-        self._remote_participant: Optional[rtc.RemoteParticipant] = None
+        self._remote_participant: rtc.RemoteParticipant | None = None
 
         self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
 
-        self._current_reader: Optional[rtc.ByteStreamReader] = None
+        self._current_reader: rtc.ByteStreamReader | None = None
         self._current_reader_cleared: bool = False
 
     async def start(self) -> None:
@@ -205,7 +204,7 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             self._stream_reader_changed.clear()
 
-    async def _wait_for_participant(self, identity: Optional[str] = None) -> rtc.RemoteParticipant:
+    async def _wait_for_participant(self, identity: str | None = None) -> rtc.RemoteParticipant:
         """Wait for a participant to join the room and return it"""
 
         def _is_matching_participant(participant: rtc.RemoteParticipant) -> bool:

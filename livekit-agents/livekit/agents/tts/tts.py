@@ -6,13 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import (
-    Generic,
-    Literal,
-    Optional,
-    TypeVar,
-    Union,
-)
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -57,7 +51,7 @@ class TTS(
         capabilities: TTSCapabilities,
         sample_rate: int,
         num_channels: int,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         super().__init__()
         self._capabilities = capabilities
@@ -87,10 +81,10 @@ class TTS(
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> ChunkedStream: ...
 
-    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         raise NotImplementedError(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
         )
@@ -121,7 +115,7 @@ class ChunkedStream(ABC):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         self._input_text = input_text
         self._tts = tts
@@ -248,7 +242,7 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     class _FlushSentinel: ...
 
-    def __init__(self, *, tts: TTS, conn_options: Optional[APIConnectOptions] = None) -> None:
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions | None = None) -> None:
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
@@ -441,7 +435,7 @@ class SynthesizedAudioEmitter:
         self._request_id = request_id
         self._segment_id = segment_id
 
-    def push(self, frame: Optional[rtc.AudioFrame]):
+    def push(self, frame: rtc.AudioFrame | None):
         """Emits any buffered frame and stores the new frame for later emission.
 
         The buffered frame is emitted as not final.

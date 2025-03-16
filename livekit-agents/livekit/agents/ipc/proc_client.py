@@ -12,13 +12,7 @@ from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
 from .channel import Message, arecv_message, asend_message, recv_message, send_message
 from .log_queue import LogQueueHandler
-from .proto import (
-    IPC_MESSAGES,
-    InitializeRequest,
-    InitializeResponse,
-    PingRequest,
-    PongResponse,
-)
+from .proto import IPC_MESSAGES, InitializeRequest, InitializeResponse, PingRequest, PongResponse
 
 
 class _ProcClient:

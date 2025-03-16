@@ -17,15 +17,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any
 
 import httpx
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    llm,
-)
+from typing_extensions import Literal
+
+import openai
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import FunctionTool
@@ -36,13 +34,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from typing_extensions import Literal
-
-import openai
-from openai.types.chat import (
-    ChatCompletionChunk,
-    ChatCompletionToolChoiceOptionParam,
-)
+from openai.types.chat import ChatCompletionChunk, ChatCompletionToolChoiceOptionParam
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .models import (
@@ -65,7 +57,7 @@ class _LLMOptions:
     user: NotGivenOr[str]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
-    tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]]
+    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
 
@@ -81,7 +73,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
     ) -> None:
@@ -132,7 +124,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -176,7 +168,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
@@ -213,7 +205,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ) -> LLM:
         """
         Create a new instance of Fireworks LLM.
@@ -249,7 +241,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ):
         """
         Create a new instance of XAI LLM.
@@ -284,7 +276,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ) -> LLM:
         """
         Create a new instance of Groq LLM.
@@ -320,7 +312,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ) -> LLM:
         """
         Create a new instance of DeepSeek LLM.
@@ -356,7 +348,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ) -> LLM:
         """
         Create a new instance of OctoAI LLM.
@@ -390,7 +382,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ) -> LLM:
         """
         Create a new instance of Ollama LLM.
@@ -416,7 +408,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
@@ -452,7 +444,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ) -> LLM:
         """
         Create a new instance of TogetherAI LLM.
@@ -488,7 +480,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
     ) -> LLM:
         """
         Create a new instance of Telnyx LLM.
@@ -521,7 +513,7 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}

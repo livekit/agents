@@ -3,21 +3,14 @@ from __future__ import annotations
 import base64
 import inspect
 from dataclasses import dataclass
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Any,
-    Callable,
-    get_args,
-    get_origin,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Annotated, Any, Callable, get_args, get_origin, get_type_hints
 
-from livekit import rtc
-from livekit.agents import llm, utils
 from pydantic import BaseModel, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined
+
+from livekit import rtc
+from livekit.agents import llm, utils
 
 from . import _strict
 from .chat_context import ChatContext

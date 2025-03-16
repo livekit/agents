@@ -21,9 +21,10 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -106,9 +107,9 @@ class TTS(tts.TTS):
         base_url: str | None = None,
         streaming_latency: int = 0,
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
-        word_tokenizer: Optional[tokenize.WordTokenizer] = None,
+        word_tokenizer: tokenize.WordTokenizer | None = None,
         enable_ssml_parsing: bool = False,
-        chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
+        chunk_length_schedule: list[int] = None,  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
         # deprecated
         model_id: TTSModels | str | None = None,
@@ -131,6 +132,8 @@ class TTS(tts.TTS):
             language (str | None): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5". Optional.
         """
 
+        if chunk_length_schedule is None:
+            chunk_length_schedule = [80, 120, 200, 260]
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
@@ -201,7 +204,7 @@ class TTS(tts.TTS):
     def prewarm(self) -> None:
         self._pool.prewarm()
 
-    async def list_voices(self) -> List[Voice]:
+    async def list_voices(self) -> list[Voice]:
         async with self._ensure_session().get(
             f"{self._opts.base_url}/voices",
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
@@ -229,7 +232,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -239,7 +242,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         stream = SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
         self._streams.add(stream)
         return stream
@@ -261,7 +264,7 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _TTSOptions,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
         session: aiohttp.ClientSession,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
@@ -405,13 +408,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
 
             # 11labs protocol expects the first message to be an "init msg"
-            init_pkt = dict(
-                text=" ",
-                voice_settings=_strip_nones(dataclasses.asdict(self._opts.voice.settings))
+            init_pkt = {
+                "text": " ",
+                "voice_settings": _strip_nones(dataclasses.asdict(self._opts.voice.settings))
                 if self._opts.voice.settings
                 else None,
-                generation_config=dict(chunk_length_schedule=self._opts.chunk_length_schedule),
-            )
+                "generation_config": {"chunk_length_schedule": self._opts.chunk_length_schedule},
+            }
             await ws_conn.send_str(json.dumps(init_pkt))
 
             @utils.log_exceptions(logger=logger)
@@ -434,7 +437,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         else:
                             continue
 
-                    data_pkt = dict(text=f"{text} ")  # must always end with a space
+                    data_pkt = {"text": f"{text} "}  # must always end with a space
                     self._mark_started()
                     await ws_conn.send_str(json.dumps(data_pkt))
                 if xml_content:
@@ -526,7 +529,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 
 def _dict_to_voices_list(data: dict[str, Any]):
-    voices: List[Voice] = []
+    voices: list[Voice] = []
     for voice in data["voices"]:
         voices.append(
             Voice(

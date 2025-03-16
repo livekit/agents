@@ -3,13 +3,7 @@ import time
 import weakref
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
-from typing import (
-    Callable,
-    Generic,
-    Optional,
-    Set,
-    TypeVar,
-)
+from typing import Callable, Generic, Optional, TypeVar
 
 from . import aio
 
@@ -44,10 +38,10 @@ class ConnectionPool(Generic[T]):
         self._connect_cb = connect_cb
         self._close_cb = close_cb
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
-        self._available: Set[T] = set()
+        self._available: set[T] = set()
 
         # store connections to be reaped (closed) later.
-        self._to_close: Set[T] = set()
+        self._to_close: set[T] = set()
 
         self._prewarm_task: Optional[weakref.ref[asyncio.Task]] = None
 
