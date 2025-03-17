@@ -749,7 +749,7 @@ class AgentActivity(RecognitionHooks):
 
         # start to execute tools (only after play())
         exe_task, fnc_outputs = perform_tool_executions(
-            agent=self._session,
+            session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             function_stream=llm_gen_data.function_ch,
@@ -976,7 +976,7 @@ class AgentActivity(RecognitionHooks):
         ]
 
         exe_task, fnc_outputs = perform_tool_executions(
-            agent=self._session,
+            session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             function_stream=generation_ev.function_stream,

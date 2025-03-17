@@ -21,17 +21,17 @@ class CallContext(Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        agent: AgentSession,
+        session: AgentSession,
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
     ) -> None:
-        self._agent = agent
+        self._session = session
         self._speech_handle = speech_handle
         self._function_call = function_call
 
     @property
-    def agent(self) -> AgentSession[Userdata_T]:
-        return self._agent
+    def session(self) -> AgentSession[Userdata_T]:
+        return self._session
 
     @property
     def speech_handle(self) -> SpeechHandle:
@@ -43,7 +43,7 @@ class CallContext(Generic[Userdata_T]):
 
     @property
     def userdata(self) -> Userdata_T:
-        return self.agent.userdata
+        return self.session.userdata
 
 
 EventTypes = Literal[
