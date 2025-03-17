@@ -64,3 +64,17 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 timeout = 120
 addopts = ["--import-mode=importlib", "--ignore=examples"]
+
+
+[tool.mypy]
+strict = true
+
+[tool.mypy-google.genai]
+follow_imports = "normal"
+follow_untyped_imports = true
+
+[tool.mypy-aiobotocore]
+follow_untyped_imports = true
+
+[tool.mypy-boto3]
+follow_untyped_imports = true
