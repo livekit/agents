@@ -36,6 +36,7 @@ dependencies = [
     "typing-extensions>=4.12",
     "sounddevice>=0.5",
     "docstring_parser>=0.16",
+    "eval-type-backport",
 ]
 
 [project.optional-dependencies]
