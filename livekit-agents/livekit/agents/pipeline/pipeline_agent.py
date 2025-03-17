@@ -723,7 +723,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     async def _synthesize_answer_task(
         self, old_task: asyncio.Task[None], handle: SpeechHandle
     ) -> None:
-        user_input = handle.user_question
         if old_task is not None:
             await utils.aio.gracefully_cancel(old_task)
 
