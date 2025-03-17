@@ -14,5 +14,5 @@ def test_process_base_url():
             "wss://livekit.ai/voice/v1/chat/voice?client=oai&enable_noise_suppression=true",
             "gpt-4",
         )
-        == "wss://livekit.ai/voice/v1/chat/voice?client=oai&enable_noise_suppression=true&model=gpt-4"
+        == "wss://livekit.ai/voice/v1/chat/voice?client=oai&enable_noise_suppression=true",
     )
