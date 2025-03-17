@@ -4,12 +4,11 @@ from dataclasses import dataclass
 from api_setup import setup_event_types
 from dotenv import load_dotenv
 from livekit.agents import (
-    AutoSubscribe,
     JobContext,
     WorkerOptions,
     cli,
 )
-from livekit.agents.voice import AgentTask, VoiceAgent
+from livekit.agents.voice import Agent, AgentSession
 from livekit.plugins import cartesia, deepgram, openai, silero
 from tasks import Messenger, Receptionist, Scheduler
 
@@ -23,16 +22,16 @@ class UserInfo:
 
 
 @dataclass
-class Tasks:
+class Agents:
     @property
-    def receptionist(self) -> AgentTask:
+    def receptionist(self) -> Agent:
         return Receptionist()
 
     @property
-    def messenger(self) -> AgentTask:
+    def messenger(self) -> Agent:
         return Messenger()
 
-    def scheduler(self, service: str) -> AgentTask:
+    def scheduler(self, service: str) -> Agent:
         return Scheduler(service=service)
 
 
@@ -44,10 +43,9 @@ logger.setLevel(logging.INFO)
 
 async def entrypoint(ctx: JobContext):
     event_ids = await setup_event_types()
-    userdata = {"event_ids": event_ids, "userinfo": UserInfo(), "tasks": Tasks()}
+    userdata = {"event_ids": event_ids, "userinfo": UserInfo(), "agents": Agents()}
 
-    agent = VoiceAgent(
-        task=Receptionist(),
+    session = AgentSession(
         userdata=userdata,
         stt=deepgram.STT(),
         llm=openai.LLM(),
@@ -55,8 +53,8 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
     )
 
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    await agent.start(room=ctx.room)
+    await ctx.connect()
+    await session.start(agent=userdata["agents"].receptionist, room=ctx.room)
 
 
 if __name__ == "__main__":

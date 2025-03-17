@@ -1,37 +1,44 @@
 import os
 from enum import Enum
+from typing import Annotated
 
 import aiohttp
-from livekit.agents.llm import ai_function
-from livekit.agents.voice import AgentTask
+from global_functions import (
+    transfer_to_messenger,
+    transfer_to_receptionist,
+    update_information,
+)
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent
 from livekit.plugins import cartesia
+from pydantic import Field
 
 
 class APIRequests(Enum):
     GET_APPTS = "get_appts"
-    GET_APPT = "get_appt"
     CANCEL = "cancel"
     RESCHEDULE = "reschedule"
     SCHEDULE = "schedule"
 
 
-class Scheduler(AgentTask):
+class Scheduler(Agent):
     def __init__(self, *, service: str) -> None:
         super().__init__(
-            instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
+            instructions="""You are a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
                             scheduling/rescheduling/canceling. When calling functions, return the user's email if already known.
                             Always confirm details with the user. Convert all times given by the user to ISO 8601 format in UTC timezone,
                             assuming the user is in America/Los Angeles, and do not mention the conversion or the UTC timezone to the user. Avoiding repeating words.""",
             tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600"),
+            tools=[update_information, transfer_to_receptionist, transfer_to_messenger],
         )
         self._service_requested = service
 
     async def on_enter(self) -> None:
-        self._event_ids = self.agent.userdata["event_ids"]
+        self._event_ids = self.session.userdata["event_ids"]
 
-        await self.agent.generate_reply(
-            instructions=f"""Introduce yourself and ask {self.agent.userdata["userinfo"].name} to confirm that they would like to {self._service_requested} an appointment. 
-                            Their email is {self.agent.userdata["userinfo"].email}."""
+        await self.session.generate_reply(
+            instructions=f"""Introduce yourself and ask {self.session.userdata["userinfo"].name} to confirm that they would like to {self._service_requested} an appointment. 
+                            Their email is {self.session.userdata["userinfo"].email}."""
         )
 
     async def send_request(
@@ -45,8 +52,8 @@ class Scheduler(AgentTask):
             params = {}
             if request.value == "get_appts":
                 payload = {
-                    "attendeeEmail": self.agent.userdata["userinfo"].email,
-                    "attendeeName": self.agent.userdata["userinfo"].name,
+                    "attendeeEmail": self.session.userdata["userinfo"].email,
+                    "attendeeName": self.session.userdata["userinfo"].name,
                     "status": "upcoming",
                 }
                 params = {
@@ -65,8 +72,8 @@ class Scheduler(AgentTask):
 
             elif request.value == "schedule":
                 attendee_details = {
-                    "name": self.agent.userdata["userinfo"].name,
-                    "email": self.agent.userdata["userinfo"].email,
+                    "name": self.session.userdata["userinfo"].name,
+                    "email": self.session.userdata["userinfo"].email,
                     "timeZone": "America/Los_Angeles",
                 }
                 payload = {
@@ -102,22 +109,30 @@ class Scheduler(AgentTask):
             except Exception as e:
                 raise Exception(f"API Communication Error: {e}")
 
-    @ai_function()
-    async def schedule(self, email: str, description: str, date: str) -> None:
+    @function_tool()
+    async def schedule(
+        self,
+        email: Annotated[
+            str, Field(description="The user's email, in the format local-part@domain")
+        ],
+        description: Annotated[
+            str,
+            Field(
+                description="Reason for scheduling appointment, either 'routine-checkup' or 'tooth-extraction'"
+            ),
+        ],
+        date: Annotated[str, Field(description="Date and time for the appointment")],
+    ) -> None:
         """
         Schedules a new appointment for users. The email should be confirmed by spelling it out to the user.
-        Args:
-            email: The user's email, in the format local-part@domain
-            description: Reason for scheduling appointment, either "routine-checkup" or "tooth-extraction"
-            date: Date and time for the appointment
         """
-        self.agent.userdata["userinfo"].email = email
+        self.session.userdata["userinfo"].email = email
         response = await self.send_request(
             request=APIRequests.SCHEDULE, time=date, slug=description
         )
 
         if response["status"] == "success":
-            await self.agent.generate_reply(
+            await self.session.generate_reply(
                 instructions="Tell the user you were able to schedule the appointment successfully."
             )
         elif (
@@ -125,47 +140,58 @@ class Scheduler(AgentTask):
             and response["error"]["message"]
             == "User either already has booking at this time or is not available"
         ):
-            if self.agent.current_speech:
-                await self.agent.current_speech.wait_for_playout()
-            await self.agent.generate_reply(
+            if self.session.current_speech:
+                await self.session.current_speech.wait_for_playout()
+            await self.session.generate_reply(
                 instructions="Inform the user that the date and time specified are unavailable, and ask the user to choose another date."
             )
 
-    @ai_function()
-    async def cancel(self, email: str) -> None:
+    @function_tool()
+    async def cancel(
+        self,
+        email: Annotated[
+            str, Field(description="The user's email, in the format local-part@domain")
+        ],
+    ) -> None:
         """
         Cancels an existing appointment.
-        Args:
-            email: The user's email formatted local-part@domain
         """
-        self.agent.userdata["userinfo"].email = email
+        self.session.userdata["userinfo"].email = email
         response = await self.send_request(request=APIRequests.GET_APPTS)
         if response["data"]:
             cancel_response = await self.send_request(
                 request=APIRequests.CANCEL, uid=response["data"][0]["uid"]
             )
             if cancel_response["status"] == "success":
-                if self.agent.current_speech:
-                    await self.agent.current_speech.wait_for_playout()
-                await self.agent.generate_reply(
+                if self.session.current_speech:
+                    await self.session.current_speech.wait_for_playout()
+                await self.session.generate_reply(
                     instructions="Inform the user that they are all set."
                 )
         else:
-            if self.agent.current_speech:
-                await self.agent.current_speech.wait_for_playout()
-            await self.agent.generate_reply(
+            if self.session.current_speech:
+                await self.session.current_speech.wait_for_playout()
+            await self.session.generate_reply(
                 instructions="Inform the user that there are no appointments under their name and ask to create one."
             )
 
-    @ai_function()
-    async def reschedule(self, email: str, new_time: str) -> None:
+    @function_tool()
+    async def reschedule(
+        self,
+        email: Annotated[
+            str, Field(description="The user's email, in the format local-part@domain")
+        ],
+        new_time: Annotated[
+            str,
+            Field(
+                description="the new time and day for the appointment to be rescheduled to"
+            ),
+        ],
+    ) -> None:
         """
         Reschedules an appointment to a new date specified by the user
-        Args:
-            email: The user's email formatted local-part@domain
-            new_time: the new time and day for the appointment to be rescheduled to
         """
-        self.agent.userdata["userinfo"].email = email
+        self.session.userdata["userinfo"].email = email
         response = await self.send_request(request=APIRequests.GET_APPTS)
         if response["data"]:
             reschedule_response = await self.send_request(
@@ -178,36 +204,22 @@ class Scheduler(AgentTask):
                 and reschedule_response["error"]["message"]
                 == "User either already has booking at this time or is not available"
             ):
-                if self.agent.current_speech:
-                    await self.agent.current_speech.wait_for_playout()
-                await self.agent.generate_reply(
+                if self.session.current_speech:
+                    await self.session.current_speech.wait_for_playout()
+                await self.session.generate_reply(
                     instructions="Tell the user that the office is unavailable at the time specified. You were unable to reschedule, so ask the user to choose another time to try again."
                 )
 
             elif reschedule_response["status"] == "success":
-                if self.agent.current_speech:
-                    await self.agent.current_speech.wait_for_playout()
-                await self.agent.generate_reply(
+                if self.session.current_speech:
+                    await self.session.current_speech.wait_for_playout()
+                await self.session.generate_reply(
                     instructions="Inform the user that they are all set and confirm that the appointment was moved."
                 )
 
         else:
-            if self.agent.current_speech:
-                await self.agent.current_speech.wait_for_playout()
-            await self.agent.generate_reply(
+            if self.session.current_speech:
+                await self.session.current_speech.wait_for_playout()
+            await self.session.generate_reply(
                 instructions="Inform the user that there are no appointments under their name and ask to create one."
             )
-
-    @ai_function()
-    async def transfer_to_receptionist(self) -> None:
-        """Transfers the user to the receptionist for any office inquiries, user information updates, or when they are finished with managing appointments."""
-        return self.agent.userdata[
-            "tasks"
-        ].receptionist, "Transferring you to our receptionist!"
-
-    @ai_function()
-    async def transfer_to_messenger(self) -> None:
-        """Transfers the user to the messenger if they want to leave a message for the office."""
-        return self.agent.userdata[
-            "tasks"
-        ].messenger, "Transferring you to our messenger!"

@@ -7,13 +7,13 @@ from typing import Union
 import aiofiles
 from dotenv import load_dotenv
 from livekit.agents import (
-    AutoSubscribe,
     JobContext,
     WorkerOptions,
     cli,
     utils,
 )
-from livekit.agents.voice import AgentTask, VoiceAgent
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import AgentEvent, EventTypes
 from livekit.plugins import openai
 
@@ -40,7 +40,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        agent: VoiceAgent | None,
+        session: AgentSession | None,
         log: str | None,
         transcriptions_only: bool = False,
     ):
@@ -48,7 +48,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         Initializes a ConversationPersistor instance which records the events and transcriptions of a VoiceAgent.
 
         Args:
-            model (VoiceAgent): an instance of a VoiceAgent
+            model (AgentSession): an instance of an AgentSession
             log (str): name of the external file to record events in
             transcriptions_only (bool): a boolean variable to determine if only transcriptions will be recorded, False by default
             user_transcriptions (arr): list of user transcriptions
@@ -59,7 +59,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
 
-        self._agent = agent
+        self._session = session
         self._log = log
         self._transcriptions_only = transcriptions_only
 
@@ -74,8 +74,8 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         return self._log
 
     @property
-    def model(self) -> VoiceAgent | None:
-        return self._model
+    def session(self) -> AgentSession | None:
+        return self._session
 
     @property
     def user_transcriptions(self) -> dict:
@@ -125,17 +125,17 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         # Listens for emitted VoiceAgent events
         self._main_task = asyncio.create_task(self._main_atask())
 
-        @self._agent.on("user_started_speaking")
+        @self.session.on("user_started_speaking")
         def _user_started_speaking(ev: AgentEvent):
             event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
-        @self._agent.on("user_stopped_speaking")
+        @self.session.on("user_stopped_speaking")
         def _user_stopped_speaking(ev: AgentEvent):
             event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
-        @self._agent.on("user_input_transcribed")
+        @self.session.on("user_input_transcribed")
         def _user_input_transcribed(ev: AgentEvent):
             if ev.is_final:
                 event = EventLog(eventname=ev.type)
@@ -145,22 +145,35 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
                 )
                 self._log_q.put_nowait(transcription)
 
-        # @self._agent.on("agent_state_changed")
+        # @self.session.on("agent_state_changed")
         # def _agent_state_changed(ev: AgentStateChangedEvent):
         #     """ The state is either "initializing", "listening", or "speaking" """
         #     name = "agent_state_changed: " + ev.state.value
         #     event = EventLog(name)
         #     self._log_q.put_nowait(event)
 
-        @self._agent.on("agent_started_speaking")
+        @self.session.on("agent_started_speaking")
         def _agent_started_speaking(ev: AgentEvent):
             event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
-        @self._agent.on("agent_stopped_speaking")
+        @self.session.on("agent_stopped_speaking")
         def _agent_stopped_speaking(ev: AgentEvent):
             event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
+
+
+class MyAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            instructions="You are a helpful assistant that can answer questions and help with tasks.",
+        )
+
+    @function_tool()
+    async def open_door(self) -> str:
+        await self.session.generate_reply(instructions="Opening the door..")
+
+        return "The door is open!"
 
 
 load_dotenv()
@@ -170,13 +183,13 @@ logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
-    agent = VoiceAgent(task=AgentTask(), llm=openai.realtime.RealtimeModel())
+    await ctx.connect()
+    session = AgentSession(llm=openai.realtime.RealtimeModel())
 
-    cp = ConversationPersistor(model=agent, log="log.txt")
+    cp = ConversationPersistor(session=session, log="log.txt")
     cp.start()
 
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    agent.start(ctx.room)
+    await session.start(agent=MyAgent(), room=ctx.room)
 
 
 if __name__ == "__main__":
