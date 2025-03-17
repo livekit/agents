@@ -1,0 +1,5 @@
+dotenv
+livekit
+livekit-agents
+livekit-plugins-bey
+openai

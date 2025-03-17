@@ -5,6 +5,7 @@ Avatars provide a visual representation for agents. This collection showcases th
 1. **audio_wave** - A simple local mock demo that visualizes audio input as waveforms
 2. **simli** - Integration with the Simli API for avatar generation
 3. **bithuman** - Direct integration of a local avatar model with the agent worker
+4. **bey** - Integration with the Beyond Presence API for avatar generation
 
 ## Integration Approaches
 
@@ -12,7 +13,7 @@ These examples demonstrate two primary methods for integrating avatars with agen
 
 ### 1. Data Stream Sink Integration
 
-Used in **audio_wave** and **simli** examples, this approach:
+Used in **audio_wave**, **simli**, and **bey** examples, this approach:
 - Runs the avatar in a separate process or server that joins the same LiveKit room as a participant
 - Receives agent audio output through DataStream
 - Processes audio and publishes synchronized video back to the room
@@ -64,6 +65,13 @@ The bithuman example demonstrates direct integration of a [Bithuman local runtim
 - Runs the avatar generation model locally alongside the agent
 - Operates independently of external services
 - Implements direct model inference within the agent workflow
+
+### bey
+
+The bey example shows how to integrate with the [Beyond Presence API](https://docs.bey.dev/introduction) for avatar generation. This approach:
+- Utilizes a third-party service for avatar rendering
+- Implements API request/response handling
+- Requires network connectivity and API authentication
 
 
 ## Contributing
