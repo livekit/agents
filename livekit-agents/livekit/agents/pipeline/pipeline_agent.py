@@ -13,7 +13,6 @@ from typing import (
     Literal,
     Optional,
     Protocol,
-    Tuple,
     Union,
 )
 
@@ -793,13 +792,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _commit_user_question(self) -> None:
         speech_handle = self._playing_speech
-        synthesis_handle = speech_handle.synthesis_handle
-        play_handle = synthesis_handle.play()
-        join_fut = play_handle.join()
         user_question = speech_handle.user_question
-        is_using_tools = isinstance(speech_handle.source, LLMStream) and len(
-            speech_handle.source.function_calls
-        )
 
         user_msg = ChatMessage.create(text=user_question, role="user")
         self._chat_ctx.messages.append(user_msg)
@@ -1007,7 +1000,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     f"collected_text: {collected_text}, last_llm_message: {AppConfig().last_llm_message}"
                 )
                 if interrupted:
-                    logger.info(f"interrupted=True")
+                    logger.info("interrupted=True")
                     # if collected_text in (
                     #     AppConfig().call_metadata.get("agent_interrupted_text") or ""
                     # ):
@@ -1033,7 +1026,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         AppConfig().playout_buffer = ""
                         AppConfig().char_timings = []
                 else:
-                    logger.info(f"interrupted=False")
+                    logger.info("interrupted=False")
                     if (
                         collected_text.replace(" ", "").lower()
                         == AppConfig().last_llm_message.replace(" ", "").lower()
