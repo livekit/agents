@@ -47,7 +47,7 @@ BASE_URL = "https://api.deepgram.com/v1/listen"
 
 # This is the magic number during testing that we use to determine if a frame is loud enough
 # to possibly contain speech. It's very conservative.
-MAGIC_NUMBER_THRESHOLD = 0.004**2
+MAGIC_NUMBER_THRESHOLD = 0.4**2
 
 
 class AudioEnergyFilter:
@@ -60,6 +60,7 @@ class AudioEnergyFilter:
     def __init__(
         self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD
     ):
+        logger.info(f"MAGIC_NUMBER_THRESHOLD: {MAGIC_NUMBER_THRESHOLD}")
         self._cooldown_seconds = min_silence
         self._cooldown = min_silence
         self._state = self.State.SILENCE
