@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator
 
 from ..utils import aio
 
@@ -25,7 +25,7 @@ class SentenceTokenizer(ABC):
         pass
 
     @abstractmethod
-    def stream(self, *, language: str | None = None) -> "SentenceStream":
+    def stream(self, *, language: str | None = None) -> SentenceStream:
         pass
 
 
@@ -66,7 +66,7 @@ class WordTokenizer(ABC):
         pass
 
     @abstractmethod
-    def stream(self, *, language: str | None = None) -> "WordStream":
+    def stream(self, *, language: str | None = None) -> WordStream:
         pass
 
     def format_words(self, words: list[str]) -> str:

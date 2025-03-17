@@ -2,15 +2,8 @@ import logging
 from typing import Annotated
 
 from dotenv import load_dotenv
-from livekit.agents import (
-    AutoSubscribe,
-    JobContext,
-    JobProcess,
-    WorkerOptions,
-    cli,
-    llm,
-    metrics,
-)
+
+from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli, llm, metrics
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import google, silero
 

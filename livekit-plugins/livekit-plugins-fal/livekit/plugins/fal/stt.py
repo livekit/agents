@@ -3,15 +3,11 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 import fal_client
+
 from livekit import rtc
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    stt,
-)
+from livekit.agents import APIConnectionError, APIConnectOptions, stt
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.utils import AudioBuffer
 
@@ -28,10 +24,10 @@ class WizperSTT(stt.STT):
     def __init__(
         self,
         *,
-        language: Optional[str] = "en",
-        task: Optional[str] = "transcribe",
-        chunk_level: Optional[str] = "segment",
-        version: Optional[str] = "3",
+        language: str | None = "en",
+        task: str | None = "transcribe",
+        chunk_level: str | None = "segment",
+        version: str | None = "3",
     ):
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
         self._api_key = os.getenv("FAL_KEY")
@@ -46,16 +42,16 @@ class WizperSTT(stt.STT):
         if not self._api_key:
             raise ValueError("fal AI API key is required. It should be set with env FAL_KEY")
 
-    def update_options(self, *, language: Optional[str] = None) -> None:
+    def update_options(self, *, language: str | None = None) -> None:
         self._opts.language = language or self._opts.language
 
     def _sanitize_options(
         self,
         *,
-        language: Optional[str] = None,
-        task: Optional[str] = None,
-        chunk_level: Optional[str] = None,
-        version: Optional[str] = None,
+        language: str | None = None,
+        task: str | None = None,
+        chunk_level: str | None = None,
+        version: str | None = None,
     ) -> _STTOptions:
         config = dataclasses.replace(self._opts)
         config.language = language or config.language

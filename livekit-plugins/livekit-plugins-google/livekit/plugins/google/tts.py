@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
+from google.cloud import texttospeech
+from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -25,10 +27,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-
-from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
-from google.cloud import texttospeech
-from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
 
 from .models import Gender, SpeechLanguages
 
@@ -146,8 +144,8 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions | None = None,
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             input_text=text,
@@ -165,7 +163,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _TTSOptions,
         client: texttospeech.TextToSpeechAsyncClient,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client

@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
 
 import httpx
+
+import openai
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -27,8 +28,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-
-import openai
 
 from .log import logger
 from .models import TTSModels, TTSVoices
@@ -144,8 +143,8 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions | None = None,
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             input_text=text,
@@ -161,7 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
         opts: _TTSOptions,
         client: openai.AsyncClient,
     ) -> None:

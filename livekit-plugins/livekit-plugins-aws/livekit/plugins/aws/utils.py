@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import boto3
+
 from livekit.agents import llm
 from livekit.agents.llm import AIFunction, ChatContext, ImageContent, utils
 
 __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
 
 
-def get_aws_credentials(api_key: Optional[str], api_secret: Optional[str], region: Optional[str]):
+def get_aws_credentials(api_key: str | None, api_secret: str | None, region: str | None):
     region = region or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         raise ValueError(
@@ -71,13 +72,15 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
                 elif isinstance(content, ImageContent):
                     current_content.append(_build_image(content, cache_key))
         elif msg.type == "function_call":
-            current_content.append({
-                "toolUse": {
-                    "toolUseId": msg.call_id,
-                    "name": msg.name,
-                    "input": json.loads(msg.arguments),
+            current_content.append(
+                {
+                    "toolUse": {
+                        "toolUseId": msg.call_id,
+                        "name": msg.name,
+                        "input": json.loads(msg.arguments),
+                    }
                 }
-            })
+            )
         elif msg.type == "function_call_output":
             tool_response = {
                 "toolResult": {
@@ -106,11 +109,13 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
 def _build_tool_spec(fnc: AIFunction) -> dict:
     fnc = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
     return {
-        "toolSpec": _strip_nones({
-            "name": fnc["name"],
-            "description": fnc["description"] if fnc["description"] else None,
-            "inputSchema": {"json": fnc["parameters"] if fnc["parameters"] else {}},
-        })
+        "toolSpec": _strip_nones(
+            {
+                "name": fnc["name"],
+                "description": fnc["description"] if fnc["description"] else None,
+                "inputSchema": {"json": fnc["parameters"] if fnc["parameters"] else {}},
+            }
+        )
     }
 
 

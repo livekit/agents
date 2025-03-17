@@ -18,9 +18,10 @@ import asyncio
 import contextvars
 import functools
 import multiprocessing as mp
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Any, Callable, Coroutine, Tuple, Union
+from typing import Any, Callable
 
 from livekit import api, rtc
 from livekit.protocol import agent, models
@@ -97,12 +98,12 @@ class JobContext:
         self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
         self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
         self._participant_entrypoints: list[
-            Tuple[
+            tuple[
                 Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
                 list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
             ]
         ] = []
-        self._participant_tasks = dict[Tuple[str, Callable], asyncio.Task[None]]()
+        self._participant_tasks = dict[tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
@@ -153,10 +154,8 @@ class JobContext:
 
     def add_shutdown_callback(
         self,
-        callback: Union[
-            Callable[[], Coroutine[None, None, None]],
-            Callable[[str], Coroutine[None, None, None]],
-        ],
+        callback: Callable[[], Coroutine[None, None, None]]
+        | Callable[[str], Coroutine[None, None, None]],
     ) -> None:
         """
         Add a callback to be called when the job is shutting down.

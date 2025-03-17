@@ -3,10 +3,10 @@ from __future__ import annotations
 import base64
 import os
 from collections import OrderedDict
-from typing import Any, Awaitable, Callable, Optional, Union
+from collections.abc import Awaitable
+from typing import Any, Callable, Union
 
 from livekit.agents import llm
-
 from openai.types.chat import (
     ChatCompletionContentPartParam,
     ChatCompletionMessageParam,
@@ -16,7 +16,7 @@ from openai.types.chat import (
 AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
 
 
-def get_base_url(base_url: Optional[str]) -> str:
+def get_base_url(base_url: str | None) -> str:
     if not base_url:
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     return base_url

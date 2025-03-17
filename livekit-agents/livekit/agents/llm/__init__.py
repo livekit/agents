@@ -11,15 +11,6 @@ from .chat_context import (
     ImageContent,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
-from .function_context import (
-    AIError,
-    AIFunction,
-    FunctionContext,
-    StopResponse,
-    ai_function,
-    find_ai_functions,
-    is_ai_function,
-)
 from .llm import (
     LLM,
     ChatChunk,
@@ -35,12 +26,20 @@ from .realtime import (
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
     InputTranscriptionCompleted,
-    InputTranscriptionFailed,
     MessageGeneration,
     RealtimeCapabilities,
     RealtimeError,
     RealtimeModel,
     RealtimeSession,
+)
+from .tool_context import (
+    FunctionTool,
+    StopResponse,
+    ToolContext,
+    ToolError,
+    find_function_tools,
+    function_tool,
+    is_function_tool,
 )
 
 __all__ = [
@@ -62,12 +61,12 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "ToolChoice",
-    "is_ai_function",
-    "ai_function",
-    "find_ai_functions",
-    "AIFunction",
-    "FunctionContext",
-    "AIError",
+    "is_function_tool",
+    "function_tool",
+    "find_function_tools",
+    "FunctionTool",
+    "ToolContext",
+    "ToolError",
     "StopResponse",
     "utils",
     "remote_chat_context",

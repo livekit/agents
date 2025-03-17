@@ -103,7 +103,7 @@ class BufferedTokenStream:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
-    def __aiter__(self) -> "BufferedTokenStream":
+    def __aiter__(self) -> BufferedTokenStream:
         return self
 
     async def __anext__(self) -> TokenData:

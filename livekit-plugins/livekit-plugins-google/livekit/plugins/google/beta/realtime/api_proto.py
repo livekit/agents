@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Literal, Sequence, Union
+from collections.abc import Sequence
+from typing import Literal, Union
 
 from google.genai import types
 

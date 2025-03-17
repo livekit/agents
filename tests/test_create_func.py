@@ -1,8 +1,9 @@
 import enum
 from inspect import _empty
-from typing import Annotated, List, Optional
+from typing import Annotated, Optional
 
 import pytest
+
 from livekit.agents import llm
 from livekit.plugins.openai import _oai_api
 
@@ -72,7 +73,7 @@ def test_func_with_optional_parameter():
             param: Annotated[
                 Optional[int], llm.TypeInfo(description="An optional integer parameter")
             ] = None,
-            param2: Optional[List[str]] = None,
+            param2: Optional[list[str]] = None,
             param3: str = "A string",
         ):
             pass
@@ -115,7 +116,7 @@ def test_func_with_optional_parameter():
 
     assert arg_info.name == "param2"
     assert arg_info.description == ""
-    assert arg_info.type == Optional[List[str]]
+    assert arg_info.type == Optional[list[str]]
     assert arg_info.default is None
     assert arg_info.choices == ()
     assert build_arg_info["type"] == "array"
@@ -138,7 +139,7 @@ def test_func_with_list_parameter():
         @llm.ai_callable(name="list_function", description="Function with list parameter")
         def list_fn(
             self,
-            items: Annotated[List[str], llm.TypeInfo(description="A list of strings")],
+            items: Annotated[list[str], llm.TypeInfo(description="A list of strings")],
         ):
             pass
 
@@ -159,7 +160,7 @@ def test_func_with_list_parameter():
 
     assert arg_info.name == "items"
     assert arg_info.description == "A list of strings"
-    assert arg_info.type is List[str]
+    assert arg_info.type is list[str]
     assert arg_info.default is _empty
     assert arg_info.choices == ()
     assert build_arg_info["description"] == arg_info.description

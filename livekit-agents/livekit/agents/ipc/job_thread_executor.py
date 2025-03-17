@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import socket
 import threading
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo

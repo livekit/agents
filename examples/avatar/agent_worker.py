@@ -6,12 +6,13 @@ from functools import partial
 
 import httpx
 from dotenv import load_dotenv
+
 from livekit import api, rtc
 from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
-from livekit.agents.voice import AgentTask, VoiceAgent
-from livekit.agents.voice.avatar import DataStreamAudioSink
+from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import PlaybackFinishedEvent
-from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_FOR, RoomOutputOptions
+from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomOutputOptions
 from livekit.plugins import openai
 
 logger = logging.getLogger("avatar-example")
@@ -44,7 +45,7 @@ async def launch_avatar_worker(
         .with_name("Avatar Runner")
         .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
         .with_kind("agent")
-        .with_attributes({ATTRIBUTE_PUBLISH_FOR: agent_identity})
+        .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: agent_identity})
         .to_jwt()
     )
 
@@ -65,33 +66,31 @@ async def launch_avatar_worker(
 async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await ctx.connect()
 
-    agent = VoiceAgent(
-        task=AgentTask(
-            instructions="Talk to me!",
-            llm=openai.realtime.RealtimeModel(),
-            # stt=deepgram.STT(),
-            # llm=openai.LLM(model="gpt-4o-mini"),
-            # tts=cartesia.TTS(),
-        )
+    agent = Agent(instructions="Talk to me!")
+    session = AgentSession(
+        llm=openai.realtime.RealtimeModel(),
+        # stt=deepgram.STT(),
+        # llm=openai.LLM(model="gpt-4o-mini"),
+        # tts=cartesia.TTS(),
     )
 
     # wait for the participant to join the room and the avatar worker to connect
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
     # connect the output audio to the avatar runner
-    agent.output.audio = DataStreamAudioSink(ctx.room, destination_identity=AVATAR_IDENTITY)
+    session.output.audio = DataStreamAudioOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
 
     # start agent with room input and room text output
-    await agent.start(
+    await session.start(
+        agent=agent,
         room=ctx.room,
         room_output_options=RoomOutputOptions(
             audio_enabled=False,
             transcription_enabled=True,
-            agent_transcription_identity=AVATAR_IDENTITY,
         ),
     )
 
-    @agent.output.audio.on("playback_finished")
+    @session.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
             "playback_finished",

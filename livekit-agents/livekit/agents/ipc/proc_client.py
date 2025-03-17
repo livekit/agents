@@ -5,19 +5,14 @@ import contextlib
 import logging
 import socket
 import sys
-from typing import Callable, Coroutine
+from collections.abc import Coroutine
+from typing import Callable
 
 from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
 from .channel import Message, arecv_message, asend_message, recv_message, send_message
 from .log_queue import LogQueueHandler
-from .proto import (
-    IPC_MESSAGES,
-    InitializeRequest,
-    InitializeResponse,
-    PingRequest,
-    PongResponse,
-)
+from .proto import IPC_MESSAGES, InitializeRequest, InitializeResponse, PingRequest, PongResponse
 
 
 class _ProcClient:
@@ -25,7 +20,7 @@ class _ProcClient:
         self,
         mp_cch: socket.socket,
         log_cch: socket.socket | None,
-        initialize_fnc: Callable[[InitializeRequest, "_ProcClient"], None],
+        initialize_fnc: Callable[[InitializeRequest, _ProcClient], None],
         main_task_fnc: Callable[[aio.ChanReceiver[Message]], Coroutine[None, None, None]],
     ) -> None:
         self._mp_cch = mp_cch

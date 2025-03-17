@@ -2,7 +2,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from itertools import cycle
-from typing import Dict, Optional
+from typing import Optional
 
 from livekit import api, rtc
 
@@ -34,7 +34,7 @@ class StreamPrinter:
         self.running = True
 
         self.color_cycle = cycle(COLORS)
-        self._color_map: Dict[str, str] = {}
+        self._color_map: dict[str, str] = {}
         self._current_stream_id: str | None = None
 
         self.printer_task = asyncio.create_task(self.printer_loop())

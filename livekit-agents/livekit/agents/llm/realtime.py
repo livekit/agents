@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import AsyncIterable, Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -62,7 +63,7 @@ class RealtimeModel:
         return self._capabilities
 
     @abstractmethod
-    def session(self) -> "RealtimeSession": ...
+    def session(self) -> RealtimeSession: ...
 
     @abstractmethod
     async def aclose(self) -> None: ...
@@ -72,7 +73,6 @@ EventTypes = Literal[
     "input_speech_started",  # serverside VAD (also used for interruptions)
     "input_speech_stopped",  # serverside VAD
     "input_audio_transcription_completed",
-    "input_audio_transcription_failed",
     "generation_created",
     "error",
 ]
@@ -86,14 +86,6 @@ class InputTranscriptionCompleted:
     """id of the item"""
     transcript: str
     """transcript of the input audio"""
-
-
-@dataclass
-class InputTranscriptionFailed:
-    item_id: str
-    """id of the item"""
-    message: str
-    """error message"""
 
 
 class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
@@ -111,7 +103,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
 
     @property
     @abstractmethod
-    def fnc_ctx(self) -> llm.FunctionContext: ...
+    def tools(self) -> llm.ToolContext: ...
 
     @abstractmethod
     async def update_instructions(self, instructions: str) -> None: ...
@@ -122,7 +114,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     ) -> None: ...  # can raise RealtimeError on Timeout
 
     @abstractmethod
-    async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]) -> None: ...
+    async def update_tools(self, tools: list[llm.FunctionTool]) -> None: ...
 
     @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...

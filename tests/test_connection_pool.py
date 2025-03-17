@@ -1,6 +1,7 @@
 import time
 
 import pytest
+
 from livekit.agents.utils import ConnectionPool
 
 

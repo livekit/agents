@@ -14,8 +14,9 @@
 
 import asyncio
 import io
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import AsyncIterator, Optional
+from typing import Optional
 
 from livekit.agents.log import logger
 from livekit.agents.utils import aio

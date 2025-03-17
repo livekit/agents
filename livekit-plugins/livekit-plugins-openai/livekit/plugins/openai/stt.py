@@ -19,6 +19,8 @@ import os
 from dataclasses import dataclass
 
 import httpx
+
+import openai
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
@@ -28,8 +30,6 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.utils import AudioBuffer
-
-import openai
 
 from .models import GroqAudioModels, WhisperModels
 

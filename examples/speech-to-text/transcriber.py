@@ -2,15 +2,9 @@ import asyncio
 import logging
 
 from dotenv import load_dotenv
+
 from livekit import rtc
-from livekit.agents import (
-    AutoSubscribe,
-    JobContext,
-    WorkerOptions,
-    cli,
-    stt,
-    transcription,
-)
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, stt, transcription
 from livekit.plugins import openai, silero
 
 load_dotenv()

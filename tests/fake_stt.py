@@ -58,7 +58,7 @@ class FakeSTT(STT):
         return self._recognize_ch
 
     @property
-    def stream_ch(self) -> utils.aio.ChanReceiver["FakeRecognizeStream"]:
+    def stream_ch(self) -> utils.aio.ChanReceiver[FakeRecognizeStream]:
         return self._stream_ch
 
     async def _recognize_impl(
@@ -94,7 +94,7 @@ class FakeSTT(STT):
         *,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "FakeRecognizeStream":
+    ) -> FakeRecognizeStream:
         stream = FakeRecognizeStream(
             stt=self,
             conn_options=conn_options,

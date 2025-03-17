@@ -1,34 +1,29 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, AsyncIterable, Generic, Optional, TypeVar, Union
+from collections.abc import AsyncIterable
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
-from ..llm import (
-    AIError,
-    AIFunction,
-    ChatContext,
-    FunctionContext,
-    find_ai_functions,
-)
+from ..llm import ChatContext, FunctionTool, ToolError, find_function_tools
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
 
 if TYPE_CHECKING:
-    from .task_activity import TaskActivity
-    from .voice_agent import VoiceAgent
+    from .agent_activity import AgentActivity
+    from .agent_session import AgentSession
 
 
-class AgentTask:
+class Agent:
     def __init__(
         self,
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.AIFunction] = [],
+        tools: list[llm.FunctionTool] = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -36,28 +31,78 @@ class AgentTask:
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        if tools is None:
+            tools = []
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
-        self._fnc_ctx = FunctionContext(ai_functions + find_ai_functions(self))
+        self._tools = tools + find_function_tools(self)
         self._eou = turn_detector
         self._stt = stt
         self._llm = llm
         self._tts = tts
         self._vad = vad
         self._allow_interruptions = allow_interruptions
-        self._activity: TaskActivity | None = None
+        self._activity: AgentActivity | None = None
 
     @property
     def instructions(self) -> str:
         return self._instructions
 
     @property
-    def ai_functions(self) -> list[llm.AIFunction]:
-        return list(self._fnc_ctx.ai_functions.values())
+    def tools(self) -> list[llm.FunctionTool]:
+        return self._tools.copy()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx
+        return self._chat_ctx.copy()
+
+    async def update_instructions(self, instructions: str) -> None:
+        """
+        Updates the agent's instructions.
+
+        If the agent is running in realtime mode, this method also updates the instructions
+        for the ongoing realtime session.
+
+        Raises:
+            llm.RealtimeError: If updating the realtime session instructions fails.
+        """
+        if self._activity is None:
+            self._instructions = instructions
+            return
+
+        await self._activity.update_instructions(instructions)
+
+    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
+        """
+        Updates the agent's tools.
+
+        If the agent is running in realtime mode, this method also updates the tools
+        for the ongoing realtime session.
+
+        Raises:
+            llm.RealtimeError: If updating the realtime session tools fails.
+        """
+        if self._activity is None:
+            self._tools = list(set(tools))
+            return
+
+        await self._activity.update_tools(tools)
+
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        """
+        Updates the agent's chat context.
+
+        If the agent is running in realtime mode, this method also updates the chat
+        context for the ongoing realtime session.
+
+        Raises:
+            llm.RealtimeError: If updating the realtime session chat context fails.
+        """
+        if self._activity is None:
+            self._chat_ctx = chat_ctx.copy()
+            return
+
+        await self._activity.update_chat_ctx(chat_ctx)
 
     @property
     def turn_detector(self) -> NotGivenOr[_TurnDetector | None]:
@@ -84,12 +129,25 @@ class AgentTask:
         return self._allow_interruptions
 
     @property
-    def agent(self) -> VoiceAgent:
+    def realtime_llm_session(self) -> llm.RealtimeSession:
         """
-        Retrieve the VoiceAgent associated with the current task;.
+        Retrieve the realtime LLM session associated with the current agent.
 
         Raises:
-            RuntimeError: If the task is not running
+            RuntimeError: If the agent is not running or the realtime LLM session is not available
+        """
+        if (rt_session := self.__get_activity_or_raise().realtime_llm_session) is None:
+            raise RuntimeError("no realtime LLM session")
+
+        return rt_session
+
+    @property
+    def session(self) -> AgentSession:
+        """
+        Retrieve the VoiceAgent associated with the current agent.
+
+        Raises:
+            RuntimeError: If the agent is not running
         """
         return self.__get_activity_or_raise().agent
 
@@ -115,7 +173,7 @@ class AgentTask:
 
     async def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame]
-    ) -> Optional[AsyncIterable[stt.SpeechEvent]]:
+    ) -> AsyncIterable[stt.SpeechEvent] | None:
         activity = self.__get_activity_or_raise()
         assert activity.stt is not None, "stt_node called but no STT node is available"
 
@@ -124,10 +182,8 @@ class AgentTask:
         if not activity.stt.capabilities.streaming:
             if not activity.vad:
                 raise RuntimeError(
-                    (
-                        f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"
-                        "Or manually wrap your STT in a stt.StreamAdapter"
-                    )
+                    f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"
+                    "Or manually wrap your STT in a stt.StreamAdapter"
                 )
 
             wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
@@ -147,19 +203,15 @@ class AgentTask:
                 await utils.aio.cancel_and_wait(forward_task)
 
     async def llm_node(
-        self, chat_ctx: llm.ChatContext, fnc_ctx: list[AIFunction]
-    ) -> Union[
-        Optional[AsyncIterable[llm.ChatChunk]],
-        Optional[AsyncIterable[str]],
-        Optional[str],
-    ]:
+        self, chat_ctx: llm.ChatContext, tools: list[FunctionTool]
+    ) -> AsyncIterable[llm.ChatChunk] | None | AsyncIterable[str] | None | str | None:
         activity = self.__get_activity_or_raise()
         assert activity.llm is not None, "llm_node called but no LLM node is available"
         assert isinstance(activity.llm, llm.LLM), (
             "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
         )
 
-        async with activity.llm.chat(chat_ctx=chat_ctx, fnc_ctx=fnc_ctx) as stream:
+        async with activity.llm.chat(chat_ctx=chat_ctx, tools=tools) as stream:
             async for chunk in stream:
                 yield chunk
 
@@ -168,7 +220,7 @@ class AgentTask:
         async for delta in text:
             yield delta
 
-    async def tts_node(self, text: AsyncIterable[str]) -> Optional[AsyncIterable[rtc.AudioFrame]]:
+    async def tts_node(self, text: AsyncIterable[str]) -> AsyncIterable[rtc.AudioFrame] | None:
         activity = self.__get_activity_or_raise()
         assert activity.tts is not None, "tts_node called but no TTS node is available"
 
@@ -194,7 +246,7 @@ class AgentTask:
             finally:
                 await utils.aio.cancel_and_wait(forward_task)
 
-    def __get_activity_or_raise(self) -> TaskActivity:
+    def __get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:
             raise RuntimeError("no activity context found, this task is not running")
@@ -205,23 +257,26 @@ class AgentTask:
 TaskResult_T = TypeVar("TaskResult_T")
 
 
-class InlineTask(AgentTask, Generic[TaskResult_T]):
+# TODO: rename to InlineAgent?
+class InlineTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.AIFunction] = [],
+        ai_functions: list[llm.FunctionTool] = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
+        if ai_functions is None:
+            ai_functions = []
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            ai_functions=ai_functions,
+            tools=ai_functions,
             turn_detector=turn_detector,
             stt=stt,
             vad=vad,
@@ -232,11 +287,11 @@ class InlineTask(AgentTask, Generic[TaskResult_T]):
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
 
-    def complete(self, result: TaskResult_T | AIError) -> None:
+    def complete(self, result: TaskResult_T | ToolError) -> None:
         if self.__fut.done():
             raise RuntimeError(f"{self.__class__.__name__} is already done")
 
-        if isinstance(result, AIError):
+        if isinstance(result, ToolError):
             self.__fut.set_exception(result)
         else:
             self.__fut.set_result(result)
