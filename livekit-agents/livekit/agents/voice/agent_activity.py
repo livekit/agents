@@ -587,8 +587,12 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)
 
-        tr_output = self._session.output.transcription
-        audio_output = self._session.output.audio
+        tr_output = (
+            self._session.output.transcription
+            if self._session.output.transcription_enabled
+            else None
+        )
+        audio_output = self._session.output.audio if self._session.output.audio_enabled else None
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
@@ -676,8 +680,12 @@ class AgentActivity(RecognitionHooks):
             "generation started", speech_id=speech_handle.id, step_index=speech_handle.step_index
         )
 
-        audio_output = self._session.output.audio
-        text_output = self._session.output.transcription
+        audio_output = self._session.output.audio if self._session.output.audio_enabled else None
+        text_output = (
+            self._session.output.transcription
+            if self._session.output.transcription_enabled
+            else None
+        )
         chat_ctx = chat_ctx.copy()
         tool_ctx = llm.ToolContext(tools)
 
@@ -896,8 +904,12 @@ class AgentActivity(RecognitionHooks):
             realtime=True,
         )
 
-        audio_output = self._session.output.audio
-        text_output = self._session.output.transcription
+        audio_output = self._session.output.audio if self._session.output.audio_enabled else None
+        text_output = (
+            self._session.output.transcription
+            if self._session.output.transcription_enabled
+            else None
+        )
         tool_ctx = llm.ToolContext(self._agent.tools)
 
         await speech_handle.wait_if_not_interrupted(
@@ -1044,7 +1056,9 @@ class AgentActivity(RecognitionHooks):
                     ),
                 )
                 self._create_task(
-                    self._realtime_reply_task(speech_handle=handle),
+                    self._realtime_reply_task(
+                        speech_handle=handle, user_input=None, instructions=None
+                    ),
                     owned_speech_handle=handle,
                     name="TaskActivity.realtime_reply",
                 )

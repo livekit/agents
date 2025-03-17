@@ -25,8 +25,13 @@ class EchoAgent(Agent):
             tts=cartesia.TTS(),
         )
 
+    async def on_enter(self):
+        self.session.generate_reply()
+
+
     @function_tool
     async def talk_to_alloy(self, context: CallContext):
+        """Called when want to talk to Alloy."""
         return AlloyAgent(), "Transferring you to Alloy."
 
 
@@ -37,8 +42,12 @@ class AlloyAgent(Agent):
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
 
+    async def on_enter(self):
+        self.session.generate_reply()
+
     @function_tool
     async def talk_to_echo(self, context: CallContext):
+        """Called when want to talk to Echo."""
         return EchoAgent(), "Transferring you to Echo."
 
 
@@ -55,15 +64,6 @@ async def entrypoint(ctx: JobContext):
         ),
         room_output_options=RoomOutputOptions(transcription_enabled=True)
     )
-
-    from livekit.agents.voice.io import PlaybackFinishedEvent
-
-    @session.output.audio.on("playback_finished")
-    def on_playback_finished(ev: PlaybackFinishedEvent):
-        logger.info(
-            "playback finished",
-            extra={"playback_position": ev.playback_position, "interrupted": ev.interrupted},
-        )
 
 
 if __name__ == "__main__":

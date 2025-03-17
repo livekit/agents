@@ -327,7 +327,8 @@ class TextSynchronizer:
         self._base_text_output = text_output
         self._text_output = _TextOutput(self)
         self._audio_output = _AudioSyncOutput(audio_output, self)
-
+        self._text_attached = True
+        self._audio_attached = True
         self._tasks: set[asyncio.Task] = set()
         self._main_task = asyncio.create_task(self._forward_event())
 
@@ -369,6 +370,16 @@ class TextSynchronizer:
         task = asyncio.create_task(current_synchronizer.aclose())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _on_output_attach_changed(
+        self, *, audio_attached: bool | None = None, text_attached: bool | None = None
+    ) -> None:
+        if audio_attached is not None:
+            self._audio_attached = audio_attached
+        if text_attached is not None:
+            self._text_attached = text_attached
+
+        self.set_sync_enabled(self._audio_attached and self._text_attached)
 
     async def aclose(self) -> None:
         """Close the forwarder and cleanup resources"""
@@ -439,6 +450,12 @@ class _AudioSyncOutput(AudioOutput):
             playback_position=ev.playback_position, interrupted=ev.interrupted
         )
 
+    def on_attached(self) -> None:
+        self._parent._on_output_attach_changed(audio_attached=True)
+
+    def on_detached(self) -> None:
+        self._parent._on_output_attach_changed(audio_attached=False)
+
 
 class _TextOutput(TextOutput):
     def __init__(self, parent: TextSynchronizer) -> None:
@@ -458,3 +475,9 @@ class _TextOutput(TextOutput):
             return
 
         self._parent._synchronizer.mark_text_segment_end()
+
+    def on_attached(self) -> None:
+        self._parent._on_output_attach_changed(text_attached=True)
+
+    def on_detached(self) -> None:
+        self._parent._on_output_attach_changed(text_attached=False)
