@@ -610,7 +610,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             logger.debug(
-                "received user transcript",
+                f"received user transcript - {new_transcript}",
                 extra={"user_transcript": new_transcript},
             )
             AppConfig().received_user_transcript_timestamp = time.time()
