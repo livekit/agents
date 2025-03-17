@@ -6,15 +6,16 @@ import cv2
 import numpy as np
 from bithuman_runtime import AsyncBithumanRuntime
 from dotenv import load_dotenv
+
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, utils
-from livekit.agents.llm import ai_function
-from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, AgentSession, CallContext
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
     AvatarRunner,
-    QueueAudioSink,
+    QueueAudioOutput,
     VideoGenerator,
 )
 from livekit.agents.voice.room_io import RoomOutputOptions
@@ -99,7 +100,7 @@ class BithumanGenerator(VideoGenerator):
         await self._runtime.stop()
 
 
-class EchoTask(AgentTask):
+class EchoAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Echo.",
@@ -109,31 +110,29 @@ class EchoTask(AgentTask):
             tts=cartesia.TTS(),
         )
 
-    @ai_function
+    @function_tool()
     async def talk_to_alloy(self, context: CallContext):
-        return AlloyTask(), "Transferring you to Alloy."
+        return AlloyAgent(), "Transferring you to Alloy."
 
 
-class AlloyTask(AgentTask):
+class AlloyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy.",
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
 
-    @ai_function
+    @function_tool()
     async def talk_to_echo(self, context: CallContext):
-        return EchoTask(), "Transferring you to Echo."
+        return EchoAgent(), "Transferring you to Echo."
 
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     # create agent
-    agent = VoiceAgent(
-        task=AlloyTask(),
-    )
-    agent.output.audio = QueueAudioSink()
+    session = AgentSession()
+    session.output.audio = QueueAudioOutput()
 
     # create video generator
     avatar_model = os.getenv("BITHUMAN_AVATAR_MODEL")
@@ -156,13 +155,14 @@ async def entrypoint(ctx: JobContext):
     avatar_runner = AvatarRunner(
         room=ctx.room,
         video_gen=video_gen,
-        audio_recv=agent.output.audio,
+        audio_recv=session.output.audio,
         options=avatar_options,
     )
     await avatar_runner.start()
 
     # start agent
-    await agent.start(
+    await session.start(
+        agent=AlloyAgent(),
         room=ctx.room,
         room_output_options=RoomOutputOptions(
             audio_enabled=False, audio_sample_rate=video_gen.audio_sample_rate

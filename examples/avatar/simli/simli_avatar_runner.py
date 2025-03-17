@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 import dotenv
+from simli import SimliClient, SimliConfig
+
 from livekit import rtc
 from livekit.agents import utils
 from livekit.agents.voice.avatar import (
@@ -16,7 +18,6 @@ from livekit.agents.voice.avatar import (
     DataStreamAudioReceiver,
     VideoGenerator,
 )
-from simli import SimliClient, SimliConfig
 
 dotenv.load_dotenv()
 
