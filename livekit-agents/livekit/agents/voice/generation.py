@@ -230,7 +230,7 @@ async def _audio_forwarding_task(
 
 def perform_tool_executions(
     *,
-    agent: AgentSession,
+    session: AgentSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -241,7 +241,7 @@ def perform_tool_executions(
     out: list[_PythonOutput] = []
     task = asyncio.create_task(
         _execute_tools_task(
-            agent=agent,
+            session=session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             function_stream=function_stream,
@@ -255,7 +255,7 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    agent: AgentSession,
+    session: AgentSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
     function_stream: AsyncIterable[llm.FunctionCall],
@@ -308,7 +308,7 @@ async def _execute_tools_task(
                 model=parsed_args,
                 function_tool=function_tool,
                 call_ctx=CallContext(
-                    agent=agent, speech_handle=speech_handle, function_call=fnc_call
+                    session=session, speech_handle=speech_handle, function_call=fnc_call
                 ),
             )
 
