@@ -141,12 +141,12 @@ def serialize_image(image: llm.ImageContent) -> SerializedImage:
 
 
 def build_legacy_openai_schema(
-    ai_function: FunctionTool, *, internally_tagged: bool = False
+    function_tool: FunctionTool, *, internally_tagged: bool = False
 ) -> dict[str, Any]:
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
-    model = function_arguments_to_pydantic_model(ai_function)
-    info = get_function_info(ai_function)
+    model = function_arguments_to_pydantic_model(function_tool)
+    info = get_function_info(function_tool)
     schema = model.model_json_schema()
 
     if internally_tagged:
@@ -168,11 +168,11 @@ def build_legacy_openai_schema(
 
 
 def build_strict_openai_schema(
-    ai_function: FunctionTool,
+    function_tool: FunctionTool,
 ) -> dict[str, Any]:
     """strict mode tool description"""
-    model = function_arguments_to_pydantic_model(ai_function)
-    info = get_function_info(ai_function)
+    model = function_arguments_to_pydantic_model(function_tool)
+    info = get_function_info(function_tool)
     schema = _strict.to_strict_json_schema(model)
 
     return {
@@ -234,7 +234,7 @@ def function_arguments_to_pydantic_model(func: Callable) -> type[BaseModel]:
 
 def pydantic_model_to_function_arguments(
     *,
-    ai_function: Callable,
+    function_tool: Callable,
     model: BaseModel,
     call_ctx: CallContext | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
@@ -242,8 +242,8 @@ def pydantic_model_to_function_arguments(
     Convert a model’s fields into function args/kwargs.
     Raises TypeError if required params are missing
     """
-    signature = inspect.signature(ai_function)
-    type_hints = get_type_hints(ai_function, include_extras=True)
+    signature = inspect.signature(function_tool)
+    type_hints = get_type_hints(function_tool, include_extras=True)
 
     context_dict = {}
     for param_name, _ in signature.parameters.items():

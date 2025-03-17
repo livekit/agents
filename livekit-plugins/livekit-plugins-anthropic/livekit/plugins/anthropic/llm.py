@@ -231,7 +231,7 @@ class LLMStream(llm.LLMStream):
 
                 self._event_ch.send_nowait(
                     llm.ChatChunk(
-                        request_id=self._request_id,
+                        id=self._request_id,
                         usage=llm.CompletionUsage(
                             completion_tokens=self._output_tokens,
                             prompt_tokens=self._input_tokens,
@@ -244,15 +244,15 @@ class LLMStream(llm.LLMStream):
                         ),
                     )
                 )
-        except anthropic.APITimeoutError:
-            raise APITimeoutError(retryable=retryable)
+        except anthropic.APITimeoutError as e:
+            raise APITimeoutError(retryable=retryable) from e
         except anthropic.APIStatusError as e:
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
-            )
+            ) from e
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 

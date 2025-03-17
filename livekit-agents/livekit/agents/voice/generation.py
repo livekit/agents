@@ -269,7 +269,7 @@ async def _execute_tools_task(
     tasks: list[asyncio.Task] = []
     try:
         async for fnc_call in function_stream:
-            if (ai_function := tool_ctx.function_tools.get(fnc_call.name)) is None:
+            if (function_tool := tool_ctx.function_tools.get(fnc_call.name)) is None:
                 logger.warning(
                     f"unknown AI function `{fnc_call.name}`",
                     extra={
@@ -280,8 +280,9 @@ async def _execute_tools_task(
                 continue
 
             try:
-                function_model = llm_utils.function_arguments_to_pydantic_model(ai_function)
-                parsed_args = function_model.model_validate_json(fnc_call.arguments)
+                function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
+                json_args = fnc_call.arguments or "{}"
+                parsed_args = function_model.model_validate_json(json_args)
 
             except ValidationError:
                 logger.exception(
@@ -305,7 +306,7 @@ async def _execute_tools_task(
 
             fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
                 model=parsed_args,
-                ai_function=ai_function,
+                function_tool=function_tool,
                 call_ctx=CallContext(
                     agent=agent, speech_handle=speech_handle, function_call=fnc_call
                 ),
@@ -318,8 +319,8 @@ async def _execute_tools_task(
             )
 
             task = asyncio.create_task(
-                ai_function(*fnc_args, **fnc_kwargs),
-                name=f"ai_function_{fnc_call.name}",
+                function_tool(*fnc_args, **fnc_kwargs),
+                name=f"function_tool_{fnc_call.name}",
             )
             tasks.append(task)
             _authorize_inline_task(task)
@@ -418,6 +419,7 @@ class _PythonOutput:
             return _SanitizedOutput(
                 fnc_call=self.fnc_call.model_copy(),
                 fnc_call_out=llm.FunctionCallOutput(
+                    name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
                     output=self.exception.message,
                     is_error=True,
@@ -436,6 +438,7 @@ class _PythonOutput:
             return _SanitizedOutput(
                 fnc_call=self.fnc_call.model_copy(),
                 fnc_call_out=llm.FunctionCallOutput(
+                    name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
                     output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information
                     is_error=True,
@@ -501,6 +504,7 @@ class _PythonOutput:
             fnc_call=self.fnc_call.model_copy(),
             fnc_call_out=(
                 llm.FunctionCallOutput(
+                    name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
                     output=str(fnc_out),  # take the string representation of the output
                     is_error=False,

@@ -264,19 +264,19 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.FunctionTool] = None,
+        tools: list[llm.FunctionTool] = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
-        if ai_functions is None:
-            ai_functions = []
+        if tools is None:
+            tools = []
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            tools=ai_functions,
+            tools=tools,
             turn_detector=turn_detector,
             stt=stt,
             vad=vad,

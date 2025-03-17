@@ -77,7 +77,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
                     "toolUse": {
                         "toolUseId": msg.call_id,
                         "name": msg.name,
-                        "input": json.loads(msg.arguments),
+                        "input": json.loads(msg.arguments or "{}"),
                     }
                 }
             )

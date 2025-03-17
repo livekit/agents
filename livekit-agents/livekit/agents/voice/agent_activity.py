@@ -1044,7 +1044,9 @@ class AgentActivity(RecognitionHooks):
                     ),
                 )
                 self._create_task(
-                    self._realtime_reply_task(speech_handle=handle),
+                    self._realtime_reply_task(
+                        speech_handle=handle, user_input=None, instructions=None
+                    ),
                     owned_speech_handle=handle,
                     name="TaskActivity.realtime_reply",
                 )
