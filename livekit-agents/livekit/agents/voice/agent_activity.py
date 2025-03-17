@@ -690,7 +690,8 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(tools)
 
         if user_input is not None:
-            chat_ctx.add_message(role="user", content=user_input)
+            user_msg = chat_ctx.add_message(role="user", content=user_input)
+            self._agent._chat_ctx.items.append(user_msg)
 
         if instructions is not None:
             try:
