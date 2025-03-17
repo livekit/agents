@@ -569,6 +569,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         def _on_start_of_speech(ev: vad.VADEvent) -> None:
             self._plotter.plot_event("user_started_speaking")
             self.emit("user_started_speaking")
+            logger.info("User started speaking so starting validation")
             self._deferred_validation.on_human_start_of_speech(ev)
 
         def _on_vad_inference_done(ev: vad.VADEvent) -> None:
@@ -599,6 +600,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         def _on_end_of_speech(ev: vad.VADEvent) -> None:
             self._plotter.plot_event("user_stopped_speaking")
             self.emit("user_stopped_speaking")
+            logger.info("User stopped speaking so starting validation")
             self._deferred_validation.on_human_end_of_speech(ev)
 
         def _on_interim_transcript(ev: stt.SpeechEvent) -> None:
@@ -628,6 +630,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 ):
                     self._synthesize_agent_reply()
 
+            logger.info(f"Validating final transcript and starting deferred validation")
             self._deferred_validation.on_human_final_transcript(
                 new_transcript, ev.alternatives[0].language
             )
@@ -1255,6 +1258,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _validate_reply_if_possible(self) -> None:
         """Check if the new agent speech should be played"""
+
+        logger.info(f"Validating reply - {self._transcribed_text}")
 
         if "potential_user_question" not in AppConfig().call_metadata:
             AppConfig().call_metadata["potential_user_question"] = ""
