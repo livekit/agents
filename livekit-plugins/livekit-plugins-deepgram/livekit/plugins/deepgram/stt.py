@@ -447,13 +447,13 @@ class SpeechStream(stt.SpeechStream):
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
-
+            logger.info("inside send_task")
             # forward audio to deepgram in chunks of 50ms
-            samples_50ms = self._opts.sample_rate // 20
+            samples_20ms = self._opts.sample_rate // 50
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=self._opts.num_channels,
-                samples_per_channel=samples_50ms,
+                samples_per_channel=samples_20ms,
             )
 
             has_ended = False
