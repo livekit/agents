@@ -5,6 +5,7 @@ import base64
 import contextlib
 import json
 import os
+import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal, Union
@@ -134,6 +135,12 @@ class RealtimeModel(llm.RealtimeModel):
             base_url=base_url,
         )
         self._http_session = http_session
+        self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    def update_options(self, *, voice: str) -> None:
+        self._opts.voice = voice
+        for sess in self._sessions:
+            sess.update_options(voice=voice)
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
@@ -142,7 +149,9 @@ class RealtimeModel(llm.RealtimeModel):
         return self._http_session
 
     def session(self) -> RealtimeSession:
-        return RealtimeSession(self)
+        sess = RealtimeSession(self)
+        self._sessions.add(sess)
+        return sess
 
     async def aclose(self) -> None: ...
 
@@ -388,6 +397,15 @@ class RealtimeSession(
     @property
     def tools(self) -> llm.ToolContext:
         return self._tools.copy()
+
+    def update_options(self, *, voice: str) -> None:
+        self.send_event(
+            SessionUpdateEvent(
+                type="session.update",
+                session=session_update_event.Session.model_construct(voice=voice),
+                event_id=utils.shortuuid("options_update_"),
+            )
+        )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
