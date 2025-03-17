@@ -724,9 +724,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self, old_task: asyncio.Task[None], handle: SpeechHandle
     ) -> None:
         user_input = handle.user_question
-        if not user_input.strip():
-            logger.info("User input is empty, skipping synthesis")
-            return
         if old_task is not None:
             await utils.aio.gracefully_cancel(old_task)
 
@@ -1260,6 +1257,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """Check if the new agent speech should be played"""
 
         logger.info(f"Validating reply - {self._transcribed_text}")
+
+        if not self._transcribed_text.strip():
+            logger.info("Transcribed text is empty, skipping validation")
+            return
 
         if "potential_user_question" not in AppConfig().call_metadata:
             AppConfig().call_metadata["potential_user_question"] = ""
