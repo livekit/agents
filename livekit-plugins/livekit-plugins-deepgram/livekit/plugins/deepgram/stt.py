@@ -107,6 +107,7 @@ class STTOptions:
     keyterms: list[str]
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
+    numerals: bool = False
 
 
 class STT(stt.STT):
@@ -131,6 +132,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
+        numerals: bool = False,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -156,6 +158,7 @@ class STT(stt.STT):
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             energy_filter: Audio energy filter configuration for voice activity detection.
                          Can be a boolean or AudioEnergyFilter instance. Defaults to False.
+            numerals: Whether to include numerals in the transcription. Defaults to False.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -196,6 +199,7 @@ class STT(stt.STT):
             keyterms=keyterms or [],
             profanity_filter=profanity_filter,
             energy_filter=energy_filter,
+            numerals=numerals,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -222,6 +226,7 @@ class STT(stt.STT):
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
+            "numerals": config.numerals,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -290,6 +295,7 @@ class STT(stt.STT):
         keywords: list[Tuple[str, float]] | None = None,
         keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
+        numerals: bool | None = None,
     ):
         if language is not None:
             self._opts.language = language
@@ -330,6 +336,7 @@ class STT(stt.STT):
                 keywords=keywords,
                 keyterms=keyterms,
                 profanity_filter=profanity_filter,
+                numerals=numerals,
             )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -400,6 +407,7 @@ class SpeechStream(stt.SpeechStream):
         keywords: list[Tuple[str, float]] | None = None,
         keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
+        numerals: bool | None = None,
     ):
         if language is not None:
             self._opts.language = language
@@ -425,6 +433,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.keyterms = keyterms
         if profanity_filter is not None:
             self._opts.profanity_filter = profanity_filter
+        if numerals is not None:
+            self._opts.numerals = numerals
 
         self._reconnect_event.set()
 
@@ -570,6 +580,7 @@ class SpeechStream(stt.SpeechStream):
             else self._opts.endpointing_ms,
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
+            "numerals": self._opts.numerals,
         }
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
