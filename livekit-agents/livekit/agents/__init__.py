@@ -12,18 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import (
-    cli,
-    ipc,
-    llm,
-    metrics,
-    stt,
-    tokenize,
-    tts,
-    utils,
-    vad,
-    voice,
-)
+from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -43,7 +32,7 @@ from .types import (
     NotGivenOr,
 )
 from .version import __version__
-from .voice import VoiceAgent
+from .voice import AgentSession
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
@@ -68,7 +57,7 @@ __all__ = [
     "llm",
     "metrics",
     "voice",
-    "VoiceAgent",
+    "AgentSession",
     "cli",
     "AssignmentTimeoutError",
     "APIConnectionError",

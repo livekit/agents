@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import aiohttp
 from aiobotocore.session import AioSession, get_session
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -27,8 +28,8 @@ from livekit.agents import (
     utils,
 )
 
-from ._utils import _get_aws_credentials
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
+from .utils import get_aws_credentials
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
@@ -85,12 +86,14 @@ class TTS(tts.TTS):
             num_channels=TTS_NUM_CHANNELS,
         )
 
-        self._api_key, self._api_secret = _get_aws_credentials(api_key, api_secret, speech_region)
+        self._api_key, self._api_secret, self._speech_region = get_aws_credentials(
+            api_key, api_secret, speech_region
+        )
 
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
-            speech_region=speech_region,
+            speech_region=self._speech_region,
             language=language,
             sample_rate=sample_rate,
         )
@@ -108,8 +111,8 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions | None = None,
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             text=text,
@@ -125,7 +128,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         text: str,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
         opts: _TTSOptions,
         get_client: Callable[[], Any],
     ) -> None:

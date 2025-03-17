@@ -2,9 +2,9 @@ import logging
 
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.agents.llm import ai_function
-from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
-from livekit.agents.voice.room_io import RoomInputOptions
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, AgentSession, CallContext
+from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
 from livekit.plugins import cartesia, deepgram, openai
 
 # from livekit.plugins import noise_cancellation
@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
-class EchoTask(AgentTask):
+class EchoAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Echo.",
@@ -25,35 +25,44 @@ class EchoTask(AgentTask):
             tts=cartesia.TTS(),
         )
 
-    @ai_function
+    async def on_enter(self):
+        self.session.generate_reply()
+
+
+    @function_tool
     async def talk_to_alloy(self, context: CallContext):
-        return AlloyTask(), "Transferring you to Alloy."
+        """Called when want to talk to Alloy."""
+        return AlloyAgent(), "Transferring you to Alloy."
 
 
-class AlloyTask(AgentTask):
+class AlloyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy.",
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
 
-    @ai_function
+    async def on_enter(self):
+        self.session.generate_reply()
+
+    @function_tool
     async def talk_to_echo(self, context: CallContext):
-        return EchoTask(), "Transferring you to Echo."
+        """Called when want to talk to Echo."""
+        return EchoAgent(), "Transferring you to Echo."
 
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    agent = VoiceAgent(
-        task=AlloyTask(),
-    )
+    session = AgentSession()
 
-    await agent.start(
+    await session.start(
+        agent=AlloyAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             # noise_cancellation=noise_cancellation.BVC(),
         ),
+        room_output_options=RoomOutputOptions(transcription_enabled=True)
     )
 
 

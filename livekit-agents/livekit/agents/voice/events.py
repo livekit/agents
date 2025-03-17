@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..llm import ChatMessage, FunctionCall
 from ..metrics import AgentMetrics
 from ..types import AgentState
+from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .speech_handle import SpeechHandle
-    from .voice_agent import VoiceAgent
+    from .agent_session import AgentSession
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -21,17 +21,17 @@ class CallContext(Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        agent: VoiceAgent,
+        session: AgentSession,
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
     ) -> None:
-        self._agent = agent
+        self._session = session
         self._speech_handle = speech_handle
         self._function_call = function_call
 
     @property
-    def agent(self) -> VoiceAgent[Userdata_T]:
-        return self._agent
+    def session(self) -> AgentSession[Userdata_T]:
+        return self._session
 
     @property
     def speech_handle(self) -> SpeechHandle:
@@ -43,7 +43,7 @@ class CallContext(Generic[Userdata_T]):
 
     @property
     def userdata(self) -> Userdata_T:
-        return self.agent.userdata
+        return self.session.userdata
 
 
 EventTypes = Literal[
@@ -55,6 +55,7 @@ EventTypes = Literal[
     "agent_state_changed",
     "conversation_item_added",
     "metrics_collected",
+    "speech_created",
 ]
 
 
@@ -95,6 +96,18 @@ class ConversationItemAddedEvent(BaseModel):
     message: ChatMessage
 
 
+class SpeechCreatedEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["speech_created"] = "speech_created"
+    user_initiated: bool
+    """True if the speech was created using public methods like `say` or `generate_reply`"""
+    source: Literal["say", "generate_reply", "tool_response"]
+    """Source indicating how the speech handle was created"""
+    speech_handle: SpeechHandle = Field(..., exclude=True)
+    """The speech handle that was created"""
+
+
 AgentEvent = Union[
     UserStartedSpeakingEvent,
     UserStoppedSpeakingEvent,
@@ -104,4 +117,5 @@ AgentEvent = Union[
     AgentStateChangedEvent,
     MetricsCollectedEvent,
     ConversationItemAddedEvent,
+    SpeechCreatedEvent,
 ]

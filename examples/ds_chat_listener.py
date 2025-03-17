@@ -2,7 +2,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from itertools import cycle
-from typing import Dict, Optional
+from typing import Optional
 
 from livekit import api, rtc
 
@@ -22,6 +22,7 @@ RESET = "\033[0m"  # Reset color
 @dataclass
 class StreamMessage:
     participant_identity: str
+    track_id: Optional[str]
     stream_id: str
     content: str
     final: Optional[bool] = None
@@ -33,7 +34,7 @@ class StreamPrinter:
         self.running = True
 
         self.color_cycle = cycle(COLORS)
-        self._color_map: Dict[str, str] = {}
+        self._color_map: dict[str, str] = {}
         self._current_stream_id: str | None = None
 
         self.printer_task = asyncio.create_task(self.printer_loop())
@@ -52,8 +53,9 @@ class StreamPrinter:
             if self._current_stream_id != msg.stream_id:
                 # print a new line if the stream id has changed
                 color = self.get_color(msg.participant_identity)
+                type = "transcript" if msg.track_id else "chat"
                 print(
-                    f"\n{color}[{msg.participant_identity}][{msg.stream_id}]: {RESET}",
+                    f"\n{color}[{msg.participant_identity}][{type}][{msg.stream_id}]: {RESET}",
                     end="",
                     flush=True,
                 )
@@ -96,15 +98,16 @@ async def main(room: rtc.Room, room_name: str):
     def on_text_received(reader: rtc.TextStreamReader, participant_identity: str):
         async def _on_text_received():
             stream_id = reader.info.stream_id
+            track_id = reader.info.attributes.get("lk.transcribed_track_id", None)
 
             async for chunk in reader:
                 await stream_printer.queue.put(
-                    StreamMessage(participant_identity, stream_id, content=chunk)
+                    StreamMessage(participant_identity, track_id, stream_id, content=chunk)
                 )
 
             final = reader.info.attributes.get("lk.transcription_final", "null")
             await stream_printer.queue.put(
-                StreamMessage(participant_identity, stream_id, content="", final=final)
+                StreamMessage(participant_identity, track_id, stream_id, content="", final=final)
             )
 
         task = asyncio.create_task(_on_text_received())

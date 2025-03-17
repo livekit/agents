@@ -21,11 +21,12 @@ import os
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
+
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -101,7 +102,7 @@ class STTOptions:
     filler_words: bool
     sample_rate: int
     num_channels: int
-    keywords: list[Tuple[str, float]]
+    keywords: list[tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
@@ -122,7 +123,7 @@ class STT(stt.STT):
         endpointing_ms: int = 25,
         # enable filler words by default to improve turn detector accuracy
         filler_words: bool = True,
-        keywords: list[Tuple[str, float]] | None = None,
+        keywords: list[tuple[str, float]] | None = None,
         keyterms: list[str] | None = None,
         profanity_filter: bool = False,
         api_key: str | None = None,
@@ -258,7 +259,7 @@ class STT(stt.STT):
         *,
         language: DeepgramLanguages | str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
@@ -283,7 +284,7 @@ class STT(stt.STT):
         no_delay: bool | None = None,
         endpointing_ms: int | None = None,
         filler_words: bool | None = None,
-        keywords: list[Tuple[str, float]] | None = None,
+        keywords: list[tuple[str, float]] | None = None,
         keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
     ):
@@ -368,7 +369,7 @@ class SpeechStream(stt.SpeechStream):
             duration=5.0,
         )
 
-        self._audio_energy_filter: Optional[AudioEnergyFilter] = None
+        self._audio_energy_filter: AudioEnergyFilter | None = None
         if opts.energy_filter:
             if isinstance(opts.energy_filter, AudioEnergyFilter):
                 self._audio_energy_filter = opts.energy_filter
@@ -391,7 +392,7 @@ class SpeechStream(stt.SpeechStream):
         no_delay: bool | None = None,
         endpointing_ms: int | None = None,
         filler_words: bool | None = None,
-        keywords: list[Tuple[str, float]] | None = None,
+        keywords: list[tuple[str, float]] | None = None,
         keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
     ):
@@ -449,7 +450,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            last_frame: Optional[rtc.AudioFrame] = None
+            last_frame: rtc.AudioFrame | None = None
             async for data in self._input_ch:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
@@ -655,7 +656,7 @@ class SpeechStream(stt.SpeechStream):
             logger.warning("received unexpected message from deepgram %s", data)
 
 
-def live_transcription_to_speech_data(language: str, data: dict) -> List[stt.SpeechData]:
+def live_transcription_to_speech_data(language: str, data: dict) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
     return [

@@ -4,9 +4,10 @@ import asyncio
 import base64
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Callable, Literal, Optional, Union
+from typing import Annotated, Callable, Literal
 
 import pytest
+
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FunctionContext, TypeInfo, ai_callable
 from livekit.plugins import anthropic, aws, google, openai
@@ -59,9 +60,9 @@ class FncCtx(FunctionContext):
     @ai_callable(description="Update user info")
     def update_user_info(
         self,
-        email: Annotated[Optional[str], TypeInfo(description="The user address email")] = None,
-        name: Annotated[Optional[str], TypeInfo(description="The user name")] = None,
-        address: Optional[Annotated[str, TypeInfo(description="The user address")]] = None,
+        email: Annotated[str | None, TypeInfo(description="The user address email")] = None,
+        name: Annotated[str | None, TypeInfo(description="The user name")] = None,
+        address: Annotated[str, TypeInfo(description="The user address")] | None = None,
     ) -> None: ...
 
 
@@ -336,7 +337,7 @@ test_tool_choice_cases = [
 async def test_tool_choice_options(
     description: str,
     user_request: str,
-    tool_choice: Union[dict, str, None],
+    tool_choice: dict | str | None,
     expected_calls: set,
     llm_factory: Callable[[], llm.LLM],
 ):
@@ -369,7 +370,7 @@ async def _request_fnc_call(
     fnc_ctx: FncCtx,
     temperature: float | None = None,
     parallel_tool_calls: bool | None = None,
-    tool_choice: Union[llm.ToolChoice, Literal["auto", "required", "none"]] | None = None,
+    tool_choice: llm.ToolChoice | Literal["auto", "required", "none"] | None = None,
 ) -> llm.LLMStream:
     stream = model.chat(
         chat_ctx=ChatContext()

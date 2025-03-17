@@ -52,7 +52,7 @@ def _ensure_strict_json_schema(
     # { 'type': 'object', 'properties': { 'a':  {...} } }
     properties = json_schema.get("properties")
     if is_dict(properties):
-        json_schema["required"] = [prop for prop in properties.keys()]
+        json_schema["required"] = list(properties.keys())
         json_schema["properties"] = {
             key: _ensure_strict_json_schema(prop_schema, path=(*path, "properties", key), root=root)
             for key, prop_schema in properties.items()

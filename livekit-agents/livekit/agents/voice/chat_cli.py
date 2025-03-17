@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING, Literal
 
 import click
 import numpy as np
+
 from livekit import rtc
 
 from ..log import logger
 from ..utils import aio, log_exceptions
 from . import io
-from .voice_agent import VoiceAgent
+from .agent_session import AgentSession
 
 if TYPE_CHECKING:
     import sounddevice as sd
@@ -36,8 +37,16 @@ def _normalize_db(amplitude_db: float, db_min: float, db_max: float) -> float:
     return (amplitude_db - db_min) / (db_max - db_min)
 
 
-class _TextSink(io.TextSink):
-    def __init__(self, cli: "ChatCLI") -> None:
+class _AudioInput(io.AudioInput):
+    def __init__(self, cli: ChatCLI) -> None:
+        self._cli = cli
+
+    async def __anext__(self) -> rtc.AudioFrame:
+        return await self._cli._audio_input_ch.__anext__()
+
+
+class _TextOutput(io.TextOutput):
+    def __init__(self, cli: ChatCLI) -> None:
         self._cli = cli
         self._capturing = False
 
@@ -56,8 +65,8 @@ class _TextSink(io.TextSink):
             self._capturing = False
 
 
-class _AudioSink(io.AudioSink):
-    def __init__(self, cli: "ChatCLI") -> None:
+class _AudioOutput(io.AudioOutput):
+    def __init__(self, cli: ChatCLI) -> None:
         super().__init__(sample_rate=24000)
         self._cli = cli
         self._capturing = False
@@ -129,7 +138,7 @@ class _AudioSink(io.AudioSink):
 class ChatCLI:
     def __init__(
         self,
-        agent: VoiceAgent,
+        agent: AgentSession,
         *,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -146,8 +155,8 @@ class ChatCLI:
 
         self._text_input_buf = []
 
-        self._text_sink = _TextSink(self)
-        self._audio_sink = _AudioSink(self)
+        self._text_sink = _TextOutput(self)
+        self._audio_sink = _AudioOutput(self)
 
         self._apm = rtc.AudioProcessingModule(
             echo_cancellation=True,
@@ -236,7 +245,7 @@ class ChatCLI:
                 blocksize=240,
             )
             self._input_stream.start()
-            self._agent.input.audio = self._audio_input_ch
+            self._agent.input.audio = _AudioInput(self)
         elif self._input_stream is not None:
             self._input_stream.stop()
             self._input_stream.close()

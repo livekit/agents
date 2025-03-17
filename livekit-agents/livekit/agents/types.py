@@ -12,6 +12,8 @@ class AgentState(str, Enum):
     SPEAKING = "speaking"
 
 
+ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
+ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"
 """
 The state of the agent, stored in the agent's attributes.
@@ -23,6 +25,8 @@ With components-js, this can be easily retrieved using:
 const { state, ... } = useVoiceAssistant();
 ```
 """
+
+TOPIC_CHAT = "lk.chat"
 
 
 _T = TypeVar("_T")

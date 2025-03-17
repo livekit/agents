@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from livekit import rtc
 from livekit.agents import utils
@@ -58,7 +57,7 @@ class AvatarRunner:
             video_fps=options.video_fps,
             video_queue_size_ms=self._queue_size_ms,
         )
-        self._publish_video_atask: Optional[asyncio.Task[None]] = None
+        self._publish_video_atask: asyncio.Task[None] | None = None
 
     @property
     def av_sync(self) -> rtc.AVSynchronizer:

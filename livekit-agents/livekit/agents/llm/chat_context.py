@@ -14,33 +14,28 @@
 
 from __future__ import annotations
 
-from typing import (
-    Annotated,
-    Any,
-    Literal,
-    Optional,
-    Union,
-)
+from typing import Annotated, Any, Literal, Union
+
+from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
+from typing_extensions import TypeAlias
 
 from livekit import rtc
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.misc import is_given
-from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
-from typing_extensions import TypeAlias
 
 from .. import utils
 
 
 class ImageContent(BaseModel):
     """
-    ChatImage is used to input images into the ChatContext on supported LLM providers / plugins.
+    ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.
 
     You may need to consult your LLM provider's documentation on supported URL types.
 
     ```python
     # Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally
     async for event in rtc.VideoStream(video_track):
-        chat_image = ChatImage(image=event.frame)
+        chat_image = ImageContent(image=event.frame)
         # this instance is now available for your ChatContext
 
     # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
@@ -53,33 +48,33 @@ class ImageContent(BaseModel):
             resize_options=ResizeOptions(width=512, height=512, strategy="scale_aspect_fit"),
         ),
     )
-    chat_image = ChatImage(
+    chat_image = ImageContent(
         image=f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
     )
 
     # With an external URL
-    chat_image = ChatImage(image="https://example.com/image.jpg")
+    chat_image = ImageContent(image="https://example.com/image.jpg")
     ```
     """
 
     type: Literal["image_content"] = Field(default="image_content")
 
-    image: Union[str, rtc.VideoFrame]
+    image: str | rtc.VideoFrame
     """
     Either a string URL or a VideoFrame object
     """
-    inference_width: Optional[int] = None
+    inference_width: int | None = None
     """
     Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
     """
-    inference_height: Optional[int] = None
+    inference_height: int | None = None
     """
     Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
     """
     inference_detail: Literal["auto", "high", "low"] = "auto"
     """
     Detail parameter for LLM provider, if supported.
-    
+
     Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
     """
     _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
@@ -88,7 +83,7 @@ class ImageContent(BaseModel):
 class AudioContent(BaseModel):
     type: Literal["audio_content"] = Field(default="audio_content")
     frame: list[rtc.AudioFrame]
-    transcript: Optional[str] = None
+    transcript: str | None = None
 
 
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
@@ -100,7 +95,7 @@ class ChatMessage(BaseModel):
     role: ChatRole
     content: list[ChatContent]
     interrupted: bool = False
-    hash: Optional[bytes] = None
+    hash: bytes | None = None
 
 
 ChatContent = Union[ImageContent, AudioContent, str]
@@ -116,6 +111,7 @@ class FunctionCall(BaseModel):
 
 class FunctionCallOutput(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+    name: str = Field(default="")
     type: Literal["function_call_output"] = Field(default="function_call_output")
     call_id: str
     output: str
@@ -132,7 +128,7 @@ class ChatContext:
         self._items: list[ChatItem] = items if is_given(items) else []
 
     @classmethod
-    def empty(cls) -> "ChatContext":
+    def empty(cls) -> ChatContext:
         return cls([])
 
     @property
@@ -161,7 +157,7 @@ class ChatContext:
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
 
-    def copy(self) -> "ChatContext":
+    def copy(self) -> ChatContext:
         return ChatContext(self.items.copy())
 
     def to_dict(
@@ -190,7 +186,7 @@ class ChatContext:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ChatContext":
+    def from_dict(cls, data: dict) -> ChatContext:
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)

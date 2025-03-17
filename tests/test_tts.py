@@ -7,20 +7,11 @@ import dataclasses
 from typing import Callable
 
 import pytest
+
 from livekit import agents
 from livekit.agents import APIConnectionError, tokenize, tts
 from livekit.agents.utils import AudioBuffer, merge_frames
-from livekit.plugins import (
-    aws,
-    azure,
-    cartesia,
-    deepgram,
-    elevenlabs,
-    google,
-    openai,
-    playai,
-    rime,
-)
+from livekit.plugins import aws, azure, cartesia, deepgram, elevenlabs, google, openai, playai, rime
 
 from .conftest import TEST_CONNECT_OPTIONS
 from .fake_tts import FakeTTS

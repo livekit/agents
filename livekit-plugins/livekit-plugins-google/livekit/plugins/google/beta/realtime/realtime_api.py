@@ -3,13 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
-
-from livekit import rtc
-from livekit.agents import llm, utils
-from livekit.agents.llm.function_context import _create_ai_function_info
-from livekit.agents.utils import images
+from typing import Literal
 
 from google import genai
 from google.genai._api_client import HttpOptions
@@ -29,15 +25,13 @@ from google.genai.types import (
     Tool,
     VoiceConfig,
 )
+from livekit import rtc
+from livekit.agents import llm, utils
+from livekit.agents.llm.function_context import _create_ai_function_info
+from livekit.agents.utils import images
 
 from ...log import logger
-from .api_proto import (
-    ClientEvents,
-    LiveAPIModels,
-    Voice,
-    _build_gemini_ctx,
-    _build_tools,
-)
+from .api_proto import ClientEvents, LiveAPIModels, Voice, _build_gemini_ctx, _build_tools
 from .transcriber import ModelTranscriber, TranscriberSession, TranscriptionContent
 
 EventTypes = Literal[
@@ -108,7 +102,7 @@ class RealtimeModel:
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = ["AUDIO"],
+        modalities: list[Modality] = None,
         enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
@@ -155,6 +149,8 @@ class RealtimeModel:
         Raises:
             ValueError: If the API key is not provided and cannot be found in environment variables.
         """
+        if modalities is None:
+            modalities = ["AUDIO"]
         super().__init__()
         self._capabilities = Capabilities(
             supports_truncate=False,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 from multiprocessing.context import BaseContext
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Callable, Literal
 
 from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo

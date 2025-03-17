@@ -1,22 +1,23 @@
 from __future__ import annotations
 
 import logging
-from typing import AsyncIterator, Literal
+from collections.abc import AsyncIterator
+from typing import Literal
 
 from livekit import rtc
 
 from ... import utils
-from ..io import AudioSink
+from ..io import AudioOutput
 from ._types import AudioReceiver, AudioSegmentEnd
 
 logger = logging.getLogger(__name__)
 
 
-class QueueAudioSink(
-    AudioSink, AudioReceiver, rtc.EventEmitter[Literal["playback_finished", "clear_buffer"]]
+class QueueAudioOutput(
+    AudioOutput, AudioReceiver, rtc.EventEmitter[Literal["playback_finished", "clear_buffer"]]
 ):
     """
-    AudioSink implementation that sends audio frames through a queue.
+    AudioOutput implementation that sends audio frames through a queue.
     """
 
     def __init__(self):

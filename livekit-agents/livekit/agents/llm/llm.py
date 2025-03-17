@@ -3,41 +3,30 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
-from typing import (
-    Any,
-    AsyncIterable,
-    AsyncIterator,
-    Generic,
-    Literal,
-    Optional,
-    TypedDict,
-    TypeVar,
-    Union,
-)
+from typing import Any, Generic, Literal, TypedDict, TypeVar, Union
+
+from pydantic import BaseModel, Field
+from typing_extensions import Required
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
-from pydantic import BaseModel, Field
-from typing_extensions import Required
 
 from .. import utils
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    APIConnectOptions,
-    NotGivenOr,
-)
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .function_context import AIFunction
+from .tool_context import FunctionTool
 
 
 class CompletionUsage(BaseModel):
     completion_tokens: int
     prompt_tokens: int
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
     total_tokens: int
 
 
@@ -49,15 +38,15 @@ class FunctionToolCall(BaseModel):
 
 
 class ChoiceDelta(BaseModel):
-    role: Optional[ChatRole] = None
-    content: Optional[str] = None
+    role: ChatRole | None = None
+    content: str | None = None
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
 
 
 class ChatChunk(BaseModel):
     id: str
-    delta: Optional[ChoiceDelta] = None
-    usage: Optional[CompletionUsage] = None
+    delta: ChoiceDelta | None = None
+    usage: CompletionUsage | None = None
 
 
 # Used by ToolChoice
@@ -91,12 +80,12 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "LLMStream": ...
+    ) -> LLMStream: ...
 
     async def aclose(self) -> None: ...
 
@@ -118,12 +107,12 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[AIFunction],
+        tools: list[FunctionTool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
         self._chat_ctx = chat_ctx
-        self._fnc_ctx = fnc_ctx
+        self._tools = tools
         self._conn_options = conn_options
 
         self._event_ch = aio.Chan[ChatChunk]()
@@ -194,13 +183,11 @@ class LLMStream(ABC):
 
     @property
     def chat_ctx(self) -> ChatContext:
-        """The chat context of this stream."""
         return self._chat_ctx
 
     @property
-    def fnc_ctx(self) -> list[AIFunction]:
-        """The function context of this stream."""
-        return self._fnc_ctx
+    def tools(self) -> list[FunctionTool]:
+        return self._tools
 
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._task)

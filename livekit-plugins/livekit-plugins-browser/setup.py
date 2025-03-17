@@ -25,7 +25,7 @@ from setuptools.command.build_ext import build_ext
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(os.path.join(here, "livekit", "plugins", "browser", "version.py"), "r") as f:
+with open(os.path.join(here, "livekit", "plugins", "browser", "version.py")) as f:
     exec(f.read(), about)
 
 

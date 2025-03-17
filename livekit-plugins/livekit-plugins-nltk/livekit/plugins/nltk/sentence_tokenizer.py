@@ -4,9 +4,8 @@ import dataclasses
 import functools
 from dataclasses import dataclass
 
-from livekit import agents
-
 import nltk  # type: ignore
+from livekit import agents
 
 # nltk is using the punkt tokenizer
 # https://www.nltk.org/_modules/nltk/tokenize/punkt.html

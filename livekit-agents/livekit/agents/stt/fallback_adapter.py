@@ -200,11 +200,7 @@ class FallbackAdapter(
             self._try_recovery(stt=stt, buffer=buffer, language=language, conn_options=conn_options)
 
         raise APIConnectionError(
-            "all STTs failed (%s) after %s seconds"
-            % (
-                [stt.label for stt in self._stt_instances],
-                time.time() - start_time,
-            )
+            f"all STTs failed ({[stt.label for stt in self._stt_instances]}) after {time.time() - start_time} seconds"
         )
 
     async def recognize(
@@ -333,11 +329,7 @@ class FallbackRecognizeStream(RecognizeStream):
         await asyncio.gather(*[stream.aclose() for stream in self._recovering_streams])
 
         raise APIConnectionError(
-            "all STTs failed (%s) after %s seconds"
-            % (
-                [stt.label for stt in self._fallback_adapter._stt_instances],
-                time.time() - start_time,
-            )
+            f"all STTs failed ({[stt.label for stt in self._fallback_adapter._stt_instances]}) after {time.time() - start_time} seconds"
         )
 
     def _try_recovery(self, stt: STT) -> None:

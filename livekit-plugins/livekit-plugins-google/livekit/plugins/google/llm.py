@@ -15,45 +15,43 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, MutableSet, Union, cast
-
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    llm,
-    utils,
-)
-from livekit.agents.llm import LLMCapabilities, ToolChoice, _create_ai_function_info
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from typing import Any, Literal, cast
 
 from google import genai
 from google.auth._default_async import default_async
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
+from livekit.agents import APIConnectionError, APIStatusError, llm, utils
+from livekit.agents.llm import AIFunction, ToolChoice
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
-from ._utils import _build_gemini_ctx, _build_tools
 from .log import logger
 from .models import ChatModels
+from .utils import to_chat_ctx, to_fnc_ctx
 
 
 @dataclass
-class LLMOptions:
+class _LLMOptions:
     model: ChatModels | str
-    temperature: float | None
-    tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto"
-    vertexai: bool = False
-    project: str | None = None
-    location: str | None = None
-    candidate_count: int = 1
-    max_output_tokens: int | None = None
-    top_p: float | None = None
-    top_k: float | None = None
-    presence_penalty: float | None = None
-    frequency_penalty: float | None = None
+    temperature: NotGivenOr[float]
+    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
+    vertexai: NotGivenOr[bool]
+    project: NotGivenOr[str]
+    location: NotGivenOr[str]
+    max_output_tokens: NotGivenOr[int]
+    top_p: NotGivenOr[float]
+    top_k: NotGivenOr[float]
+    presence_penalty: NotGivenOr[float]
+    frequency_penalty: NotGivenOr[float]
 
 
 class LLM(llm.LLM):
@@ -61,18 +59,17 @@ class LLM(llm.LLM):
         self,
         *,
         model: ChatModels | str = "gemini-2.0-flash-001",
-        api_key: str | None = None,
-        vertexai: bool = False,
-        project: str | None = None,
-        location: str | None = None,
-        candidate_count: int = 1,
-        temperature: float = 0.8,
-        max_output_tokens: int | None = None,
-        top_p: float | None = None,
-        top_k: float | None = None,
-        presence_penalty: float | None = None,
-        frequency_penalty: float | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        vertexai: NotGivenOr[bool] = False,
+        project: NotGivenOr[str] = NOT_GIVEN,
+        location: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        top_k: NotGivenOr[float] = NOT_GIVEN,
+        presence_penalty: NotGivenOr[float] = NOT_GIVEN,
+        frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -90,7 +87,6 @@ class LLM(llm.LLM):
             vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
             project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
             location (str, optional): The location to use for VertexAI API requests. Defaults value is "us-central1".
-            candidate_count (int, optional): Number of candidate responses to generate. Defaults to 1.
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
@@ -99,12 +95,7 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
         """
-        super().__init__(
-            capabilities=LLMCapabilities(
-                supports_choices_on_int=False,
-                requires_persistent_functions=False,
-            )
-        )
+        super().__init__()
         self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
         self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY", None)
@@ -129,14 +120,13 @@ class LLM(llm.LLM):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
                 )
 
-        self._opts = LLMOptions(
+        self._opts = _LLMOptions(
             model=model,
             temperature=temperature,
             tool_choice=tool_choice,
             vertexai=vertexai,
             project=project,
             location=location,
-            candidate_count=candidate_count,
             max_output_tokens=max_output_tokens,
             top_p=top_p,
             top_k=top_k,
@@ -149,40 +139,77 @@ class LLM(llm.LLM):
             project=self._project_id,
             location=self._location,
         )
-        self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
 
     def chat(
         self,
         *,
         chat_ctx: llm.ChatContext,
+        fnc_ctx: list[AIFunction] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        fnc_ctx: llm.FunctionContext | None = None,
-        temperature: float | None = None,
-        n: int | None = 1,
-        parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None = None,
-    ) -> "LLMStream":
-        if tool_choice is None:
-            tool_choice = self._opts.tool_choice
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> LLMStream:
+        extra = {}
 
-        if temperature is None:
-            temperature = self._opts.temperature
+        if is_given(extra_kwargs):
+            extra.update(extra_kwargs)
+
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+        if is_given(tool_choice):
+            gemini_tool_choice: types.ToolConfig
+            if isinstance(tool_choice, ToolChoice):
+                gemini_tool_choice = types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="ANY",
+                        allowed_function_names=[tool_choice["function"]["name"]],
+                    )
+                )
+                extra["tool_config"] = gemini_tool_choice
+            elif tool_choice == "required":
+                gemini_tool_choice = types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="ANY",
+                        allowed_function_names=[fnc.name for fnc in fnc_ctx.ai_functions.values()],
+                    )
+                )
+                extra["tool_config"] = gemini_tool_choice
+            elif tool_choice == "auto":
+                gemini_tool_choice = types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="AUTO",
+                    )
+                )
+                extra["tool_config"] = gemini_tool_choice
+            elif tool_choice == "none":
+                gemini_tool_choice = types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="NONE",
+                    )
+                )
+                extra["tool_config"] = gemini_tool_choice
+
+        if is_given(self._opts.temperature):
+            extra["temperature"] = self._opts.temperature
+        if is_given(self._opts.max_output_tokens):
+            extra["max_output_tokens"] = self._opts.max_output_tokens
+        if is_given(self._opts.top_p):
+            extra["top_p"] = self._opts.top_p
+        if is_given(self._opts.top_k):
+            extra["top_k"] = self._opts.top_k
+        if is_given(self._opts.presence_penalty):
+            extra["presence_penalty"] = self._opts.presence_penalty
+        if is_given(self._opts.frequency_penalty):
+            extra["frequency_penalty"] = self._opts.frequency_penalty
 
         return LLMStream(
             self,
             client=self._client,
             model=self._opts.model,
-            max_output_tokens=self._opts.max_output_tokens,
-            top_p=self._opts.top_p,
-            top_k=self._opts.top_k,
-            presence_penalty=self._opts.presence_penalty,
-            frequency_penalty=self._opts.frequency_penalty,
             chat_ctx=chat_ctx,
             fnc_ctx=fnc_ctx,
             conn_options=conn_options,
-            n=n,
-            temperature=temperature,
-            tool_choice=tool_choice,
+            extra_kwargs=extra,
         )
 
 
@@ -196,89 +223,36 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
         fnc_ctx: llm.FunctionContext | None,
-        temperature: float | None,
-        n: int | None,
-        max_output_tokens: int | None,
-        top_p: float | None,
-        top_k: float | None,
-        presence_penalty: float | None,
-        frequency_penalty: float | None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]],
+        extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm
-        self._max_output_tokens = max_output_tokens
-        self._top_p = top_p
-        self._top_k = top_k
-        self._presence_penalty = presence_penalty
-        self._frequency_penalty = frequency_penalty
-        self._temperature = temperature
-        self._n = n
-        self._tool_choice = tool_choice
+        self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
         retryable = True
         request_id = utils.shortuuid()
 
         try:
-            opts: dict[str, Any] = dict()
-            turns, system_instruction = _build_gemini_ctx(self._chat_ctx, id(self))
+            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm))
 
-            if self._fnc_ctx and len(self._fnc_ctx.ai_functions) > 0:
-                functions = _build_tools(self._fnc_ctx)
-                opts["tools"] = [types.Tool(function_declarations=functions)]
-
-                if self._tool_choice is not None:
-                    if isinstance(self._tool_choice, ToolChoice):
-                        # specific function
-                        tool_config = types.ToolConfig(
-                            function_calling_config=types.FunctionCallingConfig(
-                                mode="ANY",
-                                allowed_function_names=[self._tool_choice.name],
-                            )
-                        )
-                    elif self._tool_choice == "required":
-                        # model must call any function
-                        tool_config = types.ToolConfig(
-                            function_calling_config=types.FunctionCallingConfig(
-                                mode="ANY",
-                                allowed_function_names=[
-                                    fnc.name for fnc in self._fnc_ctx.ai_functions.values()
-                                ],
-                            )
-                        )
-                    elif self._tool_choice == "auto":
-                        # model can call any function
-                        tool_config = types.ToolConfig(
-                            function_calling_config=types.FunctionCallingConfig(mode="AUTO")
-                        )
-                    elif self._tool_choice == "none":
-                        # model cannot call any function
-                        tool_config = types.ToolConfig(
-                            function_calling_config=types.FunctionCallingConfig(
-                                mode="NONE",
-                            )
-                        )
-                    opts["tool_config"] = tool_config
-
+            self._extra_kwargs["tools"] = [
+                types.Tool(function_declarations=to_fnc_ctx(self._fnc_ctx))
+            ]
             config = types.GenerateContentConfig(
-                candidate_count=self._n,
-                temperature=self._temperature,
-                max_output_tokens=self._max_output_tokens,
-                top_p=self._top_p,
-                top_k=self._top_k,
-                presence_penalty=self._presence_penalty,
-                frequency_penalty=self._frequency_penalty,
                 system_instruction=system_instruction,
-                **opts,
+                **self._extra_kwargs,
             )
-            async for response in self._client.aio.models.generate_content_stream(
+
+            stream = await self._client.aio.models.generate_content_stream(
                 model=self._model,
                 contents=cast(types.ContentListUnion, turns),
                 config=config,
-            ):
+            )
+
+            async for response in stream:
                 if response.prompt_feedback:
                     raise APIStatusError(
                         response.prompt_feedback.json(),
@@ -302,8 +276,8 @@ class LLMStream(llm.LLMStream):
                         "gemini llm: there are multiple candidates in the response, returning response from the first one."
                     )
 
-                for index, part in enumerate(response.candidates[0].content.parts):
-                    chat_chunk = self._parse_part(request_id, index, part)
+                for part in response.candidates[0].content.parts:
+                    chat_chunk = self._parse_part(request_id, part)
                     if chat_chunk is not None:
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
@@ -312,7 +286,7 @@ class LLMStream(llm.LLMStream):
                     usage = response.usage_metadata
                     self._event_ch.send_nowait(
                         llm.ChatChunk(
-                            request_id=request_id,
+                            id=request_id,
                             usage=llm.CompletionUsage(
                                 completion_tokens=usage.candidates_token_count or 0,
                                 prompt_tokens=usage.prompt_token_count or 0,
@@ -320,6 +294,7 @@ class LLMStream(llm.LLMStream):
                             ),
                         )
                     )
+
         except ClientError as e:
             raise APIStatusError(
                 "gemini llm: client error",
@@ -350,55 +325,25 @@ class LLMStream(llm.LLMStream):
                 retryable=retryable,
             ) from e
 
-    def _parse_part(self, id: str, index: int, part: types.Part) -> llm.ChatChunk | None:
+    def _parse_part(self, id: str, part: types.Part) -> llm.ChatChunk | None:
         if part.function_call:
-            return self._try_build_function(id, index, part)
+            chat_chunk = llm.ChatChunk(
+                id=id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    tool_calls=[
+                        llm.FunctionToolCall(
+                            arguments=json.dumps(part.function_call.args),
+                            name=part.function_call.name,
+                            call_id=part.function_call.id or utils.shortuuid("function_call_"),
+                        )
+                    ],
+                    content=part.text,
+                ),
+            )
+            return chat_chunk
 
         return llm.ChatChunk(
-            request_id=id,
-            choices=[
-                llm.Choice(
-                    delta=llm.ChoiceDelta(content=part.text, role="assistant"),
-                    index=index,
-                )
-            ],
-        )
-
-    def _try_build_function(self, id: str, index: int, part: types.Part) -> llm.ChatChunk | None:
-        if part.function_call is None:
-            logger.warning("gemini llm: no function call in the response")
-            return None
-
-        if part.function_call.name is None:
-            logger.warning("gemini llm: no function name in the response")
-            return None
-
-        if part.function_call.id is None:
-            part.function_call.id = utils.shortuuid()
-
-        if self._fnc_ctx is None:
-            logger.warning("google stream tried to run function without function context")
-            return None
-
-        fnc_info = _create_ai_function_info(
-            self._fnc_ctx,
-            part.function_call.id,
-            part.function_call.name,
-            json.dumps(part.function_call.args),
-        )
-
-        self._function_calls_info.append(fnc_info)
-
-        return llm.ChatChunk(
-            request_id=id,
-            choices=[
-                llm.Choice(
-                    delta=llm.ChoiceDelta(
-                        role="assistant",
-                        tool_calls=[fnc_info],
-                        content=part.text,
-                    ),
-                    index=index,
-                )
-            ],
+            id=id,
+            delta=llm.ChoiceDelta(content=part.text, role="assistant"),
         )

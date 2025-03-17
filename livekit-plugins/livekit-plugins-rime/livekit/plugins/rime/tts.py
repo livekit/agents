@@ -17,9 +17,9 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -98,9 +98,9 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
         segment_id: str | None = None,
-    ) -> "ChunkedStream":
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             input_text=text,
@@ -130,7 +130,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
         segment_id: str | None = None,
         api_key: str | None = None,
     ) -> None:
@@ -163,7 +163,7 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=NUM_CHANNELS,
         )
 
-        decode_task: Optional[asyncio.Task] = None
+        decode_task: asyncio.Task | None = None
         try:
             async with self._session.post(
                 DEFAULT_API_URL, headers=headers, json=payload

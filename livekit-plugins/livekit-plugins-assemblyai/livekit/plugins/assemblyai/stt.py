@@ -21,10 +21,11 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
@@ -50,11 +51,11 @@ bytes_per_frame = {
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float
-    word_boost: Optional[List[str]] = None
-    encoding: Optional[Literal["pcm_s16le", "pcm_mulaw"]] = None
+    word_boost: list[str] | None = None
+    encoding: Literal["pcm_s16le", "pcm_mulaw"] | None = None
     disable_partial_transcripts: bool = False
     enable_extra_session_information: bool = False
-    end_utterance_silence_threshold: Optional[int] = None
+    end_utterance_silence_threshold: int | None = None
     # Buffer to collect frames to send to AssemblyAI
 
     def __post_init__(self):
@@ -66,14 +67,14 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         sample_rate: int = 16000,
-        word_boost: Optional[List[str]] = None,
-        encoding: Optional[Literal["pcm_s16le", "pcm_mulaw"]] = "pcm_s16le",
+        word_boost: list[str] | None = None,
+        encoding: Literal["pcm_s16le", "pcm_mulaw"] | None = "pcm_s16le",
         disable_partial_transcripts: bool = False,
         enable_extra_session_information: bool = False,
-        end_utterance_silence_threshold: Optional[int] = 500,
-        http_session: Optional[aiohttp.ClientSession] = None,
+        end_utterance_silence_threshold: int | None = 500,
+        http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
     ):
         super().__init__(
@@ -121,9 +122,9 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: Optional[str] = None,
+        language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = dataclasses.replace(self._opts)
         stream = SpeechStream(
             stt=self,
@@ -138,11 +139,11 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        disable_partial_transcripts: Optional[bool] = None,
-        word_boost: Optional[List[str]] = None,
-        end_utterance_silence_threshold: Optional[int] = None,
-        enable_extra_session_information: Optional[bool] = None,
-        buffer_size_seconds: Optional[float] = None,
+        disable_partial_transcripts: bool | None = None,
+        word_boost: list[str] | None = None,
+        end_utterance_silence_threshold: int | None = None,
+        enable_extra_session_information: bool | None = None,
+        buffer_size_seconds: float | None = None,
     ):
         if disable_partial_transcripts is not None:
             self._opts.disable_partial_transcripts = disable_partial_transcripts
@@ -186,17 +187,17 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
-        self._final_events: List[SpeechEvent] = []
+        self._final_events: list[SpeechEvent] = []
         self._reconnect_event = asyncio.Event()
 
     def update_options(
         self,
         *,
-        disable_partial_transcripts: Optional[bool] = None,
-        word_boost: Optional[List[str]] = None,
-        end_utterance_silence_threshold: Optional[int] = None,
-        enable_extra_session_information: Optional[bool] = None,
-        buffer_size_seconds: Optional[float] = None,
+        disable_partial_transcripts: bool | None = None,
+        word_boost: list[str] | None = None,
+        end_utterance_silence_threshold: int | None = None,
+        enable_extra_session_information: bool | None = None,
+        buffer_size_seconds: float | None = None,
     ):
         if disable_partial_transcripts is not None:
             self._opts.disable_partial_transcripts = disable_partial_transcripts
@@ -401,7 +402,7 @@ class SpeechStream(stt.SpeechStream):
 def live_transcription_to_speech_data(
     language: str,
     data: dict,
-) -> List[stt.SpeechData]:
+) -> list[stt.SpeechData]:
     return [
         stt.SpeechData(
             language=language,
