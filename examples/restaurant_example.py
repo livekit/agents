@@ -4,12 +4,13 @@ from typing import Annotated, Optional
 
 import yaml
 from dotenv import load_dotenv
+from pydantic import Field
+
 from livekit.agents import JobContext, WorkerOptions, cli, llm
-from livekit.agents.llm import ai_function
-from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, AgentSession, CallContext
 from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai
-from pydantic import Field
 
 # from livekit.plugins import noise_cancellation
 
@@ -35,7 +36,7 @@ class UserData:
     expense: Optional[float] = None
     checked_out: Optional[bool] = None
 
-    tasks: dict[str, AgentTask] = field(default_factory=dict)
+    agents: dict[str, Agent] = field(default_factory=dict)
 
     def summarize(self) -> str:
         data = {
@@ -63,7 +64,7 @@ CallContext_T = CallContext[UserData]
 # common functions
 
 
-@ai_function()
+@function_tool()
 async def update_name(
     name: Annotated[str, Field(description="The customer's name")], context: CallContext_T
 ) -> str:
@@ -74,7 +75,7 @@ async def update_name(
     return f"The name is updated to {name}"
 
 
-@ai_function()
+@function_tool()
 async def update_phone(
     phone: Annotated[str, Field(description="The customer's phone number")], context: CallContext_T
 ) -> str:
@@ -85,35 +86,40 @@ async def update_phone(
     return f"The phone number is updated to {phone}"
 
 
-@ai_function()
-async def to_greeter(context: CallContext_T) -> AgentTask:
+@function_tool()
+async def to_greeter(context: CallContext_T) -> Agent:
     """Called when user asks any unrelated questions or requests any other services not in your job description."""
-    curr_task: "BaseAgentTask" = context.agent.current_task
-    return curr_task._transfer_to_task("greeter", context)
+    curr_agent: BaseAgent = context.session.current_agent
+    return curr_agent._transfer_to_agent("greeter", context)
 
 
-class BaseAgentTask(AgentTask):
+class BaseAgent(Agent):
     async def on_enter(self) -> None:
         logger.info(f"entering task {self.__class__.__name__}")
-        userdata: UserData = self.agent.userdata
-        self.chat_ctx.add_message(
+        userdata: UserData = self.session.userdata
+        chat_ctx = self.chat_ctx
+        chat_ctx.add_message(
             role="system",
             content=f"Current user data is {userdata.summarize()}",
         )
-        self.agent.generate_reply()
+        await self.update_chat_ctx(chat_ctx)
+        self.session.generate_reply()
 
-    def _transfer_to_task(self, task_name: str, context: CallContext_T) -> AgentTask:
+    async def _transfer_to_agent(self, name: str, context: CallContext_T) -> tuple[Agent, str]:
         userdata = context.userdata
-        curr_task = context.agent.current_task
-        next_task = userdata.tasks[task_name]
+        current_agent = context.session.current_agent
+        next_agent = userdata.agents[name]
 
         # copy part of chat history from current task to next task
-        items_copy = self._truncate_chat_ctx(curr_task.chat_ctx.items)
-        existing_ids = {item.id for item in next_task.chat_ctx.items}
+        items_copy = self._truncate_chat_ctx(current_agent.chat_ctx.items)
+        existing_ids = {item.id for item in next_agent.chat_ctx.items}
         items_copy = [item for item in items_copy if item.id not in existing_ids]
-        next_task.chat_ctx.items.extend(items_copy)
 
-        return next_task, f"Transferring to {task_name}."
+        chat_ctx = next_agent.chat_ctx
+        chat_ctx.items.extend(items_copy)
+        await next_agent.update_chat_ctx(chat_ctx)
+
+        return next_agent, f"Transferring to {name}."
 
     def _truncate_chat_ctx(
         self,
@@ -146,41 +152,44 @@ class BaseAgentTask(AgentTask):
         return new_items
 
 
-class Greeter(BaseAgentTask):
+class Greeter(BaseAgent):
     def __init__(self, menu: str) -> None:
         super().__init__(
             instructions=(
                 f"You are a friendly restaurant receptionist. The menu is: {menu}\n"
                 "Your jobs are to greet the caller and understand if they want to "
-                "make a reservation or order takeaway. Guide them to the right agent using functions."
+                "make a reservation or order takeaway. Guide them to the right agent using tools."
             ),
-            llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
+            # llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
         )
         self.menu = menu
 
-    @ai_function
-    async def to_reservation(self, context: CallContext_T) -> AgentTask:
-        """Called when user wants to make a reservation. This function handles transitioning to the reservation agent
-        who will collect the necessary details like reservation time, customer name and phone number."""
-        return self._transfer_to_task("reservation", context)
+    @function_tool()
+    async def to_reservation(self, context: CallContext_T) -> Agent:
+        """Called when user wants to make a reservation.
+        This function handles transitioning to the reservation agent
+        who will collect the necessary details like reservation time,
+        customer name and phone number."""
+        return await self._transfer_to_agent("reservation", context)
 
-    @ai_function
-    async def to_takeaway(self, context: CallContext_T) -> AgentTask:
-        """Called when the user wants to place a takeaway order. This includes handling orders for pickup,
-        delivery, or when the user wants to proceed to checkout with their existing order."""
-        return self._transfer_to_task("takeaway", context)
+    @function_tool()
+    async def to_takeaway(self, context: CallContext_T) -> Agent:
+        """Called when the user wants to place a takeaway order.
+        This includes handling orders for pickup, delivery, or when the user wants to
+        proceed to checkout with their existing order."""
+        return await self._transfer_to_agent("takeaway", context)
 
 
-class Reservation(BaseAgentTask):
+class Reservation(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a reservation agent at a restaurant. Your jobs are to ask for "
             "the reservation time, then customer's name, and phone number. Then "
             "confirm the reservation details with the customer.",
-            ai_functions=[update_name, update_phone, to_greeter],
+            tools=[update_name, update_phone, to_greeter],
         )
 
-    @ai_function()
+    @function_tool()
     async def update_reservation_time(
         self,
         time: Annotated[str, Field(description="The reservation time")],
@@ -190,8 +199,8 @@ class Reservation(BaseAgentTask):
         userdata.reservation_time = time
         return f"The reservation time is updated to {time}"
 
-    @ai_function
-    async def confirm_reservation(self, context: CallContext_T) -> str | tuple[AgentTask, str]:
+    @function_tool()
+    async def confirm_reservation(self, context: CallContext_T) -> str | tuple[Agent, str]:
         userdata = context.userdata
         if not userdata.customer_name or not userdata.customer_phone:
             return "Please provide your name and phone number first."
@@ -199,19 +208,19 @@ class Reservation(BaseAgentTask):
         if not userdata.reservation_time:
             return "Please provide reservation time first."
 
-        return self._transfer_to_task("greeter", context)
+        return await self._transfer_to_agent("greeter", context)
 
 
-class Takeaway(BaseAgentTask):
+class Takeaway(BaseAgent):
     def __init__(self, menu: str) -> None:
         super().__init__(
             instructions=f"Our menu is: {menu}. Your jobs are to record the order from the "
             "customer. Clarify special requests and confirm the order with the "
             "customer.",
-            ai_functions=[to_greeter],
+            tools=[to_greeter],
         )
 
-    @ai_function
+    @function_tool()
     async def update_order(
         self,
         items: Annotated[list[str], Field(description="The items of the full order")],
@@ -221,16 +230,16 @@ class Takeaway(BaseAgentTask):
         userdata.order = items
         return f"The order is updated to {items}"
 
-    @ai_function
-    async def to_checkout(self, context: CallContext_T) -> str | tuple[AgentTask, str]:
+    @function_tool()
+    async def to_checkout(self, context: CallContext_T) -> str | tuple[Agent, str]:
         userdata = context.userdata
         if not userdata.order:
             return "No takeaway order found. Please make an order first."
 
-        return self._transfer_to_task("checkout", context)
+        return await self._transfer_to_agent("checkout", context)
 
 
-class Checkout(BaseAgentTask):
+class Checkout(BaseAgent):
     def __init__(self, menu: str) -> None:
         super().__init__(
             instructions=(
@@ -239,10 +248,10 @@ class Checkout(BaseAgentTask):
                 "order and then collecting customer's name, phone number and credit card "
                 "information, including the card number, expiry date, and CVV step by step."
             ),
-            ai_functions=[update_name, update_phone, to_greeter],
+            tools=[update_name, update_phone, to_greeter],
         )
 
-    @ai_function
+    @function_tool()
     async def confirm_expense(
         self,
         expense: Annotated[float, Field(description="The expense of the order")],
@@ -252,7 +261,7 @@ class Checkout(BaseAgentTask):
         userdata.expense = expense
         return f"The expense is confirmed to be {expense}"
 
-    @ai_function
+    @function_tool()
     async def update_credit_card(
         self,
         number: Annotated[str, Field(description="The credit card number")],
@@ -266,8 +275,8 @@ class Checkout(BaseAgentTask):
         userdata.customer_credit_card_cvv = cvv
         return f"The credit card number is updated to {number}"
 
-    @ai_function
-    async def confirm_checkout(self, context: CallContext_T) -> str | tuple[AgentTask, str]:
+    @function_tool()
+    async def confirm_checkout(self, context: CallContext_T) -> str | tuple[Agent, str]:
         userdata = context.userdata
         if not userdata.expense:
             return "Please confirm the expense first."
@@ -282,9 +291,9 @@ class Checkout(BaseAgentTask):
         userdata.checked_out = True
         return await to_greeter(context)
 
-    @ai_function
-    async def to_takeaway(self, context: CallContext_T) -> tuple[AgentTask, str]:
-        return self._transfer_to_task("takeaway", context)
+    @function_tool()
+    async def to_takeaway(self, context: CallContext_T) -> tuple[Agent, str]:
+        return await self._transfer_to_agent("takeaway", context)
 
 
 async def entrypoint(ctx: JobContext):
@@ -292,7 +301,7 @@ async def entrypoint(ctx: JobContext):
 
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
     userdata = UserData()
-    userdata.tasks.update(
+    userdata.agents.update(
         {
             "greeter": Greeter(menu),
             "reservation": Reservation(),
@@ -300,15 +309,16 @@ async def entrypoint(ctx: JobContext):
             "checkout": Checkout(menu),
         }
     )
-    agent = VoiceAgent[UserData](
-        task=userdata.tasks["greeter"],
+    agent = AgentSession[UserData](
         userdata=userdata,
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=cartesia.TTS(),
+        # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 
     await agent.start(
+        agent=userdata.agents["greeter"],
         room=ctx.room,
         room_input_options=RoomInputOptions(
             # noise_cancellation=noise_cancellation.BVC(),
