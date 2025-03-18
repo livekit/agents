@@ -264,7 +264,7 @@ async def _execute_tools_task(
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
     from .agent import _authorize_inline_task
-    from .events import CallContext
+    from .events import RunContext
 
     tasks: list[asyncio.Task] = []
     try:
@@ -307,7 +307,7 @@ async def _execute_tools_task(
             fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
                 model=parsed_args,
                 function_tool=function_tool,
-                call_ctx=CallContext(
+                call_ctx=RunContext(
                     session=session, speech_handle=speech_handle, function_call=fnc_call
                 ),
             )

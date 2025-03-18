@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 Userdata_T = TypeVar("Userdata_T")
 
 
-class CallContext(Generic[Userdata_T]):
+class RunContext(Generic[Userdata_T]):
     # private ctor
     def __init__(
         self,
