@@ -1,48 +1,64 @@
+from typing import Annotated
+
 from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, RunContext
+from pydantic import Field
 
 
 @function_tool()
-async def update_information(self, field: str, info: str) -> str:
+async def update_information(
+    field: Annotated[
+        str,
+        Field(
+            description="The type of information to be updated, either 'phone_number', 'email', or 'name'"
+        ),
+    ],
+    info: Annotated[str, Field(description="The new user provided information")],
+    context: RunContext,
+) -> str:
     """
     Updates information on record about the user. The only fields to update are names, phone numbers, and emails.
-
-    Args:
-        field: The type of information to be updated, either "phone_number", "email", or "name"
-        info: The new user provided information
-
     """
+    userinfo = context.userdata["userinfo"]
     if field == "name":
-        self.agent.userdata["userinfo"].name = info
+        userinfo.name = info
     elif field == "phone_number":
-        self.agent.userdata["userinfo"].phone = info
+        userinfo.phone = info
     elif field == "email":
-        self.agent.userdata["userinfo"].email = info
+        userinfo.email = info
 
     return "Got it, thank you!"
 
 
 @function_tool()
-async def transfer_to_receptionist(self):
-    """Transfers the user to the receptionist for any office inquiries, user information updates, or when they are finished with managing appointments."""
-    return self.agent.userdata[
-        "tasks"
+async def transfer_to_receptionist(context: RunContext) -> tuple[Agent, str]:
+    """Transfers the user to the receptionist for any office inquiries or when they are finished with managing appointments."""
+    return context.userdata[
+        "agents"
     ].receptionist, "Transferring you to our receptionist!"
 
 
 @function_tool()
-async def transfer_to_scheduler(self, service: str):
+async def transfer_to_scheduler(
+    action: Annotated[
+        str,
+        Field(
+            description="The appointment action requested, either 'schedule', 'reschedule', or 'cancel'"
+        ),
+    ],
+    context: RunContext,
+) -> tuple[Agent, str]:
     """
-    Transfers the user to the Scheduler.
-
-    Args:
-        service: Either "schedule", "reschedule", or "cancel"
+    Transfers the user to the Scheduler to manage appointments.
     """
-    return self.agent.userdata["tasks"].scheduler(
-        service=service
+    return context.userdata["agents"].scheduler(
+        service=action
     ), "Transferring you to our scheduler!"
 
 
 @function_tool()
-async def transfer_to_messenger(self):
-    """Transfers the user to the messenger if they want to leave a message for the office."""
-    return self.agent.userdata["tasks"].messenger, "Transferring you to our messenger!"
+async def transfer_to_messenger(context: RunContext) -> tuple[Agent, str]:
+    """
+    Transfers the user to the messenger if they want to leave a message for the office.
+    """
+    return context.userdata["agents"].messenger, "Transferring you to our messenger!"

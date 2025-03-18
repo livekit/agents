@@ -11,7 +11,8 @@ class Receptionist(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="""You are a receptionist at the LiveKit Dental Office who answers inquiries and manages appointments for users. 
-            If there is an inquiry that can't be answered, suggest to leave a message. When calling functions, return the user's name as an arg if already known. Be brief and efficient.""",
+            If there is an inquiry that can't be answered, suggest to leave a message. Be brief and efficient, do not ask for unnecessary details. 
+            When handling appointments or taking a message, you will transfer the user to another agent.""",
             tts=cartesia.TTS(emotion=["positivity:high"]),
             tools=[update_information],
         )
@@ -41,10 +42,10 @@ class Receptionist(Agent):
     async def manage_appointment(
         self,
         name: Annotated[str, Field(description="The user's name")],
-        service: Annotated[
+        action: Annotated[
             str,
             Field(
-                description="The service requested, either 'schedule', 'reschedule', or 'cancel'"
+                description="The appointment action requested, either 'schedule', 'reschedule', or 'cancel'"
             ),
         ],
     ) -> tuple[Agent, str]:
@@ -53,7 +54,7 @@ class Receptionist(Agent):
         """
         self.session.userdata["userinfo"].name = name
         return self.session.userdata["agents"].scheduler(
-            service=service
+            service=action
         ), "I'll be transferring you to our scheduler, Echo!"
 
     @function_tool()
@@ -63,7 +64,6 @@ class Receptionist(Agent):
     ) -> tuple[Agent, str]:
         """
         This function allows users to leave a message for the office by transferring to the messenger.
-        The user's name will be confirmed with the user by spelling it out.
         """
         self.session.userdata["userinfo"].name = name
         return self.session.userdata[

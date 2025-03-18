@@ -121,7 +121,12 @@ class Scheduler(Agent):
                 description="Reason for scheduling appointment, either 'routine-checkup' or 'tooth-extraction'"
             ),
         ],
-        date: Annotated[str, Field(description="Date and time for the appointment")],
+        date: Annotated[
+            str,
+            Field(
+                description="Formatted and converted date and time for the appointment, in ISO 8601 format in UTC timezone assuming the user is in Los Angeles."
+            ),
+        ],
     ) -> None:
         """
         Schedules a new appointment for users. The email should be confirmed by spelling it out to the user.
@@ -144,6 +149,10 @@ class Scheduler(Agent):
                 await self.session.current_speech.wait_for_playout()
             await self.session.generate_reply(
                 instructions="Inform the user that the date and time specified are unavailable, and ask the user to choose another date."
+            )
+        else:
+            await self.session.generate_reply(
+                instructions="There was an error with scheduling, suggest to leave a message about it."
             )
 
     @function_tool()

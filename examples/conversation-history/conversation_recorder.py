@@ -4,44 +4,46 @@ import wave
 
 from dotenv import load_dotenv
 from livekit.agents import (
-    AutoSubscribe,
     JobContext,
     WorkerOptions,
     cli,
 )
-from livekit.agents.voice import AgentTask, VoiceAgent
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, AgentSession
+from livekit.plugins import openai
 
 
 class ConversationRecorder:
     def __init__(
         self,
         *,
-        model: VoiceAgent | None,
+        session: AgentSession | None,
         file_name: str | None,
     ):
         """
         Initializes a ConversationRecorder instance which records the audio of a conversation.
 
         Args:
-            model (VoiceAgent): an instance of a VoiceAgent
+            model (AgentSession): an instance of an AgentSession
             file_name (str): the name of the audio file
         """
         super().__init__()
 
-        self._model = model
+        self._session = session
         self._file_name = file_name
 
         with wave.open(file_name, "wb") as file:
             file.setnchannels(2)
             file.setframerate(24000)
+            file.setsampwidth(2)
         self._file = file
 
     @property
-    def model(self) -> VoiceAgent | None:
-        return self._model
+    def session(self) -> AgentSession | None:
+        return self._session
 
     async def record_input(self) -> None:
-        async for audioframe in self._model._input.audio:
+        async for audioframe in self._session._input.audio:
             self._file.writeframes(audioframe)
 
     async def record_output(self) -> None:
@@ -57,6 +59,19 @@ class ConversationRecorder:
         self._main_task = asyncio.create_task(self._main_atask())
 
 
+class MyAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            instructions="You are a helpful assistant that can answer questions and help with tasks.",
+        )
+
+    @function_tool()
+    async def open_door(self) -> str:
+        await self.session.generate_reply(instructions="Opening the door..")
+
+        return "The door is open!"
+
+
 load_dotenv()
 
 logger = logging.getLogger("my-worker")
@@ -64,13 +79,13 @@ logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
-    agent = VoiceAgent(task=AgentTask())
-    recorder = ConversationRecorder(model=agent, file_name="output.wav")
+    await ctx.connect()
+    session = AgentSession(llm=openai.realtime.RealtimeModel())
 
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    participant = await ctx.wait_for_participant()
-    agent.start(ctx.room, participant)
-    recorder.start()
+    cr = ConversationRecorder(session=session, file_name="recording.wav")
+    cr.start()
+
+    await session.start(agent=MyAgent(), room=ctx.room)
 
 
 if __name__ == "__main__":
