@@ -8,6 +8,7 @@ from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import ChatContext, FunctionTool, ToolError, find_function_tools
+from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
@@ -53,7 +54,7 @@ class Agent:
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx.copy()
+        return _ReadOnlyChatContext.from_chat_context(self._chat_ctx)
 
     async def update_instructions(self, instructions: str) -> None:
         """

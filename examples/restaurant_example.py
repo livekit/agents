@@ -105,7 +105,7 @@ class BaseAgent(Agent):
     async def on_enter(self) -> None:
         logger.info(f"entering task {self.__class__.__name__}")
         userdata: UserData = self.session.userdata
-        chat_ctx = self.chat_ctx
+        chat_ctx = self.chat_ctx.copy()
         chat_ctx.add_message(
             role="system",
             content=f"Current user data is {userdata.summarize()}",
@@ -123,7 +123,7 @@ class BaseAgent(Agent):
         existing_ids = {item.id for item in next_agent.chat_ctx.items}
         items_copy = [item for item in items_copy if item.id not in existing_ids]
 
-        chat_ctx = next_agent.chat_ctx
+        chat_ctx = next_agent.chat_ctx.copy()
         chat_ctx.items.extend(items_copy)
         await next_agent.update_chat_ctx(chat_ctx)
 
