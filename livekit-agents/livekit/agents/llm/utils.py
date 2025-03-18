@@ -17,7 +17,7 @@ from .chat_context import ChatContext
 from .tool_context import FunctionTool, get_function_info
 
 if TYPE_CHECKING:
-    from ..voice.events import CallContext
+    from ..voice.events import RunContext
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -91,10 +91,10 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
 
 def is_context_type(ty: type) -> bool:
-    from ..voice.events import CallContext
+    from ..voice.events import RunContext
 
     origin = get_origin(ty)
-    is_call_context = ty is CallContext or origin is CallContext
+    is_call_context = ty is RunContext or origin is RunContext
 
     return is_call_context
 
@@ -236,7 +236,7 @@ def pydantic_model_to_function_arguments(
     *,
     ai_function: Callable,
     model: BaseModel,
-    call_ctx: CallContext | None = None,
+    call_ctx: RunContext | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     """
     Convert a model’s fields into function args/kwargs.

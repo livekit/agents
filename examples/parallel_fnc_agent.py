@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import ai_function
-from livekit.agents.voice import AgentTask, CallContext, VoiceAgent
+from livekit.agents.voice import AgentTask, RunContext, VoiceAgent
 from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai
 
@@ -30,7 +30,7 @@ class EchoTask(AgentTask):
         )
 
     @ai_function()
-    async def talk_to_alloy(self, context: CallContext):
+    async def talk_to_alloy(self, context: RunContext):
         return AlloyTask(), "Transferring you to Alloy."
 
     @ai_function()
@@ -55,7 +55,7 @@ class AlloyTask(AgentTask):
         )
 
     @ai_function()
-    async def talk_to_echo(self, context: CallContext):
+    async def talk_to_echo(self, context: RunContext):
         return EchoTask(), "Transferring you to Echo."
 
     @ai_function()

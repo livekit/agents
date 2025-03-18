@@ -23,7 +23,7 @@ class Agent:
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool] = None,
+        tools: list[llm.FunctionTool] | None = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -31,8 +31,7 @@ class Agent:
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        if tools is None:
-            tools = []
+        tools = tools or []
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
         self._tools = tools + find_function_tools(self)
@@ -264,15 +263,14 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.FunctionTool] = None,
+        ai_functions: list[llm.FunctionTool] | None = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
-        if ai_functions is None:
-            ai_functions = []
+        ai_functions = ai_functions or []
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
