@@ -241,5 +241,5 @@ class AudioRecognition:
             async for ev in stream:
                 await self._on_vad_event(ev)
         finally:
-            await stream.aclose()
             await aio.cancel_and_wait(forward_task)
+            await stream.aclose()

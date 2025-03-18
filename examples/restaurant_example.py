@@ -8,9 +8,9 @@ from pydantic import Field
 
 from livekit.agents import JobContext, WorkerOptions, cli, llm
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession, CallContext
+from livekit.agents.voice import Agent, AgentSession, RunContext
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import cartesia, deepgram, openai
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 # from livekit.plugins import noise_cancellation
 
@@ -18,6 +18,13 @@ logger = logging.getLogger("restaurant-example")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
+voices = {
+    "greeter": "794f9389-aac1-45b6-b726-9d9369183238",
+    "reservation": "156fb8d2-335b-4950-9cb3-a2d33befec77",
+    "takeaway": "6f84f4b8-58a2-430c-8c79-688dad597532",
+    "checkout": "39b376fc-488e-4d0c-8b37-e00b72059fdd",
+}
 
 
 @dataclass
@@ -58,7 +65,7 @@ class UserData:
         return yaml.dump(data)
 
 
-CallContext_T = CallContext[UserData]
+RunContext_T = RunContext[UserData]
 
 
 # common functions
@@ -66,7 +73,7 @@ CallContext_T = CallContext[UserData]
 
 @function_tool()
 async def update_name(
-    name: Annotated[str, Field(description="The customer's name")], context: CallContext_T
+    name: Annotated[str, Field(description="The customer's name")], context: RunContext_T
 ) -> str:
     """Called when the user provides their name.
     Confirm the spelling with the user before calling the function."""
@@ -77,7 +84,7 @@ async def update_name(
 
 @function_tool()
 async def update_phone(
-    phone: Annotated[str, Field(description="The customer's phone number")], context: CallContext_T
+    phone: Annotated[str, Field(description="The customer's phone number")], context: RunContext_T
 ) -> str:
     """Called when the user provides their phone number.
     Confirm the spelling with the user before calling the function."""
@@ -87,10 +94,11 @@ async def update_phone(
 
 
 @function_tool()
-async def to_greeter(context: CallContext_T) -> Agent:
-    """Called when user asks any unrelated questions or requests any other services not in your job description."""
+async def to_greeter(context: RunContext_T) -> Agent:
+    """Called when user asks any unrelated questions or requests
+    any other services not in your job description."""
     curr_agent: BaseAgent = context.session.current_agent
-    return curr_agent._transfer_to_agent("greeter", context)
+    return await curr_agent._transfer_to_agent("greeter", context)
 
 
 class BaseAgent(Agent):
@@ -105,7 +113,7 @@ class BaseAgent(Agent):
         await self.update_chat_ctx(chat_ctx)
         self.session.generate_reply()
 
-    async def _transfer_to_agent(self, name: str, context: CallContext_T) -> tuple[Agent, str]:
+    async def _transfer_to_agent(self, name: str, context: RunContext_T) -> tuple[Agent, str]:
         userdata = context.userdata
         current_agent = context.session.current_agent
         next_agent = userdata.agents[name]
@@ -161,11 +169,12 @@ class Greeter(BaseAgent):
                 "make a reservation or order takeaway. Guide them to the right agent using tools."
             ),
             # llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
+            tts=cartesia.TTS(voice=voices["greeter"]),
         )
         self.menu = menu
 
     @function_tool()
-    async def to_reservation(self, context: CallContext_T) -> Agent:
+    async def to_reservation(self, context: RunContext_T) -> Agent:
         """Called when user wants to make a reservation.
         This function handles transitioning to the reservation agent
         who will collect the necessary details like reservation time,
@@ -173,7 +182,7 @@ class Greeter(BaseAgent):
         return await self._transfer_to_agent("reservation", context)
 
     @function_tool()
-    async def to_takeaway(self, context: CallContext_T) -> Agent:
+    async def to_takeaway(self, context: RunContext_T) -> Agent:
         """Called when the user wants to place a takeaway order.
         This includes handling orders for pickup, delivery, or when the user wants to
         proceed to checkout with their existing order."""
@@ -187,20 +196,21 @@ class Reservation(BaseAgent):
             "the reservation time, then customer's name, and phone number. Then "
             "confirm the reservation details with the customer.",
             tools=[update_name, update_phone, to_greeter],
+            tts=cartesia.TTS(voice=voices["reservation"]),
         )
 
     @function_tool()
     async def update_reservation_time(
         self,
         time: Annotated[str, Field(description="The reservation time")],
-        context: CallContext_T,
+        context: RunContext_T,
     ) -> str:
         userdata = context.userdata
         userdata.reservation_time = time
         return f"The reservation time is updated to {time}"
 
     @function_tool()
-    async def confirm_reservation(self, context: CallContext_T) -> str | tuple[Agent, str]:
+    async def confirm_reservation(self, context: RunContext_T) -> str | tuple[Agent, str]:
         userdata = context.userdata
         if not userdata.customer_name or not userdata.customer_phone:
             return "Please provide your name and phone number first."
@@ -218,20 +228,21 @@ class Takeaway(BaseAgent):
             "customer. Clarify special requests and confirm the order with the "
             "customer.",
             tools=[to_greeter],
+            tts=cartesia.TTS(voice=voices["takeaway"]),
         )
 
     @function_tool()
     async def update_order(
         self,
         items: Annotated[list[str], Field(description="The items of the full order")],
-        context: CallContext_T,
+        context: RunContext_T,
     ) -> str:
         userdata = context.userdata
         userdata.order = items
         return f"The order is updated to {items}"
 
     @function_tool()
-    async def to_checkout(self, context: CallContext_T) -> str | tuple[Agent, str]:
+    async def to_checkout(self, context: RunContext_T) -> str | tuple[Agent, str]:
         userdata = context.userdata
         if not userdata.order:
             return "No takeaway order found. Please make an order first."
@@ -249,13 +260,14 @@ class Checkout(BaseAgent):
                 "information, including the card number, expiry date, and CVV step by step."
             ),
             tools=[update_name, update_phone, to_greeter],
+            tts=cartesia.TTS(voice=voices["checkout"]),
         )
 
     @function_tool()
     async def confirm_expense(
         self,
         expense: Annotated[float, Field(description="The expense of the order")],
-        context: CallContext_T,
+        context: RunContext_T,
     ) -> str:
         userdata = context.userdata
         userdata.expense = expense
@@ -267,7 +279,7 @@ class Checkout(BaseAgent):
         number: Annotated[str, Field(description="The credit card number")],
         expiry: Annotated[str, Field(description="The expiry date of the credit card")],
         cvv: Annotated[str, Field(description="The CVV of the credit card")],
-        context: CallContext_T,
+        context: RunContext_T,
     ) -> str:
         userdata = context.userdata
         userdata.customer_credit_card = number
@@ -276,7 +288,7 @@ class Checkout(BaseAgent):
         return f"The credit card number is updated to {number}"
 
     @function_tool()
-    async def confirm_checkout(self, context: CallContext_T) -> str | tuple[Agent, str]:
+    async def confirm_checkout(self, context: RunContext_T) -> str | tuple[Agent, str]:
         userdata = context.userdata
         if not userdata.expense:
             return "Please confirm the expense first."
@@ -292,7 +304,7 @@ class Checkout(BaseAgent):
         return await to_greeter(context)
 
     @function_tool()
-    async def to_takeaway(self, context: CallContext_T) -> tuple[Agent, str]:
+    async def to_takeaway(self, context: RunContext_T) -> tuple[Agent, str]:
         return await self._transfer_to_agent("takeaway", context)
 
 
@@ -314,6 +326,8 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=cartesia.TTS(),
+        vad=silero.VAD.load(),
+        max_fnc_steps=5,
         # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 
