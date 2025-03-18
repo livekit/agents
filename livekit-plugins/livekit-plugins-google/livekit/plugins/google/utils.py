@@ -7,12 +7,12 @@ from typing import Any
 
 from google.genai import types
 from livekit.agents import llm
-from livekit.agents.llm.function_context import AIFunction
+from livekit.agents.llm import FunctionTool
 
 __all__ = ["to_chat_ctx", "to_fnc_ctx"]
 
 
-def to_fnc_ctx(fncs: list[llm.AIFunction]) -> list[types.FunctionDeclaration]:
+def to_fnc_ctx(fncs: list[FunctionTool]) -> list[types.FunctionDeclaration]:
     return [_build_gemini_fnc(fnc) for fnc in fncs]
 
 
@@ -86,8 +86,8 @@ def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
     return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.media_type)
 
 
-def _build_gemini_fnc(ai_function: AIFunction) -> types.FunctionDeclaration:
-    fnc = llm.utils.build_legacy_openai_schema(ai_function, internally_tagged=True)
+def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
+    fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
     json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
     return types.FunctionDeclaration(
         name=fnc["name"],

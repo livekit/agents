@@ -226,6 +226,12 @@ class AgentActivity(RecognitionHooks):
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)
 
+            elif self.stt and isinstance(self.llm, llm.LLM) and self.allow_interruptions:
+                logger.warning(
+                    "VAD is not set. Enabling VAD is recommended when using LLM and STT "
+                    "for more responsive interruption handling."
+                )
+
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
                 hooks=self,
@@ -587,8 +593,12 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)
 
-        tr_output = self._session.output.transcription
-        audio_output = self._session.output.audio
+        tr_output = (
+            self._session.output.transcription
+            if self._session.output.transcription_enabled
+            else None
+        )
+        audio_output = self._session.output.audio if self._session.output.audio_enabled else None
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
@@ -676,13 +686,18 @@ class AgentActivity(RecognitionHooks):
             "generation started", speech_id=speech_handle.id, step_index=speech_handle.step_index
         )
 
-        audio_output = self._session.output.audio
-        text_output = self._session.output.transcription
+        audio_output = self._session.output.audio if self._session.output.audio_enabled else None
+        text_output = (
+            self._session.output.transcription
+            if self._session.output.transcription_enabled
+            else None
+        )
         chat_ctx = chat_ctx.copy()
         tool_ctx = llm.ToolContext(tools)
 
         if user_input is not None:
-            chat_ctx.add_message(role="user", content=user_input)
+            user_msg = chat_ctx.add_message(role="user", content=user_input)
+            self._agent._chat_ctx.items.append(user_msg)
 
         if instructions is not None:
             try:
@@ -740,7 +755,7 @@ class AgentActivity(RecognitionHooks):
 
         # start to execute tools (only after play())
         exe_task, fnc_outputs = perform_tool_executions(
-            agent=self._session,
+            session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             function_stream=llm_gen_data.function_ch,
@@ -896,8 +911,12 @@ class AgentActivity(RecognitionHooks):
             realtime=True,
         )
 
-        audio_output = self._session.output.audio
-        text_output = self._session.output.transcription
+        audio_output = self._session.output.audio if self._session.output.audio_enabled else None
+        text_output = (
+            self._session.output.transcription
+            if self._session.output.transcription_enabled
+            else None
+        )
         tool_ctx = llm.ToolContext(self._agent.tools)
 
         await speech_handle.wait_if_not_interrupted(
@@ -963,7 +982,7 @@ class AgentActivity(RecognitionHooks):
         ]
 
         exe_task, fnc_outputs = perform_tool_executions(
-            agent=self._session,
+            session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             function_stream=generation_ev.function_stream,
@@ -1044,7 +1063,9 @@ class AgentActivity(RecognitionHooks):
                     ),
                 )
                 self._create_task(
-                    self._realtime_reply_task(speech_handle=handle),
+                    self._realtime_reply_task(
+                        speech_handle=handle, user_input=None, instructions=None
+                    ),
                     owned_speech_handle=handle,
                     name="TaskActivity.realtime_reply",
                 )

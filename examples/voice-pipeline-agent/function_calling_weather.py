@@ -42,7 +42,7 @@ class AssistantFnc(llm.FunctionContext):
         # Option 2: you can prompt the agent to return a text response when it's making a function call
 
         # uncomment for option 1
-        # agent = AgentCallContext.get_current().agent
+        # agent = AgentRunContext.get_current().agent
         # filler_messages = [
         #     "Let me check the weather in {location} for you.",
         #     "Let me see what the weather is like in {location} right now.",

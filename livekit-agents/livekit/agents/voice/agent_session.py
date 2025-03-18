@@ -170,7 +170,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return
 
-            self.update_agent(agent)
+            self._agent = agent
             self._update_agent_state(AgentState.INITIALIZING)
 
             if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
@@ -231,6 +231,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 await self._room_io.start()
 
+            else:
+                if not self.output.audio and not self.output.transcription:
+                    logger.warning(
+                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"
+                    )
+
             # it is ok to await it directly, there is no previous task to drain
             await self._update_activity_task(self._agent)
 
@@ -271,7 +277,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise RuntimeError("VoiceAgent isn't running")
+            raise RuntimeError("AgentSession isn't running")
+
+        if self._activity.draining:
+            if self._next_activity is None:
+                raise RuntimeError("AgentSession is closing, cannot use say()")
+
+            return self._next_activity.say(
+                text,
+                audio=audio,
+                allow_interruptions=allow_interruptions,
+                add_to_chat_ctx=add_to_chat_ctx,
+            )
 
         return self._activity.say(
             text,
@@ -288,7 +305,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise RuntimeError("VoiceAgent isn't running")
+            raise RuntimeError("AgentSession isn't running")
+
+        if self._activity.draining:
+            if self._next_activity is None:
+                raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+
+            return self._next_activity.generate_reply(
+                user_input=user_input,
+                instructions=instructions,
+                allow_interruptions=allow_interruptions,
+            )
 
         return self._activity.generate_reply(
             user_input=user_input,
@@ -298,7 +325,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def interrupt(self) -> None:
         if self._activity is None:
-            raise RuntimeError("VoiceAgent isn't running")
+            raise RuntimeError("AgentSession isn't running")
 
         self._activity.interrupt()
 
@@ -307,18 +334,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if self._started:
             self._update_activity_atask = asyncio.create_task(
-                self._update_activity_task(self._agent),
-                name="_update_activity_task",
+                self._update_activity_task(self._agent), name="_update_activity_task"
             )
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
         async with self._activity_lock:
+            self._next_activity = AgentActivity(task, self)
+
             if self._activity is not None:
                 await self._activity.drain()
                 await self._activity.aclose()
 
-            self._activity = AgentActivity(task, self)
+            self._activity = self._next_activity
+            self._next_activity = None
             await self._activity.start()
 
     @utils.log_exceptions(logger=logger)

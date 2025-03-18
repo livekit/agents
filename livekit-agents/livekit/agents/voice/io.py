@@ -249,9 +249,9 @@ class AgentOutput:
         self._audio_changed = audio_changed
         self._transcription_changed = transcription_changed
 
-        self._audio_enabled = False
-        self._video_enabled = False
-        self._transcription_enabled = False
+        self._audio_enabled = True
+        self._video_enabled = True
+        self._transcription_enabled = True
 
     def set_video_enabled(self, enabled: bool):
         if enabled == self._video_enabled:
@@ -322,8 +322,17 @@ class AgentOutput:
 
     @audio.setter
     def audio(self, sink: AudioOutput | None) -> None:
+        if sink is self._audio_sink:
+            return
+
+        if self._audio_sink:
+            self._audio_sink.on_detached()
+
         self._audio_sink = sink
         self._audio_changed()
+
+        if self._audio_sink:
+            self._audio_sink.on_attached()
 
     @property
     def transcription(self) -> TextOutput | None:
@@ -331,5 +340,14 @@ class AgentOutput:
 
     @transcription.setter
     def transcription(self, sink: TextOutput | None) -> None:
+        if sink is self._transcription_sink:
+            return
+
+        if self._transcription_sink:
+            self._transcription_sink.on_detached()
+
         self._transcription_sink = sink
         self._transcription_changed()
+
+        if self._transcription_sink:
+            self._transcription_sink.on_attached()

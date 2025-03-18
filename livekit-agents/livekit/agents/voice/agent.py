@@ -8,6 +8,7 @@ from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import ChatContext, FunctionTool, ToolError, find_function_tools
+from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .audio_recognition import _TurnDetector
@@ -23,7 +24,7 @@ class Agent:
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool] = None,
+        tools: list[llm.FunctionTool] | None = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -31,8 +32,7 @@ class Agent:
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        if tools is None:
-            tools = []
+        tools = tools or []
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
         self._tools = tools + find_function_tools(self)
@@ -54,7 +54,7 @@ class Agent:
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx.copy()
+        return _ReadOnlyChatContext(self._chat_ctx.items)
 
     async def update_instructions(self, instructions: str) -> None:
         """
@@ -264,19 +264,18 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        ai_functions: list[llm.FunctionTool] = None,
+        tools: list[llm.FunctionTool] | None = None,
         turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
-        if ai_functions is None:
-            ai_functions = []
+        tools = tools or []
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
-            tools=ai_functions,
+            tools=tools,
             turn_detector=turn_detector,
             stt=stt,
             vad=vad,
