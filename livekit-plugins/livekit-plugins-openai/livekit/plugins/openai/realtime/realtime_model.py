@@ -218,7 +218,7 @@ class RealtimeSession(
         )
 
     def send_event(self, event: RealtimeClientEvent | dict) -> None:
-        with contextlib.suppress(utils.aio.channel.ChanFull):
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
 
     @utils.log_exceptions(logger=logger)
