@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 import anthropic
 from livekit.agents import llm
-from livekit.agents.llm.function_context import AIFunction
+from livekit.agents.llm import FunctionTool
 
 CACHE_CONTROL_EPHEMERAL = anthropic.types.CacheControlEphemeralParam(type="ephemeral")
 
@@ -12,7 +12,7 @@ __all__ = ["to_fnc_ctx", "to_chat_ctx"]
 
 
 def to_fnc_ctx(
-    fncs: list[AIFunction], caching: Literal["ephemeral"] | None
+    fncs: list[FunctionTool], caching: Literal["ephemeral"] | None
 ) -> list[anthropic.types.ToolParam]:
     tools: list[anthropic.types.ToolParam] = []
     for i, fnc in enumerate(fncs):
@@ -78,7 +78,7 @@ def to_chat_ctx(
                     id=msg.call_id,
                     type="tool_use",
                     name=msg.name,
-                    input=json.loads(msg.arguments),
+                    input=json.loads(msg.arguments or "{}"),
                     cache_control=cache_ctrl,
                 )
             )
@@ -128,10 +128,10 @@ def _to_image_content(
 
 
 def _build_anthropic_schema(
-    ai_function: AIFunction,
+    function_tool: FunctionTool,
     cache_ctrl: anthropic.types.CacheControlEphemeralParam | None = None,
 ) -> anthropic.types.ToolParam:
-    fnc = llm.utils.build_legacy_openai_schema(ai_function, internally_tagged=True)
+    fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
     return anthropic.types.ToolParam(
         name=fnc["name"],
         description=fnc["description"] or "",
