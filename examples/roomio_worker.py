@@ -3,9 +3,9 @@ import logging
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession, CallContext
+from livekit.agents.voice import Agent, AgentSession, RunContext
 from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
-from livekit.plugins import cartesia, deepgram, openai
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 # from livekit.plugins import noise_cancellation
 
@@ -23,6 +23,7 @@ class EchoAgent(Agent):
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
             tts=cartesia.TTS(),
+            vad=silero.VAD.load()
         )
 
     async def on_enter(self):
@@ -30,7 +31,7 @@ class EchoAgent(Agent):
 
 
     @function_tool
-    async def talk_to_alloy(self, context: CallContext):
+    async def talk_to_alloy(self, context: RunContext):
         """Called when want to talk to Alloy."""
         return AlloyAgent(), "Transferring you to Alloy."
 
@@ -46,7 +47,7 @@ class AlloyAgent(Agent):
         self.session.generate_reply()
 
     @function_tool
-    async def talk_to_echo(self, context: CallContext):
+    async def talk_to_echo(self, context: RunContext):
         """Called when want to talk to Echo."""
         return EchoAgent(), "Transferring you to Echo."
 
