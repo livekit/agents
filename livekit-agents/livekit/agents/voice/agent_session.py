@@ -231,6 +231,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 await self._room_io.start()
 
+            else:
+                if not self.output.audio and not self.output.transcription:
+                    logger.warning(
+                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"
+                    )
+
             # it is ok to await it directly, there is no previous task to drain
             await self._update_activity_task(self._agent)
 

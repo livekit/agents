@@ -226,6 +226,12 @@ class AgentActivity(RecognitionHooks):
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)
 
+            elif self.stt and isinstance(self.llm, llm.LLM) and self.allow_interruptions:
+                logger.warning(
+                    "VAD is not set. Enabling VAD is recommended when using LLM and STT "
+                    "for more responsive interruption handling."
+                )
+
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
                 hooks=self,

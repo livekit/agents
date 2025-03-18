@@ -24,12 +24,11 @@ class EchoAgent(Agent):
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
             tts=cartesia.TTS(),
-            vad=silero.VAD.load()
+            vad=silero.VAD.load(),
         )
 
     async def on_enter(self):
         self.session.generate_reply()
-
 
     @function_tool
     async def talk_to_alloy(self, context: RunContext):
@@ -59,12 +58,12 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession()
 
     await session.start(
-        agent=AlloyAgent(),
+        agent=EchoAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             # noise_cancellation=noise_cancellation.BVC(),
         ),
-        room_output_options=RoomOutputOptions(transcription_enabled=True)
+        room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
 
 
