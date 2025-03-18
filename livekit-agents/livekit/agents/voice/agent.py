@@ -54,7 +54,7 @@ class Agent:
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return _ReadOnlyChatContext.from_chat_context(self._chat_ctx)
+        return _ReadOnlyChatContext(self._chat_ctx.items)
 
     async def update_instructions(self, instructions: str) -> None:
         """

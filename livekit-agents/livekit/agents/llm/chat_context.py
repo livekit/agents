@@ -211,16 +211,5 @@ class _ReadOnlyChatContext(ChatContext):
         def copy(self):
             return list(self)
 
-    @classmethod
-    def from_chat_context(cls, chat_ctx: ChatContext) -> _ReadOnlyChatContext:
-        return cls(chat_ctx.items)
-
-    def add_message(self, **kwargs) -> ChatMessage:
-        raise RuntimeError(_ReadOnlyChatContext.error_msg)
-
-    @property
-    def items(self) -> list[ChatItem]:
-        return self._ImmutableList(self._items)
-
-    def copy(self) -> ChatContext:
-        return ChatContext(self._items.copy())
+    def __init__(self, items: list[ChatItem]):
+        self._items = self._ImmutableList(items)
