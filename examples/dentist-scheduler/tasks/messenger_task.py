@@ -1,16 +1,17 @@
 import os
 from typing import Annotated
 
-from global_functions import (
-    transfer_to_receptionist,
-    transfer_to_scheduler,
-    update_information,
-)
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent
 from livekit.plugins import cartesia
 from pydantic import Field
 from supabase import AsyncClient, create_async_client
+
+from .global_functions import (
+    transfer_to_receptionist,
+    transfer_to_scheduler,
+    update_information,
+)
 
 
 class SupabaseClient:
@@ -49,7 +50,7 @@ class Messenger(Agent):
 
         await self.session.generate_reply(
             instructions=f"""Introduce yourself and ask {self.session.userdata["userinfo"].name} for their phone number if not given. 
-                            Their phone number is {self.session.userdata["userinfo"].phone}. Then, ask for the message they want to leave for the office."""
+            Then, ask for the message they want to leave for the office."""
         )
 
     @function_tool()
@@ -59,7 +60,7 @@ class Messenger(Agent):
         message: Annotated[
             str, Field(description="The user's message to be left for the office")
         ],
-    ) -> None:
+    ) -> str:
         """Records the user's message to be left for the office and the user's phone number."""
         self.session.userdata["userinfo"].phone = phone_number
         self.session.userdata["userinfo"].message = message
@@ -70,10 +71,6 @@ class Messenger(Agent):
                 phone=phone_number,
             )
             if data:
-                if self.session.current_speech:
-                    await self.session.current_speech.wait_for_playout()
-                await self.session.generate_reply(
-                    instructions="Inform the user that their message has been submitted."
-                )
+                return "Your message has been submitted."
         except Exception as e:
             raise Exception(f"Error sending data to Supabase: {e}")

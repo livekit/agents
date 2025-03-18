@@ -31,6 +31,30 @@ async def update_information(
 
 
 @function_tool()
+async def get_user_info(
+    field: Annotated[
+        str,
+        Field(
+            description="The type of information to be accessed, either 'phone_number', 'email', or 'name'"
+        ),
+    ],
+    context: RunContext,
+) -> str:
+    """
+    Retrieves information on record about the user. The only fields to access are names, phone numbers, and emails.
+    """
+    userinfo = context.userdata["userinfo"]
+    if field == "name" and userinfo.name:
+        return userinfo.name
+    elif field == "phone_number" and userinfo.phone:
+        return userinfo.phone
+    elif field == "email" and userinfo.email:
+        return userinfo.email
+    else:
+        return "Not given"
+
+
+@function_tool()
 async def transfer_to_receptionist(context: RunContext) -> tuple[Agent, str]:
     """Transfers the user to the receptionist for any office inquiries or when they are finished with managing appointments."""
     return context.userdata[

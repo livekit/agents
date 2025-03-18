@@ -15,9 +15,9 @@ from tasks import Messenger, Receptionist, Scheduler
 
 @dataclass
 class UserInfo:
-    name: str = "not given"
-    email: str = "not given"
-    phone: str = "not given"
+    name: str | None = None
+    email: str | None = None
+    phone: str | None = None
     message: str | None = None
 
 
