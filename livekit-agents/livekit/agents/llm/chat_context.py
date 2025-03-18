@@ -190,3 +190,26 @@ class ChatContext:
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)
+
+
+class _ReadOnlyChatContext(ChatContext):
+    """A read-only wrapper for ChatContext that prevents modifications."""
+
+    error_msg = (
+        "This is a read-only reference to the chat context. "
+        "Please use .copy() method to make a mutable copy."
+    )
+
+    class _ImmutableList(list):
+        def _raise_error(self, *args, **kwargs):
+            raise RuntimeError(_ReadOnlyChatContext.error_msg)
+
+        # override all mutating methods to raise errors
+        append = extend = pop = remove = clear = sort = reverse = _raise_error
+        __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error
+
+        def copy(self):
+            return list(self)
+
+    def __init__(self, items: list[ChatItem]):
+        self._items = self._ImmutableList(items)
