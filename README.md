@@ -119,6 +119,8 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 
 Documentation on the framework and how to use it can be found [here](https://docs.livekit.io/agents)
 
+Want to create your own LiveKit plugin? Check out our [plugin creation guide](create-livekit-plugin-guide.md).
+
 ## Example agents
 
 | Description                                                           | Demo Link                                      | Code Link                                                                                                     |
