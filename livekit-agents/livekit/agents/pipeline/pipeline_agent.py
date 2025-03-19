@@ -1393,6 +1393,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             return False
 
         # We should only have the check for min words when we are actively speaking, if not we should interrupt the agent process
+        # Also if we hit this block then it is 100% a human self interruption
         try:
             spoken_text = (
                 self._playing_speech.synthesis_handle.tts_forwarder.played_text
@@ -1401,11 +1402,13 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 logger.info(
                     "Interrupting the speech because the agent is not actively speaking"
                 )
+                AppConfig().is_human_interrupted = True
                 return True
         except:
             logger.info(
                 "Interrupting the speech because the agent is not actively speaking"
             )
+            AppConfig().is_human_interrupted = True
             return True
 
         if self._opts.int_min_words != 0:
