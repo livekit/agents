@@ -1,5 +1,15 @@
 # livekit-plugins-deepgram
 
+## 0.7.1
+
+### Patch Changes
+
+- add `nova-3-medical` to stt models - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
+- Add string type support to model parameter - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
+- support numerals deepgram stt - [#1667](https://github.com/livekit/agents/pull/1667) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.7.0
 
 ### Minor Changes

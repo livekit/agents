@@ -1,5 +1,11 @@
 # livekit-plugins-elevenlabs
 
+## 0.8.1
+
+### Patch Changes
+
+- Revert to using 'isFinal' in ElevenLabs for reliable audio packet completion detection - [#1676](https://github.com/livekit/agents/pull/1676) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.8.0
 
 ### Minor Changes

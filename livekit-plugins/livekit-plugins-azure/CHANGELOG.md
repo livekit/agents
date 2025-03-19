@@ -1,5 +1,11 @@
 # livekit-plugins-azure
 
+## 0.5.6
+
+### Patch Changes
+
+- Add callbacks as updatable Azure TTS options - [#1645](https://github.com/livekit/agents/pull/1645) ([@anishnag](https://github.com/anishnag))
+
 ## 0.5.5
 
 ### Patch Changes
