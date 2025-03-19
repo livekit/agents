@@ -842,7 +842,7 @@ class AgentActivity(RecognitionHooks):
         # important: no agent ouput should be used after this point
 
         if len(fnc_outputs) > 0:
-            if speech_handle.step_index >= self._session.options.max_fnc_steps:
+            if speech_handle.step_index >= self._session.options.max_tool_steps:
                 logger.warning(
                     "maximum number of function calls steps reached",
                     extra={"speech_id": speech_handle.id},
