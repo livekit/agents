@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Literal
 
+from app_config import AppConfig
 from livekit import rtc
 
 from .. import stt as speech_to_text
@@ -140,6 +142,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
                     self.emit("vad_inference_done", ev)
                 elif ev.type == voice_activity_detection.VADEventType.END_OF_SPEECH:
                     self._speaking = False
+                    AppConfig().last_human_vad_speech_time = time.perf_counter()
                     self.emit("end_of_speech", ev)
 
         async def _stt_stream_co() -> None:
@@ -147,6 +150,7 @@ class HumanInput(utils.EventEmitter[EventTypes]):
                 stt_forwarder.update(ev)
 
                 if ev.type == speech_to_text.SpeechEventType.FINAL_TRANSCRIPT:
+                    AppConfig().last_transcript_time = time.perf_counter()
                     self.emit("final_transcript", ev)
                 elif ev.type == speech_to_text.SpeechEventType.INTERIM_TRANSCRIPT:
                     self.emit("interim_transcript", ev)
