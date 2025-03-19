@@ -983,6 +983,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # add tool calls and text message to the chat context
         message_id_committed: str | None = None
+        logger.info(f"add_to_chat_ctx: {speech_handle.add_to_chat_ctx}")
+        logger.info(f"not user_question: {not user_question}")
+        logger.info(f"user_committed: {speech_handle.user_committed}")
         if speech_handle.add_to_chat_ctx and (
             not user_question or speech_handle.user_committed
         ):
