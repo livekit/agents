@@ -416,13 +416,14 @@ class RealtimeSession(
         if utils.is_given(voice):
             kwargs["voice"] = voice
 
-        self.send_event(
-            SessionUpdateEvent(
-                type="session.update",
-                session=session_update_event.Session.model_construct(**kwargs),
-                event_id=utils.shortuuid("options_update_"),
+        if kwargs:
+            self.send_event(
+                SessionUpdateEvent(
+                    type="session.update",
+                    session=session_update_event.Session.model_construct(**kwargs),
+                    event_id=utils.shortuuid("options_update_"),
+                )
             )
-        )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
