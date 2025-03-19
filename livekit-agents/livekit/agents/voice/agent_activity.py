@@ -1049,27 +1049,28 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-                self._rt_session.interrupt()
+                if self.llm.capabilities.message_truncation:
+                    self._rt_session.interrupt()
 
-                handle = SpeechHandle.create(
-                    allow_interruptions=speech_handle.allow_interruptions,
-                    step_index=speech_handle.step_index + 1,
-                    parent=speech_handle,
-                )
-                self._session.emit(
-                    "speech_created",
-                    SpeechCreatedEvent(
-                        speech_handle=handle, user_initiated=False, source="tool_response"
-                    ),
-                )
-                self._create_task(
-                    self._realtime_reply_task(
-                        speech_handle=handle, user_input=None, instructions=None
-                    ),
-                    owned_speech_handle=handle,
-                    name="TaskActivity.realtime_reply",
-                )
-                self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+                    handle = SpeechHandle.create(
+                        allow_interruptions=speech_handle.allow_interruptions,
+                        step_index=speech_handle.step_index + 1,
+                        parent=speech_handle,
+                    )
+                    self._session.emit(
+                        "speech_created",
+                        SpeechCreatedEvent(
+                            speech_handle=handle, user_initiated=False, source="tool_response"
+                        ),
+                    )
+                    self._create_task(
+                        self._realtime_reply_task(
+                            speech_handle=handle, user_input=None, instructions=None
+                        ),
+                        owned_speech_handle=handle,
+                        name="TaskActivity.realtime_reply",
+                    )
+                    self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
             if not ignore_task_switch and new_agent_task is not None:
                 self._session.update_agent(new_agent_task)

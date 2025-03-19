@@ -16,6 +16,24 @@ def to_fnc_ctx(fncs: list[FunctionTool]) -> list[types.FunctionDeclaration]:
     return [_build_gemini_fnc(fnc) for fnc in fncs]
 
 
+def get_tool_results_for_realtime(chat_ctx: llm.ChatContext) -> types.LiveClientToolResponse | None:
+    function_responses: list[types.FunctionResponse] = []
+    for msg in chat_ctx.items:
+        if msg.type == "function_call_output":
+            function_responses.append(
+                types.FunctionResponse(
+                    id=msg.call_id,
+                    name=msg.name,
+                    response={"text": msg.output},
+                )
+            )
+    return (
+        types.LiveClientToolResponse(function_responses=function_responses)
+        if function_responses
+        else None
+    )
+
+
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, cache_key: Any
 ) -> tuple[list[types.Content], types.Content | None]:

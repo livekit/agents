@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from google import genai
 from google.genai._api_client import HttpOptions
@@ -15,6 +16,9 @@ from google.genai.types import (
     LiveClientContent,
     LiveClientRealtimeInput,
     LiveConnectConfig,
+    LiveServerContent,
+    LiveServerToolCall,
+    LiveServerToolCallCancellation,
     Modality,
     Part,
     PrebuiltVoiceConfig,
@@ -24,9 +28,10 @@ from google.genai.types import (
 )
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from ...log import logger
-from ...utils import _build_gemini_fnc, to_chat_ctx
+from ...utils import _build_gemini_fnc, get_tool_results_for_realtime, to_chat_ctx
 from .api_proto import ClientEvents, LiveAPIModels, Voice
 
 # from .transcriber import TranscriberSession, TranscriptionContent
@@ -136,7 +141,9 @@ class RealtimeModel(llm.RealtimeModel):
         """
         if modalities is None:
             modalities = ["AUDIO"]
-        super().__init__(capabilities=llm.RealtimeCapabilities(message_truncation=False))
+        super().__init__(
+            capabilities=llm.RealtimeCapabilities(message_truncation=False, turn_detection=True)
+        )
         self._loop = loop or asyncio.get_event_loop()
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
         self._project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -187,10 +194,10 @@ class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
-        self._fnc_ctx = llm.FunctionContext.empty()
+        self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents]()
-        self._tools: list[FunctionDeclaration] = []
+        self._gemini_tools: list[Tool] = []
         self._client = genai.Client(
             http_options=HttpOptions(api_version="v1alpha"),
             api_key=self._opts.api_key,
@@ -209,6 +216,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._session = None
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
+        self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        self._pending_generation_event_id = None
 
         # if self._opts.enable_user_audio_transcription:
         #     self._transcriber = TranscriberSession(
@@ -228,34 +237,36 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
-            turns, _ = to_chat_ctx(chat_ctx, id(self))
             self._chat_ctx = chat_ctx
-            if turns:
+            turns, _ = to_chat_ctx(self._chat_ctx, id(self))
+            tool_results = get_tool_results_for_realtime(self._chat_ctx)
+            # giving priority to tool results
+            if tool_results:
+                print("tool_results", tool_results)
+                self._msg_ch.send_nowait(tool_results)
+            elif turns:
                 self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
 
-    async def update_fnc_ctx(self, fnc_ctx: llm.FunctionContext | list[llm.AIFunction]) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
         async with self._update_fnc_ctx_lock:
-            if isinstance(fnc_ctx, list):
-                fnc_ctx = llm.FunctionContext(fnc_ctx)
+            retained_tools: list[llm.FunctionTool] = []
+            gemini_function_declarations: list[FunctionDeclaration] = []
 
-            retained_functions: list[llm.AIFunction] = []
-            tools: list[FunctionDeclaration] = []
+            for tool in tools:
+                gemini_function = _build_gemini_fnc(tool)
+                gemini_function_declarations.append(gemini_function)
+                retained_tools.append(tool)
 
-            for ai_fnc in fnc_ctx.ai_functions.values():
-                tool_desc = _build_gemini_fnc(ai_fnc)
-                tools.append(tool_desc)
-                retained_functions.append(ai_fnc)
-
-            self._fnc_ctx = llm.FunctionContext(retained_functions)
-            self._tools = [Tool(function_declarations=tools)]
+            self._tools = llm.ToolContext(retained_tools)
+            self._gemini_tools = [Tool(function_declarations=gemini_function_declarations)]
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._chat_ctx
 
     @property
-    def fnc_ctx(self) -> llm.FunctionContext:
-        return self._fnc_ctx.copy()
+    def tools(self) -> llm.ToolContext:
+        return self._tools
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         # if self._opts.enable_user_audio_transcription and self._transcriber:
@@ -269,16 +280,28 @@ class RealtimeSession(llm.RealtimeSession):
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        event_id = utils.shortuuid("gemini-response-")
         fut = asyncio.Future()
+        self._response_created_futures[event_id] = fut
+        self._pending_generation_event_id = event_id
 
         ctx = [Content(parts=[Part(text=instructions or ".")])]
         self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
 
+        # Add timeout handling to prevent hanging futures
+        def _on_timeout() -> None:
+            if event_id in self._response_created_futures and not fut.done():
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+                self._response_created_futures.pop(event_id, None)
+                if self._pending_generation_event_id == event_id:
+                    self._pending_generation_event_id = None
+
+        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        fut.add_done_callback(lambda _: handle.cancel())
         return fut
 
     def interrupt(self) -> None:
         logger.warning("interrupt() - no direct cancellation in Gemini")
-        self._is_interrupted = True
 
     def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
         logger.warning(f"truncate(...) called for {message_id}, ignoring for Gemini")
@@ -287,16 +310,16 @@ class RealtimeSession(llm.RealtimeSession):
         self._msg_ch.close()
         if self._session:
             await self._session.close()
-        if self._transcriber:
-            await self._transcriber.aclose()
-        if self._agent_transcriber:
-            await self._agent_transcriber.aclose()
+
+        for fut in self._response_created_futures.values():
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError("Session closed"))
+
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
-        print("self tools", self._tools)
         config = LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             generation_config=GenerationConfig(
@@ -314,9 +337,8 @@ class RealtimeSession(llm.RealtimeSession):
                     prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
                 )
             ),
-            tools=self._tools,
+            tools=self._gemini_tools,
         )
-        print(config)
 
         async with self._client.aio.live.connect(model=self._opts.model, config=config) as session:
             self._session = session
@@ -380,11 +402,19 @@ class RealtimeSession(llm.RealtimeSession):
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
         )
+
+        # Resolve any pending future from generate_reply()
+        if self._pending_generation_event_id and (
+            fut := self._response_created_futures.pop(self._pending_generation_event_id, None)
+        ):
+            fut.set_result(generation_event)
+
+        self._pending_generation_event_id = None
         self.emit("generation_created", generation_event)
 
         self._current_generation.messages[self._active_response_id] = item_generation
 
-    def _handle_server_content(self, server_content):
+    def _handle_server_content(self, server_content: LiveServerContent):
         if not self._current_generation or not self._active_response_id:
             logger.warning(
                 "gemini-realtime-session: No active response ID, skipping server content"
@@ -411,22 +441,24 @@ class RealtimeSession(llm.RealtimeSession):
                     item_generation.audio_ch.send_nowait(frame)
 
         if server_content.interrupted or server_content.turn_complete:
-            self._finalize_response(item_generation)
+            self._finalize_response()
 
-    def _finalize_response(self, item_generation: _MessageGeneration):
-        item_generation.text_ch.close()
-        item_generation.audio_ch.close()
+    def _finalize_response(self) -> None:
+        if not self._current_generation:
+            return
 
-        if self._current_generation:
-            self._current_generation.message_ch.close()
-            self._current_generation.function_ch.close()
-            self._current_generation = None
+        for item_generation in self._current_generation.messages.values():
+            item_generation.text_ch.close()
+            item_generation.audio_ch.close()
 
+        self._current_generation.function_ch.close()
+        self._current_generation.message_ch.close()
+        self._current_generation = None
         self._is_interrupted = True
         self._active_response_id = None
         self.emit("agent_speech_stopped")
 
-    def _handle_tool_calls(self, tool_call):
+    def _handle_tool_calls(self, tool_call: LiveServerToolCall):
         if not self._current_generation:
             return
         for fnc_call in tool_call.function_calls:
@@ -438,8 +470,11 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=json.dumps(fnc_call.args),
                 )
             )
+        self._finalize_response()
 
-    def _handle_tool_call_cancellation(self, tool_call_cancellation):
+    def _handle_tool_call_cancellation(
+        self, tool_call_cancellation: LiveServerToolCallCancellation
+    ):
         logger.warning(
             "function call cancelled",
             extra={
