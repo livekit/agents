@@ -98,24 +98,8 @@ Clearly define environment variables:
 - Example: `YOURCOMPANY_API_KEY` for YourCompany API.
 
 ### Update Main README.md Tables
-Add your plugin to the appropriate integration tables in the main `README.md`:
+- Add your plugin to the appropriate integration tables in the main `README.md`:
 
-1. For STT plugins, add to the STT table:
-   ```markdown
-   | YourCompany | livekit-plugins-yourplugin | ✅/❌ | [yourplugin.STT()](link-to-docs) |
-   ```
-
-2. For TTS plugins, add to the TTS table:
-   ```markdown
-   | YourCompany | livekit-plugins-yourplugin | ✅/❌ | ✅/❌ | [yourplugin.TTS()](link-to-docs) |
-   ```
-
-3. For LLM plugins, add to the LLM table:
-   ```markdown
-   | YourCompany | livekit-plugins-yourplugin | [yourplugin.LLM()](link-to-docs) |
-   ```
-
-4. For other plugins, add to the "Other plugins" table.
 
 ## 5. Submit Your Changes
 
