@@ -29,42 +29,6 @@ Check existing plugins for reference:
 - **TTS:** [Cartesia](https://docs.livekit.io/python/livekit/plugins/cartesia/index.html#livekit.plugins.cartesia.TTS), [ElevenLabs](https://docs.livekit.io/python/livekit/plugins/elevenlabs/index.html#livekit.plugins.elevenlabs#livekit.plugins.elevenlabs.TTS), [OpenAI](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.TTS), [Deepgram](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.TTS)
 - **LLM:** [OpenAI](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.LLM), [Anthropic](https://docs.livekit.io/python/livekit/plugins/anthropic/index.html), [Google](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.LLM), [AWS](https://docs.livekit.io/python/livekit/plugins/aws/index.html#livekit.plugins.aws.LLM)
 
-### Creating OpenAI-Compatible LLM Plugins
-If you're integrating an LLM service with an OpenAI-compatible API, you can easily add a `with_` method to your LLM class:
-
-```python
-@staticmethod
-def with_your_provider(
-    *,
-    model: str = "default-model",
-    api_key: str | None = None,
-    base_url: str | None = "https://api.yourprovider.com/v1",
-    client: openai.AsyncClient | None = None,
-    user: str | None = None,
-    temperature: float | None = None,
-    parallel_tool_calls: bool | None = None,
-    tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-) -> LLM:
-    """
-    Create a new instance of YourProvider LLM.
-
-    ``api_key`` must be set to your YourProvider API key, either using the argument or by setting
-    the ``YOURPROVIDER_API_KEY`` environmental variable.
-    """
-    api_key = _get_api_key("YOURPROVIDER_API_KEY", api_key)
-    return LLM(
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        client=client,
-        user=user,
-        temperature=temperature,
-        parallel_tool_calls=parallel_tool_calls,
-        tool_choice=tool_choice,
-    )
-```
-
-This pattern allows users to easily configure your plugin for different providers while maintaining a consistent interface.
 
 ### Create Service Files
 Depending on your service, create:
@@ -166,16 +130,16 @@ Before publishing:
 
 ## 7. Final Submission Checklist
 
-[x] Plugin code is implemented and follows LiveKit patterns
-[x] Tests are created and passing
-[x] CI/CD workflows are updated
-[x] Installation script is updated
-[x] Documentation is thorough
-[x] README.md tables are updated
-[x] Environment variables are documented
-[x] Secrets are added to GitHub repository (if needed)
-[x] Changeset is created
-[x] Code is formatted and passes linting checks
+- [x] Plugin code is implemented and follows LiveKit patterns
+- [x] Tests are created and passing
+- [x] CI/CD workflows are updated
+- [x] Installation script is updated
+- [x] Documentation is thorough
+- [x] README.md tables are updated
+- [x] Environment variables are documented
+- [x] Secrets are added to GitHub repository (if needed)
+- [x] Changeset is created
+- [x] Code is formatted and passes linting checks
 
 ## Additional Resources
 
