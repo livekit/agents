@@ -4,30 +4,32 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from dataclasses import dataclass
-from typing import Callable, Literal, Optional, Union
+from typing import Callable, Literal, Optional, Union, TYPE_CHECKING
 
 from livekit import rtc
 
 from .. import llm, stt
 from ..log import logger
 
+from .agent import ModelSettings
+
 # TODO(theomonnom): can those types be simplified?
 STTNode = Callable[
-    [AsyncIterable[rtc.AudioFrame]],
+    [AsyncIterable[rtc.AudioFrame], ModelSettings],
     Union[
         Optional[Union[AsyncIterable[stt.SpeechEvent], AsyncIterable[str]]],
         Awaitable[Optional[Union[AsyncIterable[stt.SpeechEvent], AsyncIterable[str]]]],
     ],
 ]
 LLMNode = Callable[
-    [llm.ChatContext, list[llm.FunctionTool]],
+    [llm.ChatContext, list[llm.FunctionTool], ModelSettings],
     Union[
         Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]],
         Awaitable[Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]]],
     ],
 ]
 TTSNode = Callable[
-    [AsyncIterable[str]],
+    [AsyncIterable[str], ModelSettings],
     Union[
         Optional[AsyncIterable[rtc.AudioFrame]],
         Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],

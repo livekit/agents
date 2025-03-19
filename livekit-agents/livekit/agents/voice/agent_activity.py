@@ -41,8 +41,9 @@ def log_event(event: str, **kwargs) -> None:
     debug.Tracing.log_event(event, kwargs)
 
 
+from .agent import Agent, ModelSettings
+
 if TYPE_CHECKING:
-    from .agent import Agent
     from .agent_session import AgentSession
 
 
@@ -50,7 +51,7 @@ _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activ
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
 
-# NOTE: TaskActivity isn't exposed to the public API
+# NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
@@ -63,10 +64,13 @@ class AgentActivity(RecognitionHooks):
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
-        self._speech_q_changed = asyncio.Event()
+
+        # fired when a speech_task finishes or when a new speech_handle is scheduled
+        # this is used to wake up the main task when the scheduling state changes
+        self._q_updated = asyncio.Event()
 
         self._main_atask: asyncio.Task | None = None
-        self._tasks: list[asyncio.Task] = []
+        self._speech_tasks: list[asyncio.Task] = []
 
         from .. import llm as large_language_model
 
@@ -76,7 +80,14 @@ class AgentActivity(RecognitionHooks):
             and not self.allow_interruptions
         ):
             raise ValueError(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
+                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, "
+                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
+            )
+
+        if not self.vad and self.stt and isinstance(self.llm, llm.LLM) and self.allow_interruptions:
+            logger.warning(
+                "VAD is not set. Enabling VAD is recommended when using LLM and STT "
+                "for more responsive interruption handling."
             )
 
     @property
@@ -144,27 +155,35 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             await self._rt_session.update_chat_ctx(chat_ctx)
 
-    def _create_task(
+    def _create_speech_task(
         self,
         coro: Coroutine[Any, Any, Any],
         *,
         owned_speech_handle: SpeechHandle | None = None,
         name: str | None = None,
     ) -> asyncio.Task:
+        """
+        This method must only be used for tasks that "could" create a new SpeechHandle.
+        When draining, every task created with this method will be awaited.
+        """
         # https://github.com/python/cpython/pull/31837 alternative impl
         tk = _AgentActivityContextVar.set(self)
 
         task = asyncio.create_task(coro, name=name)
-        self._tasks.append(task)
-        task.add_done_callback(lambda _: self._tasks.remove(task))
+        self._speech_tasks.append(task)
+        task.add_done_callback(lambda _: self._speech_tasks.remove(task))
 
         if owned_speech_handle is not None:
             # make sure to finish playout in case something goes wrong
             # the tasks should normally do this before their function calls
             task.add_done_callback(lambda _: owned_speech_handle._mark_playout_done())
 
+        task.add_done_callback(lambda _: self._wake_up_main_task())
         _AgentActivityContextVar.reset(tk)
         return task
+
+    def _wake_up_main_task(self) -> None:
+        self._q_updated.set()
 
     # TODO(theomonnom): Shoukd pause and resume call on_enter and on_exit? probably not
     async def pause(self) -> None:
@@ -226,12 +245,6 @@ class AgentActivity(RecognitionHooks):
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)
 
-            elif self.stt and isinstance(self.llm, llm.LLM) and self.allow_interruptions:
-                logger.warning(
-                    "VAD is not set. Enabling VAD is recommended when using LLM and STT "
-                    "for more responsive interruption handling."
-                )
-
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
                 hooks=self,
@@ -243,7 +256,7 @@ class AgentActivity(RecognitionHooks):
             self._audio_recognition.start()
             self._started = True
 
-            task = self._create_task(
+            task = self._create_speech_task(
                 self._agent.on_enter(),
                 name="AgentTask_on_enter",
             )
@@ -257,13 +270,13 @@ class AgentActivity(RecognitionHooks):
             if self._draining:
                 return
 
-            task = self._create_task(
+            task = self._create_speech_task(
                 self._agent.on_exit(),
                 name="AgentTask_on_exit",
             )
             _authorize_inline_task(task)
 
-            self._speech_q_changed.set()  # TODO(theomonnom): we shouldn't need this here
+            self._wake_up_main_task()
             self._draining = True
             if self._main_atask is not None:
                 await asyncio.shield(self._main_atask)
@@ -330,15 +343,16 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
 
-        self._create_task(
+        self._create_speech_task(
             self._tts_task(
                 speech_handle=handle,
                 text=text,
                 audio=audio or None,
                 add_to_chat_ctx=add_to_chat_ctx,
+                model_settings=ModelSettings(),
             ),
             owned_speech_handle=handle,
-            name="TaskActivity.tts_say",
+            name="AgentActivity.tts_say",
         )
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
@@ -379,27 +393,29 @@ class AgentActivity(RecognitionHooks):
         )
 
         if isinstance(self.llm, llm.RealtimeModel):
-            self._create_task(
+            self._create_speech_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
                     user_input=user_input or None,
                     instructions=instructions or None,
+                    model_settings=ModelSettings(),
                 ),
                 owned_speech_handle=handle,
-                name="TaskActivity.realtime_reply",
+                name="AgentActivity.realtime_reply",
             )
 
         elif isinstance(self.llm, llm.LLM):
-            self._create_task(
+            self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=self._agent._chat_ctx,
                     tools=self._agent.tools,
                     user_input=user_input or None,
                     instructions=instructions or None,
+                    model_settings=ModelSettings(),
                 ),
                 owned_speech_handle=handle,
-                name="TaskActivity.pipeline_reply",
+                name="AgentActivity.pipeline_reply",
             )
 
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
@@ -416,33 +432,40 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.interrupt()
 
-    def _schedule_speech(self, speech: SpeechHandle, priority: int) -> None:
-        if self._draining:
-            raise RuntimeError("cannot schedule new speech, task is draining")
+    def _schedule_speech(
+        self, speech: SpeechHandle, priority: int, bypass_draining: bool = False
+    ) -> None:
+        """
+        This method is used to schedule a new speech.
+
+        Args:
+            bypass_draining: bypass_draining should only be used to allow the last tool response to be scheduled
+
+        Raises RuntimeError if the agent is draining
+        """
+        if self.draining and not bypass_draining:
+            raise RuntimeError("cannot schedule new speech, the agent is draining")
 
         heapq.heappush(self._speech_q, (priority, time.time(), speech))
-        self._speech_q_changed.set()
+        self._wake_up_main_task()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        try:
-            while True:
-                await self._speech_q_changed.wait()
-                while self._speech_q:
-                    _, _, speech = heapq.heappop(self._speech_q)
-                    self._current_speech = speech
-                    speech._authorize_playout()
-                    await speech.wait_for_playout()
-                    self._current_speech = None
+        while True:
+            await self._q_updated.wait()
+            while self._speech_q:
+                _, _, speech = heapq.heappop(self._speech_q)
+                self._current_speech = speech
+                speech._authorize_playout()
+                await speech.wait_for_playout()
+                self._current_speech = None
 
-                if self._draining:  # no more speech can be scheduled
-                    break
+            # If we're draining and there are no more speech tasks, we can exit.
+            # Only speech tasks can bypass draining to create a tool response
+            if self._draining and len(self._speech_tasks) == 0:
+                break
 
-                self._speech_q_changed.clear()
-        finally:
-            log_event(f"task done, waiting for {len(self._tasks)} tasks")
-            await asyncio.gather(*self._tasks)
-            log_event("marking agent task as done")
+            self._q_updated.clear()
 
     # -- Realtime Session events --
 
@@ -478,13 +501,13 @@ class AgentActivity(RecognitionHooks):
         )
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
-        if self.draining:
-            logger.warning("skipping new generation, task is draining")
-            log_event("skipping new generation, task is draining")
-            return
-
         if ev.user_initiated:
             # user_initiated generations are directly handled inside _realtime_reply_task
+            return
+
+        if self.draining:
+            # TODO(theomonnom): should we "forward" this new turn to the next agent?
+            logger.warning("skipping new realtime generation, the agent is draining")
             return
 
         handle = SpeechHandle.create(allow_interruptions=self.allow_interruptions)
@@ -493,13 +516,12 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=False, source="generate_reply"),
         )
 
-        self._create_task(
+        self._create_speech_task(
             self._realtime_generation_task(
-                speech_handle=handle,
-                generation_ev=ev,
+                speech_handle=handle, generation_ev=ev, model_settings=ModelSettings()
             ),
             owned_speech_handle=handle,
-            name="TaskActivity.realtime_generation",
+            name="AgentActivity.realtime_generation",
         )
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
@@ -575,6 +597,11 @@ class AgentActivity(RecognitionHooks):
             ),  # TODO(theomonnom): This doesn't allow edits yet
         )
 
+        if self.draining:
+            # TODO(theomonnom): should we "forward" this new turn to the next agent?
+            logger.warning("ignoring new user turn, the agent is draining")
+            return
+
         self.generate_reply(user_input=new_transcript)
 
     # AudioRecognition is calling this method to retrieve the chat context before running the TurnDetector model
@@ -590,6 +617,7 @@ class AgentActivity(RecognitionHooks):
         text: str | AsyncIterable[str],
         audio: AsyncIterable[rtc.AudioFrame] | None,
         add_to_chat_ctx: bool,
+        model_settings: ModelSettings,
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)
 
@@ -621,8 +649,10 @@ class AgentActivity(RecognitionHooks):
             audio_source = _read_text()
 
         tasks = []
-        tr_node = self._agent.transcription_node(text_source)
-        forward_text, text_out = perform_text_forwarding(text_output=tr_output, source=tr_node)
+        forward_text, text_out = perform_text_forwarding(
+            text_output=tr_output,
+            source=self._agent.transcription_node(text_source, model_settings),
+        )
         tasks.append(forward_text)
         if audio_output is None:
             # update the agent state based on text if no audio output
@@ -634,7 +664,7 @@ class AgentActivity(RecognitionHooks):
             if audio is None:
                 # generate audio using TTS
                 tts_task, tts_gen_data = perform_tts_inference(
-                    node=self._agent.tts_node, input=audio_source
+                    node=self._agent.tts_node, input=audio_source, model_settings=model_settings
                 )
                 tasks.append(tts_task)
 
@@ -677,9 +707,12 @@ class AgentActivity(RecognitionHooks):
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
         tools: list[llm.FunctionTool],
+        model_settings: ModelSettings,
         user_input: str | None = None,
         instructions: str | None = None,
     ) -> None:
+        from .agent import ModelSettings
+
         _SpeechHandleContextVar.set(speech_handle)
 
         log_event(
@@ -711,6 +744,7 @@ class AgentActivity(RecognitionHooks):
             node=self._agent.llm_node,
             chat_ctx=chat_ctx,
             tool_ctx=tool_ctx,
+            model_settings=model_settings,
         )
         tasks.append(llm_task)
         tts_text_input, llm_output = utils.aio.itertools.tee(llm_gen_data.text_ch)
@@ -719,7 +753,7 @@ class AgentActivity(RecognitionHooks):
         tts_gen_data: _TTSGenerationData | None = None
         if audio_output is not None:
             tts_task, tts_gen_data = perform_tts_inference(
-                node=self._agent.tts_node, input=tts_text_input
+                node=self._agent.tts_node, input=tts_text_input, model_settings=model_settings
             )
             tasks.append(tts_task)
 
@@ -731,11 +765,10 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             return
 
-        tr_source = llm_output
-        tr_node = self._agent.transcription_node(tr_source)
-        if tr_node is not None:
-            tr_source = tr_node
-        forward_task, text_out = perform_text_forwarding(text_output=text_output, source=tr_source)
+        forward_task, text_out = perform_text_forwarding(
+            text_output=text_output,
+            source=self._agent.transcription_node(llm_output, model_settings),
+        )
         tasks.append(forward_task)
 
         if audio_output is not None:
@@ -758,6 +791,7 @@ class AgentActivity(RecognitionHooks):
             session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
+            tool_choice=model_settings.tool_choice,
             function_stream=llm_gen_data.function_ch,
         )
 
@@ -853,16 +887,21 @@ class AgentActivity(RecognitionHooks):
                         speech_handle=handle, user_initiated=False, source="tool_response"
                     ),
                 )
-                self._create_task(
+                self._create_speech_task(
                     self._pipeline_reply_task(
                         speech_handle=handle,
                         chat_ctx=chat_ctx,
                         tools=tools,
+                        model_settings=ModelSettings(
+                            tool_choice=model_settings.tool_choice if not self.draining else "none",
+                        ),
                     ),
                     owned_speech_handle=handle,
-                    name="TaskActivity.pipeline_reply",
+                    name="AgentActivity.pipeline_reply",
                 )
-                self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+                self._schedule_speech(
+                    handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, bypass_draining=True
+                )
 
             if not ignore_task_switch and new_agent_task is not None:
                 self._session.update_agent(new_agent_task)
@@ -872,8 +911,9 @@ class AgentActivity(RecognitionHooks):
         self,
         *,
         speech_handle: SpeechHandle,
-        user_input: str | None,
-        instructions: str | None,
+        model_settings: ModelSettings,
+        user_input: str | None = None,
+        instructions: str | None = None,
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)  # not needed, but here for completeness
 
@@ -884,6 +924,8 @@ class AgentActivity(RecognitionHooks):
             chat_ctx.add_message(role="user", content=user_input)
             await self._rt_session.update_chat_ctx(chat_ctx)
 
+        self._rt_session.update_options(tool_choice=model_settings.tool_choice)
+
         generation_ev = await self._rt_session.generate_reply(
             instructions=instructions or NOT_GIVEN
         )
@@ -891,7 +933,11 @@ class AgentActivity(RecognitionHooks):
         await self._realtime_generation_task(
             speech_handle=speech_handle,
             generation_ev=generation_ev,
+            model_settings=model_settings,
         )
+
+        # TODO(theomonnom): reset tool_choice value (not needed for now, because it isn't exposed to the user)
+        # tool_choice is currently only set to None when draining
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
@@ -899,6 +945,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         generation_ev: llm.GenerationCreatedEvent,
+        model_settings: ModelSettings,
     ) -> None:
         _SpeechHandleContextVar.set(speech_handle)
 
@@ -942,12 +989,9 @@ class AgentActivity(RecognitionHooks):
                 audio_out = None
 
                 if text_output is not None:
-                    tr_source = msg.text_stream
-                    tr_node = self._agent.transcription_node(tr_source)
-                    if tr_node is not None:
-                        tr_source = tr_node
                     forward_task, text_out = perform_text_forwarding(
-                        text_output=text_output, source=tr_source
+                        text_output=text_output,
+                        source=self._agent.transcription_node(msg.text_stream, model_settings),
                     )
 
                     forward_tasks.append(forward_task)
@@ -975,9 +1019,9 @@ class AgentActivity(RecognitionHooks):
 
         message_outputs: list[tuple[_TextOutput | None, _AudioOutput | None]] = []
         tasks = [
-            self._create_task(
+            self._create_speech_task(
                 _read_messages(message_outputs),
-                name="TaskActivity.realtime_generation.read_messages",
+                name="AgentActivity.realtime_generation.read_messages",
             )
         ]
 
@@ -985,6 +1029,7 @@ class AgentActivity(RecognitionHooks):
             session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
+            tool_choice=model_settings.tool_choice,
             function_stream=generation_ev.function_stream,
         )
 
@@ -1062,14 +1107,21 @@ class AgentActivity(RecognitionHooks):
                         speech_handle=handle, user_initiated=False, source="tool_response"
                     ),
                 )
-                self._create_task(
+                self._create_speech_task(
                     self._realtime_reply_task(
-                        speech_handle=handle, user_input=None, instructions=None
+                        speech_handle=handle,
+                        model_settings=ModelSettings(
+                            tool_choice=model_settings.tool_choice if not self.draining else "none",
+                        ),
                     ),
                     owned_speech_handle=handle,
-                    name="TaskActivity.realtime_reply",
+                    name="AgentActivity.realtime_reply",
                 )
-                self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+                self._schedule_speech(
+                    handle,
+                    SpeechHandle.SPEECH_PRIORITY_NORMAL,
+                    bypass_draining=True,
+                )
 
             if not ignore_task_switch and new_agent_task is not None:
                 self._session.update_agent(new_agent_task)

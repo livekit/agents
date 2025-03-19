@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from livekit import rtc
 
 from .. import debug, llm, utils
+from ..types import NOT_GIVEN, NotGivenOr
 from ..llm import ChatChunk, ChatContext, StopResponse, ToolContext, ToolError, utils as llm_utils
 from ..log import logger
 from ..utils import aio
@@ -19,6 +20,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from .agent import Agent
     from .agent_session import AgentSession
+    from .agent import ModelSettings
 
 
 @runtime_checkable
@@ -36,7 +38,11 @@ class _LLMGenerationData:
 
 
 def perform_llm_inference(
-    *, node: io.LLMNode, chat_ctx: ChatContext, tool_ctx: ToolContext | None
+    *,
+    node: io.LLMNode,
+    chat_ctx: ChatContext,
+    tool_ctx: ToolContext | None,
+    model_settings: ModelSettings,
 ) -> tuple[asyncio.Task, _LLMGenerationData]:
     text_ch = aio.Chan()
     function_ch = aio.Chan()
@@ -46,7 +52,9 @@ def perform_llm_inference(
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
         llm_node = node(
-            chat_ctx, list(tool_ctx.function_tools.values()) if tool_ctx is not None else []
+            chat_ctx,
+            list(tool_ctx.function_tools.values()) if tool_ctx is not None else [],
+            model_settings,
         )
         if asyncio.iscoroutine(llm_node):
             llm_node = await llm_node
@@ -110,13 +118,13 @@ class _TTSGenerationData:
 
 
 def perform_tts_inference(
-    *, node: io.TTSNode, input: AsyncIterable[str]
+    *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
 ) -> tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
-        tts_node = node(input)
+        tts_node = node(input, model_settings)
         if asyncio.iscoroutine(tts_node):
             tts_node = await tts_node
 
@@ -233,6 +241,7 @@ def perform_tool_executions(
     session: AgentSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
+    tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
 ) -> tuple[
     asyncio.Task,
@@ -244,6 +253,7 @@ def perform_tool_executions(
             session=session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
+            tool_choice=tool_choice,
             function_stream=function_stream,
             out=out,
         ),
@@ -258,6 +268,7 @@ async def _execute_tools_task(
     session: AgentSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
+    tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
     out: list[_PythonOutput],
 ) -> None:
@@ -269,6 +280,18 @@ async def _execute_tools_task(
     tasks: list[asyncio.Task] = []
     try:
         async for fnc_call in function_stream:
+            if tool_choice == "none":
+                logger.error(
+                    "received a tool call with tool_choice set to 'none', ignoring",
+                    extra={
+                        "function": fnc_call.name,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                continue
+
+            # TODO(theomonnom): assert other tool_choice values
+
             if (function_tool := tool_ctx.function_tools.get(fnc_call.name)) is None:
                 logger.warning(
                     f"unknown AI function `{fnc_call.name}`",

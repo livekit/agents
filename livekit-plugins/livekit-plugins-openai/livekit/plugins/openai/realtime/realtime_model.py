@@ -398,11 +398,28 @@ class RealtimeSession(
     def tools(self) -> llm.ToolContext:
         return self._tools.copy()
 
-    def update_options(self, *, voice: str) -> None:
+    def update_options(
+        self,
+        *,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        kwargs = {}
+
+        if utils.is_given(tool_choice):
+            oai_tool_choice = tool_choice
+            if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
+                oai_tool_choice = tool_choice["function"]
+
+            kwargs["tool_choice"] = oai_tool_choice
+
+        if utils.is_given(voice):
+            kwargs["voice"] = voice
+
         self.send_event(
             SessionUpdateEvent(
                 type="session.update",
-                session=session_update_event.Session.model_construct(voice=voice),
+                session=session_update_event.Session.model_construct(**kwargs),
                 event_id=utils.shortuuid("options_update_"),
             )
         )

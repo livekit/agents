@@ -117,6 +117,11 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None: ...
 
     @abstractmethod
+    def update_options(
+        self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
+    ) -> None: ...
+
+    @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
 
     @abstractmethod
