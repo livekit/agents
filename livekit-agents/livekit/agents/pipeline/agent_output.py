@@ -85,9 +85,10 @@ class SynthesisHandle:
             extra={"speech_id": self.speech_id},
         )
         logger.info(f"AGENT INTERRUPTED TEXT: {self.tts_forwarder.played_text}")
-        AppConfig().call_metadata.update({"agent_has_been_interrupted": True})
+        # AppConfig().call_metadata.update({"agent_has_been_interrupted": True})
 
         if self._play_handle is not None:
+            logger.info("There is an active play handle, interrupting it")
             self._play_handle.interrupt()
 
         self._interrupt_fut.set_result(None)
