@@ -489,12 +489,14 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_bytes(frame.data.tobytes())
 
                     if has_ended:
+                        logger.info("Deepgram: About to send finalize message")
                         self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
                         has_ended = False
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
+            logger.info("Deepgram: About to send close message")
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
         @utils.log_exceptions(logger=logger)
@@ -567,9 +569,9 @@ class SpeechStream(stt.SpeechStream):
             "vad_events": True,
             "sample_rate": self._opts.sample_rate,
             "channels": self._opts.num_channels,
-            "endpointing": False
-            if self._opts.endpointing_ms == 0
-            else self._opts.endpointing_ms,
+            "endpointing": (
+                False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms
+            ),
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
         }
