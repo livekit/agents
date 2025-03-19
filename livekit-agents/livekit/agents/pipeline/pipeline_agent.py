@@ -977,8 +977,15 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
+        logger.info(
+            f"collected_text: {collected_text}\ninterrupted: {interrupted}\nis_using_tools: {is_using_tools}"
+        )
+
         # add tool calls and text message to the chat context
         message_id_committed: str | None = None
+        logger.info(f"add_to_chat_ctx: {speech_handle.add_to_chat_ctx}")
+        logger.info(f"not user_question: {not user_question}")
+        logger.info(f"user_committed: {speech_handle.user_committed}")
         if speech_handle.add_to_chat_ctx and (
             not user_question or speech_handle.user_committed
         ):
@@ -1046,10 +1053,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 else:
                     self.emit("agent_speech_committed", msg)
 
-                AppConfig().call_metadata.update(
-                    {"updated_chat_ctx_with_collected_text": True}
-                )
-
                 logger.debug(
                     "committed agent speech",
                     extra={
@@ -1058,6 +1061,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         "speech_id": speech_handle.id,
                     },
                 )
+
+        AppConfig().call_metadata.update({"updated_chat_ctx_with_collected_text": True})
         playing_lock.release()
 
         @utils.log_exceptions(logger=logger)
@@ -1364,6 +1369,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _should_interrupt(self) -> bool:
         if self._playing_speech is None:
+            logger.info("No playing speech, skipping interrupt")
             return False
 
         if "potential_user_question" not in AppConfig().call_metadata:
@@ -1381,14 +1387,21 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             not self._playing_speech.allow_interruptions
             or self._playing_speech.interrupted
         ):
+            logger.info(
+                "Skipping interrupt because the speech is not allowed to be interrupted or is already interrupted"
+            )
             return False
 
         if self._opts.int_min_words != 0:
             text = self._transcribed_interim_text or self._transcribed_text
             interim_words = self._opts.transcription.word_tokenizer.tokenize(text=text)
             if len(interim_words) < self._opts.int_min_words:
+                logger.info(
+                    "Skipping interrupt because the number of interim words is less than the minimum number of words"
+                )
                 return False
 
+        logger.info("Interrupting the speech because the interrupt threshold is met")
         return True
 
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
