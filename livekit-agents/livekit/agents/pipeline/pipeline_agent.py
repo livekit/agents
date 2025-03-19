@@ -1053,10 +1053,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 else:
                     self.emit("agent_speech_committed", msg)
 
-                AppConfig().call_metadata.update(
-                    {"updated_chat_ctx_with_collected_text": True}
-                )
-
                 logger.debug(
                     "committed agent speech",
                     extra={
@@ -1065,6 +1061,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         "speech_id": speech_handle.id,
                     },
                 )
+
+        AppConfig().call_metadata.update({"updated_chat_ctx_with_collected_text": True})
         playing_lock.release()
 
         @utils.log_exceptions(logger=logger)
