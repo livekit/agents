@@ -977,6 +977,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
+        logger.info(
+            f"collected_text: {collected_text}\ninterrupted: {interrupted}\nis_using_tools: {is_using_tools}"
+        )
+
         # add tool calls and text message to the chat context
         message_id_committed: str | None = None
         if speech_handle.add_to_chat_ctx and (
