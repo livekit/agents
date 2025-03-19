@@ -486,6 +486,7 @@ class SpeechStream(stt.SpeechStream):
 
                 for frame in frames:
                     self._audio_duration_collector.push(frame.duration)
+                    logger.info(f"Deepgram: Sending frame of duration {frame.duration}")
                     await ws.send_bytes(frame.data.tobytes())
 
                     if has_ended:
