@@ -87,7 +87,7 @@ class SynthesisHandle:
         logger.info(f"AGENT INTERRUPTED TEXT: {self.tts_forwarder.played_text}")
         if (
             self.tts_forwarder.played_text
-            and self.tts_forwarder.played_text.strip() is not None
+            and self.tts_forwarder.played_text.strip() != ''
         ):
             AppConfig().call_metadata.update({"agent_has_been_interrupted": True})
 
