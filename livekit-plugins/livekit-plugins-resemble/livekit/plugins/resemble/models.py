@@ -7,7 +7,4 @@ class OutputFormat(str, Enum):
 
 
 class Precision(str, Enum):
-    PCM_32 = "PCM_32"
-    PCM_24 = "PCM_24"
     PCM_16 = "PCM_16"
-    MULAW = "MULAW" 
