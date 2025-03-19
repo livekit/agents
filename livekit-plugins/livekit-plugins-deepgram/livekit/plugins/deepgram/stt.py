@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import math
 import os
 import weakref
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
+from app_config import AppConfig
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -488,8 +490,9 @@ class SpeechStream(stt.SpeechStream):
                     self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-                    if has_ended:
+                    if AppConfig().get_call_metadata().get("should_flush_stt"):
                         logger.info("Deepgram: About to send finalize message")
+                        AppConfig().get_call_metadata().pop("should_flush_stt")
                         self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
                         has_ended = False
