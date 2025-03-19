@@ -34,12 +34,12 @@ from .realtime import (
 from .tool_context import (
     FunctionTool,
     StopResponse,
+    ToolChoice,
     ToolContext,
     ToolError,
     find_function_tools,
     function_tool,
     is_function_tool,
-    ToolChoice,
 )
 
 __all__ = [

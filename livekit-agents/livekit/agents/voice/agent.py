@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from collections.abc import AsyncIterable
-from typing import TYPE_CHECKING, Generic, TypeVar, overload
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from livekit import rtc
 
@@ -14,9 +14,9 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 
 if TYPE_CHECKING:
-    from .audio_recognition import _TurnDetector
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
+    from .audio_recognition import _TurnDetector
 
 
 @dataclass

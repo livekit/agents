@@ -4,13 +4,12 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from dataclasses import dataclass
-from typing import Callable, Literal, Optional, Union, TYPE_CHECKING
+from typing import Callable, Literal, Optional, Union
 
 from livekit import rtc
 
 from .. import llm, stt
 from ..log import logger
-
 from .agent import ModelSettings
 
 # TODO(theomonnom): can those types be simplified?

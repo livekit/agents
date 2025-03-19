@@ -18,7 +18,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Protocol, runtime_checkable
 
-from typing_extensions import TypeGuard, TypedDict, Required
+from typing_extensions import Required, TypedDict, TypeGuard
 
 
 # Used by ToolChoice

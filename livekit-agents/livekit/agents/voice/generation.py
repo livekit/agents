@@ -10,17 +10,16 @@ from pydantic import ValidationError
 from livekit import rtc
 
 from .. import debug, llm, utils
-from ..types import NOT_GIVEN, NotGivenOr
 from ..llm import ChatChunk, ChatContext, StopResponse, ToolContext, ToolError, utils as llm_utils
 from ..log import logger
+from ..types import NotGivenOr
 from ..utils import aio
 from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .agent import Agent
+    from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
-    from .agent import ModelSettings
 
 
 @runtime_checkable

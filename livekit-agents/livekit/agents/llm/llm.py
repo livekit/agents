@@ -5,10 +5,9 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
-from typing import Any, Generic, Literal, TypedDict, TypeVar, Union
+from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, Field
-from typing_extensions import Required
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
