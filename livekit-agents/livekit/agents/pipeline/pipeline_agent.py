@@ -1043,12 +1043,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
                 if interrupted:
                     self.emit("agent_speech_interrupted", msg)
-                    AppConfig().call_metadata.update(
-                        {"updated chat_ctx_with_collected_text": True}
-                    )
-
                 else:
                     self.emit("agent_speech_committed", msg)
+
+                AppConfig().call_metadata.update(
+                    {"updated_chat_ctx_with_collected_text": True}
+                )
 
                 logger.debug(
                     "committed agent speech",
