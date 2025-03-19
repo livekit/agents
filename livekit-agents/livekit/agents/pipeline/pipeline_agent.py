@@ -1046,6 +1046,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 else:
                     self.emit("agent_speech_committed", msg)
 
+                AppConfig().call_metadata.update(
+                    {"updated_chat_ctx_with_collected_text": True}
+                )
+
                 logger.debug(
                     "committed agent speech",
                     extra={
