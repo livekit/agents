@@ -40,7 +40,7 @@ from .log import logger
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
 RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
 NUM_CHANNELS = 1
-
+DEFAULT_VOICE_UUID = '55592656'
 
 @dataclass
 class _Options:
@@ -53,7 +53,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        voice_uuid: str,
+        voice_uuid: str | None = DEFAULT_VOICE_UUID,
         sample_rate: int = 44100,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -78,7 +78,6 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
         )
 
-        # HTTP session for REST API calls
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
         
