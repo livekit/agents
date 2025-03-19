@@ -36,7 +36,6 @@ from livekit.agents import (
 )
 
 from .log import logger
-from .models import OutputFormat, Precision
 
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
 RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
@@ -47,10 +46,6 @@ NUM_CHANNELS = 1
 class _Options:
     voice_uuid: str
     sample_rate: int
-    precision: Precision
-    output_format: OutputFormat
-    binary_response: bool
-    no_audio_header: bool
 
 
 class TTS(tts.TTS):
@@ -60,10 +55,6 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         voice_uuid: str,
         sample_rate: int = 44100,
-        precision: Union[Precision, str] = Precision.PCM_16,
-        output_format: Union[OutputFormat, str] = OutputFormat.WAV,
-        binary_response: bool = False,
-        no_audio_header: bool = True,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -80,64 +71,26 @@ class TTS(tts.TTS):
             raise ValueError(
                 "Resemble API key is required, either as argument or set RESEMBLE_API_KEY environment variable"
             )
-        
-        # Convert string enum values to their proper types if needed
-        if isinstance(precision, str):
-            precision = Precision(precision)
-        if isinstance(output_format, str):
-            output_format = OutputFormat(output_format)
             
         # Set options
         self._opts = _Options(
             voice_uuid=voice_uuid,
             sample_rate=sample_rate,
-            precision=precision,
-            output_format=output_format,
-            binary_response=binary_response,
-            no_audio_header=no_audio_header,
         )
         
         # HTTP session for REST API calls
         self._session = http_session
-        self._private_session = None
-        self._owns_session = False
         self._streams = weakref.WeakSet[SynthesizeStream]()
-
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        """Ensure a HTTP session is available."""
-        if self._session:
-            return self._session
-        
-        try:
-            # Try to use the LiveKit utility if available in an agent context
-            self._session = utils.http_context.http_session()
-            return self._session
-        except RuntimeError:
-            # If not in an agent context, create our own session
-            if not self._private_session:
-                self._private_session = aiohttp.ClientSession()
-                self._owns_session = True
-            return self._private_session
 
     def update_options(
         self,
         *,
         voice_uuid: str | None = None,
-        precision: Union[Precision, str, None] = None,
-        output_format: Union[OutputFormat, str, None] = None,
         **kwargs,
     ) -> None:
         """Update TTS options."""
         if voice_uuid:
             self._opts.voice_uuid = voice_uuid
-        if precision:
-            if isinstance(precision, str):
-                precision = Precision(precision)
-            self._opts.precision = precision
-        if output_format:
-            if isinstance(output_format, str):
-                output_format = OutputFormat(output_format)
-            self._opts.output_format = output_format
 
     def synthesize(
         self,
@@ -152,8 +105,7 @@ class TTS(tts.TTS):
             opts=self._opts,
             conn_options=conn_options,
             api_key=self._api_key,
-            session=self._ensure_session(),
-            should_close_session=False,  # Let TTS handle session lifecycle
+            session=self._session,
         )
 
     def stream(
@@ -184,11 +136,6 @@ class TTS(tts.TTS):
             await stream.aclose()
         self._streams.clear()
         
-        # Close the private session if we own it
-        if self._owns_session and self._private_session:
-            await self._private_session.close()
-            self._private_session = None
-        
         await super().aclose()
 
 
@@ -203,13 +150,11 @@ class ChunkedStream(tts.ChunkedStream):
         conn_options: Optional[APIConnectOptions] = None,
         api_key: str | None = None,
         session: aiohttp.ClientSession,
-        should_close_session: bool = False,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
         self._api_key = api_key
         self._session = session
-        self._should_close_session = should_close_session
         self._segment_id = utils.shortuuid()
 
     async def _run(self) -> None:
@@ -228,7 +173,6 @@ class ChunkedStream(tts.ChunkedStream):
             "voice_uuid": self._opts.voice_uuid,
             "data": self._input_text,
             "sample_rate": self._opts.sample_rate,
-            "output_format": self._opts.output_format,
         }
         
         # Create decoder for audio processing
@@ -332,9 +276,6 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError(f"Error during synthesis: {e}") from e
         finally:
             await decoder.aclose()
-            # Clean up session if we own it
-            if self._should_close_session:
-                await self._session.close()
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -539,27 +480,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         async with self._ws_lock:
                             message = await self._websocket.recv()
                         
-                        # Handle binary response (when binary_response=true)
-                        if isinstance(message, bytes):
-                            logger.info(f"Received binary audio data: {len(message)} bytes")
-                            decoder.push(message)
-                            
-                            # Process decoded audio frames
-                            frame_count = 0
-                            async for frame in decoder:
-                                frame_count += 1
-                                logger.info(f"Emitting audio frame {frame_count}: {frame.samples_per_channel} samples")
-                                emitter.push(frame)
-                            
-                            # If we didn't get any frames, log a warning
-                            if frame_count == 0:
-                                logger.warning("No audio frames were decoded from the audio data")
-                            else:
-                                logger.info(f"Successfully decoded {frame_count} frames from audio data")
-                                # Immediately flush after each chunk to ensure frames are available
-                                emitter.flush()
-                            continue
-                        
                         # Handle JSON response
                         try:
                             data = json.loads(message)
@@ -572,51 +492,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 logger.info(f"Received audio data: {len(audio_data)} bytes")
                                 
                                 try:
-                                    # When no_audio_header is True, we get raw PCM samples
-                                    # Convert the raw bytes directly to an audio frame
-                                    if self._opts.no_audio_header:
-                                        # For PCM_16, each sample is 2 bytes (16 bits)
-                                        bytes_per_sample = 2
-                                        samples_per_channel = len(audio_data) // bytes_per_sample
-                                        
-                                        # Create audio frame directly from the PCM data
-                                        frame = rtc.AudioFrame(
-                                            data=audio_data,
-                                            samples_per_channel=samples_per_channel,
-                                            sample_rate=self._opts.sample_rate,
-                                            num_channels=NUM_CHANNELS,
-                                        )
-                                        
-                                        logger.info(f"Created direct audio frame with {samples_per_channel} samples from raw PCM data")
-                                        emitter.push(frame)
-                                    else:
-                                        # If we have an audio header (WAV format)
-                                        data_chunk_pos = audio_data.find(b'data')
-                                        if data_chunk_pos >= 0:
-                                            # Skip the 'data' marker (4 bytes) and the chunk size (4 bytes)
-                                            pcm_data_start = data_chunk_pos + 8
-                                            # Get the chunk size (4 bytes little-endian)
-                                            chunk_size = int.from_bytes(audio_data[data_chunk_pos+4:data_chunk_pos+8], byteorder='little')
-                                            logger.info(f"Found WAV data chunk at position {data_chunk_pos}, size: {chunk_size}, data starts at {pcm_data_start}")
-                                            pcm_data = audio_data[pcm_data_start:pcm_data_start+chunk_size]
-                                        else:
-                                            # If we can't find the data chunk, assume standard 44-byte header
-                                            pcm_data = audio_data[44:]
-                                            logger.info("Using standard 44-byte WAV header offset")
-                                        
-                                        # Create an audio frame from the PCM data
-                                        samples_per_channel = len(pcm_data) // (2 * NUM_CHANNELS)  # 2 bytes per sample (16-bit PCM)
-                                        frame = rtc.AudioFrame(
-                                            data=pcm_data,
-                                            samples_per_channel=samples_per_channel,
-                                            sample_rate=self._opts.sample_rate,
-                                            num_channels=NUM_CHANNELS,
-                                        )
-                                        
-                                        logger.info(f"Created audio frame with {samples_per_channel} samples from WAV data")
-                                        emitter.push(frame)
+                                    # For PCM_16, each sample is 2 bytes (16 bits)
+                                    bytes_per_sample = 2
+                                    samples_per_channel = len(audio_data) // bytes_per_sample
                                     
-                                    # Flush after each chunk
+                                    # Create audio frame directly from the PCM data
+                                    frame = rtc.AudioFrame(
+                                        data=audio_data,
+                                        samples_per_channel=samples_per_channel,
+                                        sample_rate=self._opts.sample_rate,
+                                        num_channels=NUM_CHANNELS,
+                                    )
+
+                                    emitter.push(frame)
+                                    
                                     emitter.flush()
                                     
                                 except Exception as e:
@@ -693,11 +582,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "voice_uuid": self._opts.voice_uuid,
                         "data": text,
                         "request_id": self._request_id,
-                        "binary_response": self._opts.binary_response,
-                        "output_format": self._opts.output_format,
                         "sample_rate": self._opts.sample_rate,
-                        "precision": self._opts.precision,
-                        "no_audio_header": self._opts.no_audio_header,
+                        "precision": "PCM_16",
+                        "no_audio_header": True,
                     }
                     
                     # Add request to pending set
