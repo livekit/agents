@@ -3,7 +3,7 @@
 ## 1. Set Up Your Plugin
 
 ### Copy Template
-Copy the `livekit-plugins-minimal` folder to start your plugin.
+Copy the [`livekit-plugins-minimal`](livekit-plugins/livekit-plugins-minimal) folder to start your plugin.
 
 ### Update Metadata
 
@@ -25,9 +25,9 @@ Copy the `livekit-plugins-minimal` folder to start your plugin.
 
 ### Study Existing Examples
 Check existing plugins for reference:
-- **STT:** Deepgram, AssemblyAI, OpenAI
-- **TTS:** Cartesia, ElevenLabs, Deepgram, AWS
-- **LLM:** OpenAI, Anthropic, Google
+- **STT:** [Deepgram](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.STT), [AssemblyAI](https://docs.livekit.io/python/livekit/plugins/assemblyai/index.html#livekit.plugins.assemblyai.STT), [OpenAI](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.STT)
+- **TTS:** [Cartesia](https://docs.livekit.io/python/livekit/plugins/cartesia/index.html#livekit.plugins.cartesia.TTS), [ElevenLabs](https://docs.livekit.io/python/livekit/plugins/elevenlabs/index.html#livekit.plugins.elevenlabs#livekit.plugins.elevenlabs.TTS), [OpenAI](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.TTS), [Deepgram](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.TTS)
+- **LLM:** [OpenAI](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.LLM), [Anthropic](https://docs.livekit.io/python/livekit/plugins/anthropic/index.html), [Google](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.LLM), [AWS](https://docs.livekit.io/python/livekit/plugins/aws/index.html#livekit.plugins.aws.LLM)
 
 ### Create Service Files
 Depending on your service, create:
@@ -43,14 +43,14 @@ Match existing plugin class structures and methods.
 
 ### Update Tests
 Add your plugin to the appropriate tests:
-- STT → `tests/test_stt.py`
-- TTS → `tests/test_tts.py`
-- LLM → `tests/test_llm.py`
+- STT → [`tests/test_stt.py`](tests/test_stt.py)
+- TTS → [`tests/test_tts.py`](tests/test_tts.py)
+- LLM → [`tests/test_llm.py`](tests/test_llm.py)
 
 ### Update GitHub Workflow Files
 Ensure your plugin is included in the CI/CD pipeline:
 
-1. Add your plugin to `.github/workflows/ci.yml` under the `type-check` job:
+1. Add your plugin to [`.github/workflows/ci.yml`](.github/workflows/ci.yml) under the `type-check` job:
    ```yaml
    - name: Check Types
      run: |
@@ -59,7 +59,7 @@ Ensure your plugin is included in the CI/CD pipeline:
             -p livekit.plugins.yourplugin
    ```
 
-2. If your plugin needs specific environment variables for testing, update `.github/workflows/tests.yml`:
+2. If your plugin needs specific environment variables for testing, update [`.github/workflows/tests.yml`](.github/workflows/tests.yml):
    ```yaml
    - name: Run tests
      env:
@@ -68,7 +68,7 @@ Ensure your plugin is included in the CI/CD pipeline:
    ```
 
 ### Update Installation Script
-Add your plugin to `livekit-plugins/install_local.sh`:
+Add your plugin to [`livekit-plugins/install_local.sh`](livekit-plugins/install_local.sh):
 ```bash
 pip install \
   # ... existing plugins ...
@@ -98,8 +98,9 @@ Clearly define environment variables:
 - Example: `YOURCOMPANY_API_KEY` for YourCompany API.
 
 ### Update Main README.md Tables
-- Add your plugin to the appropriate integration tables in the main `README.md`:
+Add your plugin to the appropriate integration tables in the main [`README.md`](README.md):
 
+For examples of how to structure your table entries, see the [existing tables in the README](README.md#integrations).
 
 ## 5. Submit Your Changes
 
@@ -138,3 +139,10 @@ Before publishing:
 ✅ Secrets are added to GitHub repository (if needed)
 ✅ Changeset is created
 ✅ Code is formatted and passes linting checks
+
+## Additional Resources
+
+- [LiveKit Docs](https://docs.livekit.io)
+- [Agents Documentation](https://docs.livekit.io/agents)
+- [Plugin API Reference](https://docs.livekit.io/python/livekit/plugins/)
+- [LiveKit Community Slack](https://livekit.io/join-slack)
