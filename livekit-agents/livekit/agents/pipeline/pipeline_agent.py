@@ -1085,9 +1085,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             assert isinstance(speech_handle.source, LLMStream)
-            assert (
-                not user_question or speech_handle.user_committed
-            ), "user speech should have been committed before using tools"
+            assert not user_question or speech_handle.user_committed, (
+                "user speech should have been committed before using tools"
+            )
 
             llm_stream = speech_handle.source
 
@@ -1213,9 +1213,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
-        assert (
-            self._agent_output is not None
-        ), "agent output should be initialized when ready"
+        assert self._agent_output is not None, (
+            "agent output should be initialized when ready"
+        )
 
         tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
@@ -1391,6 +1391,22 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 "Skipping interrupt because the speech is not allowed to be interrupted or is already interrupted"
             )
             return False
+
+        # We should only have the check for min words when we are actively speaking, if not we should interrupt the agent process
+        try:
+            spoken_text = (
+                self._playing_speech.synthesis_handle.tts_forwarder.played_text
+            )
+            if spoken_text is None:
+                logger.info(
+                    "Interrupting the speech because the agent is not actively speaking"
+                )
+                return True
+        except:
+            logger.info(
+                "Interrupting the speech because the agent is not actively speaking"
+            )
+            return True
 
         if self._opts.int_min_words != 0:
             text = (
