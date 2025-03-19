@@ -1364,6 +1364,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _should_interrupt(self) -> bool:
         if self._playing_speech is None:
+            logger.info("No playing speech, skipping interrupt")
             return False
 
         if "potential_user_question" not in AppConfig().call_metadata:
@@ -1381,14 +1382,21 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             not self._playing_speech.allow_interruptions
             or self._playing_speech.interrupted
         ):
+            logger.info(
+                "Skipping interrupt because the speech is not allowed to be interrupted or is already interrupted"
+            )
             return False
 
         if self._opts.int_min_words != 0:
             text = self._transcribed_interim_text or self._transcribed_text
             interim_words = self._opts.transcription.word_tokenizer.tokenize(text=text)
             if len(interim_words) < self._opts.int_min_words:
+                logger.info(
+                    "Skipping interrupt because the number of interim words is less than the minimum number of words"
+                )
                 return False
 
+        logger.info("Interrupting the speech because the interrupt threshold is met")
         return True
 
     def _add_speech_for_playout(self, speech_handle: SpeechHandle) -> None:
