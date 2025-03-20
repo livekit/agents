@@ -95,6 +95,7 @@ class RoomIO:
         self._user_tr_output: _ParallelTextOutput | None = None
         self._agent_tr_output: _ParallelTextOutput | None = None
         self._tr_output_synchronizer: TextSynchronizer | None = None
+        self._last_user_tr_id: str = ""
 
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
 
@@ -294,6 +295,9 @@ class RoomIO:
             return
 
         async def _capture_text():
+            if self._last_user_tr_id and self._last_user_tr_id != ev.id:
+                self._user_tr_output.flush()
+            self._last_user_tr_id = ev.id
             await self._user_tr_output.capture_text(ev.transcript)
 
             if ev.is_final:

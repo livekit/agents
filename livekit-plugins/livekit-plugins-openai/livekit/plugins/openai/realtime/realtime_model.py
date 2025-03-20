@@ -568,19 +568,21 @@ class RealtimeSession(
             yield frame
 
     def _handle_input_audio_buffer_speech_started(
-        self, _: InputAudioBufferSpeechStartedEvent
+        self, ev: InputAudioBufferSpeechStartedEvent
     ) -> None:
-        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent(item_id=ev.item_id))
 
     def _handle_input_audio_buffer_speech_stopped(
-        self, _: InputAudioBufferSpeechStoppedEvent
+        self, ev: InputAudioBufferSpeechStoppedEvent
     ) -> None:
         user_transcription_enabled = (
             self._realtime_model._opts.input_audio_transcription is not None
         )
         self.emit(
             "input_speech_stopped",
-            llm.InputSpeechStoppedEvent(user_transcription_enabled=user_transcription_enabled),
+            llm.InputSpeechStoppedEvent(
+                user_transcription_enabled=user_transcription_enabled, item_id=ev.item_id
+            ),
         )
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:

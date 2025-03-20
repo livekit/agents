@@ -467,14 +467,14 @@ class AgentActivity(RecognitionHooks):
         if ev.user_transcription_enabled:
             self._session.emit(
                 "user_input_transcribed",
-                UserInputTranscribedEvent(transcript="", is_final=False),
+                UserInputTranscribedEvent(transcript="", is_final=False, id=ev.item_id),
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
         log_event("input_audio_transcription_completed")
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=False, id=ev.item_id),
         )
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
@@ -527,13 +527,13 @@ class AgentActivity(RecognitionHooks):
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=False),
+            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=False, id=ev.request_id),
         )
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
+            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True, id=ev.request_id),
         )
 
     async def on_end_of_turn(self, new_transcript: str) -> None:

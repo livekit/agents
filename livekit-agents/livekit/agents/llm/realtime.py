@@ -14,11 +14,12 @@ from ..types import NOT_GIVEN, NotGivenOr
 
 @dataclass
 class InputSpeechStartedEvent:
-    pass
+    item_id: str
 
 
 @dataclass
 class InputSpeechStoppedEvent:
+    item_id: str
     user_transcription_enabled: bool
 
 

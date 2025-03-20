@@ -71,6 +71,7 @@ class UserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
+    id: str
 
 
 class AgentStartedSpeakingEvent(BaseModel):
