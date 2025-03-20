@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import librosa
@@ -17,67 +15,66 @@ logging.getLogger("numba").setLevel(logging.WARNING)
 
 
 @dataclass
-class _SyllableRateOptions:
-    window_duration: float  # Window length in seconds for syllable rate calculation
-    hop_duration: float  # How frequently to update the syllable rate
-    sample_rate: int  # Sample rate for processing
+class _SyllableOptions:
+    window_duration: float
+    "window size in seconds"
+    hop_duration: float
+    "hop size in seconds"
+    sample_rate: int
+    "inference sample rate"
+    enabled: bool = True
+    "enable/disable the syllable detector, if disabled, only estimate speaking"
+    _hop_length: int = 256
+    "hop length for onset detection"
+    _delta: float = 0.3
+    "delta for onset detection"
+    _wait: int = 10
+    "wait for onset detection"
+    _silence_threshold: float = 0.005
+    "silence threshold for silence detection on audio RMS"
 
 
 @dataclass
-class SyllableRateEvent:
-    """
-    Represents an event from the Syllable Rate Detector.
-    """
-
+class SyllableEvent:
     timestamp: float
     speaking: bool
-    syllable_count: int  # Number of syllables in the window
-    syllable_rate: float  # Syllables per second
-    samples_index: int = 0
-    inference_duration: float = 0.0
+    syllable_count: int
+    syllable_rate: float
 
 
-class SyllableRateDetector:
-    """
-    Syllable Rate Detector class.
-
-    This class provides functionality to detect syllable rates within streaming audio data.
-    """
-
+class SyllableDetector:
     def __init__(
         self,
         *,
         window_size: float = 1.0,
         step_size: float = 0.2,
         sample_rate: int = 44100,
+        enabled: bool = True,
     ) -> None:
         super().__init__()
-        self._opts = _SyllableRateOptions(
+        self._opts = _SyllableOptions(
             window_duration=window_size,
             hop_duration=step_size,
             sample_rate=sample_rate,
+            enabled=enabled,
         )
 
-    def stream(self) -> SyllableRateStream:
-        return SyllableRateStream(self, self._opts)
+    def stream(self) -> SyllableStream:
+        return SyllableStream(self, self._opts)
 
 
-class SyllableRateStream:
+class SyllableStream:
     class _FlushSentinel:
         pass
 
-    def __init__(self, detector: SyllableRateDetector, opts: _SyllableRateOptions) -> None:
+    def __init__(self, detector: SyllableDetector, opts: _SyllableOptions) -> None:
         self._detector = detector
         self._opts = opts
 
-        self._loop = asyncio.get_event_loop()
-        self._executor = ThreadPoolExecutor(max_workers=1)
-
-        self._input_ch = utils.aio.Chan[rtc.AudioFrame | SyllableRateStream._FlushSentinel]()
-        self._event_ch = utils.aio.Chan[SyllableRateEvent]()
+        self._input_ch = utils.aio.Chan[rtc.AudioFrame | SyllableStream._FlushSentinel]()
+        self._event_ch = utils.aio.Chan[SyllableEvent]()
 
         self._task = asyncio.create_task(self._main_task())
-        self._task.add_done_callback(lambda _: self._executor.shutdown(wait=False))
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
         self._input_sample_rate = 0
@@ -94,22 +91,30 @@ class SyllableRateStream:
 
         async for input_frame in self._input_ch:
             if not isinstance(input_frame, rtc.AudioFrame):
-                # available_samples = sum(frame.samples_per_channel for frame in inference_frames)
-                # if available_samples > self._window_size_samples * 0.5:
-                #     frame = utils.combine_frames(inference_frames)
-                #     frame_f32_data = np.divide(frame.data, np.iinfo(np.int16).max, dtype=np.float32)
-                #     pub_timestamp += frame.duration
-                #     self._event_ch.send_nowait(
-                #         SyllableRateEvent(
-                #             timestamp=pub_timestamp,
-                #             speaking=not self._detect_silence(frame_f32_data),
-                #             syllable_count=0,  # skip syllable count for last frame
-                #             syllable_rate=0,
-                #         )
-                #     )
-                #     inference_frames = []
+                # estimate the syllable rate for the last frame
+                available_samples = sum(frame.samples_per_channel for frame in inference_frames)
+                if available_samples > self._window_size_samples * 0.5:
+                    frame = utils.combine_frames(inference_frames)
+                    frame_f32_data = np.divide(frame.data, np.iinfo(np.int16).max, dtype=np.float32)
+                    speaking = not self._detect_silence(frame_f32_data)
+                    syllable_count = (
+                        self._compute_syllable_count(frame_f32_data, self._opts.sample_rate)
+                        if speaking
+                        else 0
+                    )
+                    pub_timestamp += frame.duration
+                    self._event_ch.send_nowait(
+                        SyllableEvent(
+                            timestamp=pub_timestamp,
+                            speaking=speaking,
+                            syllable_count=syllable_count,
+                            syllable_rate=syllable_count / frame.duration,
+                        )
+                    )
+                inference_frames = []
                 continue
 
+            # resample the input frame if necessary
             if not self._input_sample_rate:
                 self._input_sample_rate = input_frame.sample_rate
                 if self._input_sample_rate != self._opts.sample_rate:
@@ -148,12 +153,6 @@ class SyllableRateStream:
                 )
 
                 # run the inference
-                # speaking, syllable_count = await self._loop.run_in_executor(
-                #     self._executor,
-                #     self._compute_syllable_count,
-                #     inference_f32_data,
-                #     self._opts.sample_rate,
-                # )
                 speaking = not self._detect_silence(inference_f32_data)
                 if not speaking:
                     syllable_count = 0
@@ -162,7 +161,7 @@ class SyllableRateStream:
                         inference_f32_data, self._opts.sample_rate
                     )
                 self._event_ch.send_nowait(
-                    SyllableRateEvent(
+                    SyllableEvent(
                         timestamp=pub_timestamp,
                         speaking=speaking,
                         syllable_count=syllable_count,
@@ -170,7 +169,7 @@ class SyllableRateStream:
                     )
                 )
 
-                # move the window forward
+                # move the window forward by the hop size
                 pub_timestamp += self._opts.hop_duration
                 if len(inference_frame.data) - self._hop_size_samples > 0:
                     data = inference_frame.data[self._hop_size_samples :]
@@ -182,27 +181,25 @@ class SyllableRateStream:
                             samples_per_channel=len(data) // 2,
                         )
                     ]
-        print("syllable rate stream end")
 
     def _compute_syllable_count(self, audio: np.ndarray, sample_rate: int) -> int:
-        tic = time.time()
+        if not self._opts.enabled:
+            return 1
+
+        # TODO(long): this tooks 200M of memory
         onset_env = librosa.onset.onset_strength(y=audio, sr=sample_rate)
         onsets = librosa.onset.onset_detect(
             onset_envelope=onset_env,
             sr=sample_rate,
-            hop_length=256,
-            # pre_max=20,
-            # post_max=20,
-            delta=0.3,
-            wait=10,
+            hop_length=self._opts._hop_length,
+            delta=self._opts._delta,
+            wait=self._opts._wait,
         )
-        toc = time.time()
-        # print(f"onset_detect time: {toc - tic}")
         return len(onsets)
 
     def _detect_silence(self, audio: np.ndarray) -> bool:
         overall_rms = np.sqrt(np.mean(audio**2))
-        silence_threshold = 0.005
+        silence_threshold = self._opts._silence_threshold
 
         if overall_rms < silence_threshold:
             return True

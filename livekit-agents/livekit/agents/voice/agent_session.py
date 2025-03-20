@@ -190,8 +190,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await chat_cli.start()
 
             elif is_given(room):
-                room_input_options = copy.copy(room_input_options)
-                room_output_options = copy.copy(room_output_options)
+                room_input_options = copy.deepcopy(room_input_options)
+                room_output_options = copy.deepcopy(room_output_options)
 
                 if (
                     self.input.audio is not None
