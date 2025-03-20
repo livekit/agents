@@ -24,5 +24,6 @@ pip install -e ./livekit-plugins-turn-detector --config-settings editable_mode=s
 pip install -e ./livekit-plugins-silero --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-speechmatics --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-neuphonic --config-settings editable_mode=strict
+pip install -e ./livekit-plugins-groq --config-settings editable_mode=strict
 pip install -e ./livekit-plugins-browser --config-settings editable_mode=strict
 
