@@ -486,7 +486,7 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your Perplexity API key, either using the argument or by setting
         the ``PERPLEXITY_API_KEY`` environmental variable.
-        
+
         ``web_search_options`` allows configuration for web search in model responses, e.g.
         ``{"search_context_size": "high"}`` to retrieve more search context for the model.
         """
