@@ -27,7 +27,7 @@ class VoiceOptions:
     allow_interruptions: bool
     min_interruption_duration: float
     min_endpointing_delay: float
-    max_fnc_steps: int
+    max_tool_steps: int
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -46,7 +46,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
-        max_fnc_steps: int = 3,
+        max_tool_steps: int = 3,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
@@ -58,7 +58,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions=allow_interruptions,
             min_interruption_duration=min_interruption_duration,
             min_endpointing_delay=min_endpointing_delay,
-            max_fnc_steps=max_fnc_steps,
+            max_tool_steps=max_tool_steps,
         )
         self._started = False
         self._turn_detector = turn_detector or None

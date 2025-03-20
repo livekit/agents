@@ -16,9 +16,22 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, runtime_checkable
 
-from typing_extensions import TypeGuard
+from typing_extensions import Required, TypedDict, TypeGuard
+
+
+# Used by ToolChoice
+class Function(TypedDict, total=False):
+    name: Required[str]
+
+
+class NamedToolChoice(TypedDict, total=False):
+    type: Required[Literal["function"]]
+    function: Required[Function]
+
+
+ToolChoice = NamedToolChoice | Literal["auto", "required", "none"]
 
 
 class ToolError(Exception):

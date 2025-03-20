@@ -98,7 +98,7 @@ class ChatMessage(BaseModel):
     hash: bytes | None = None
 
 
-ChatContent = Union[ImageContent, AudioContent, str]
+ChatContent: TypeAlias = Union[ImageContent, AudioContent, str]
 
 
 class FunctionCall(BaseModel):
@@ -205,8 +205,8 @@ class _ReadOnlyChatContext(ChatContext):
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
         # override all mutating methods to raise errors
-        append = extend = pop = remove = clear = sort = reverse = _raise_error
-        __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error
+        append = extend = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
+        __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error  # type: ignore
 
         def copy(self):
             return list(self)

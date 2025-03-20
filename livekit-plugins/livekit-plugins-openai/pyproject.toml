@@ -23,9 +23,10 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs, images]>=1.0.0.dev3",
+    "livekit-agents[codecs, images]>=1.0.0.dev5",
     "openai[realtime]>=1.65",
 ]
+
 
 [project.optional-dependencies]
 vertex = ["google-auth>=2.0.0"]

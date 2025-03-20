@@ -9,9 +9,7 @@ description = "Agent Framework plugin for services from Google Cloud"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
-authors = [
-    { name = "LiveKit" }
-]
+authors = [{ name = "LiveKit" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -29,7 +27,7 @@ dependencies = [
     "google-cloud-speech >= 2, < 3",
     "google-cloud-texttospeech >= 2, < 3",
     "google-genai == 1.5.0",
-    "livekit-agents>=1.0.0.dev3",
+    "livekit-agents>=1.0.0.dev5",
 ]
 
 [project.urls]
@@ -44,6 +42,4 @@ path = "livekit/plugins/google/version.py"
 packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "/livekit",
-]
+include = ["/livekit"]

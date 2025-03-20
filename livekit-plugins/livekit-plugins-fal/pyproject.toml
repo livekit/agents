@@ -9,9 +9,7 @@ description = "fal plugin template for LiveKit Agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
-authors = [
-    { name = "LiveKit" }
-]
+authors = [{ name = "LiveKit" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -24,10 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = [
-    "livekit-agents>=1.0.0.dev3",
-    "fal_client",
-]
+dependencies = ["livekit-agents>=1.0.0.dev5", "fal_client"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
@@ -41,6 +36,4 @@ path = "livekit/plugins/fal/version.py"
 packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "/livekit",
-]
+include = ["/livekit"]
