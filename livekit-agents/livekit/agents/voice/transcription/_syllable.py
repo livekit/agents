@@ -11,8 +11,6 @@ from livekit import rtc
 from livekit.agents import utils
 from livekit.agents.log import logger
 
-logging.getLogger("numba").setLevel(logging.WARNING)
-
 
 @dataclass
 class _SyllableOptions:
@@ -58,6 +56,9 @@ class SyllableDetector:
             sample_rate=sample_rate,
             enabled=enabled,
         )
+        if self._opts.enabled:
+            # Suppress numba debugging logs
+            logging.getLogger("numba").setLevel(logging.WARNING)
 
     def stream(self) -> SyllableStream:
         return SyllableStream(self, self._opts)

@@ -17,7 +17,7 @@ from ...tokenize.tokenizer import PUNCTUATIONS
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.io import AudioOutput, PlaybackFinishedEvent, TextOutput
 from . import _utils
-from .streaming_syllable_rate import SyllableDetector, SyllableStream
+from ._syllable import SyllableDetector, SyllableStream
 
 # Standard speech rate in hyphens per second
 STANDARD_SPEECH_RATE = 3.83
