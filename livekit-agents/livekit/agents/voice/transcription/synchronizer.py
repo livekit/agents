@@ -36,7 +36,7 @@ class TextSyncOptions:
     )
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
     split_words: Callable[[str], list[tuple[str, int, int]]] = tokenize.basic.split_words
-    enable_syllable_rate: bool = True
+    enable_syllable_rate: bool = True  # use only audio energy if disabled
 
 
 @dataclass
