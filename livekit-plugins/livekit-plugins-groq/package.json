@@ -1,5 +1,5 @@
 {
-  "name": "livekit-plugins-minimal",
+  "name": "livekit-plugins-groq",
   "private": true,
-  "version": "0.2.2"
+  "version": "0.1.0"
 }

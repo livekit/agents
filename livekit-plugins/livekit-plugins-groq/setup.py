@@ -43,7 +43,7 @@ setuptools.setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3 :: Only",
     ],
-    keywords=["groq", "llm", "webrtc", "livekit"],
+    keywords=["groq", "llm", "stt", "tts", "webrtc", "livekit"],
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",

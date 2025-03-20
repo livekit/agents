@@ -1,14 +1,13 @@
-# LiveKit Plugins Minimal
+# LiveKit Plugins Groq
 
-This is a minimal example of a LiveKit plugin for Agents.
+Agent Framework plugin for services from Groq. Currently supporting STT, and LLM
 
-### Developer note
+## Installation
 
-When copying this directory over to create a new `livekit-plugins` package, make sure it's nested within the `livekit-plugins` folder and that the `"name"` field in `package.json` follows the proper naming convention for CI:
-
-```json
-{
-  "name": "livekit-plugins-<name>",
-  "private": true
-}
+```bash
+pip install livekit-plugins-groq
 ```
+
+## Pre-requisites
+
+For credentials, you'll need a Groq Cloud account and obtain the correct credentials. Credentials can be passed directly or via GROQ_API_KEY environment variable
