@@ -393,7 +393,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     for frame in audio_bstream.write(b64data):
                         emitter.push(frame)
 
-                    if data["data"].get("stop"):  # A bool flag, is True when audio reaches "<STOP>"
+                    if data["data"].get(
+                        "stop"
+                    ):  # A bool flag, is True when audio reaches "<STOP>"
                         for frame in audio_bstream.flush():
                             emitter.push(frame)
                         emitter.flush()
