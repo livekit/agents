@@ -18,6 +18,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...vad import VAD, VADEventType, VADStream
 from ...voice.io import AudioOutput, PlaybackFinishedEvent, TextOutput
 from . import _utils
+from .streaming_syllable_rate import SyllableRateDetector, SyllableRateStream
 
 # Standard speech rate in hyphens per second
 STANDARD_SPEECH_RATE = 3.83
@@ -30,7 +31,7 @@ class TextSyncOptions:
     language: str = ""
     speed: float = 1.0  # Multiplier of STANDARD_SPEECH_RATE
     new_sentence_delay: float = 0.4
-    pause_to_new_sentence_delay_factor: float = 0.7
+    pause_to_new_sentence_delay_factor: float = 0.8
     sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(
         retain_format=True
     )
@@ -44,30 +45,44 @@ class _VoiceActivityData:
     timestamps: list[float] = field(default_factory=list)
     speaking: list[bool] = field(default_factory=list)
     speak_duration_cumsum: list[float] = field(default_factory=list)
+    syllable_rates: list[float] = field(default_factory=list)
+    syllable_integrals: list[float] = field(default_factory=list)
 
-    def append(self, timestamp: float, speaking: bool) -> None:
-        cumsum = self.speak_duration_cumsum[-1] if self.speak_duration_cumsum else 0
+    def append(self, timestamp: float, speaking: bool, syllable_rate: float) -> None:
+        if not self.timestamps:
+            speak_duration = 0
+            syllable_integral = 0
+        else:
+            speak_duration = self.speak_duration_cumsum[-1]
+            syllable_integral = self.syllable_integrals[-1]
+
         if speaking:
-            prev_timestamp = self.timestamps[-1] if self.timestamps else 0
-            cumsum += timestamp - prev_timestamp
+            duration = timestamp - self.timestamps[-1] if self.timestamps else timestamp
+            speak_duration += duration
+            syllable_integral += syllable_rate * duration
 
         self.timestamps.append(timestamp)
-        self.speak_duration_cumsum.append(cumsum)
         self.speaking.append(speaking)
+        self.speak_duration_cumsum.append(speak_duration)
+        self.syllable_rates.append(syllable_rate)
+        self.syllable_integrals.append(syllable_integral)
 
-    def get_speak_duration(self, timestamp: float) -> float:
+    def get_speak_duration(self, timestamp: float) -> tuple[float, float]:
         """Get the cumulative speech duration up to the given timestamp."""
         if not self.timestamps:
-            return 0
+            return 0, 0
 
         idx = np.searchsorted(self.timestamps, timestamp, side="right")
         if idx == 0:
-            return 0
+            return 0, 0
 
         speak_duration = self.speak_duration_cumsum[idx - 1]
+        syllable_integral = self.syllable_integrals[idx - 1]
         if self.speaking[idx - 1]:
-            speak_duration += timestamp - self.timestamps[idx - 1]
-        return speak_duration
+            gap_s = timestamp - self.timestamps[idx - 1]
+            speak_duration += gap_s
+            syllable_integral += self.syllable_rates[idx - 1] * gap_s
+        return speak_duration, syllable_integral
 
     @property
     def pushed_duration(self) -> float:
@@ -83,7 +98,7 @@ class _AudioData:
     pushed_duration: float = 0.0
     done: bool = False
     id: str = field(default_factory=_utils.speech_uuid)
-    vad_stream: VADStream | None = None
+    vad_stream: SyllableRateStream | None = None
     vad_data: _VoiceActivityData | None = None
 
     def __post_init__(self) -> None:
@@ -117,7 +132,8 @@ class _TextAudioSynchronizer:
 
         self._opts = options
         self._speed = options.speed * STANDARD_SPEECH_RATE
-        self._vad = options.vad
+        self._vad = SyllableRateDetector()
+        # self._vad = None
         self._closed = False
         self._close_future = asyncio.Future[None]()
         self._event_ch = utils.aio.Chan[_TextSegment]()
@@ -295,12 +311,27 @@ class _TextAudioSynchronizer:
     ) -> None:
         """Synchronize a sentence with audio timing."""
         real_speed = None
+        syllable_speed = None
         if audio_data.pushed_duration > 0 and audio_data.done:
-            text_hyphens = len(self._calc_hyphens(text_data.pushed_text))
-            if audio_data.vad_data and audio_data.vad_data.speak_duration > 0:
-                real_speed = text_hyphens / audio_data.vad_data.speak_duration
-            else:
-                real_speed = text_hyphens / audio_data.pushed_duration
+            pushed_hyphens = len(self._calc_hyphens(text_data.pushed_text))
+
+            speak_duration, syllable_integral = audio_data.vad_data.get_speak_duration(
+                audio_data.pushed_duration
+            )
+            if speak_duration <= 0:
+                speak_duration = audio_data.pushed_duration
+
+            if speak_duration > 0:
+                real_speed = pushed_hyphens / speak_duration
+                logger.info(
+                    f"real_speed: {real_speed}, text_hyphens: {pushed_hyphens}, speak_duration: {speak_duration}"
+                )
+
+            if syllable_integral > 0:
+                syllable_speed = pushed_hyphens / syllable_integral
+                logger.info(
+                    f"syllable_speed: {syllable_speed}, syllable_integral: {syllable_integral}"
+                )
 
         seg_id = _utils.segment_uuid()
         words = self._opts.split_words(sentence)
@@ -324,16 +355,28 @@ class _TextAudioSynchronizer:
             speed = self._speed
             if real_speed is not None:
                 speed = real_speed
+                syllable_integral = None
                 if audio_data.vad_data:
-                    speaks_s = audio_data.vad_data.get_speak_duration(elapsed_time)
+                    speaks_s, syllable_integral = audio_data.vad_data.get_speak_duration(
+                        elapsed_time
+                    )
                 else:
                     estimated_pauses_s = text_data.new_sentence_pauses_s
                     speaks_s = elapsed_time - estimated_pauses_s
 
-                target_hyphens = round(speed * speaks_s)
+                if syllable_integral is not None and syllable_speed is not None:
+                    target_hyphens = round(syllable_speed * syllable_integral)
+
+                else:
+                    target_hyphens = round(speed * speaks_s)
+
                 dt = target_hyphens - text_data.forwarded_hyphens
                 to_wait_hyphens = max(0.0, word_hyphens - dt)
                 delay = to_wait_hyphens / speed
+                logger.info(
+                    f"dt: {dt}, target_hyphens: {target_hyphens}, forward_hyphens: {text_data.forwarded_hyphens}, "
+                    f"syllable_speed: {syllable_speed}, syllable_integral: {syllable_integral}, delay: {delay}"
+                )
             else:
                 delay = word_hyphens / speed
 
@@ -365,16 +408,21 @@ class _TextAudioSynchronizer:
         )
         sent_text = sentence
 
-        if audio_data.vad_data and audio_data.vad_data.pushed_duration >= elapsed_time:
-            pauses_s = elapsed_time - audio_data.vad_data.get_speak_duration(elapsed_time)
+        if not real_speed and audio_data.vad_data and audio_data.vad_data.pushed_duration >= elapsed_time:
+            pauses_s = elapsed_time - audio_data.vad_data.get_speak_duration(elapsed_time)[0]
             new_sentence_delay = max(
                 0,
                 pauses_s * self._opts.pause_to_new_sentence_delay_factor
                 - text_data.new_sentence_pauses_s,
             )
+            logger.info(
+                f"new_sentence_delay: {new_sentence_delay}, pauses_s: {pauses_s}, "
+                f"text_data.new_sentence_pauses_s: {text_data.new_sentence_pauses_s}"
+            )
         else:
             new_sentence_delay = self._opts.new_sentence_delay
 
+        new_sentence_delay = self._opts.new_sentence_delay
         await self._sleep_if_not_closed(new_sentence_delay)
         text_data.new_sentence_pauses_s += new_sentence_delay
 
@@ -383,8 +431,7 @@ class _TextAudioSynchronizer:
             return
 
         async for ev in audio_data.vad_stream:
-            if ev.type == VADEventType.INFERENCE_DONE:
-                audio_data.vad_data.append(ev.timestamp, ev.speaking)
+            audio_data.vad_data.append(ev.timestamp, ev.speaking, ev.syllable_rate)
 
     async def _sleep_if_not_closed(self, delay: float) -> None:
         with contextlib.suppress(asyncio.TimeoutError):

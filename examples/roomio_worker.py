@@ -64,7 +64,7 @@ async def entrypoint(ctx: JobContext):
             # noise_cancellation=noise_cancellation.BVC(),
         ),
         room_output_options=RoomOutputOptions(
-            transcription_enabled=True, vad_for_transcription_sync=silero.VAD.load()
+            # transcription_enabled=True, vad_for_transcription_sync=silero.VAD.load()
         ),
     )
 
