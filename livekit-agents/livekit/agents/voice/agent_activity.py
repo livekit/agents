@@ -256,11 +256,7 @@ class AgentActivity(RecognitionHooks):
             self._audio_recognition.start()
             self._started = True
 
-            task = self._create_speech_task(
-                self._agent.on_enter(),
-                name="AgentTask_on_enter",
-            )
-
+            task = self._create_speech_task(self._agent.on_enter(), name="AgentTask_on_enter")
             _authorize_inline_task(task)
 
     async def drain(self) -> None:
@@ -270,10 +266,7 @@ class AgentActivity(RecognitionHooks):
             if self._draining:
                 return
 
-            task = self._create_speech_task(
-                self._agent.on_exit(),
-                name="AgentTask_on_exit",
-            )
+            task = self._create_speech_task(self._agent.on_exit(), name="AgentTask_on_exit")
             _authorize_inline_task(task)
 
             self._wake_up_main_task()

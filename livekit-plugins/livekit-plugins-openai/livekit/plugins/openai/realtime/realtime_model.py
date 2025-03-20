@@ -15,7 +15,7 @@ import aiohttp
 from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import llm, utils, io
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from openai.types.beta.realtime import (
     ConversationItem,
@@ -324,9 +324,7 @@ class RealtimeSession(
                             ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
                         )
                     elif event["type"] == "response.audio_transcript.delta":
-                        self._handle_response_audio_transcript_delta(
-                            ResponseAudioTranscriptDeltaEvent.construct(**event)
-                        )
+                        self._handle_response_audio_transcript_delta(event)
                     elif event["type"] == "response.audio.delta":
                         self._handle_response_audio_delta(
                             ResponseAudioDeltaEvent.construct(**event)
@@ -694,12 +692,17 @@ class RealtimeSession(
             extra={"error": event.error},
         )
 
-    def _handle_response_audio_transcript_delta(
-        self, event: ResponseAudioTranscriptDeltaEvent
-    ) -> None:
+    def _handle_response_audio_transcript_delta(self, event: dict) -> None:
         assert self._current_generation is not None, "current_generation is None"
-        item_generation = self._current_generation.messages[event.item_id]
-        item_generation.text_ch.send_nowait(event.delta)
+
+        item_id = event["item_id"]
+        delta = event["delta"]
+
+        if (start_time := event.get("start_time")) is not None:
+            delta = io.TimedString(delta, start_time=start_time)
+
+        item_generation = self._current_generation.messages[item_id]
+        item_generation.text_ch.send_nowait(delta)
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -755,6 +758,7 @@ class RealtimeSession(
                 generation.text_ch.close()
             if not generation.audio_ch.closed:
                 generation.audio_ch.close()
+
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
         self._current_generation = None
