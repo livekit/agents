@@ -18,8 +18,8 @@ class _SyllableOptions:
     "window size in seconds"
     hop_duration: float
     "hop size in seconds"
-    sample_rate: int
-    "inference sample rate"
+    sample_rate: int | None
+    "inference sample rate, if None, use the sample rate of the input frame"
     enabled: bool = True
     "enable/disable the syllable detector, if disabled, only estimate speaking"
     _hop_length: int = 256
@@ -46,7 +46,7 @@ class SyllableDetector:
         *,
         window_size: float = 1.0,
         step_size: float = 0.2,
-        sample_rate: int = 44100,
+        sample_rate: int | None = None,
         enabled: bool = True,
     ) -> None:
         super().__init__()
@@ -79,12 +79,13 @@ class SyllableStream:
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
         self._input_sample_rate = 0
-        self._window_size_samples = int(self._opts.window_duration * self._opts.sample_rate)
-        self._hop_size_samples = int(self._opts.hop_duration * self._opts.sample_rate)
+        self._window_size_samples = 0
+        self._hop_size_samples = 0
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
-        inference_f32_data = np.empty(self._window_size_samples, dtype=np.float32)
+        _inference_sample_rate = 0
+        inference_f32_data = np.empty(0, dtype=np.float32)
 
         pub_timestamp = self._opts.window_duration / 2
         inference_frames = []
@@ -99,7 +100,7 @@ class SyllableStream:
                     frame_f32_data = np.divide(frame.data, np.iinfo(np.int16).max, dtype=np.float32)
                     speaking = not self._detect_silence(frame_f32_data)
                     syllable_count = (
-                        self._compute_syllable_count(frame_f32_data, self._opts.sample_rate)
+                        self._compute_syllable_count(frame_f32_data, _inference_sample_rate)
                         if speaking
                         else 0
                     )
@@ -118,10 +119,16 @@ class SyllableStream:
             # resample the input frame if necessary
             if not self._input_sample_rate:
                 self._input_sample_rate = input_frame.sample_rate
-                if self._input_sample_rate != self._opts.sample_rate:
+                _inference_sample_rate = self._opts.sample_rate or self._input_sample_rate
+
+                self._window_size_samples = int(self._opts.window_duration * _inference_sample_rate)
+                self._hop_size_samples = int(self._opts.hop_duration * _inference_sample_rate)
+                inference_f32_data = np.empty(self._window_size_samples, dtype=np.float32)
+
+                if self._input_sample_rate != _inference_sample_rate:
                     resampler = rtc.AudioResampler(
                         input_rate=self._input_sample_rate,
-                        output_rate=self._opts.sample_rate,
+                        output_rate=_inference_sample_rate,
                         num_channels=1,
                         quality=rtc.AudioResamplerQuality.MEDIUM,
                     )
@@ -159,7 +166,7 @@ class SyllableStream:
                     syllable_count = 0
                 else:
                     syllable_count = self._compute_syllable_count(
-                        inference_f32_data, self._opts.sample_rate
+                        inference_f32_data, _inference_sample_rate
                     )
                 self._event_ch.send_nowait(
                     SyllableEvent(
