@@ -59,7 +59,7 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(log_usage)
 
-    await agent.say("Hey, how can I help you today?", allow_interruptions=True)
+    await agent.say("Hello there! How can I help you today?", allow_interruptions=False)
 
 
 if __name__ == "__main__":
