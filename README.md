@@ -84,7 +84,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Deepgram         | livekit-plugins-deepgram   | ✅        | [deepgram.STT()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.STT)       |
 | OpenAI (Whisper) | livekit-plugins-openai     |           | [openai.STT()](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.STT)             |
 | Google           | livekit-plugins-google     | ✅        | [google.STT()](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.STT)             |
-| AssemblyAI       | livekit-plugins-assemblyai |           | [assemblyai.STT()](https://docs.livekit.io/python/livekit/plugins/assemblyai/index.html#livekit.plugins.assemblyai.STT) |
+| AssemblyAI       | livekit-plugins-assemblyai | ✅         | [assemblyai.STT()](https://docs.livekit.io/python/livekit/plugins/assemblyai/index.html#livekit.plugins.assemblyai.STT) |
 | Groq (Whisper)   | livekit-plugins-openai     |           | [openai.STT.with_groq()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.STT.with_groq)   |
 | FAL (Whizper)    | livekit-plugins-fal        |           | [fal.STT()](https://docs.livekit.io/python/livekit/plugins/fal/index.html#livekit.plugins.fal.STT)                      |
 | Speechmatics     | livekit-plugins-speechmatics | ✅      | [speechmatics.STT()](https://docs.livekit.io/python/livekit/plugins/speechmatics/index.html#livekit.plugins.speechmatics.STT) |
