@@ -57,8 +57,13 @@ class SyllableDetector:
             enabled=enabled,
         )
         if self._opts.enabled:
-            # Suppress numba debugging logs
+            # suppress numba debugging logs
             logging.getLogger("numba").setLevel(logging.WARNING)
+
+            # warm up the librosa
+            warmup_sr = 16000
+            onset_env = librosa.onset.onset_strength(y=np.random.randn(warmup_sr), sr=warmup_sr)
+            librosa.onset.onset_detect(onset_envelope=onset_env, sr=warmup_sr)
 
     def stream(self) -> SyllableStream:
         return SyllableStream(self, self._opts)
