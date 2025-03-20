@@ -30,7 +30,7 @@ from livekit.agents import (
 )
 
 from .log import logger
-from .models import SpeechModels, SpeechVoices
+from .models import TTSModels, TTSVoices
 
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 SAMPLE_RATE = 48000
@@ -39,8 +39,8 @@ NUM_CHANNELS = 1
 
 @dataclass
 class _TTSOptions:
-    model: SpeechModels | str
-    voice: SpeechVoices | str
+    model: TTSModels | str
+    voice: TTSVoices | str
     api_key: str
     base_url: str
 
@@ -50,8 +50,8 @@ class TTS(tts.TTS):
         self,
         *,
         base_url: str | None = None,
-        model: SpeechModels | str = "playai-tts",
-        voice: SpeechVoices | str = "Autumn-PlayAI",
+        model: TTSModels | str = "playai-tts",
+        voice: TTSVoices | str = "Eileen-PlayAI",
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -63,7 +63,7 @@ class TTS(tts.TTS):
 
         Args:
             model (SpeechModels | str, optional): Model to use. Default is "playai-tts".
-            voice (SpeechVoices | str, optional): Voice to use. Default is "Sophia-PlayAI".
+            voice (SpeechVoices | str, optional): Voice to use. Default is "Autumn-PlayAI".
             api_key (str | None, optional): API key to use. Default is None.
         """
 
@@ -101,8 +101,8 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: SpeechModels | None = None,
-        voice: SpeechVoices | None = None,
+        model: TTSModels | None = None,
+        voice: TTSVoices | None = None,
     ) -> None:
         """
         Update the TTS options.

@@ -1,11 +1,27 @@
 from typing import Literal
 
-SpeechModels = Literal[
+# listing production models from https://console.groq.com/docs/models
+
+STTModels = Literal[
+    "whisper-large-v3",
+    "whisper-large-v3-turbo",
+    "distil-whisper-large-v3-en",
+]
+
+LLMModels = Literal[
+    "llama3-8b-8192",
+    "llama3-70b-8192",
+    "llama-guard-3-8b",
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+]
+
+TTSModels = Literal[
     "playai-tts",
     "playai-tts-arabic",
 ]
 
-SpeechVoices = Literal[
+TTSVoices = Literal[
     "Aaliyah-PlayAI",
     "Abigail-PlayAI",
     "Angelo-PlayAI",

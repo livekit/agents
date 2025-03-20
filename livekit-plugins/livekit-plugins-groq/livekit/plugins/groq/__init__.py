@@ -15,10 +15,11 @@
 from livekit.agents import Plugin
 
 from .log import logger
+from .services import LLM, STT
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["TTS", "__version__"]
+__all__ = ["TTS", "LLM", "STT", "__version__"]
 
 
 class GroqPlugin(Plugin):
