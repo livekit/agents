@@ -467,7 +467,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 if data.get("type") == "audio":
                                     # Decode base64 audio content
                                     audio_data = base64.b64decode(data["audio_content"])
-                                    logger.info(f"Received audio data: {len(audio_data)} bytes")
                                     
                                     try:
                                         # For PCM_16, each sample is 2 bytes (16 bits)
@@ -491,7 +490,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 
                                 # Handle end of audio
                                 elif data.get("type") == "audio_end":
-                                    logger.info("Received audio_end message")
                                     # Complete current segment
                                     emitter.flush()
                                     
@@ -548,8 +546,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         # Preprocess text before sending
                         text = self._preprocess_text(text)
                         
-                        # Prepare request payload
-                        logger.info(f"Synthesizing text: {text}")
                         self._mark_started()
                         
                         payload = {
@@ -573,7 +569,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     
                     # Wait for all pending requests to complete
                     if pending_requests:
-                        logger.info(f"Waiting for {len(pending_requests)} pending audio responses")
                         # Wait with a timeout to avoid hanging indefinitely
                         wait_start = time.time()
                         while pending_requests and (time.time() - wait_start) < 5.0:
