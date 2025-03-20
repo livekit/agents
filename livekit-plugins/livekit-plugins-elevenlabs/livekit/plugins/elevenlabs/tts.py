@@ -534,6 +534,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.info(
                             "Sending flush packet due to sentence ending punctuation"
                         )
+                        AppConfig().tts_flush_request_timestamp = time.perf_counter()
                         await ws_conn.send_str(json.dumps({"flush": True}))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
@@ -545,7 +546,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 nonlocal expected_text
 
                 received_text = ""
-
+                received_first_data_packet = False
                 while True:
                     msg = await ws_conn.receive()
                     if msg.type in (
@@ -563,7 +564,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         continue
 
                     data = json.loads(msg.data)
-                    logger.info(f"data: {data}")
+                    if not received_first_data_packet:
+                        received_first_data_packet = True
+                        AppConfig().tts_first_data_packet_timestamp = time.perf_counter()
                     if data.get("audio"):
                         received_text_to_print = ""
                         if alignment := data.get("normalizedAlignment"):

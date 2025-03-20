@@ -493,7 +493,7 @@ class SpeechStream(stt.SpeechStream):
 
                     if AppConfig().get_call_metadata().get("should_flush_stt"):
                         logger.info("Deepgram: About to send finalize message")
-                        AppConfig().stt_flush_request = time.time()
+                        AppConfig().stt_flush_request = time.perf_counter()
                         AppConfig().get_call_metadata().pop("should_flush_stt")
                         self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
