@@ -54,10 +54,10 @@ setuptools.setup(
         "protobuf>=3",
         "pyjwt>=2.0.0",
         "types-protobuf>=4,<5",
-        "watchfiles~=0.22",
-        "psutil~=5.9",
-        "aiohttp~=3.10",
-        "typing-extensions~=4.12",
+        "watchfiles>=0.22",
+        "psutil>=5.9",
+        "aiohttp>=3.10",
+        "typing-extensions>=4.12",
     ],
     extras_require={
         ':sys_platform=="win32"': [
