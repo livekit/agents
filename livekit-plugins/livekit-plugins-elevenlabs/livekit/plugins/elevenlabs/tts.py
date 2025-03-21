@@ -485,7 +485,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         logger.info(f"running ws for word stream: {word_stream}")
         async with self._pool.connection() as ws_conn:
-            logger.info("got connection")
+            logger.info(f"got connection: {ws_conn}")
             segment_id = utils.shortuuid()
             expected_text = ""  # accumulate all tokens sent
 
