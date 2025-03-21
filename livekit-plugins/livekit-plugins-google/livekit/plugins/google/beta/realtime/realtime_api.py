@@ -34,9 +34,6 @@ from ...log import logger
 from ...utils import _build_gemini_fnc, get_tool_results_for_realtime, to_chat_ctx
 from .api_proto import ClientEvents, LiveAPIModels, Voice
 
-# from .transcriber import TranscriberSession, TranscriptionContent
-
-
 INPUT_AUDIO_SAMPLE_RATE = 16000
 OUTPUT_AUDIO_SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -65,8 +62,6 @@ class _RealtimeOptions:
     presence_penalty: float | None
     frequency_penalty: float | None
     instructions: Content | None
-    enable_user_audio_transcription: bool
-    enable_agent_audio_transcription: bool
 
 
 @dataclass
@@ -93,8 +88,6 @@ class RealtimeModel(llm.RealtimeModel):
         api_key: str | None = None,
         voice: Voice | str = "Puck",
         modalities: list[Modality] = None,
-        enable_user_audio_transcription: bool = True,
-        enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
         project: str | None = None,
         location: str | None = None,
@@ -123,8 +116,6 @@ class RealtimeModel(llm.RealtimeModel):
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
-            enable_user_audio_transcription (bool, optional): Whether to enable user audio transcription. Defaults to True
-            enable_agent_audio_transcription (bool, optional): Whether to enable agent audio transcription. Defaults to True
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
                 project (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
@@ -168,8 +159,6 @@ class RealtimeModel(llm.RealtimeModel):
             model=model,
             api_key=self._api_key,
             voice=voice,
-            enable_user_audio_transcription=enable_user_audio_transcription,
-            enable_agent_audio_transcription=enable_agent_audio_transcription,
             response_modalities=modalities,
             vertexai=vertexai,
             project=self._project,
@@ -208,8 +197,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
 
         self._current_generation: Optional[_ResponseGeneration] = None
-        # self._transcriber: Optional[TranscriberSession] = None
-        # self._agent_transcriber: Optional[TranscriberSession] = None
 
         self._is_interrupted = False
         self._active_response_id = None
@@ -218,18 +205,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._update_fnc_ctx_lock = asyncio.Lock()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_event_id = None
-
-        # if self._opts.enable_user_audio_transcription:
-        #     self._transcriber = TranscriberSession(
-        #         client=self._client, model=self._opts.model
-        #     )
-        #     self._transcriber.on("input_speech_done", self._on_input_speech_done)
-
-        # if self._opts.enable_agent_audio_transcription:
-        #     self._agent_transcriber = TranscriberSession(
-        #         client=self._client, model=self._opts.model
-        #     )
-        #     self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
 
     async def update_instructions(self, instructions: str) -> None:
         # No-op for Gemini
@@ -268,9 +243,6 @@ class RealtimeSession(llm.RealtimeSession):
         return self._tools
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        # if self._opts.enable_user_audio_transcription and self._transcriber:
-        #     self._transcriber._push_audio(frame)
-
         realtime_input = LiveClientRealtimeInput(
             media_chunks=[Blob(data=frame.data.tobytes(), mime_type="audio/pcm")],
         )
@@ -435,8 +407,6 @@ class RealtimeSession(llm.RealtimeSession):
                         num_channels=NUM_CHANNELS,
                         samples_per_channel=len(frame_data) // 2,
                     )
-                    # if self._opts.enable_agent_audio_transcription:
-                    #     self._agent_transcriber._push_audio(frame)
                     item_generation.audio_ch.send_nowait(frame)
 
         if server_content.interrupted or server_content.turn_complete:
@@ -486,26 +456,3 @@ class RealtimeSession(llm.RealtimeSession):
 
     def server_vad_enabled(self) -> bool:
         return True
-
-    # def _on_input_speech_done(self, content: TranscriptionContent) -> None:
-    #     if content.response_id and content.text:
-    #         self.emit(
-    #             "input_speech_transcription_completed",
-    #             multimodal.InputTranscriptionCompleted(
-    #                 item_id=content.response_id,
-    #                 transcript=content.text,
-    #             ),
-    #         )
-    #         # self._chat_ctx.append(text=content.text, role="user")
-    #         # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
-
-    # def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
-    #     if not self._is_interrupted and content.response_id and content.text:
-    #         self.emit(
-    #             "agent_speech_transcription_completed",
-    #             multimodal.InputTranscriptionCompleted(
-    #                 item_id=content.response_id,
-    #                 transcript=content.text,
-    #             ),
-    #         )
-    #         # self._chat_ctx.append(text=content.text, role="assistant")
