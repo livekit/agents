@@ -184,16 +184,16 @@ class ChunkedStream(tts.ChunkedStream):
                         await utils.aio.gracefully_cancel(push_task)
 
         except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+            raise APITimeoutError("Connection to AWS Polly timed out") from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
+                f"AWS Polly client error: {str(e)}",
                 status_code=e.status,
                 request_id=request_id,
-                body=None,
+                body=e.message,
             ) from e
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(f"Failed to connect to AWS Polly: {str(e)}") from e
 
 
 def _strip_nones(d: dict[str, Any]) -> dict[str, Any]:

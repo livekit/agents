@@ -137,9 +137,22 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
-        return await asyncio.wait_for(
-            session.ws_connect(url), self._conn_options.timeout
-        )
+        try:
+            return await asyncio.wait_for(
+                session.ws_connect(url), self._conn_options.timeout
+            )
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("Connection to Cartesia API timed out") from e
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                f"Cartesia websocket handshake error: {str(e)}",
+                status_code=e.status,
+                body=e.message,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError(
+                f"Failed to connect to Cartesia API: {str(e)}"
+            ) from e
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()
@@ -267,16 +280,18 @@ class ChunkedStream(tts.ChunkedStream):
                     emitter.push(frame)
                 emitter.flush()
         except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+            raise APITimeoutError("Connection to Cartesia API timed out") from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=None,
-                body=None,
+                request_id=request_id,
+                body=f"cartesia api error {str(e)}",
             ) from e
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(
+                f"Failed to connect to Cartesia API: {str(e)}"
+            ) from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -373,6 +388,19 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             try:
                 await asyncio.gather(*tasks)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError("Connection to Cartesia API timed out") from e
+            except aiohttp.ClientResponseError as e:
+                raise APIStatusError(
+                    message=e.message,
+                    status_code=e.status,
+                    request_id=request_id,
+                    body=f"cartesia api error {str(e)}",
+                ) from e
+            except Exception as e:
+                raise APIConnectionError(
+                    f"Failed to connect to Cartesia API: {str(e)}"
+                ) from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
 

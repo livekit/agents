@@ -96,16 +96,26 @@ class TTS(tts.TTS):
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
         }
-        return await asyncio.wait_for(
-            session.ws_connect(
-                _to_deepgram_url(config, self._base_url, websocket=True),
-                headers={"Authorization": f"Token {self._api_key}"},
-            ),
-            self._conn_options.timeout,
-        )
-
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
-        await ws.close()
+        try:
+            return await asyncio.wait_for(
+                session.ws_connect(
+                    _to_deepgram_url(config, self._base_url, websocket=True),
+                    headers={"Authorization": f"Token {self._api_key}"},
+                ),
+                self._conn_options.timeout,
+            )
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("Connection to Deepgram API timed out") from e
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                "Deepgram websocket handshake error",
+                status_code=e.status,
+                body=e.message,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError(
+                f"Failed to connect to Deepgram API: {str(e)}"
+            ) from e
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -232,16 +242,18 @@ class ChunkedStream(tts.ChunkedStream):
                     )
 
         except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+            raise APITimeoutError("Connection to Deepgram API timed out") from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
                 request_id=request_id,
-                body=None,
+                body=f"deepgram api error {str(e)}",
             ) from e
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(
+                f"Failed to connect to Deepgram API: {str(e)}"
+            ) from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -288,16 +300,18 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             await asyncio.gather(*tasks)
         except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+            raise APITimeoutError("Connection to Deepgram API timed out") from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
                 request_id=request_id,
-                body=None,
+                body=f"deepgram api error {str(e)}",
             ) from e
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(
+                f"Failed to connect to Deepgram API: {str(e)}"
+            ) from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
@@ -364,16 +378,18 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 await asyncio.gather(*tasks)
             except asyncio.TimeoutError as e:
-                raise APITimeoutError() from e
+                raise APITimeoutError("Connection to Deepgram API timed out") from e
             except aiohttp.ClientResponseError as e:
                 raise APIStatusError(
                     message=e.message,
                     status_code=e.status,
                     request_id=request_id,
-                    body=None,
+                    body=f"deepgram api error {str(e)}",
                 ) from e
             except Exception as e:
-                raise APIConnectionError() from e
+                raise APIConnectionError(
+                    f"Failed to connect to Deepgram API: {str(e)}"
+                ) from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
 
