@@ -163,7 +163,6 @@ class STT(stt.STT):
                 response_format="text",
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
-            print(resp)
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
