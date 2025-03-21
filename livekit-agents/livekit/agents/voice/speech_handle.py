@@ -76,7 +76,8 @@ class SpeechHandle:
         if self.done():
             return
 
-        self._interrupt_fut.set_result(None)
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._interrupt_fut.set_result(None)
 
     async def wait_for_playout(self) -> None:
         await asyncio.shield(self._playout_done_fut)

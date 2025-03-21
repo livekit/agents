@@ -18,7 +18,6 @@ from .llm import (
     CompletionUsage,
     FunctionToolCall,
     LLMStream,
-    ToolChoice,
 )
 from .realtime import (
     ErrorEvent,
@@ -35,6 +34,7 @@ from .realtime import (
 from .tool_context import (
     FunctionTool,
     StopResponse,
+    ToolChoice,
     ToolContext,
     ToolError,
     find_function_tools,

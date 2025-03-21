@@ -327,7 +327,7 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
-        max_fnc_steps=5,
+        max_tool_steps=5,
         # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 
