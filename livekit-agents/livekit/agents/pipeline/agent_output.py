@@ -138,6 +138,14 @@ class AgentOutput:
         word_tokenizer: tokenize.WordTokenizer,
         hyphenate_word: Callable[[str], list[str]],
     ) -> SynthesisHandle:
+        logger.info("synthesizing speech")
+        logger.info("tts_source: %s", tts_source)
+        logger.info("transcript_source: %s", transcript_source)
+        logger.info("transcription: %s", transcription)
+        logger.info("transcription_speed: %s", transcription_speed)
+        logger.info("sentence_tokenizer: %s", sentence_tokenizer)
+        logger.info("word_tokenizer: %s", word_tokenizer)
+        logger.info("hyphenate_word: %s", hyphenate_word)
         def _before_forward(
             fwd: agent_transcription.TTSSegmentsForwarder,
             rtc_transcription: rtc.Transcription,
