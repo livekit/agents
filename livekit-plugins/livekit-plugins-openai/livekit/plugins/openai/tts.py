@@ -43,7 +43,7 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     speed: float
-    instructions: Optional[str] = None  # Add instructions parameter
+    instructions: Optional[str] = None
 
 
 class TTS(tts.TTS):
@@ -53,7 +53,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = "tts-1",
         voice: TTSVoices | str = "alloy",
         speed: float = 1.0,
-        instructions: Optional[str] = None,  # Add instructions parameter
+        instructions: Optional[str] = None,
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
@@ -77,7 +77,7 @@ class TTS(tts.TTS):
             model=model,
             voice=voice,
             speed=speed,
-            instructions=instructions,  # Set instructions
+            instructions=instructions,
         )
 
         self._client = client or openai.AsyncClient(
@@ -101,14 +101,12 @@ class TTS(tts.TTS):
         model: TTSModels | str | None,
         voice: TTSVoices | str | None,
         speed: float | None,
-        instructions: Optional[str] = None,  # Add instructions parameter
+        instructions: Optional[str] = None,
     ) -> None:
         self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
         self._opts.speed = speed or self._opts.speed
-        self._opts.instructions = (
-            instructions or self._opts.instructions
-        )  # Update instructions
+        self._opts.instructions = instructions or self._opts.instructions
 
     @staticmethod
     def create_azure_client(
@@ -187,7 +185,7 @@ class ChunkedStream(tts.ChunkedStream):
             voice=self._opts.voice,
             response_format="opus",
             speed=self._opts.speed,
-            instructions=self._opts.instructions,  # Pass instructions
+            instructions=self._opts.instructions,
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
