@@ -283,9 +283,9 @@ class AgentOutput:
                 buffer += seg
                 
                 #Don't flush if we have decimal point at the end of $XXXX
-                incomplete_currency = re.search(r'\$\d+\.?$|\$\d*$', buffer)
+                potential_incomplete_currency = re.search(r'\$[\d,]+\.?$|\$\d*$', buffer)
                 
-                if re.search(r'[.!?](?!\d)', buffer) and not incomplete_currency:
+                if re.search(r'[.!?](?!\d)', buffer) and not potential_incomplete_currency:
                     logger.info(f"flushing tts stream with buffer: {buffer}")
                     tts_stream.flush()
                     buffer = ""
