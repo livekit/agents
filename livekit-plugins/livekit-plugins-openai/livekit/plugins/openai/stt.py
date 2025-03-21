@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 from livekit import rtc
@@ -40,6 +41,12 @@ class _STTOptions:
     detect_language: bool
     model: STTModels | str
     prompt: str | None = None
+
+
+def _get_response_format(model: str) -> Literal["verbose_json", "text"]:
+    if model == "whisper-1":
+        return "verbose_json"
+    return "text"
 
 
 class STT(stt.STT):
@@ -150,6 +157,8 @@ class STT(stt.STT):
             prompt = (
                 self._opts.prompt if self._opts.prompt is not None else openai.NOT_GIVEN
             )
+
+            response_format = _get_response_format(self._opts.model)
             resp = await self._client.audio.transcriptions.create(
                 file=(
                     "file.wav",
@@ -159,17 +168,23 @@ class STT(stt.STT):
                 model=self._opts.model,
                 language=config.language,
                 prompt=prompt,
-                # verbose_json returns language and other details
-                response_format="text",
+                response_format=response_format,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
+
+            if response_format == "verbose_json":
+                transcript = resp.text or ""
+                lang = resp.language or config.language or ""
+            else:
+                transcript = resp or ""
+                lang = "" if self._opts.detect_language else (config.language or "")
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[
                     stt.SpeechData(
-                        text=resp or "",
-                        language=config.language or "",
+                        text=transcript,
+                        language=lang,
                     )
                 ],
             )
