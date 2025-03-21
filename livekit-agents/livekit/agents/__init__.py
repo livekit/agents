@@ -21,9 +21,18 @@ from ._exceptions import (
     AssignmentTimeoutError,
 )
 from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
+from .llm.chat_context import (
+    ChatContent,
+    ChatContext,
+    ChatItem,
+    ChatMessage,
+    ChatRole,
+    FunctionCall,
+    FunctionCallOutput,
+)
+from .llm.tool_context import function_tool
 from .plugin import Plugin
 from .types import (
-    ATTRIBUTE_AGENT_STATE,
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     AgentState,
@@ -32,7 +41,8 @@ from .types import (
     NotGivenOr,
 )
 from .version import __version__
-from .voice import AgentSession
+from .voice import Agent, AgentEvent, AgentSession, RunContext, io
+from .voice.room_io import RoomIO
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
@@ -47,30 +57,33 @@ __all__ = [
     "JobExecutorType",
     "AutoSubscribe",
     "AgentState",
+    "function_tool",
+    "ChatContext",
+    "ChatItem",
+    "RoomIO",
+    "ChatMessage",
+    "ChatRole",
+    "ChatContent",
+    "io",
+    "FunctionCall",
+    "FunctionCallOutput",
+    "RunContext",
     "Plugin",
-    "ipc",
-    "stt",
-    "vad",
-    "utils",
-    "tts",
-    "tokenize",
-    "llm",
-    "metrics",
-    "voice",
     "AgentSession",
+    "AgentEvent",
+    "Agent",
     "cli",
     "AssignmentTimeoutError",
     "APIConnectionError",
     "APIError",
     "APIStatusError",
     "APITimeoutError",
-    "ATTRIBUTE_AGENT_STATE",
     "APIConnectOptions",
-    "DEFAULT_API_CONNECT_OPTIONS",
     "AgentState",
     "NotGiven",
     "NOT_GIVEN",
     "NotGivenOr",
+    "DEFAULT_API_CONNECT_OPTIONS",
 ]
 
 # Cleanup docs of unexported modules

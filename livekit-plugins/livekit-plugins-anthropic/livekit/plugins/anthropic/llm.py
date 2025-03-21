@@ -25,7 +25,7 @@ import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.function_context import AIFunction
+from livekit.agents.llm.tool_context import FunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -118,7 +118,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
@@ -140,8 +140,8 @@ class LLM(llm.LLM):
 
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
-        if fnc_ctx:
-            extra["tools"] = to_fnc_ctx(fnc_ctx, self._opts.caching)
+        if tools:
+            extra["tools"] = to_fnc_ctx(tools, self._opts.caching)
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
@@ -183,7 +183,7 @@ class LLM(llm.LLM):
             self,
             anthropic_stream=stream,
             chat_ctx=chat_ctx,
-            fnc_ctx=fnc_ctx,
+            tools=tools,
             conn_options=conn_options,
         )
 
@@ -195,10 +195,10 @@ class LLMStream(llm.LLMStream):
         *,
         anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.FunctionContext | None,
+        tools: list[FunctionTool] | None,
         conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._awaitable_anthropic_stream = anthropic_stream
         self._anthropic_stream: (
             anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None
@@ -231,7 +231,7 @@ class LLMStream(llm.LLMStream):
 
                 self._event_ch.send_nowait(
                     llm.ChatChunk(
-                        request_id=self._request_id,
+                        id=self._request_id,
                         usage=llm.CompletionUsage(
                             completion_tokens=self._output_tokens,
                             prompt_tokens=self._input_tokens,
@@ -244,15 +244,15 @@ class LLMStream(llm.LLMStream):
                         ),
                     )
                 )
-        except anthropic.APITimeoutError:
-            raise APITimeoutError(retryable=retryable)
+        except anthropic.APITimeoutError as e:
+            raise APITimeoutError(retryable=retryable) from e
         except anthropic.APIStatusError as e:
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
-            )
+            ) from e
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
@@ -277,7 +277,7 @@ class LLMStream(llm.LLMStream):
             if delta.type == "text_delta":
                 text = delta.text
 
-                if self._fnc_ctx is not None:
+                if self._tools is not None:
                     # anthropic may inject COC when using functions
                     if text.startswith("<thinking>"):
                         self._ignoring_cot = True

@@ -25,7 +25,7 @@ from google.auth._default_async import default_async
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import AIFunction, ToolChoice
+from livekit.agents.llm import FunctionTool, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -144,7 +144,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
@@ -170,7 +170,7 @@ class LLM(llm.LLM):
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode="ANY",
-                        allowed_function_names=[fnc.name for fnc in fnc_ctx.ai_functions.values()],
+                        allowed_function_names=[fnc.name for fnc in tools],
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice
@@ -207,7 +207,7 @@ class LLM(llm.LLM):
             client=self._client,
             model=self._opts.model,
             chat_ctx=chat_ctx,
-            fnc_ctx=fnc_ctx,
+            tools=tools,
             conn_options=conn_options,
             extra_kwargs=extra,
         )
@@ -222,10 +222,10 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        fnc_ctx: llm.FunctionContext | None,
+        tools: list[FunctionTool] | None,
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm
@@ -239,7 +239,7 @@ class LLMStream(llm.LLMStream):
             turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm))
 
             self._extra_kwargs["tools"] = [
-                types.Tool(function_declarations=to_fnc_ctx(self._fnc_ctx))
+                types.Tool(function_declarations=to_fnc_ctx(self._tools))
             ]
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,

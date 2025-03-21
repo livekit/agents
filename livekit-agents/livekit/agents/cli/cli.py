@@ -153,7 +153,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
 
         args = proto.CliArgs(
             opts=opts,
-            log_level="INFO",
+            log_level="DEBUG",
             devmode=True,
             asyncio_debug=False,
             watch=False,

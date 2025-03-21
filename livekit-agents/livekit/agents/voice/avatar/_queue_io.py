@@ -20,8 +20,8 @@ class QueueAudioOutput(
     AudioOutput implementation that sends audio frames through a queue.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *, sample_rate: int | None = None):
+        super().__init__(sample_rate=sample_rate)
         self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
         self._capturing = False
 

@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import json
+import os
+import weakref
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Literal, Optional
+from typing import Literal, Union
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+import aiohttp
+from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import llm, utils, io
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from pydantic import ValidationError
-
-import openai
-from openai.resources.beta.realtime.realtime import AsyncRealtimeConnection
 from openai.types.beta.realtime import (
     ConversationItem,
     ConversationItemContent,
@@ -60,6 +65,9 @@ from ..log import logger
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+_log_oai_events = int(os.getenv("LOG_OAI_EVENTS", 0))
 
 
 @dataclass
@@ -74,7 +82,9 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = _InputAudioTranscription()
 class _RealtimeOptions:
     model: str
     voice: str
-    input_audio_transcription: Optional[_InputAudioTranscription]
+    input_audio_transcription: _InputAudioTranscription | None
+    api_key: str
+    base_url: str
 
 
 @dataclass
@@ -99,30 +109,73 @@ class RealtimeModel(llm.RealtimeModel):
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        input_audio_transcription: Optional[
-            _InputAudioTranscription
-        ] = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        client: openai.AsyncClient | None = None,
+        input_audio_transcription: _InputAudioTranscription
+        | None = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        api_key: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             # TODO(theomonnom): add a way to disable turn detection (And use VAD on the VoiceAgent)
             capabilities=llm.RealtimeCapabilities(message_truncation=True, turn_detection=True)
         )
 
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+
+        if api_key is None:
+            raise ValueError(
+                "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+            )
+
+        base_url = base_url or OPENAI_BASE_URL
         self._opts = _RealtimeOptions(
             model=model,
             voice=voice,
             input_audio_transcription=input_audio_transcription,
+            api_key=api_key,
+            base_url=base_url,
         )
-        self._client = client or openai.AsyncClient(
-            base_url=base_url or None, api_key=api_key or None
-        )
+        self._http_session = http_session
+        self._sessions = weakref.WeakSet[RealtimeSession]()
 
-    def session(self) -> "RealtimeSession":
-        return RealtimeSession(self)
+    def update_options(self, *, voice: str) -> None:
+        self._opts.voice = voice
+        for sess in self._sessions:
+            sess.update_options(voice=voice)
+
+    def _ensure_http_session(self) -> aiohttp.ClientSession:
+        if not self._http_session:
+            self._http_session = utils.http_context.http_session()
+
+        return self._http_session
+
+    def session(self) -> RealtimeSession:
+        sess = RealtimeSession(self)
+        self._sessions.add(sess)
+        return sess
 
     async def aclose(self) -> None: ...
+
+
+def process_base_url(url: str, model: str) -> str:
+    if url.startswith("http"):
+        url = url.replace("http", "ws", 1)
+
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+
+    # ensure "/realtime" is added if the path is empty OR "/v1"
+    if not parsed_url.path or parsed_url.path.rstrip("/") in ["", "/v1"]:
+        path = parsed_url.path.rstrip("/") + "/realtime"
+
+        if "model" not in query_params:
+            query_params["model"] = [model]
+    else:
+        path = parsed_url.path
+
+    new_query = urlencode(query_params, doseq=True)
+    new_url = urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", new_query, ""))
+
+    return new_url
 
 
 class RealtimeSession(
@@ -143,10 +196,9 @@ class RealtimeSession(
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[RealtimeClientEvent]()
+        self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
-        self._conn: AsyncRealtimeConnection | None = None
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
@@ -165,70 +217,143 @@ class RealtimeSession(
             samples_per_channel=SAMPLE_RATE // 10,  # 100ms
         )
 
+    def send_event(self, event: RealtimeClientEvent | dict) -> None:
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            self._msg_ch.send_nowait(event)
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        # TODO(theomonnom): handle reconnections
-        self._conn = conn = await self._realtime_model._client.beta.realtime.connect(
-            model=self._realtime_model._opts.model
-        ).enter()
+        headers = {
+            "User-Agent": "LiveKit Agents",
+            "Authorization": f"Bearer {self._realtime_model._opts.api_key}",
+            "OpenAI-Beta": "realtime=v1",
+        }
+
+        url = process_base_url(
+            self._realtime_model._opts.base_url, self._realtime_model._opts.model
+        )
+
+        if _log_oai_events:
+            logger.debug(f"connecting to Realtime API: {url}")
+
+        ws_conn = await self._realtime_model._ensure_http_session().ws_connect(
+            url=url, headers=headers
+        )
+
+        closing = False
 
         @utils.log_exceptions(logger=logger)
-        async def _listen_for_events() -> None:
-            async for event in conn:
-                self.emit("openai_server_event_received", event)
-
-                try:
-                    if event.type == "input_audio_buffer.speech_started":
-                        self._handle_input_audio_buffer_speech_started(event)
-                    elif event.type == "input_audio_buffer.speech_stopped":
-                        self._handle_input_audio_buffer_speech_stopped(event)
-                    elif event.type == "response.created":
-                        self._handle_response_created(event)
-                    elif event.type == "response.output_item.added":
-                        self._handle_response_output_item_added(event)
-                    elif event.type == "conversation.item.created":
-                        self._handle_conversion_item_created(event)
-                    elif event.type == "conversation.item.deleted":
-                        self._handle_conversion_item_deleted(event)
-                    elif event.type == "conversation.item.input_audio_transcription.completed":
-                        self._handle_conversion_item_input_audio_transcription_completed(event)
-                    elif event.type == "conversation.item.input_audio_transcription.failed":
-                        self._handle_conversion_item_input_audio_transcription_failed(event)
-                    elif event.type == "response.audio_transcript.delta":
-                        self._handle_response_audio_transcript_delta(event)
-                    elif event.type == "response.audio.delta":
-                        self._handle_response_audio_delta(event)
-                    elif event.type == "response.audio_transcript.done":
-                        self._handle_response_audio_transcript_done(event)
-                    elif event.type == "response.audio.done":
-                        self._handle_response_audio_done(event)
-                    elif event.type == "response.output_item.done":
-                        self._handle_response_output_item_done(event)
-                    elif event.type == "response.done":
-                        self._handle_response_done(event)
-                    elif event.type == "error":
-                        self._handle_error(event)
-                except Exception as e:
-                    logger.exception("failed to handle event", extra={"event": event})
-
-        @utils.log_exceptions(logger=logger)
-        async def _forward_input() -> None:
+        async def _send_task() -> None:
+            nonlocal closing
             async for msg in self._msg_ch:
                 try:
+                    if isinstance(msg, BaseModel):
+                        msg = msg.model_dump(
+                            by_alias=True, exclude_unset=True, exclude_defaults=True
+                        )
+
                     self.emit("openai_client_event_queued", msg)
-                    await conn.send(msg)
+                    await ws_conn.send_str(json.dumps(msg))
+
+                    if _log_oai_events:
+                        msg_copy = msg.copy()
+                        if msg_copy["type"] == "input_audio_buffer.append":
+                            msg_copy = {**msg_copy, "audio": "..."}
+
+                        logger.debug(f">>> {msg_copy}")
                 except Exception:
                     break
 
-        input_audio_transcription: Optional[session_update_event.SessionInputAudioTranscription] = (
-            None
-        )
+            closing = True
+            await ws_conn.close()
+
+        @utils.log_exceptions(logger=logger)
+        async def _recv_task() -> None:
+            while True:
+                msg = await ws_conn.receive()
+                if msg.type == aiohttp.WSMsgType.CLOSED:
+                    if not closing:
+                        raise Exception("OpenAI S2S connection closed unexpectedly")
+
+                    return
+                elif msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+
+                event = json.loads(msg.data)
+
+                # emit the raw json dictionary instead of the BaseModel because different
+                # providers can have different event types that are not part of the OpenAI Realtime API
+                self.emit("openai_server_event_received", event)
+
+                try:
+                    if _log_oai_events:
+                        event_copy = event.copy()
+                        if event_copy["type"] == "response.audio.delta":
+                            event_copy = {**event_copy, "delta": "..."}
+
+                        logger.debug(f"<<< {event_copy}")
+
+                    if event["type"] == "input_audio_buffer.speech_started":
+                        self._handle_input_audio_buffer_speech_started(
+                            InputAudioBufferSpeechStartedEvent.construct(**event)
+                        )
+                    elif event["type"] == "input_audio_buffer.speech_stopped":
+                        self._handle_input_audio_buffer_speech_stopped(
+                            InputAudioBufferSpeechStoppedEvent.construct(**event)
+                        )
+                    elif event["type"] == "response.created":
+                        self._handle_response_created(ResponseCreatedEvent.construct(**event))
+                    elif event["type"] == "response.output_item.added":
+                        self._handle_response_output_item_added(
+                            ResponseOutputItemAddedEvent.construct(**event)
+                        )
+                    elif event["type"] == "conversation.item.created":
+                        self._handle_conversion_item_created(
+                            ConversationItemCreatedEvent.construct(**event)
+                        )
+                    elif event["type"] == "conversation.item.deleted":
+                        self._handle_conversion_item_deleted(
+                            ConversationItemDeletedEvent.construct(**event)
+                        )
+                    elif event["type"] == "conversation.item.input_audio_transcription.completed":
+                        self._handle_conversion_item_input_audio_transcription_completed(
+                            ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
+                        )
+                    elif event["type"] == "conversation.item.input_audio_transcription.failed":
+                        self._handle_conversion_item_input_audio_transcription_failed(
+                            ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
+                        )
+                    elif event["type"] == "response.audio_transcript.delta":
+                        self._handle_response_audio_transcript_delta(event)
+                    elif event["type"] == "response.audio.delta":
+                        self._handle_response_audio_delta(
+                            ResponseAudioDeltaEvent.construct(**event)
+                        )
+                    elif event["type"] == "response.audio_transcript.done":
+                        self._handle_response_audio_transcript_done(
+                            ResponseAudioTranscriptDoneEvent.construct(**event)
+                        )
+                    elif event["type"] == "response.audio.done":
+                        self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
+                    elif event["type"] == "response.output_item.done":
+                        self._handle_response_output_item_done(
+                            ResponseOutputItemDoneEvent.construct(**event)
+                        )
+                    elif event["type"] == "response.done":
+                        self._handle_response_done(ResponseDoneEvent.construct(**event))
+                    elif event["type"] == "error":
+                        self._handle_error(ErrorEvent.construct(**event))
+                except Exception:
+                    logger.exception("failed to handle event", extra={"event": event})
+
+        input_audio_transcription: session_update_event.SessionInputAudioTranscription | None = None
         if self._realtime_model._opts.input_audio_transcription:
             input_audio_transcription = session_update_event.SessionInputAudioTranscription(
                 model=self._realtime_model._opts.input_audio_transcription.model,
             )
 
-        self._msg_ch.send_nowait(
+        # initial session update
+        self.send_event(
             SessionUpdateEvent(
                 type="session.update",
                 # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.
@@ -254,14 +379,14 @@ class RealtimeSession(
         )
 
         tasks = [
-            asyncio.create_task(_listen_for_events(), name="_listen_for_events"),
-            asyncio.create_task(_forward_input(), name="_forward_input"),
+            asyncio.create_task(_recv_task(), name="_recv_task"),
+            asyncio.create_task(_send_task(), name="_send_task"),
         ]
         try:
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.cancel_and_wait(*tasks)
-            await conn.close()
+            await ws_conn.close()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -270,6 +395,33 @@ class RealtimeSession(
     @property
     def tools(self) -> llm.ToolContext:
         return self._tools.copy()
+
+    def update_options(
+        self,
+        *,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        kwargs = {}
+
+        if utils.is_given(tool_choice):
+            oai_tool_choice = tool_choice
+            if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
+                oai_tool_choice = tool_choice["function"]
+
+            kwargs["tool_choice"] = oai_tool_choice
+
+        if utils.is_given(voice):
+            kwargs["voice"] = voice
+
+        if kwargs:
+            self.send_event(
+                SessionUpdateEvent(
+                    type="session.update",
+                    session=session_update_event.Session.model_construct(**kwargs),
+                    event_id=utils.shortuuid("options_update_"),
+                )
+            )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
@@ -281,7 +433,7 @@ class RealtimeSession(
 
             for msg_id in diff_ops.to_remove:
                 event_id = utils.shortuuid("chat_ctx_delete_")
-                self._msg_ch.send_nowait(
+                self.send_event(
                     ConversationItemDeleteEvent(
                         type="conversation.item.delete",
                         item_id=msg_id,
@@ -296,7 +448,7 @@ class RealtimeSession(
                 chat_item = chat_ctx.get_by_id(msg_id)
                 assert chat_item is not None
 
-                self._msg_ch.send_nowait(
+                self.send_event(
                     ConversationItemCreateEvent(
                         type="conversation.item.create",
                         item=_livekit_item_to_openai_item(chat_item),
@@ -333,7 +485,7 @@ class RealtimeSession(
             event_id = utils.shortuuid("tools_update_")
             # f = asyncio.Future()
             # self._response_futures[event_id] = f
-            self._msg_ch.send_nowait(
+            self.send_event(
                 SessionUpdateEvent(
                     type="session.update",
                     session=session_update_event.Session.model_construct(
@@ -350,14 +502,10 @@ class RealtimeSession(
         event_id = utils.shortuuid("instructions_update_")
         # f = asyncio.Future()
         # self._response_futures[event_id] = f
-        self._msg_ch.send_nowait(
+        self.send_event(
             SessionUpdateEvent(
                 type="session.update",
-                session=session_update_event.Session.model_construct(
-                    model=self._realtime_model._opts.model,
-                    voice=self._realtime_model._opts.voice,
-                    instructions=instructions,
-                ),
+                session=session_update_event.Session.model_construct(instructions=instructions),
                 event_id=event_id,
             )
         )
@@ -365,7 +513,7 @@ class RealtimeSession(
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
             for f in self._bstream.write(f.data.tobytes()):
-                self._msg_ch.send_nowait(
+                self.send_event(
                     InputAudioBufferAppendEvent(
                         type="input_audio_buffer.append",
                         audio=base64.b64encode(f.data).decode("utf-8"),
@@ -378,7 +526,7 @@ class RealtimeSession(
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future()
         self._response_created_futures[event_id] = fut
-        self._msg_ch.send_nowait(
+        self.send_event(
             ResponseCreateEvent(
                 type="response.create",
                 event_id=event_id,
@@ -398,10 +546,10 @@ class RealtimeSession(
         return fut
 
     def interrupt(self) -> None:
-        self._msg_ch.send_nowait(ResponseCancelEvent(type="response.cancel"))
+        self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
-        self._msg_ch.send_nowait(
+        self.send_event(
             ConversationItemTruncateEvent(
                 type="conversation.item.truncate",
                 content_index=0,
@@ -411,8 +559,8 @@ class RealtimeSession(
         )
 
     async def aclose(self) -> None:
-        if self._conn is not None:
-            await self._conn.close()
+        self._msg_ch.close()
+        await self._main_atask
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
@@ -544,12 +692,17 @@ class RealtimeSession(
             extra={"error": event.error},
         )
 
-    def _handle_response_audio_transcript_delta(
-        self, event: ResponseAudioTranscriptDeltaEvent
-    ) -> None:
+    def _handle_response_audio_transcript_delta(self, event: dict) -> None:
         assert self._current_generation is not None, "current_generation is None"
-        item_generation = self._current_generation.messages[event.item_id]
-        item_generation.text_ch.send_nowait(event.delta)
+
+        item_id = event["item_id"]
+        delta = event["delta"]
+
+        if (start_time := event.get("start_time")) is not None:
+            delta = io.TimedString(delta, start_time=start_time)
+
+        item_generation = self._current_generation.messages[item_id]
+        item_generation.text_ch.send_nowait(delta)
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -605,6 +758,7 @@ class RealtimeSession(
                 generation.text_ch.close()
             if not generation.audio_ch.closed:
                 generation.audio_ch.close()
+
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
         self._current_generation = None

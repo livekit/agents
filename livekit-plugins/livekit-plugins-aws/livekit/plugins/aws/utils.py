@@ -7,7 +7,7 @@ from typing import Any, cast
 import boto3
 
 from livekit.agents import llm
-from livekit.agents.llm import AIFunction, ChatContext, ImageContent, utils
+from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
 
 __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
 
@@ -34,7 +34,7 @@ def get_aws_credentials(api_key: str | None, api_secret: str | None, region: str
     return cast(tuple[str, str, str], (credentials.access_key, credentials.secret_key, region))
 
 
-def to_fnc_ctx(fncs: list[AIFunction]) -> list[dict]:
+def to_fnc_ctx(fncs: list[FunctionTool]) -> list[dict]:
     return [_build_tool_spec(fnc) for fnc in fncs]
 
 
@@ -77,7 +77,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
                     "toolUse": {
                         "toolUseId": msg.call_id,
                         "name": msg.name,
-                        "input": json.loads(msg.arguments),
+                        "input": json.loads(msg.arguments or "{}"),
                     }
                 }
             )
@@ -106,7 +106,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
     return messages, system_message
 
 
-def _build_tool_spec(fnc: AIFunction) -> dict:
+def _build_tool_spec(fnc: FunctionTool) -> dict:
     fnc = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
     return {
         "toolSpec": _strip_nones(

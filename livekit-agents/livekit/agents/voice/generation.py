@@ -12,12 +12,13 @@ from livekit import rtc
 from .. import debug, llm, utils
 from ..llm import ChatChunk, ChatContext, StopResponse, ToolContext, ToolError, utils as llm_utils
 from ..log import logger
+from ..types import NotGivenOr
 from ..utils import aio
 from . import io
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .agent import Agent
+    from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
 
 
@@ -36,7 +37,11 @@ class _LLMGenerationData:
 
 
 def perform_llm_inference(
-    *, node: io.LLMNode, chat_ctx: ChatContext, tool_ctx: ToolContext | None
+    *,
+    node: io.LLMNode,
+    chat_ctx: ChatContext,
+    tool_ctx: ToolContext | None,
+    model_settings: ModelSettings,
 ) -> tuple[asyncio.Task, _LLMGenerationData]:
     text_ch = aio.Chan()
     function_ch = aio.Chan()
@@ -46,7 +51,9 @@ def perform_llm_inference(
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
         llm_node = node(
-            chat_ctx, list(tool_ctx.function_tools.values()) if tool_ctx is not None else []
+            chat_ctx,
+            list(tool_ctx.function_tools.values()) if tool_ctx is not None else [],
+            model_settings,
         )
         if asyncio.iscoroutine(llm_node):
             llm_node = await llm_node
@@ -110,13 +117,13 @@ class _TTSGenerationData:
 
 
 def perform_tts_inference(
-    *, node: io.TTSNode, input: AsyncIterable[str]
+    *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
 ) -> tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
-        tts_node = node(input)
+        tts_node = node(input, model_settings)
         if asyncio.iscoroutine(tts_node):
             tts_node = await tts_node
 
@@ -233,6 +240,7 @@ def perform_tool_executions(
     session: AgentSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
+    tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
 ) -> tuple[
     asyncio.Task,
@@ -244,6 +252,7 @@ def perform_tool_executions(
             session=session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
+            tool_choice=tool_choice,
             function_stream=function_stream,
             out=out,
         ),
@@ -258,18 +267,31 @@ async def _execute_tools_task(
     session: AgentSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
+    tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
     out: list[_PythonOutput],
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
     from .agent import _authorize_inline_task
-    from .events import CallContext
+    from .events import RunContext
 
     tasks: list[asyncio.Task] = []
     try:
         async for fnc_call in function_stream:
-            if (ai_function := tool_ctx.function_tools.get(fnc_call.name)) is None:
+            if tool_choice == "none":
+                logger.error(
+                    "received a tool call with tool_choice set to 'none', ignoring",
+                    extra={
+                        "function": fnc_call.name,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                continue
+
+            # TODO(theomonnom): assert other tool_choice values
+
+            if (function_tool := tool_ctx.function_tools.get(fnc_call.name)) is None:
                 logger.warning(
                     f"unknown AI function `{fnc_call.name}`",
                     extra={
@@ -280,8 +302,9 @@ async def _execute_tools_task(
                 continue
 
             try:
-                function_model = llm_utils.function_arguments_to_pydantic_model(ai_function)
-                parsed_args = function_model.model_validate_json(fnc_call.arguments)
+                function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
+                json_args = fnc_call.arguments or "{}"
+                parsed_args = function_model.model_validate_json(json_args)
 
             except ValidationError:
                 logger.exception(
@@ -305,8 +328,8 @@ async def _execute_tools_task(
 
             fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
                 model=parsed_args,
-                ai_function=ai_function,
-                call_ctx=CallContext(
+                function_tool=function_tool,
+                call_ctx=RunContext(
                     session=session, speech_handle=speech_handle, function_call=fnc_call
                 ),
             )
@@ -318,8 +341,8 @@ async def _execute_tools_task(
             )
 
             task = asyncio.create_task(
-                ai_function(*fnc_args, **fnc_kwargs),
-                name=f"ai_function_{fnc_call.name}",
+                function_tool(*fnc_args, **fnc_kwargs),
+                name=f"function_tool_{fnc_call.name}",
             )
             tasks.append(task)
             _authorize_inline_task(task)
@@ -418,6 +441,7 @@ class _PythonOutput:
             return _SanitizedOutput(
                 fnc_call=self.fnc_call.model_copy(),
                 fnc_call_out=llm.FunctionCallOutput(
+                    name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
                     output=self.exception.message,
                     is_error=True,
@@ -436,6 +460,7 @@ class _PythonOutput:
             return _SanitizedOutput(
                 fnc_call=self.fnc_call.model_copy(),
                 fnc_call_out=llm.FunctionCallOutput(
+                    name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
                     output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information
                     is_error=True,
@@ -501,6 +526,7 @@ class _PythonOutput:
             fnc_call=self.fnc_call.model_copy(),
             fnc_call_out=(
                 llm.FunctionCallOutput(
+                    name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
                     output=str(fnc_out),  # take the string representation of the output
                     is_error=False,
