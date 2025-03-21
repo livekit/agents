@@ -91,7 +91,7 @@ class STT(stt.STT):
         punctuate: bool = True,
         spoken_punctuation: bool = False,
         model: SpeechModels | str = "latest_long",
-        location: str = "us-central1",
+        location: str = "global",
         sample_rate: int = 16000,
         credentials_info: dict | None = None,
         credentials_file: str | None = None,
@@ -111,7 +111,7 @@ class STT(stt.STT):
             punctuate(bool): whether to punctuate the audio (default: True)
             spoken_punctuation(bool): whether to use spoken punctuation (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
-            location(str): the location to use for recognition default: "us-central1"
+            location(str): the location to use for recognition default: "global"
             sample_rate(int): the sample rate of the audio default: 16000
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
@@ -466,7 +466,6 @@ class SpeechStream(stt.SpeechStream):
                             ),
                         ),
                         streaming_features=cloud_speech.StreamingRecognitionFeatures(
-                            enable_voice_activity_events=True,
                             interim_results=self._config.interim_results,
                         ),
                     )
