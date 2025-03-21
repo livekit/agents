@@ -37,6 +37,9 @@ from .utils import AsyncAzureADTokenProvider
 OPENAI_TTS_SAMPLE_RATE = 48000
 OPENAI_TTS_CHANNELS = 1
 
+DEFAULT_MODEL = "gpt-4o-mini-tts"
+DEFAULT_VOICE = "ash"
+
 
 @dataclass
 class _TTSOptions:
@@ -50,8 +53,8 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels | str = "tts-1",
-        voice: TTSVoices | str = "alloy",
+        model: TTSModels | str = DEFAULT_MODEL,
+        voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
         instructions: Optional[str] = None,
         base_url: str | None = None,
@@ -111,9 +114,10 @@ class TTS(tts.TTS):
     @staticmethod
     def create_azure_client(
         *,
-        model: TTSModels | str = "tts-1",
-        voice: TTSVoices | str = "alloy",
+        model: TTSModels | str = DEFAULT_MODEL,
+        voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
+        instructions: str | None = None,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -147,7 +151,13 @@ class TTS(tts.TTS):
             base_url=base_url,
         )  # type: ignore
 
-        return TTS(model=model, voice=voice, speed=speed, client=azure_client)
+        return TTS(
+            model=model,
+            voice=voice,
+            speed=speed,
+            instructions=instructions,
+            client=azure_client,
+        )
 
     def synthesize(
         self,
