@@ -155,7 +155,7 @@ class STT(stt.STT):
                 "verbose_json" if self._opts.model == "whisper-1" else "text"
             )
             resp = await self._client.audio.transcriptions.create(
-                file=("file.wav", data, "audio/wav"),
+                file=data,
                 model=self._opts.model,
                 language=config.language,
                 prompt=prompt,
