@@ -502,7 +502,7 @@ class SpeechStream(stt.SpeechStream):
 
                     if (
                         vad_speech_timestamp > 0
-                        and current_time - vad_speech_timestamp >= 0.3
+                        and AppConfig().get_call_metadata().get("should_flush_stt")
                         and current_time - last_transcript_timestamp >= 0.3
                     ):
                         logger.info(
@@ -510,6 +510,7 @@ class SpeechStream(stt.SpeechStream):
                         )
                         AppConfig().stt_flush_request = current_time
                         self._audio_duration_collector.flush()
+                        AppConfig().get_call_metadata().pop("should_flush_stt")
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
                         has_ended = False
                     # if AppConfig().get_call_metadata().get("should_flush_stt"):
