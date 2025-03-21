@@ -32,7 +32,6 @@ from livekit.agents.utils import AudioBuffer
 import openai
 
 from .models import GroqAudioModels, STTModels
-from .utils import _get_response_format
 
 
 @dataclass
@@ -152,7 +151,9 @@ class STT(stt.STT):
                 self._opts.prompt if self._opts.prompt is not None else openai.NOT_GIVEN
             )
 
-            response_format = _get_response_format(self._opts.model)
+            response_format = (
+                "verbose_json" if self._opts.model == "whisper-1" else "text"
+            )
             resp = await self._client.audio.transcriptions.create(
                 file=(
                     "file.wav",
