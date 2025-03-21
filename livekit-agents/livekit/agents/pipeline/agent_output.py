@@ -277,6 +277,9 @@ class AgentOutput:
 
                 logger.info(f"pushing text: {seg}")
                 tts_stream.push_text(seg)
+                if any(char in seg.strip() for char in [".", "!", "?"]):
+                    logger.info("flushing tts stream")
+                    tts_stream.flush()
 
             if tts_stream is not None:
                 logger.info("ending tts stream")
