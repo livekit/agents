@@ -1363,7 +1363,7 @@ class _DeferredReplyValidation:
                 start_time = time.perf_counter()
                 try:
                     eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
-                    unlikely_threshold = self._turn_detector.unlikely_threshold()
+                    unlikely_threshold = self._turn_detector.unlikely_threshold(self._last_language)
                     elasped = time.perf_counter() - start_time
                     if eot_prob < unlikely_threshold:
                         delay = self._max_endpointing_delay

@@ -13,7 +13,7 @@ from .log import logger
 
 HG_MODEL = "livekit/turn-detector"
 ONNX_FILENAME = "model_q8.onnx"
-MODEL_REVISION = "v1.2.1"
+MODEL_REVISION = "v0.1.0-intl"
 MAX_HISTORY_TOKENS = 512
 MAX_HISTORY_TURNS = 6
 
@@ -73,6 +73,7 @@ class _EUORunner(_InferenceRunner):
                 local_files_only=True,
                 truncation_side="left",
             )
+
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
                 (
@@ -126,16 +127,40 @@ class EOUModel:
             inference_executor or get_current_job_context().inference_executor
         )
         self._unlikely_threshold = unlikely_threshold
+        local_path_langs = _download_from_hf_hub(
+            HG_MODEL,
+            "languages.json",
+            revision=MODEL_REVISION,
+            local_files_only=True,
+        )
+        with open(local_path_langs, "r") as f:
+            self._languages = {k.lower(): v for k, v in json.load(f).items()}
 
-    def unlikely_threshold(self) -> float:
-        return self._unlikely_threshold
+    def unlikely_threshold(self, language: str | None) -> float:
+        if language is None:
+            return self._unlikely_threshold
+        lang = language.lower()
+
+        if lang in self._languages:
+            return self._languages[lang]["threshold"]
+
+        if lang.split("-")[0] in self._languages:
+            return self._languages[lang.split("-")[0]]["threshold"]
+
+        return self._unlikely_threshold # Fix me!!
 
     def supports_language(self, language: str | None) -> bool:
         if language is None:
             return False
-        parts = language.lower().split("-")
-        # certain models use language codes (DG, AssemblyAI), others use full names (like OAI)
-        return parts[0] == "en" or parts[0] == "english"
+        lang = language.lower()
+        if lang in self._languages:
+            return True
+        if "-" in lang:
+            parts = lang.split("-")
+            if parts[0] in self._languages:
+                return True
+        return False
+
 
     async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
         return await self.predict_end_of_turn(chat_ctx)

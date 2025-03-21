@@ -35,6 +35,9 @@ class EOUPlugin(Plugin):
         _download_from_hf_hub(
             HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=MODEL_REVISION
         )
+        _download_from_hf_hub(
+            HG_MODEL, "languages.json", revision=MODEL_REVISION
+        )
 
 
 Plugin.register_plugin(EOUPlugin())
