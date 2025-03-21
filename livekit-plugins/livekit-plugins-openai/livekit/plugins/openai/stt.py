@@ -31,14 +31,14 @@ from livekit.agents.utils import AudioBuffer
 
 import openai
 
-from .models import GroqAudioModels, WhisperModels
+from .models import GroqAudioModels, STTModels
 
 
 @dataclass
 class _STTOptions:
     language: str
     detect_language: bool
-    model: WhisperModels | str
+    model: STTModels | str
     prompt: str | None = None
 
 
@@ -48,7 +48,7 @@ class STT(stt.STT):
         *,
         language: str = "en",
         detect_language: bool = False,
-        model: WhisperModels | str = "whisper-1",
+        model: STTModels | str = "gpt-4o-transcribe",
         prompt: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
@@ -92,7 +92,7 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        model: WhisperModels | GroqAudioModels | str | None = None,
+        model: STTModels | GroqAudioModels | str | None = None,
         language: str | None = None,
         prompt: str | None = None,
     ) -> None:
@@ -160,16 +160,17 @@ class STT(stt.STT):
                 language=config.language,
                 prompt=prompt,
                 # verbose_json returns language and other details
-                response_format="verbose_json",
+                response_format="text",
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
+            print(resp)
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[
                     stt.SpeechData(
-                        text=resp.text or "",
-                        language=resp.language or config.language or "",
+                        text=resp or "",
+                        language=config.language or "",
                     )
                 ],
             )

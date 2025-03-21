@@ -50,7 +50,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels | str = "tts-1",
+        model: TTSModels | str = "gpt-4o-mini-tts",
         voice: TTSVoices | str = "alloy",
         speed: float = 1.0,
         instructions: Optional[str] = None,
