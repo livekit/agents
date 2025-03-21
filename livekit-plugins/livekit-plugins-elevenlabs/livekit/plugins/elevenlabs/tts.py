@@ -426,6 +426,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             """tokenize text from the input_ch to words"""
             word_stream = None
             async for input in self._input_ch:
+                logger.info(f"received input: ~{input}~")
                 if isinstance(input, str):
                     # Check for filler phrases
                     filler_phrase_wav = get_wav_if_available(input)
@@ -442,18 +443,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.info(f"sending word stream to segments ch: {word_stream} (id: {id(word_stream)})")
                         self._segments_ch.send_nowait(word_stream)
                         word_stream.push_text("")
-                    logger.info("pushing text to word stream: %s", input)
+                    logger.info(f"pushing text to word stream {id(word_stream)}: ~{input}~")
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
-                    logger.info("received flush sentinel")
+                    logger.info(f"received flush sentinel for word stream {id(word_stream)}: ~{word_stream}~")
                     if word_stream is not None:
-                        logger.info("ending word stream")
+                        logger.info(f"ending word stream {id(word_stream)}")
                         word_stream.end_input()
-                        logger.info("ended word stream")
+                        logger.info(f"ended word stream {id(word_stream)}")
                     word_stream = None
             if word_stream is not None:
-                logger.info("ending word stream")
+                logger.info(f"ending word stream {id(word_stream)}")
                 word_stream.end_input()
+                logger.info(f"ended word stream {id(word_stream)}")
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
