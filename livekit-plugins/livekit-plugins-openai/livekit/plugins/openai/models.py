@@ -1,8 +1,19 @@
 from typing import Literal
 
-WhisperModels = Literal["whisper-1"]
-TTSModels = Literal["tts-1", "tts-1-hd"]
-TTSVoices = Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+STTModels = Literal["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"]
+TTSModels = Literal["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
+TTSVoices = Literal[
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "onyx",
+    "nova",
+    "sage",
+    "shimmer",
+]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
     "gpt-4o",
