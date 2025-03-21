@@ -435,19 +435,25 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if word_stream is None:
                         # new segment (after flush for e.g)
                         word_stream = self._opts.word_tokenizer.stream()
+                        logger.info(f"sending word stream to segments ch: {word_stream} (id: {id(word_stream)})")
                         self._segments_ch.send_nowait(word_stream)
+                    logger.info("pushing text to word stream: %s", input)
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
+                    logger.info("received flush sentinel")
                     if word_stream is not None:
+                        logger.info("ending word stream")
                         word_stream.end_input()
                     word_stream = None
             if word_stream is not None:
+                logger.info("ending word stream")
                 word_stream.end_input()
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
         async def _process_segments():
             async for word_stream in self._segments_ch:
+                logger.info(f"received word stream from segments ch: {word_stream}")
                 await self._run_ws(word_stream, request_id)
 
         tasks = [
@@ -475,7 +481,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         word_stream: tokenize.WordStream,
         request_id: str,
     ) -> None:
+        logger.info(f"running ws for word stream: {word_stream}")
         async with self._pool.connection() as ws_conn:
+            logger.info("got connection")
             segment_id = utils.shortuuid()
             expected_text = ""  # accumulate all tokens sent
 

@@ -382,6 +382,7 @@ class SynthesizeStream(ABC):
         if self._mtc_text:
             self._mtc_pending_texts.append(self._mtc_text)
             self._mtc_text = ""
+        logger.info("flushing tts stream")
 
         self._check_input_not_ended()
         self._check_not_closed()
