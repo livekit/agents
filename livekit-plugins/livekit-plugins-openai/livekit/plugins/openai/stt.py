@@ -81,6 +81,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
+        use_realtime: bool = True,
     ):
         """
         Create a new instance of OpenAI STT.
@@ -101,7 +102,9 @@ class STT(stt.STT):
         """
 
         super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+            capabilities=stt.STTCapabilities(
+                streaming=use_realtime, interim_results=use_realtime
+            )
         )
         if detect_language:
             language = ""
@@ -174,6 +177,7 @@ class STT(stt.STT):
             language=language,
             detect_language=detect_language,
             prompt=prompt,
+            use_realtime=False,
         )
 
     def stream(
