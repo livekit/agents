@@ -440,7 +440,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                         continue
 
-                    if word_stream is None and not input.strip():
+                    if word_stream is None and input.strip():
                         # new segment (after flush for e.g)
                         word_stream = self._opts.word_tokenizer.stream()
                         logger.info(f"sending word stream to segments ch: {word_stream} (id: {id(word_stream)})")
