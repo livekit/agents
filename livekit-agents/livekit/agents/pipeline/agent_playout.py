@@ -9,6 +9,9 @@ from .. import transcription, utils
 from .log import logger
 
 EventTypes = Literal["playout_started", "playout_stopped"]
+import time
+
+from app_config import AppConfig
 
 
 class PlayoutHandle:
@@ -144,6 +147,8 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 # logger.info(
                 #     f"[{handle.speech_id}]playout_task: _capture_task: frame: {frame}"
                 # )
+                logger.info(f"agent is speaking")
+                AppConfig().call_metadata["timestamp_of_agent_speech"] = time.time()
                 if first_frame:
                     logger.info(
                         f"[{handle.speech_id}]playout_task: _capture_task: handle._tr_fwd: {handle._tr_fwd}"
