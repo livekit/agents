@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass
+from typing import cast
 
 import httpx
 from livekit import rtc
@@ -30,7 +31,6 @@ from livekit.agents import (
 from livekit.agents.utils import AudioBuffer
 
 import openai
-from openai import Timeout
 
 from .models import GroqAudioModels, STTModels
 
@@ -156,12 +156,16 @@ class STT(stt.STT):
                 "verbose_json" if self._opts.model == "whisper-1" else "text"
             )
             resp = await self._client.audio.transcriptions.create(
-                file=data,
+                file=(
+                    "file.wav",
+                    data,
+                    "audio/wav",
+                ),
                 model=self._opts.model,
                 language=config.language,
                 prompt=prompt,
-                response_format=response_format,
-                timeout=Timeout(30, connect=conn_options.timeout),
+                response_format=cast(str, response_format),
+                timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
             if response_format == "verbose_json":
