@@ -180,6 +180,7 @@ class STT(stt.STT):
         self,
         *,
         language: str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "SpeechStream":
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
@@ -299,7 +300,7 @@ class STT(stt.STT):
                     data,
                     "audio/wav",
                 ),
-                model=self._opts.model,
+                model=self._opts.model, # type: ignore
                 language=config.language,
                 prompt=prompt,
                 response_format=format,
@@ -383,12 +384,11 @@ class SpeechStream(stt.SpeechStream):
                     frames.extend(audio_bstream.flush())
 
                 for frame in frames:
-                    # self._audio_duration_collector.push(frame.duration)
-                    data = {
+                    encoded_frame = {
                         "type": "input_audio_buffer.append",
                         "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
                     }
-                    await ws.send_json(data)
+                    await ws.send_json(encoded_frame)
 
             closing_ws = True
 
@@ -396,7 +396,7 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
             current_text = ""
-            last_interim_at = 0
+            last_interim_at: float = 0
             connected_at = time.time()
             while True:
                 msg = await ws.receive()

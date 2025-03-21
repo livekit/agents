@@ -1,6 +1,7 @@
 from typing import Literal
+from openai.types import AudioModel
 
-STTModels = Literal["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"]
+STTModels = AudioModel
 TTSModels = Literal["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
 TTSVoices = Literal[
     "alloy",
