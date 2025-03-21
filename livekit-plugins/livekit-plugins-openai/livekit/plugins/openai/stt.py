@@ -30,6 +30,7 @@ from livekit.agents import (
 from livekit.agents.utils import AudioBuffer
 
 import openai
+from openai import Timeout
 
 from .models import GroqAudioModels, STTModels
 
@@ -160,7 +161,7 @@ class STT(stt.STT):
                 language=config.language,
                 prompt=prompt,
                 response_format=response_format,
-                timeout=httpx.Timeout(30, connect=conn_options.timeout),
+                timeout=Timeout(30, connect=conn_options.timeout),
             )
 
             if response_format == "verbose_json":
