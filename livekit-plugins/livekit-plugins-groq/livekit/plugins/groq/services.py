@@ -2,9 +2,9 @@ import os
 from typing import Literal, Union
 
 import openai
+
 from livekit.agents.llm import ToolChoice
-from livekit.plugins.openai import LLM as OpenAILLM
-from livekit.plugins.openai import STT as OpenAISTT
+from livekit.plugins.openai import LLM as OpenAILLM, STT as OpenAISTT
 
 from .models import LLMModels, STTModels
 
