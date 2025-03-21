@@ -456,6 +456,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for word_stream in self._segments_ch:
                 logger.info(f"received word stream from segments ch ({self._segments_ch}): {word_stream}")
                 await self._run_ws(word_stream, request_id)
+                logger.info(f"finished running ws for word stream: {word_stream}")
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -505,6 +506,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     chunk_length_schedule=self._opts.chunk_length_schedule
                 ),
             )
+            logger.info(f"sending init packet: {init_pkt}")
             await ws_conn.send_str(json.dumps(init_pkt))
 
             eos_sent = False
