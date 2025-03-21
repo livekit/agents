@@ -264,7 +264,9 @@ class AgentOutput:
 
         try:
             async for seg in tts_source:
+                logger.info(f"segment: {seg}")
                 if tts_stream is None:
+                    logger.info("creating new tts stream")
                     tts_stream = handle._tts.stream()
                     read_tts_atask = asyncio.create_task(
                         _read_generated_audio_task(tts_stream)
@@ -273,12 +275,16 @@ class AgentOutput:
                         self._read_transcript_task(transcript_source, handle)
                     )
 
+                logger.info(f"pushing text: {seg}")
                 tts_stream.push_text(seg)
 
             if tts_stream is not None:
+                logger.info("ending tts stream")
                 tts_stream.end_input()
                 assert read_transcript_atask and read_tts_atask
+                logger.info("waiting for read_tts_atask")
                 await read_tts_atask
+                logger.info("waiting for read_transcript_atask")
                 await read_transcript_atask
 
         finally:
