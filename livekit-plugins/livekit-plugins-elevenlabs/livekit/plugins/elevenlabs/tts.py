@@ -520,6 +520,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 xml_content = []
                 async for data in word_stream:
                     text = data.token
+                    logger.info(f"Current expected text: {expected_text}, text: {text}")
                     expected_text += text
                     # send the xml phoneme in one go
                     if (
