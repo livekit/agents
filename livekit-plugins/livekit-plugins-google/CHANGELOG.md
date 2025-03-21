@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.11.2
+
+### Patch Changes
+
+- fix: double transcript issue for google stt - [#1694](https://github.com/livekit/agents/pull/1694) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.11.1
 
 ### Patch Changes
