@@ -75,7 +75,7 @@ STREAM_STT: list[Callable[[], stt.STT]] = [
     ),
     pytest.param(
         lambda: google.STT(
-            languages=["en-AU"],
+            languages=["en-US"],
             model="chirp_2",
             spoken_punctuation=False,
             location="us-central1",
