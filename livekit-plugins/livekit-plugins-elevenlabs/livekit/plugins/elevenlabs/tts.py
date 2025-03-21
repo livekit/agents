@@ -425,9 +425,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _tokenize_input():
             """tokenize text from the input_ch to words"""
             word_stream = None
+            # have_content = False
             async for input in self._input_ch:
                 logger.info(f"received input: ~{input}~")
                 if isinstance(input, str):
+                    # if input.strip():
+                        # have_content = True
                     # Check for filler phrases
                     filler_phrase_wav = get_wav_if_available(input)
                     if filler_phrase_wav:
@@ -437,7 +440,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                         continue
 
-                    if word_stream is None:
+                    if word_stream is None and not input.strip():
                         # new segment (after flush for e.g)
                         word_stream = self._opts.word_tokenizer.stream()
                         logger.info(f"sending word stream to segments ch: {word_stream} (id: {id(word_stream)})")
