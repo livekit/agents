@@ -183,8 +183,13 @@ class AgentOutput:
             transcript_source = await transcript_source
 
         tts_stream: AsyncIterable[str] | None = None
+        logger.info("tts_source: %s", tts_source)
+        logger.info("type of tts_source: %s", type(tts_source))
+        logger.info("transcript_source: %s", transcript_source)
+        logger.info("type of transcript_source: %s", type(transcript_source))
         if isinstance(tts_source, str):
             # wrap in async iterator
+            logger.info(f"wrapping tts_source in async iterator: {tts_source}")
             async def string_to_stream(text: str):
                 yield text
 
