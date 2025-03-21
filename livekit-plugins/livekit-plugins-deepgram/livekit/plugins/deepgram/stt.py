@@ -383,7 +383,6 @@ class SpeechStream(stt.SpeechStream):
             else:
                 self._audio_energy_filter = AudioEnergyFilter()
 
-        self._pushed_audio_duration = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
@@ -475,14 +474,14 @@ class SpeechStream(stt.SpeechStream):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif state == AudioEnergyFilter.State.END:
                         # no need to buffer as we have cooldown period
-                        frames = audio_bstream.flush()
+                        frames.extend(audio_bstream.flush())
                         has_ended = True
                     elif state == AudioEnergyFilter.State.SILENCE:
                         # buffer the last silence frame, since it could contain beginning of speech
                         # TODO: improve accuracy by using a ring buffer with longer window
                         last_frame = data
                 elif isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
+                    frames.extend(audio_bstream.flush())
                     has_ended = True
 
                 for frame in frames:
