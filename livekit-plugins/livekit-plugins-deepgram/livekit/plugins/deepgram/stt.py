@@ -492,13 +492,13 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_bytes(frame.data.tobytes())
 
                     # Check if we should send a finalize message based on timing conditions
-                    current_time = time.perf_counter()
+                    current_time = time.time()
                     vad_speech_timestamp = AppConfig().call_metadata.get(
                         "timestamp_of_vad_speech", 0
                     )
-                    last_transcript_timestamp = getattr(
-                        AppConfig(), "received_user_transcript_timestamp", 0
-                    )
+                    last_transcript_timestamp = (
+                        AppConfig().received_user_transcript_timestamp
+                    ) or 0
 
                     if (
                         vad_speech_timestamp > 0
