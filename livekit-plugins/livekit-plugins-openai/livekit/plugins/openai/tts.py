@@ -37,12 +37,14 @@ from .utils import AsyncAzureADTokenProvider
 OPENAI_TTS_SAMPLE_RATE = 48000
 OPENAI_TTS_CHANNELS = 1
 
+
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     speed: float
     instructions: Optional[str] = None  # Add instructions parameter
+
 
 class TTS(tts.TTS):
     def __init__(
@@ -104,7 +106,9 @@ class TTS(tts.TTS):
         self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
         self._opts.speed = speed or self._opts.speed
-        self._opts.instructions = instructions or self._opts.instructions  # Update instructions
+        self._opts.instructions = (
+            instructions or self._opts.instructions
+        )  # Update instructions
 
     @staticmethod
     def create_azure_client(
@@ -160,6 +164,7 @@ class TTS(tts.TTS):
             opts=self._opts,
             client=self._client,
         )
+
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
