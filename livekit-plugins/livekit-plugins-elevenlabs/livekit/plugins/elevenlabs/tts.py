@@ -530,7 +530,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 xml_content = []
                 async for data in word_stream:
                     text = data.token
-                    logger.info(f"Current expected text: {expected_text}, text: {text}")
+                    logger.info(f"Current expected text: {expected_text}, text: {text} from {id(word_stream)}")
                     expected_text += text
                     # send the xml phoneme in one go
                     if (
@@ -577,8 +577,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 received_text = ""
                 received_first_data_packet = False
                 while True:
-                    logger.info("waiting for message")
+                    logger.info(f"waiting for message from {id(word_stream)}")
                     msg = await ws_conn.receive()
+                    logger.info(f"received message from {id(word_stream)}: {msg.type}")
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSE,
@@ -713,6 +714,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             request_id=request_id,
                             body=None,
                         )
+                logger.info(f"recv_task completed from {id(word_stream)}")
 
             tasks = [
                 asyncio.create_task(send_task()),
@@ -721,7 +723,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             ]
             try:
                 await asyncio.gather(*tasks)
-                logger.info("all tasks completed")
+                logger.info(f"all tasks completed from {id(word_stream)}")
             except asyncio.TimeoutError as e:
                 raise APITimeoutError() from e
             except aiohttp.ClientResponseError as e:
@@ -736,9 +738,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             except Exception as e:
                 raise APIConnectionError() from e
             finally:
-                logger.info("gracefully canceling tasks")
+                logger.info(f"gracefully canceling tasks from {id(word_stream)}")
                 await utils.aio.gracefully_cancel(*tasks)
-                logger.info("tasks cancelled")
+                logger.info(f"tasks cancelled from {id(word_stream)}")
                 # await decoder.aclose()
 
 
