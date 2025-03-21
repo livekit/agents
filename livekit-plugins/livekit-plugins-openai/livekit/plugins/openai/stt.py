@@ -17,7 +17,6 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import cast
 
 import httpx
 from livekit import rtc
@@ -31,6 +30,7 @@ from livekit.agents import (
 from livekit.agents.utils import AudioBuffer
 
 import openai
+from openai.types import AudioResponseFormat
 
 from .models import GroqAudioModels, STTModels
 
@@ -41,6 +41,7 @@ class _STTOptions:
     detect_language: bool
     model: STTModels | str
     prompt: str | None = None
+    response_format: AudioResponseFormat
 
 
 class STT(stt.STT):
@@ -68,11 +69,17 @@ class STT(stt.STT):
         if detect_language:
             language = ""
 
+        if model == "whisper-1":
+            response_format: AudioResponseFormat = "verbose_json"
+        else:
+            response_format: AudioResponseFormat = "text"
+
         self._opts = _STTOptions(
             language=language,
             detect_language=detect_language,
             model=model,
             prompt=prompt,
+            response_format=response_format,
         )
 
         self._client = client or openai.AsyncClient(
@@ -152,9 +159,6 @@ class STT(stt.STT):
                 self._opts.prompt if self._opts.prompt is not None else openai.NOT_GIVEN
             )
 
-            response_format = (
-                "verbose_json" if self._opts.model == "whisper-1" else "text"
-            )
             resp = await self._client.audio.transcriptions.create(
                 file=(
                     "file.wav",
@@ -164,11 +168,11 @@ class STT(stt.STT):
                 model=self._opts.model,
                 language=config.language,
                 prompt=prompt,
-                response_format=cast(str, response_format),
+                response_format=self._opts.response_format,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
-            if response_format == "verbose_json":
+            if self._opts.response_format == "verbose_json":
                 transcript = resp.text or ""
                 lang = resp.language or config.language or ""
             else:
