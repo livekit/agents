@@ -944,10 +944,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 speech_handle.allow_interruptions
                 and not is_using_tools
                 and (
-                    play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
-                    and not join_fut.done()
-                    or not spoken_text  # Don't commit if nothing was actually said
+                    not spoken_text  # Don't commit if nothing was actually said
                     or not spoken_text.strip()  # Don't commit if only whitespace
+                    or play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
+                    and not join_fut.done()
                 )
             ):
                 return
