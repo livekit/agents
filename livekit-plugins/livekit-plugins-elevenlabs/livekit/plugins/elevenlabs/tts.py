@@ -188,14 +188,17 @@ class TTS(tts.TTS):
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        logger.info("connecting new to 11labs ws")
         session = self._ensure_session()
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             session.ws_connect(
                 _stream_url(self._opts),
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ),
             self._conn_options.timeout,
         )
+        logger.info(f"connected to 11labs ws: {result}")
+        return result
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()
