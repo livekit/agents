@@ -70,15 +70,17 @@ class Agent:
     @property
     def chat_ctx(self) -> llm.ChatContext:
         """
-        Provides a read-only view of the agent's current chat context.
-
         Returns:
-            llm.ChatContext: A read-only version of the agent's conversation history.
+            llm.ChatContext: A read-only version of the agent's conversation history if the agent's
+            LLM is a RealtimeModel. Otherwise, it returns the internal mutable chat context.
 
         See Also:
             update_chat_ctx: Method to update the internal chat context.
         """
-        return _ReadOnlyChatContext(self._chat_ctx.items)
+        if isinstance(self.llm, llm.RealtimeModel):
+            return _ReadOnlyChatContext(self._chat_ctx.items)
+        else:
+            return self._chat_ctx
 
     async def update_instructions(self, instructions: str) -> None:
         """

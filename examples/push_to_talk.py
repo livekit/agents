@@ -33,10 +33,8 @@ class EchoAgent(Agent):
     async def on_end_of_turn(
         self, chat_ctx: ChatContext, new_message: ChatMessage, generating_reply: bool
     ) -> None:
-        chat_ctx = chat_ctx.copy()
+        assert chat_ctx.mutable
         chat_ctx.items.append(new_message)
-        await self.update_chat_ctx(chat_ctx)  # TODO(long): this is a little bit annoying for LLM
-
         logger.info("add user message to chat context", extra={"content": new_message.content})
 
 

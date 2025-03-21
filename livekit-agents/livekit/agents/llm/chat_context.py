@@ -191,6 +191,10 @@ class ChatContext:
         items = item_adapter.validate_python(data["items"])
         return cls(items)
 
+    @property
+    def mutable(self) -> bool:
+        return True
+
 
 class _ReadOnlyChatContext(ChatContext):
     """A read-only wrapper for ChatContext that prevents modifications."""
@@ -213,3 +217,7 @@ class _ReadOnlyChatContext(ChatContext):
 
     def __init__(self, items: list[ChatItem]):
         self._items = self._ImmutableList(items)
+
+    @property
+    def mutable(self) -> bool:
+        return False
