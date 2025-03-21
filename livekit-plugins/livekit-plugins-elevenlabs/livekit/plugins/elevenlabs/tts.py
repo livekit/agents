@@ -683,6 +683,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                             request_id=request_id,
                             body=None,
                         )
+                    elif data.get("isFinal"):
+                        logger.info("11labs stream ended as expected")
+                        break
                     else:
                         raise APIStatusError(
                             message=f"unexpected 11labs message {data}",
