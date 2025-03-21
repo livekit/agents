@@ -1094,31 +1094,33 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-                self._rt_session.interrupt()
+                # should we have separate flag for this?
+                if self.llm.capabilities.message_truncation:
+                    self._rt_session.interrupt()
 
-                handle = SpeechHandle.create(
-                    allow_interruptions=speech_handle.allow_interruptions,
-                    step_index=speech_handle.step_index + 1,
-                    parent=speech_handle,
-                )
-                self._session.emit(
-                    "speech_created",
-                    SpeechCreatedEvent(
-                        speech_handle=handle, user_initiated=False, source="tool_response"
-                    ),
-                )
-                self._create_speech_task(
-                    self._realtime_reply_task(
-                        speech_handle=handle,
-                        model_settings=ModelSettings(
-                            tool_choice=model_settings.tool_choice if not draining else "none",
+                    handle = SpeechHandle.create(
+                        allow_interruptions=speech_handle.allow_interruptions,
+                        step_index=speech_handle.step_index + 1,
+                        parent=speech_handle,
+                    )
+                    self._session.emit(
+                        "speech_created",
+                        SpeechCreatedEvent(
+                            speech_handle=handle, user_initiated=False, source="tool_response"
                         ),
-                    ),
-                    owned_speech_handle=handle,
-                    name="AgentActivity.realtime_reply",
-                )
-                self._schedule_speech(
-                    handle,
-                    SpeechHandle.SPEECH_PRIORITY_NORMAL,
-                    bypass_draining=True,
-                )
+                    )
+                    self._create_speech_task(
+                        self._realtime_reply_task(
+                            speech_handle=handle,
+                            model_settings=ModelSettings(
+                                tool_choice=model_settings.tool_choice if not draining else "none",
+                            ),
+                        ),
+                        owned_speech_handle=handle,
+                        name="AgentActivity.realtime_reply",
+                    )
+                    self._schedule_speech(
+                        handle,
+                        SpeechHandle.SPEECH_PRIORITY_NORMAL,
+                        bypass_draining=True,
+                    )
