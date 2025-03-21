@@ -414,6 +414,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts, self._pool = opts, pool
 
     async def _run(self) -> None:
+        logger.info("running SynthesizeStream")
         request_id = utils.shortuuid()
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
@@ -453,7 +454,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         @utils.log_exceptions(logger=logger)
         async def _process_segments():
             async for word_stream in self._segments_ch:
-                logger.info(f"received word stream from segments ch: {word_stream}")
+                logger.info(f"received word stream from segments ch ({self._segments_ch}): {word_stream}")
                 await self._run_ws(word_stream, request_id)
 
         tasks = [
@@ -701,6 +702,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             ]
             try:
                 await asyncio.gather(*tasks)
+                logger.info("all tasks completed")
             except asyncio.TimeoutError as e:
                 raise APITimeoutError() from e
             except aiohttp.ClientResponseError as e:
@@ -715,7 +717,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             except Exception as e:
                 raise APIConnectionError() from e
             finally:
+                logger.info("gracefully canceling tasks")
                 await utils.aio.gracefully_cancel(*tasks)
+                logger.info("tasks cancelled")
                 # await decoder.aclose()
 
 
