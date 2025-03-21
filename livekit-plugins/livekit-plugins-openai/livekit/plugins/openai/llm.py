@@ -479,7 +479,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-        web_search_options: dict[str, str] | None = {"search_context_size": "low"},
+        web_search_options: dict[str, str] | None = None,
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
