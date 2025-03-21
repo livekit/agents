@@ -8,6 +8,8 @@ from typing import Any, Awaitable, Callable, Optional, Union
 from livekit import rtc
 from livekit.agents import llm, utils
 
+from .models import STTModels
+
 AsyncAzureADTokenProvider = Callable[[], Union[str, Awaitable[str]]]
 
 
@@ -95,3 +97,9 @@ def _build_oai_image_content(image: llm.ChatImage, cache_key: Any):
     raise ValueError(
         "LiveKit OpenAI Plugin: ChatImage must be an rtc.VideoFrame or a URL"
     )
+
+
+def _get_response_format(model: STTModels | str):
+    if model == "whisper-1":
+        return "verbose_json"
+    return "text"

@@ -17,7 +17,6 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import Literal
 
 import httpx
 from livekit import rtc
@@ -33,6 +32,7 @@ from livekit.agents.utils import AudioBuffer
 import openai
 
 from .models import GroqAudioModels, STTModels
+from .utils import _get_response_format
 
 
 @dataclass
@@ -41,12 +41,6 @@ class _STTOptions:
     detect_language: bool
     model: STTModels | str
     prompt: str | None = None
-
-
-def _get_response_format(model: str) -> Literal["verbose_json", "text"]:
-    if model == "whisper-1":
-        return "verbose_json"
-    return "text"
 
 
 class STT(stt.STT):
