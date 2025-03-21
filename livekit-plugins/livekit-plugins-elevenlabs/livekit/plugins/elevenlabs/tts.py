@@ -188,14 +188,17 @@ class TTS(tts.TTS):
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        logger.info("connecting new to 11labs ws")
         session = self._ensure_session()
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             session.ws_connect(
                 _stream_url(self._opts),
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ),
             self._conn_options.timeout,
         )
+        logger.info(f"connected to 11labs ws: {result}")
+        return result
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()
@@ -414,6 +417,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts, self._pool = opts, pool
 
     async def _run(self) -> None:
+        logger.info("running SynthesizeStream")
         request_id = utils.shortuuid()
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
@@ -421,8 +425,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _tokenize_input():
             """tokenize text from the input_ch to words"""
             word_stream = None
+            # have_content = False
             async for input in self._input_ch:
+                logger.info(f"received input: ~{input}~")
                 if isinstance(input, str):
+                    # if input.strip():
+                        # have_content = True
                     # Check for filler phrases
                     filler_phrase_wav = get_wav_if_available(input)
                     if filler_phrase_wav:
@@ -432,23 +440,36 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                         continue
 
+                    if not input.strip():
+                        continue
+
                     if word_stream is None:
                         # new segment (after flush for e.g)
                         word_stream = self._opts.word_tokenizer.stream()
+                        logger.info(f"sending word stream to segments ch: {word_stream} (id: {id(word_stream)})")
                         self._segments_ch.send_nowait(word_stream)
+                        word_stream.push_text("")
+                    logger.info(f"pushing text to word stream {id(word_stream)}: ~{input}~")
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
+                    logger.info(f"received flush sentinel for word stream {id(word_stream)}: ~{word_stream}~")
                     if word_stream is not None:
+                        logger.info(f"ending word stream {id(word_stream)}")
                         word_stream.end_input()
+                        logger.info(f"ended word stream {id(word_stream)}")
                     word_stream = None
             if word_stream is not None:
+                logger.info(f"ending word stream {id(word_stream)}")
                 word_stream.end_input()
+                logger.info(f"ended word stream {id(word_stream)}")
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
         async def _process_segments():
             async for word_stream in self._segments_ch:
+                logger.info(f"received word stream from segments ch ({self._segments_ch}): {word_stream}")
                 await self._run_ws(word_stream, request_id)
+                logger.info(f"finished running ws for word stream: {word_stream}")
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -475,7 +496,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         word_stream: tokenize.WordStream,
         request_id: str,
     ) -> None:
+        logger.info(f"running ws for word stream: {word_stream}")
         async with self._pool.connection() as ws_conn:
+            logger.info(f"got connection: {ws_conn}")
             segment_id = utils.shortuuid()
             expected_text = ""  # accumulate all tokens sent
 
@@ -496,14 +519,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                     chunk_length_schedule=self._opts.chunk_length_schedule
                 ),
             )
+            logger.info(f"sending init packet: {init_pkt}")
             await ws_conn.send_str(json.dumps(init_pkt))
+
+            eos_sent = False
 
             @utils.log_exceptions(logger=logger)
             async def send_task():
-                nonlocal expected_text
+                nonlocal expected_text, eos_sent
                 xml_content = []
                 async for data in word_stream:
                     text = data.token
+                    logger.info(f"Current expected text: {expected_text}, text: {text} from {id(word_stream)}")
                     expected_text += text
                     # send the xml phoneme in one go
                     if (
@@ -535,29 +562,37 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "Sending flush packet due to sentence ending punctuation"
                         )
                         AppConfig().tts_flush_request_timestamp = time.perf_counter()
-                        await ws_conn.send_str(json.dumps({"flush": True}))
+                        await ws_conn.send_str(json.dumps({"text": " ", "flush": True}))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
-                await ws_conn.send_str(json.dumps({"flush": True}))
+                logger.info("ending 11labs stream")
+                # eos_sent = True
+                await ws_conn.send_str(json.dumps({"text": " ", "flush": True}))
 
             # receives from ws and decodes audio
             @utils.log_exceptions(logger=logger)
             async def recv_task():
-                nonlocal expected_text
+                nonlocal expected_text, eos_sent
 
                 received_text = ""
                 received_first_data_packet = False
                 while True:
+                    logger.info(f"waiting for message from {id(word_stream)}")
                     msg = await ws_conn.receive()
+                    logger.info(f"received message from {id(word_stream)}: {msg.type}")
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        raise APIStatusError(
-                            "11labs connection closed unexpectedly, not all tokens have been consumed",
-                            request_id=request_id,
-                        )
+                        if not eos_sent:
+                            raise APIStatusError(
+                                "11labs connection closed unexpectedly, not all tokens have been consumed",
+                                request_id=request_id,
+                            )
+                        else:
+                            logger.info("11labs connection closed as expected")
+                            break
 
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         logger.warning("unexpected 11labs message type %s", msg.type)
@@ -569,6 +604,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         AppConfig().tts_first_data_packet_timestamp = time.perf_counter()
                     if data.get("audio"):
                         received_text_to_print = ""
+                        audio = data.pop("audio")
+                        logger.info(f"received audio data: {data}")
+                        data["audio"] = audio
                         if alignment := data.get("normalizedAlignment"):
                             # Add character timing data to the forwarder
 
@@ -646,10 +684,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                             if (
                                 received_text == expected_text_without_spaces
-                                and AppConfig()
-                                .get_call_metadata()
-                                .get("safe_for_tts_to_break", "saikrishna")[:5]
-                                in received_text
+                                # and AppConfig()
+                                # .get_call_metadata()
+                                # .get("safe_for_tts_to_break", "saikrishna")[:5]
+                                # in received_text
                             ):
                                 # decoder.end_input()
                                 logger.info(
@@ -666,6 +704,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                             request_id=request_id,
                             body=None,
                         )
+                    elif data.get("isFinal"):
+                        logger.info("11labs stream ended as expected")
+                        break
                     else:
                         raise APIStatusError(
                             message=f"unexpected 11labs message {data}",
@@ -673,6 +714,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             request_id=request_id,
                             body=None,
                         )
+                logger.info(f"recv_task completed from {id(word_stream)}")
 
             tasks = [
                 asyncio.create_task(send_task()),
@@ -681,6 +723,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             ]
             try:
                 await asyncio.gather(*tasks)
+                logger.info(f"all tasks completed from {id(word_stream)}")
             except asyncio.TimeoutError as e:
                 raise APITimeoutError() from e
             except aiohttp.ClientResponseError as e:
@@ -695,7 +738,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             except Exception as e:
                 raise APIConnectionError() from e
             finally:
+                logger.info(f"gracefully canceling tasks from {id(word_stream)}")
                 await utils.aio.gracefully_cancel(*tasks)
+                logger.info(f"tasks cancelled from {id(word_stream)}")
                 # await decoder.aclose()
 
 

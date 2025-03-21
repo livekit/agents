@@ -138,6 +138,14 @@ class AgentOutput:
         word_tokenizer: tokenize.WordTokenizer,
         hyphenate_word: Callable[[str], list[str]],
     ) -> SynthesisHandle:
+        logger.info("synthesizing speech")
+        logger.info("tts_source: %s", tts_source)
+        logger.info("transcript_source: %s", transcript_source)
+        logger.info("transcription: %s", transcription)
+        logger.info("transcription_speed: %s", transcription_speed)
+        logger.info("sentence_tokenizer: %s", sentence_tokenizer)
+        logger.info("word_tokenizer: %s", word_tokenizer)
+        logger.info("hyphenate_word: %s", hyphenate_word)
         def _before_forward(
             fwd: agent_transcription.TTSSegmentsForwarder,
             rtc_transcription: rtc.Transcription,
@@ -183,8 +191,13 @@ class AgentOutput:
             transcript_source = await transcript_source
 
         tts_stream: AsyncIterable[str] | None = None
+        logger.info("tts_source: %s", tts_source)
+        logger.info("type of tts_source: %s", type(tts_source))
+        logger.info("transcript_source: %s", transcript_source)
+        logger.info("type of transcript_source: %s", type(transcript_source))
         if isinstance(tts_source, str):
             # wrap in async iterator
+            logger.info(f"wrapping tts_source in async iterator: {tts_source}")
             async def string_to_stream(text: str):
                 yield text
 
@@ -251,7 +264,9 @@ class AgentOutput:
 
         try:
             async for seg in tts_source:
+                logger.info(f"segment: {seg}")
                 if tts_stream is None:
+                    logger.info("creating new tts stream")
                     tts_stream = handle._tts.stream()
                     read_tts_atask = asyncio.create_task(
                         _read_generated_audio_task(tts_stream)
@@ -260,12 +275,19 @@ class AgentOutput:
                         self._read_transcript_task(transcript_source, handle)
                     )
 
+                logger.info(f"pushing text: {seg}")
                 tts_stream.push_text(seg)
+                if any(char in seg.strip() for char in [".", "!", "?"]):
+                    logger.info("flushing tts stream")
+                    tts_stream.flush()
 
             if tts_stream is not None:
+                logger.info("ending tts stream")
                 tts_stream.end_input()
                 assert read_transcript_atask and read_tts_atask
+                logger.info("waiting for read_tts_atask")
                 await read_tts_atask
+                logger.info("waiting for read_transcript_atask")
                 await read_transcript_atask
 
         finally:
