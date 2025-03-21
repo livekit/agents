@@ -545,12 +545,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "Sending flush packet due to sentence ending punctuation"
                         )
                         AppConfig().tts_flush_request_timestamp = time.perf_counter()
-                        await ws_conn.send_str(json.dumps({"flush": True}))
+                        await ws_conn.send_str(json.dumps({"text": " ", "flush": True}))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
                 logger.info("ending 11labs stream")
                 eos_sent = True
-                await ws_conn.send_str(json.dumps("", {"flush": True}))
+                await ws_conn.send_str(json.dumps({"text": ""}))
 
             # receives from ws and decodes audio
             @utils.log_exceptions(logger=logger)
