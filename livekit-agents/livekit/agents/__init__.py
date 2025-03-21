@@ -33,6 +33,7 @@ from .llm.chat_context import (
 from .llm.tool_context import function_tool
 from .plugin import Plugin
 from .types import (
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     AgentState,
     APIConnectOptions,
@@ -82,6 +83,7 @@ __all__ = [
     "NotGiven",
     "NOT_GIVEN",
     "NotGivenOr",
+    "DEFAULT_API_CONNECT_OPTIONS",
 ]
 
 # Cleanup docs of unexported modules

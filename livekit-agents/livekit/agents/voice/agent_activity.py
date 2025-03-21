@@ -14,6 +14,7 @@ from ..log import logger
 from ..metrics import AgentMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
+from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
 from .events import (
     MetricsCollectedEvent,
@@ -40,8 +41,6 @@ from .speech_handle import SpeechHandle
 def log_event(event: str, **kwargs) -> None:
     debug.Tracing.log_event(event, kwargs)
 
-
-from .agent import Agent, ModelSettings
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -74,17 +73,74 @@ class AgentActivity(RecognitionHooks):
 
         from .. import llm as large_language_model
 
-        if (
-            isinstance(self.llm, large_language_model.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-            and not self.allow_interruptions
-        ):
-            raise ValueError(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, "
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
-            )
+        self._turn_detection_mode = self._session.turn_detection_mode
 
-        if not self.vad and self.stt and isinstance(self.llm, llm.LLM) and self.allow_interruptions:
+        if self._turn_detection_mode == "vad" and not self.vad:
+            logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
+            self._turn_detection_mode = None
+
+        if self._turn_detection_mode == "stt" and (
+            not self.stt or not self.stt.capabilities.streaming
+        ):
+            logger.warning(
+                "turn_detection is set to 'stt', but no STT model is provided or the STT model "
+                "does not support streaming, ignoring the turn_detection setting"
+            )
+            self._turn_detection_mode = None
+
+        if isinstance(self.llm, large_language_model.RealtimeModel):
+            if self.llm.server_side_turn_detection and not self.allow_interruptions:
+                raise ValueError(
+                    "the RealtimeModel uses a server-side turn detection, "
+                    "allow_interruptions cannot be False, disable turn_detection in "
+                    "the RealtimeModel and use VAD on the AgentSession instead"
+                )
+
+            if (
+                self._turn_detection_mode == "realtime_llm"
+                and not self.llm.server_side_turn_detection
+            ):
+                logger.warning(
+                    "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
+                    "or the server-side turn detection is not supported/enabled, "
+                    "ignoring the turn_detection setting"
+                )
+                self._turn_detection_mode = None
+
+            if self._turn_detection_mode == "stt":
+                logger.warning(
+                    "turn_detection is set to 'stt', but the LLM is a RealtimeModel, "
+                    "ignoring the turn_detection setting"
+                )
+                self._turn_detection_mode = None
+
+            elif self._turn_detection_mode == "vad" and self.llm.server_side_turn_detection:
+                logger.warning(
+                    "turn_detection is set to 'vad', but the LLM is a RealtimeModel, "
+                    "and server-side turn detection enabled, ignoring the turn_detection setting"
+                )
+                self._turn_detection_mode = None
+
+            # fallback to VAD if server side turn detection is disabled and VAD is available
+            if (
+                not self.llm.server_side_turn_detection
+                and self.vad
+                and self._turn_detection_mode is None
+            ):
+                self._turn_detection_mode = "vad"
+        elif self._turn_detection_mode == "realtime_llm":
+            logger.warning(
+                "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel"
+            )
+            self._turn_detection_mode = None
+
+        if (
+            not self.vad
+            and self.stt
+            and isinstance(self.llm, llm.LLM)
+            and self.allow_interruptions
+            and self._turn_detection_mode is None
+        ):
             logger.warning(
                 "VAD is not set. Enabling VAD is recommended when using LLM and STT "
                 "for more responsive interruption handling."
@@ -242,14 +298,15 @@ class AgentActivity(RecognitionHooks):
             if isinstance(self.tts, tts.TTS):
                 self.tts.on("metrics_collected", self._on_metrics_collected)
 
-            if isinstance(self.vad, vad.VAD):
-                self.vad.on("metrics_collected", self._on_metrics_collected)
+            agent_vad = self.vad if self._turn_detection_mode in ("vad", None) else None
+            if isinstance(agent_vad, vad.VAD):
+                agent_vad.on("metrics_collected", self._on_metrics_collected)
 
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
                 hooks=self,
                 stt=self._agent.stt_node if self.stt else None,
-                vad=self.vad,
+                vad=agent_vad,
                 turn_detector=self.turn_detector,
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
             )
@@ -317,7 +374,7 @@ class AgentActivity(RecognitionHooks):
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
+            and self.llm.server_side_turn_detection
             and allow_interruptions is False
         ):
             logger.warning(
@@ -362,7 +419,7 @@ class AgentActivity(RecognitionHooks):
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
+            and self.llm.server_side_turn_detection
             and allow_interruptions is False
         ):
             logger.warning(
@@ -524,9 +581,18 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("user_started_speaking", UserStartedSpeakingEvent())
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
+        if isinstance(self.llm, llm.RealtimeModel) and (
+            self._turn_detection_mode == "vad"
+            or (not self.llm.server_side_turn_detection and self._turn_detection_mode is None)
+        ):
+            self.generate_reply()
+
         self._session.emit("user_stopped_speaking", UserStoppedSpeakingEvent())
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
+        if self._turn_detection_mode == "manual":
+            return
+
         if ev.speech_duration > self._session.options.min_interruption_duration:
             if (
                 self._current_speech is not None
@@ -553,16 +619,28 @@ class AgentActivity(RecognitionHooks):
 
     async def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:
+        #  - check if the turn detection mode is set to "manual"
         #  - check if there is no current generation happening
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
         #  turn)
         #  - generate a reply to the user input
 
+        user_message = llm.ChatMessage(role="user", content=[new_transcript])
+
+        if self._turn_detection_mode == "manual":
+            await self._agent.on_end_of_turn(
+                self._agent.chat_ctx, user_message, generating_reply=False
+            )
+            return
+
         if self._current_speech is not None:
             if not self._current_speech.allow_interruptions:
                 logger.warning(
-                    "skipping user input, current speech generation cannot be interrupted",
+                    "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"user_input": new_transcript},
+                )
+                await self._agent.on_end_of_turn(
+                    self._agent.chat_ctx, user_message, generating_reply=False
                 )
                 return
 
@@ -585,9 +663,8 @@ class AgentActivity(RecognitionHooks):
 
         await self._agent.on_end_of_turn(
             self._agent.chat_ctx,
-            llm.ChatMessage(
-                role="user", content=[new_transcript]
-            ),  # TODO(theomonnom): This doesn't allow edits yet
+            new_message=user_message,  # TODO(theomonnom): This doesn't allow edits yet
+            generating_reply=True,
         )
 
         if self.draining:
