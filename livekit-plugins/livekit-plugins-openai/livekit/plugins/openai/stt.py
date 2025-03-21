@@ -300,7 +300,7 @@ class STT(stt.STT):
                     data,
                     "audio/wav",
                 ),
-                model=self._opts.model, # type: ignore
+                model=self._opts.model,  # type: ignore
                 language=config.language,
                 prompt=prompt,
                 response_format=format,

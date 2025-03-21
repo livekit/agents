@@ -1,4 +1,5 @@
 from typing import Literal
+
 from openai.types import AudioModel
 
 STTModels = AudioModel
