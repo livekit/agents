@@ -491,13 +491,34 @@ class SpeechStream(stt.SpeechStream):
                     self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-                    if AppConfig().get_call_metadata().get("should_flush_stt"):
-                        logger.info("Deepgram: About to send finalize message")
-                        AppConfig().stt_flush_request = time.perf_counter()
-                        AppConfig().get_call_metadata().pop("should_flush_stt")
+                    # Check if we should send a finalize message based on timing conditions
+                    current_time = time.perf_counter()
+                    vad_speech_timestamp = AppConfig().call_metadata.get(
+                        "timestamp_of_vad_speech", 0
+                    )
+                    last_transcript_timestamp = getattr(
+                        AppConfig(), "received_user_transcript_timestamp", 0
+                    )
+
+                    if (
+                        vad_speech_timestamp > 0
+                        and current_time - vad_speech_timestamp >= 0.3
+                        and current_time - last_transcript_timestamp >= 0.3
+                    ):
+                        logger.info(
+                            "Deepgram: Sending finalize message based on timing conditions"
+                        )
+                        AppConfig().stt_flush_request = current_time
                         self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
                         has_ended = False
+                    # if AppConfig().get_call_metadata().get("should_flush_stt"):
+                    #     logger.info("Deepgram: About to send finalize message")
+                    #     AppConfig().stt_flush_request = time.perf_counter()
+                    #     AppConfig().get_call_metadata().pop("should_flush_stt")
+                    #     self._audio_duration_collector.flush()
+                    #     await ws.send_str(SpeechStream._FINALIZE_MSG)
+                    #     has_ended = False
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
