@@ -32,7 +32,19 @@ class VoiceOptions:
 
 Userdata_T = TypeVar("Userdata_T")
 
-TurnDetectionMode = Literal["speech_to_text", "vad", "realtime_llm", "manual"]
+TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"]
+"""
+The mode of turn detection to use.
+
+- "stt": use speech-to-text result to detect the end of the user's turn
+- "vad": use VAD to detect the start and end of the user's turn
+- "realtime_llm": use server-side turn detection provided by the realtime LLM
+- "manual": manually manage the turn detection
+- (default) None or not provided: automatically choose the best mode
+    based on available models (realtime_llm -> vad -> stt -> manual)
+
+If the model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
+"""
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):

@@ -1,5 +1,4 @@
 import logging
-from typing import Coroutine
 
 from dotenv import load_dotenv
 
