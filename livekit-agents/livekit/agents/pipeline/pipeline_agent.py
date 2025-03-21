@@ -175,7 +175,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     A pipeline agent (VAD + STT + LLM + TTS) implementation.
     """
 
-    MIN_TIME_PLAYED_FOR_COMMIT = 1.5
+    MIN_TIME_PLAYED_FOR_COMMIT = 0.1
     """Minimum time played for the user speech to be committed to the chat context"""
 
     def __init__(
@@ -939,11 +939,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             # make sure at least some speech was played before committing the user message
             # since we try to validate as fast as possible it is possible the agent gets interrupted
             # really quickly (barely audible), we don't want to mark this question as "answered".
+            spoken_text = speech_handle.synthesis_handle.tts_forwarder.played_text
             if (
                 speech_handle.allow_interruptions
                 and not is_using_tools
                 and (
-                    play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
+                    not spoken_text  # Don't commit if nothing was actually said
+                    or not spoken_text.strip()  # Don't commit if only whitespace
+                    or play_handle.time_played < self.MIN_TIME_PLAYED_FOR_COMMIT
                     and not join_fut.done()
                 )
             ):
