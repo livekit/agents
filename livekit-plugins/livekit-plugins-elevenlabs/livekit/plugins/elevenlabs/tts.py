@@ -506,9 +506,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
             await ws_conn.send_str(json.dumps(init_pkt))
 
+            eos_sent = False
+
             @utils.log_exceptions(logger=logger)
             async def send_task():
-                nonlocal expected_text
+                nonlocal expected_text, eos_sent
                 xml_content = []
                 async for data in word_stream:
                     text = data.token
@@ -546,26 +548,33 @@ class SynthesizeStream(tts.SynthesizeStream):
                         await ws_conn.send_str(json.dumps({"flush": True}))
                 if xml_content:
                     logger.warning("11labs stream ended with incomplete xml content")
-                await ws_conn.send_str(json.dumps({"flush": True}))
+                logger.info("ending 11labs stream")
+                eos_sent = True
+                await ws_conn.send_str(json.dumps("", {"flush": True}))
 
             # receives from ws and decodes audio
             @utils.log_exceptions(logger=logger)
             async def recv_task():
-                nonlocal expected_text
+                nonlocal expected_text, eos_sent
 
                 received_text = ""
                 received_first_data_packet = False
                 while True:
+                    logger.info("waiting for message")
                     msg = await ws_conn.receive()
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        raise APIStatusError(
-                            "11labs connection closed unexpectedly, not all tokens have been consumed",
-                            request_id=request_id,
-                        )
+                        if not eos_sent:
+                            raise APIStatusError(
+                                "11labs connection closed unexpectedly, not all tokens have been consumed",
+                                request_id=request_id,
+                            )
+                        else:
+                            logger.info("11labs connection closed as expected")
+                            break
 
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         logger.warning("unexpected 11labs message type %s", msg.type)
