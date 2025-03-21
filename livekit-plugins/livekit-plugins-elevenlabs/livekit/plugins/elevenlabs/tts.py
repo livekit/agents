@@ -593,6 +593,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         AppConfig().tts_first_data_packet_timestamp = time.perf_counter()
                     if data.get("audio"):
                         received_text_to_print = ""
+                        audio = data.pop("audio")
+                        logger.info(f"received audio data: {data}")
+                        data["audio"] = audio
                         if alignment := data.get("normalizedAlignment"):
                             # Add character timing data to the forwarder
 
