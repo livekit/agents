@@ -441,6 +441,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         word_stream = self._opts.word_tokenizer.stream()
                         logger.info(f"sending word stream to segments ch: {word_stream} (id: {id(word_stream)})")
                         self._segments_ch.send_nowait(word_stream)
+                        word_stream.push_text("")
                     logger.info("pushing text to word stream: %s", input)
                     word_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
@@ -448,6 +449,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if word_stream is not None:
                         logger.info("ending word stream")
                         word_stream.end_input()
+                        logger.info("ended word stream")
                     word_stream = None
             if word_stream is not None:
                 logger.info("ending word stream")
