@@ -242,7 +242,6 @@ class RealtimeSession(llm.RealtimeSession):
             tool_results = get_tool_results_for_realtime(self._chat_ctx)
             # giving priority to tool results
             if tool_results:
-                print("tool_results", tool_results)
                 self._msg_ch.send_nowait(tool_results)
             elif turns:
                 self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
@@ -462,7 +461,6 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._current_generation:
             return
         for fnc_call in tool_call.function_calls:
-            print("fnc_call", fnc_call)
             self._current_generation.function_ch.send_nowait(
                 llm.FunctionCall(
                     call_id=fnc_call.id,
