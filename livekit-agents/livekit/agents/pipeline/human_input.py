@@ -134,6 +134,9 @@ class HumanInput(utils.EventEmitter[EventTypes]):
 
         async def _vad_stream_co() -> None:
             async for ev in vad_stream:
+                if ev.speaking:
+                    logger.info("VAD SPEECH DETECTED")
+                    AppConfig().call_metadata["timestamp_of_vad_speech"] = time.time()
                 if ev.type == voice_activity_detection.VADEventType.START_OF_SPEECH:
                     self._speaking = True
                     self.emit("start_of_speech", ev)
