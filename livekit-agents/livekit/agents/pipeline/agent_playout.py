@@ -147,7 +147,6 @@ class AgentPlayout(utils.EventEmitter[EventTypes]):
                 # logger.info(
                 #     f"[{handle.speech_id}]playout_task: _capture_task: frame: {frame}"
                 # )
-                logger.info(f"agent is speaking")
                 AppConfig().call_metadata["timestamp_of_agent_speech"] = time.time()
                 if first_frame:
                     logger.info(
