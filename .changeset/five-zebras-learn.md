@@ -2,4 +2,4 @@
 "livekit-plugins-openai": patch
 ---
 
-openai new STT model and voices
+openai new TTS model and voices
