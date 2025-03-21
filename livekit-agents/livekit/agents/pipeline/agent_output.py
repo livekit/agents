@@ -298,6 +298,9 @@ class AgentOutput:
                 await read_tts_atask
                 logger.info("waiting for read_transcript_atask")
                 await read_transcript_atask
+            if buffer:
+                logger.info(f"flushing tts stream with buffer: {buffer}")
+                tts_stream.flush()
 
         finally:
             if read_tts_atask is not None:
@@ -306,3 +309,5 @@ class AgentOutput:
 
             if inspect.isasyncgen(tts_source):
                 await tts_source.aclose()
+
+            buffer = ""
