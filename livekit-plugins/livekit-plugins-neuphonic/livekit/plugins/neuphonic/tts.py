@@ -348,26 +348,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        request_data = {request_id: {"sent": "", "recv": ""}}
-
-        def _is_all_audio_recv():
-            """Check whether all audio has been recieved."""
-            recv_text = (
-                request_data[request_id]["recv"]
-                .lower()
-                .replace(" ", "")
-                .replace("\n", "")
-                .replace("<stop>", "")
-            )
-            sent_text = (
-                request_data[request_id]["sent"]
-                .lower()
-                .replace(" ", "")
-                .replace("\n", "")
-                .replace("<stop>", "")
-            )
-
-            return sent_text == recv_text
 
         async def _send_task(ws: aiohttp.ClientWebSocketResponse):
             """Stream text to the websocket."""
@@ -378,7 +358,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await ws.send_str(json.dumps({"text": "<STOP>"}))
                     continue
 
-                request_data[request_id]["sent"] += data
                 await ws.send_str(json.dumps({"text": data}))
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
@@ -411,19 +390,18 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"]["audio"])
-                    recv_text = data["data"]["text"]
                     for frame in audio_bstream.write(b64data):
                         emitter.push(frame)
 
-                    request_data[request_id]["recv"] += recv_text
+                    if data["data"].get(
+                        "stop"
+                    ):  # A bool flag, is True when audio reaches "<STOP>"
+                        for frame in audio_bstream.flush():
+                            emitter.push(frame)
+                        emitter.flush()
+                        break  # we are not going to receive any more audio
                 else:
                     logger.error("Unexpected Neuphonic message %s", data)
-
-                if _is_all_audio_recv():
-                    for frame in audio_bstream.flush():
-                        emitter.push(frame)
-                    emitter.flush()
-                    break  # we are not going to receive any more audio
 
         async with self._pool.connection() as ws:
             tasks = [
