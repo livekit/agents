@@ -26,19 +26,19 @@ def get_changed_files():
 
 
 def parse_changes(files):
-    changes, changeset_exists = set(), False
+    changes = set()
+    changeset_exists = False
     for f in files:
         if f.startswith("livekit-agents"):
             changes.add("livekit-agents")
         elif f.startswith("livekit-plugins/"):
             parts = f.split("/")
-            if len(parts) > 1:
-                plugin_dir = os.path.join("livekit-plugins", parts[1])
-                if os.path.isdir(plugin_dir):
-                    changes.add({parts[1]})
+            if len(parts) > 1 and os.path.isdir(os.path.join("livekit-plugins", parts[1])):
+                changes.add(parts[1])
         elif f.startswith(".github/next-release/"):
             changeset_exists = True
     return changes, changeset_exists
+
 
 
 def get_pr_title():
