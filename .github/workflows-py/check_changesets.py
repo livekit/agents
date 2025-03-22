@@ -7,23 +7,19 @@ import uuid
 import urllib.parse
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-REPO = os.environ.get("GITHUB_REPOSITORY")  # Format: owner/repo
+REPO = os.environ.get("GITHUB_REPOSITORY")
 PR_NUMBER = os.environ.get("GITHUB_PR_NUMBER")
 BASE_REF = os.environ.get("GITHUB_BASE_REF", "main")
 HEAD_REF = os.environ.get("GITHUB_HEAD_REF", "main")
 headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
 
-
 def get_changed_files():
     subprocess.run(["git", "fetch", "origin", BASE_REF], check=True)
     result = subprocess.run(
         ["git", "diff", "--name-only", f"origin/{BASE_REF}"],
-        capture_output=True,
-        text=True,
-        check=True,
+        capture_output=True, text=True, check=True
     )
     return result.stdout.strip().splitlines()
-
 
 def parse_changes(files):
     changes = set()
@@ -39,16 +35,12 @@ def parse_changes(files):
             changeset_exists = True
     return changes, changeset_exists
 
-
-
 def get_pr_title():
     pr_url = f"https://api.github.com/repos/{REPO}/pulls/{PR_NUMBER}"
     r = requests.get(pr_url, headers=headers)
     r.raise_for_status()
-    pr = r.json()
-    title = pr.get("title", "Your changes description here.")
+    title = r.json().get("title", "Your changes description here.")
     return f"{title} (#{PR_NUMBER})"
-
 
 def generate_template(changes, description):
     lines = ["---"]
@@ -57,7 +49,6 @@ def generate_template(changes, description):
     lines.append("---")
     lines.append(f"\n{description}")
     return "\n".join(lines)
-
 
 def validate_changeset_content(content):
     if not content.startswith("---"):
@@ -79,50 +70,43 @@ def validate_changeset_content(content):
             continue
         m = re.match(r'^"([^"]+)":\s*(patch|minor|major)$', line)
         if not m:
-            return (
-                False,
-                f"Invalid front matter line: '{line}'. It must be in the format \"package-name\": patch|minor|major.",
-            )
+            return False, f"Invalid front matter line: '{line}'. It must be in the format \"package-name\": patch|minor|major."
         pkg = m.group(1)
         if pkg in packages:
             return False, f"Duplicate package entry found: '{pkg}'."
         packages.add(pkg)
-    description_lines = lines[second_delim_index + 1 :]
+    description_lines = lines[second_delim_index + 1:]
     if not any(l.strip() for l in description_lines):
         return False, "Missing change description after front matter."
     return True, ""
 
-
-def validate_all_changeset_files():
+def validate_all_changeset_files(diff_files):
     errors, entries, descriptions = [], [], []
-    path = ".github/next-release"
-    if os.path.isdir(path):
-        for fname in os.listdir(path):
-            fpath = os.path.join(path, fname)
-            if os.path.isfile(fpath):
-                with open(fpath, "r") as f:
-                    content = f.read()
-                    is_valid, error = validate_changeset_content(content)
-                    if not is_valid:
-                        errors.append(f"{fname}: {error}")
-                    else:
-                        lines = content.splitlines()
-                        try:
-                            second_delim_index = lines[1:].index("---") + 1
-                        except ValueError:
-                            second_delim_index = None
-                        if second_delim_index is not None:
-                            front_matter = lines[1:second_delim_index]
-                            bump_order = {"major": 0, "minor": 1, "patch": 2}
-                            for line in front_matter:
-                                m = re.match(r'^"([^"]+)":\s*(patch|minor|major)$', line.strip())
-                                if m:
-                                    pkg = m.group(1)
-                                    bump = m.group(2)
-                                    entries.append((bump_order[bump], bump, pkg))
-                            description = "\n".join(lines[second_delim_index + 1 :]).strip()
-                            if description:
-                                descriptions.append(description)
+    for f in diff_files:
+        if os.path.isfile(f):
+            with open(f, "r") as file:
+                content = file.read()
+                is_valid, error = validate_changeset_content(content)
+                if not is_valid:
+                    errors.append(f"{f}: {error}")
+                else:
+                    lines = content.splitlines()
+                    try:
+                        second_delim_index = lines[1:].index("---") + 1
+                    except ValueError:
+                        second_delim_index = None
+                    if second_delim_index is not None:
+                        front_matter = lines[1:second_delim_index]
+                        bump_order = {"major": 0, "minor": 1, "patch": 2}
+                        for line in front_matter:
+                            m = re.match(r'^"([^"]+)":\s*(patch|minor|major)$', line.strip())
+                            if m:
+                                pkg = m.group(1)
+                                bump = m.group(2)
+                                entries.append((bump_order[bump], bump, pkg))
+                        description = "\n".join(lines[second_delim_index + 1:]).strip()
+                        if description:
+                            descriptions.append(description)
     if errors:
         return False, "\n".join(errors), None, None
     entries.sort(key=lambda x: x[0])
@@ -130,7 +114,6 @@ def validate_all_changeset_files():
     summary_text = "\n".join(summary_lines)
     description_text = "\n\n".join(descriptions)
     return True, "", summary_text, description_text
-
 
 def post_or_update_comment(body):
     marker = "<!-- changeset-checker -->"
@@ -147,31 +130,27 @@ def post_or_update_comment(body):
         r = requests.post(list_url, headers=headers, json={"body": body_with_marker})
     r.raise_for_status()
 
-
 def main():
-    files = get_changed_files()
-    changes, changeset_exists = parse_changes(files)
+    diff_files = get_changed_files()
+    changes, changeset_exists = parse_changes(diff_files)
     if changes:
         if changeset_exists:
-            valid, error_msg, formatted_summary, change_desc = validate_all_changeset_files()
+            diff_changeset_files = [f for f in diff_files if f.startswith(".github/next-release/")]
+            valid, error_msg, formatted_summary, change_desc = validate_all_changeset_files(diff_changeset_files)
             if not valid:
-                comment = (
-                    "### :x: Invalid Changeset Format Detected\n\n"
-                    "One or more changeset files in this PR have an invalid format. Please ensure the file(s) adhere to the following:\n\n"
-                    "- Start with `---` and include a closing `---` on its own line.\n"
-                    "- Each package line must be on its own line in the format:\n"
-                    '  `"package-name": patch|minor|major`\n'
-                    "- No duplicate package entries are allowed.\n"
-                    "- A non-empty change description must follow the front matter.\n\n"
-                    f"**Error details:**\n{error_msg}"
-                )
+                comment = ("### :x: Invalid Changeset Format Detected\n\n"
+                           "One or more changeset files in this PR have an invalid format. Please ensure they adhere to:\n\n"
+                           "- Start with `---` and include a closing `---` on its own line.\n"
+                           '- Each package line must be in the format:\n'
+                           '  `"package-name": patch|minor|major`\n'
+                           "- No duplicate package entries allowed.\n"
+                           "- A non-empty change description must follow the front matter.\n\n"
+                           f"**Error details:**\n{error_msg}")
             else:
-                comment = (
-                    "### ✅ Changeset File Detected\n\n"
-                    "The following changeset entries were found:\n\n"
-                    f"{formatted_summary}\n\n"
-                    f"**Change description:**\n{change_desc}"
-                )
+                comment = ("### ✅ Changeset File Detected\n\n"
+                           "The following changeset entries were found:\n\n"
+                           f"{formatted_summary}\n\n"
+                           f"**Change description:**\n{change_desc}")
         else:
             pr_title = get_pr_title()
             template = generate_template(changes, pr_title)
@@ -182,20 +161,14 @@ def main():
             message_lines = [
                 "### :warning: Changeset Required",
                 "",
-                "We detected changes in the following package(s) but **no changeset file was found**. Please add one to ensure proper versioning:",
+                "We detected changes in the following package(s) but **no changeset file was found**. Please add one for proper versioning:",
                 "",
             ]
             for item in sorted(changes):
                 message_lines.append(f"- `{item}`")
-            message_lines.extend(
-                [
-                    "",
-                    f"👉 Please create a changeset file for your changes by [clicking here]({link}).",
-                ]
-            )
+            message_lines.extend(["", f"👉 Create a changeset file by [clicking here]({link})."])
             comment = "\n".join(message_lines)
         post_or_update_comment(comment)
-
 
 if __name__ == "__main__":
     main()
