@@ -117,7 +117,7 @@ def validate_all_changeset_files():
     If any file is invalid, returns an error.
     """
     errors = []
-    summary_lines = []
+    entries = []  # Will hold tuples (order, bump, pkg)
     descriptions = []
     path = ".github/next-release"
     if os.path.isdir(path):
@@ -138,18 +138,22 @@ def validate_all_changeset_files():
                             second_delim_index = None
                         if second_delim_index is not None:
                             front_matter = lines[1:second_delim_index]
+                            bump_order = {"major": 0, "minor": 1, "patch": 2}
                             for line in front_matter:
                                 m = re.match(r'^"([^"]+)":\s*(patch|minor|major)$', line.strip())
                                 if m:
                                     pkg = m.group(1)
                                     bump = m.group(2)
-                                    summary_lines.append(f"- `{pkg}`: `{bump}`")
+                                    entries.append((bump_order[bump], bump, pkg))
                             # Capture the description (all lines after front matter).
                             description = "\n".join(lines[second_delim_index + 1 :]).strip()
                             if description:
                                 descriptions.append(description)
     if errors:
         return False, "\n".join(errors), None, None
+    # Sort entries: major first, then minor, then patch.
+    entries.sort(key=lambda x: x[0])
+    summary_lines = [f"- `{bump}` - `{pkg}`" for _, bump, pkg in entries]
     summary_text = "\n".join(summary_lines)
     description_text = "\n\n".join(descriptions)
     return True, "", summary_text, description_text
@@ -199,7 +203,7 @@ def main():
                     "### ✅ Changeset File Detected\n\n"
                     "The following changeset entries were found:\n\n"
                     f"{formatted_summary}\n\n"
-                    "**Release description:**\n{change_desc}"
+                    f"**Release description:**\n{change_desc}"
                 )
         else:
             pr_title = get_pr_title()
