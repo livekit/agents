@@ -125,37 +125,16 @@ def main():
             params = {"filename": f".github/next-release/{file_name}", "value": template}
             link = base_url + "?" + urllib.parse.urlencode(params)
 
-            # Separate livekit-agents and livekit-plugins for prettier formatting.
-            agents = []
-            plugins = []
-            for change in sorted(changes):
-                if change == "livekit-agents":
-                    agents.append(change)
-                elif change.startswith("livekit-plugins-"):
-                    plugins.append(change)
-
             message_lines = []
-            message_lines.append("### :warning: Changeset Required :warning:")
+            message_lines.append("### :warning: Changeset Required")
             message_lines.append("")
             message_lines.append(
                 "We detected changes in the following package(s), but **no changeset file was found**. Please add one to ensure proper versioning:"
             )
             message_lines.append("")
-            # Since there is only one livekit-agents package, display it on one line.
-            if agents:
-                message_lines.append("**Livekit Agent:** `livekit-agents`")
-                message_lines.append("")
-            if plugins:
-                message_lines.append("**Livekit Plugins:**")
-                message_lines.append("")
-                message_lines.append("<details>")
-                message_lines.append("  <summary>Click to view changed plugins</summary>")
-                message_lines.append("")
-                for p in plugins:
-                    message_lines.append(f"  - `{p}`")
-                message_lines.append("")
-                message_lines.append("</details>")
-                message_lines.append("")
+            for item in sorted(changes):
+                message_lines.append(f"- `{item}`")
+            message_lines.append("")
             message_lines.append(
                 f"👉 Please create a changeset file for your changes by [clicking here]({link})."
             )
