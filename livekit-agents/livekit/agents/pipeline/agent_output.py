@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from typing import Any, AsyncIterable, Awaitable, Callable, Union
+import re
 
 from app_config import AppConfig
 from livekit import rtc
@@ -263,6 +264,7 @@ class AgentOutput:
         read_transcript_atask: asyncio.Task | None = None
 
         try:
+            buffer = ""  # Intermediary buffer to track text for flushing
             async for seg in tts_source:
                 logger.info(f"segment: {seg}")
                 if tts_stream is None:
@@ -277,9 +279,16 @@ class AgentOutput:
 
                 logger.info(f"pushing text: {seg}")
                 tts_stream.push_text(seg)
-                if any(char in seg.strip() for char in [".", "!", "?"]):
-                    logger.info("flushing tts stream")
+                
+                buffer += seg
+                
+                #Don't flush if we have decimal point at the end of $XXXX
+                potential_incomplete_currency = re.search(r'\$[\d,]+\.?$|\$\d*$', buffer)
+                
+                if re.search(r'[.!?](?!\d)', buffer) and not potential_incomplete_currency:
+                    logger.info(f"flushing tts stream with buffer: {buffer}")
                     tts_stream.flush()
+                    buffer = ""
 
             if tts_stream is not None:
                 logger.info("ending tts stream")
