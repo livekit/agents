@@ -114,9 +114,13 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._turn_detection_mode = None
 
-            elif self._turn_detection_mode == "vad" and self.llm.capabilities.turn_detection:
+            elif (
+                self._turn_detection_mode
+                and self._turn_detection_mode != "realtime_llm"
+                and self.llm.capabilities.turn_detection
+            ):
                 logger.warning(
-                    "turn_detection is set to 'vad', but the LLM is a RealtimeModel, "
+                    f"turn_detection is set to '{self._turn_detection_mode}', but the LLM is a RealtimeModel "
                     "and server-side turn detection enabled, ignoring the turn_detection setting"
                 )
                 self._turn_detection_mode = None
@@ -352,6 +356,7 @@ class AgentActivity(RecognitionHooks):
             return
 
         if self._current_speech and not self._current_speech.allow_interruptions:
+            # TODO(long): make this optional if user want to save the transcript for later response?
             # drop the audio if the current speech is not interruptable
             return
 
@@ -581,12 +586,6 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("user_started_speaking", UserStartedSpeakingEvent())
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        if isinstance(self.llm, llm.RealtimeModel) and (
-            self._turn_detection_mode == "vad"
-            or (not self.llm.capabilities.turn_detection and self._turn_detection_mode is None)
-        ):
-            self.generate_reply()
-
         self._session.emit("user_stopped_speaking", UserStoppedSpeakingEvent())
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
@@ -606,12 +605,20 @@ class AgentActivity(RecognitionHooks):
                 self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.speech_to_text:
+            # skip stt transcription if speech_to_text is enabled on the realtime model
+            return
+
         self._session.emit(
             "user_input_transcribed",
             UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=False),
         )
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.speech_to_text:
+            # skip stt transcription if speech_to_text is enabled on the realtime model
+            return
+
         self._session.emit(
             "user_input_transcribed",
             UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
@@ -619,11 +626,15 @@ class AgentActivity(RecognitionHooks):
 
     async def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:
+        #  - check if realtime model server-side turn detection is enabled
         #  - check if the turn detection mode is set to "manual"
         #  - check if there is no current generation happening
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
         #  turn)
         #  - generate a reply to the user input
+
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
+            return
 
         user_message = llm.ChatMessage(role="user", content=[new_transcript])
 
@@ -639,6 +650,7 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"user_input": new_transcript},
                 )
+                # in agent.on_end_of_turn user can ignore the message or save it for later
                 await self._agent.on_end_of_turn(
                     self._agent.chat_ctx, user_message, generating_reply=False
                 )
@@ -649,6 +661,8 @@ class AgentActivity(RecognitionHooks):
                 speech_id=self._current_speech.id,
             )
             self._current_speech.interrupt()
+            if self._rt_session is not None:
+                self._rt_session.interrupt()
 
         if self.draining:
             logger.warning(

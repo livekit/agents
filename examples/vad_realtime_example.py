@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 from livekit.agents import JobContext, JobProcess, WorkerOptions, cli
 from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.plugins import deepgram, openai, silero
 
 # from livekit.plugins.turn_detector import EOUModel
@@ -35,6 +36,13 @@ async def entrypoint(ctx: JobContext):
         allow_interruptions=True,
     )
     await session.start(agent=AlloyAgent(), room=ctx.room)
+
+    @session.output.audio.on("playback_finished")
+    def on_playback_finished(event: PlaybackFinishedEvent):
+        logger.info(
+            "playback finished",
+            extra={"duration": event.playback_position, "interrupted": event.interrupted},
+        )
 
 
 def prewarm(proc: JobProcess):

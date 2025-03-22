@@ -169,13 +169,13 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
-        if not self._audio_transcript:
+        if self._stt and not self._audio_transcript:
+            # stt enabled but no transcript yet
             return
 
-        # TODO
-        # chat_ctx = self._agent._chat_ctx.copy()
-        # chat_ctx.append(role="user", text=self._audio_transcript)
-        turn_detector = self._turn_detector
+        chat_ctx = chat_ctx.copy()
+        chat_ctx.add_message(role="user", content=self._audio_transcript)
+        turn_detector = self._turn_detector if self._audio_transcript else None
 
         @utils.log_exceptions(logger=logger)
         async def _bounce_eou_task() -> None:

@@ -128,8 +128,11 @@ class RealtimeModel(llm.RealtimeModel):
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
-            # TODO(theomonnom): add a way to disable turn detection (And use VAD on the VoiceAgent)
-            capabilities=llm.RealtimeCapabilities(message_truncation=True, turn_detection=True)
+            capabilities=llm.RealtimeCapabilities(
+                message_truncation=True,
+                turn_detection=turn_detection is not None,
+                speech_to_text=input_audio_transcription is not None,
+            )
         )
 
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -148,7 +151,6 @@ class RealtimeModel(llm.RealtimeModel):
             api_key=api_key,
             base_url=base_url,
         )
-        self._capabilities.turn_detection = turn_detection is not None
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
