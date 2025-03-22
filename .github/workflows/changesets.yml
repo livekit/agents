@@ -1,34 +1,22 @@
-name: Changeset Check
+name: Changeset Checker
 
 on:
   pull_request:
     paths:
       - 'livekit-agents/**'
       - 'livekit-plugins/**'
-    types: [opened, synchronize, reopened]
+      - '.github/next-release/**'
 
 jobs:
-  changeset-check:
+  changesets:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-          
-      - name: Set up Python
-        uses: actions/setup-python@v5
-      
-      - name: Run changeset checker
-        id: checker
-        run: python .github/workflows-py/changeset_checker.py
+      - uses: actions/checkout@v3
+      - name: Check Changesets
+        run: python .github/workflows-py/check_changesets.py
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_REF: ${{ github.head_ref }}
-          REPO_URL: ${{ github.event.repository.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
