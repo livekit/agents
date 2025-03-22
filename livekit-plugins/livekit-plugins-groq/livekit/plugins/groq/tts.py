@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 import aiohttp
 
@@ -121,7 +120,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
         segment_id: str | None = None,
     ) -> ChunkedStream:
         return ChunkedStream(
@@ -140,7 +139,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
         segment_id: str | None = None,
@@ -168,7 +167,7 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=NUM_CHANNELS,
         )
 
-        decode_task: Optional[asyncio.Task] = None
+        decode_task: asyncio.Task | None = None
         api_url = f"{self._opts.base_url}/audio/speech"
         try:
             async with self._session.post(api_url, headers=headers, json=payload) as response:

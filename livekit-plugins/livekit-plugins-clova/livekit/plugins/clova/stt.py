@@ -20,9 +20,9 @@ import json
 import os
 import time
 import wave
-from typing import Optional, Union
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
@@ -44,9 +44,9 @@ class STT(stt.STT):
         self,
         *,
         language: ClovaSttLanguages | str = "en-US",
-        secret: Optional[str] = None,
-        invoke_url: Optional[str] = None,
-        http_session: Optional[aiohttp.ClientSession] = None,
+        secret: str | None = None,
+        invoke_url: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
         threshold: float = 0.5,
     ):
         """
@@ -82,7 +82,7 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: Union[ClovaSttLanguages, str, None],
+        language: ClovaSttLanguages | str | None,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
