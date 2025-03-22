@@ -35,7 +35,7 @@ def parse_changes(files):
             if len(parts) > 1:
                 plugin_dir = os.path.join("livekit-plugins", parts[1])
                 if os.path.isdir(plugin_dir):
-                    changes.add(f"livekit-plugins-{parts[1]}")
+                    changes.add({parts[1]})
         elif f.startswith(".github/next-release/"):
             changeset_exists = True
     return changes, changeset_exists
