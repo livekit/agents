@@ -1,4 +1,4 @@
-name: Changeset Checker
+name: changesets
 permissions:
   contents: write
   pull-requests: write
@@ -13,7 +13,7 @@ on:
       - '.github/next-release/**'
 
 jobs:
-  changesets:
+  check-changesets:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
