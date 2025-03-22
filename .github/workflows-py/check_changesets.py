@@ -96,7 +96,6 @@ def post_or_update_comment(body):
             break
     body_with_marker = marker + "\n" + body
     if comment_id:
-        # Use the correct update URL endpoint.
         update_url = f"https://api.github.com/repos/{REPO}/issues/comments/{comment_id}"
         r = requests.patch(update_url, headers=headers, json={"body": body_with_marker})
         r.raise_for_status()
@@ -112,7 +111,9 @@ def main():
         if changeset_exists:
             summary = get_existing_changeset_summary()
             comment = (
-                f"Changeset file detected in this PR. It looks good!\n\nRelease summary:\n{summary}"
+                "### ✅ Changeset File Detected\n\n"
+                "A changeset file is already present in this PR. It looks good!\n\n"
+                f"**Release summary:**\n{summary}"
             )
         else:
             pr_title = get_pr_title()
@@ -124,7 +125,7 @@ def main():
             params = {"filename": f".github/next-release/{file_name}", "value": template}
             link = base_url + "?" + urllib.parse.urlencode(params)
 
-            # Pretty formatting: separate livekit-agents and plugins, using collapsible details for plugins.
+            # Separate livekit-agents and livekit-plugins for prettier formatting.
             agents = []
             plugins = []
             for change in sorted(changes):
@@ -134,21 +135,29 @@ def main():
                     plugins.append(change)
 
             message_lines = []
-            message_lines.append("Detected changes in relevant packages:\n")
+            message_lines.append("### :warning: Changeset Required :warning:")
+            message_lines.append("")
+            message_lines.append(
+                "We detected changes in the following package(s), but **no changeset file was found**. Please add one to ensure proper versioning:"
+            )
+            message_lines.append("")
+            # Since there is only one livekit-agents package, display it on one line.
             if agents:
-                for a in agents:
-                    message_lines.append(f"- `{a}`")
+                message_lines.append("**Livekit Agent:** `livekit-agents`")
+                message_lines.append("")
             if plugins:
+                message_lines.append("**Livekit Plugins:**")
                 message_lines.append("")
                 message_lines.append("<details>")
-                message_lines.append("  <summary>`livekit-plugins`</summary>")
+                message_lines.append("  <summary>Click to view changed plugins</summary>")
                 message_lines.append("")
                 for p in plugins:
                     message_lines.append(f"  - `{p}`")
+                message_lines.append("")
                 message_lines.append("</details>")
-            message_lines.append("")
+                message_lines.append("")
             message_lines.append(
-                f"Please add a changeset file for your changes by [clicking here]({link})."
+                f"👉 Please create a changeset file for your changes by [clicking here]({link})."
             )
             comment = "\n".join(message_lines)
         post_or_update_comment(comment)
