@@ -123,6 +123,7 @@ class AudioRecognition:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
+            self._last_language = ev.alternatives[0].language
             if not transcript:
                 return
 
@@ -169,13 +170,13 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
-        if not self._audio_transcript:
+        if self._stt and not self._audio_transcript:
+            # stt enabled but no transcript yet
             return
 
-        # TODO
-        # chat_ctx = self._agent._chat_ctx.copy()
-        # chat_ctx.append(role="user", text=self._audio_transcript)
-        turn_detector = self._turn_detector
+        chat_ctx = chat_ctx.copy()
+        chat_ctx.add_message(role="user", content=self._audio_transcript)
+        turn_detector = self._turn_detector if self._audio_transcript else None
 
         @utils.log_exceptions(logger=logger)
         async def _bounce_eou_task() -> None:
@@ -188,7 +189,7 @@ class AudioRecognition:
                     {"probability": end_of_turn_probability},
                 )
                 unlikely_threshold = turn_detector.unlikely_threshold()
-                if end_of_turn_probability > unlikely_threshold:
+                if end_of_turn_probability < unlikely_threshold:
                     await asyncio.sleep(self.UNLIKELY_END_OF_TURN_EXTRA_DELAY)
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})

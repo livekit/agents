@@ -140,7 +140,7 @@ class EOUModel:
     ) -> float:
         messages = []
 
-        for msg in chat_ctx.messages:
+        for msg in chat_ctx.items:
             if msg.role not in ("user", "assistant"):
                 continue
 
