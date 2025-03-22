@@ -1,0 +1,241 @@
+name: Changesets
+
+on:
+  pull_request:
+    paths:
+      - 'livekit-agents/**'
+      - 'livekit-plugins/**'
+    types: [opened, synchronize, reopened]
+
+jobs:
+  changeset-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Check for changed files
+        id: changed-files
+        run: |
+          # Get the base branch (typically main or master)
+          BASE_BRANCH="${GITHUB_BASE_REF:-main}"
+          
+          # Get list of modified files compared to base branch
+          CHANGED_FILES=$(git diff --name-only origin/$BASE_BRANCH...HEAD)
+          
+          # Extract affected packages
+          AGENTS_CHANGED=false
+          PLUGINS_CHANGED=()
+          
+          echo "Checking changed files..."
+          
+          while IFS= read -r file; do
+            if [[ $file == livekit-agents/* ]]; then
+              AGENTS_CHANGED=true
+              echo "Found change in livekit-agents: $file"
+            elif [[ $file =~ livekit-plugins/([^/]+)/.* ]]; then
+              PLUGIN_NAME="${BASH_REMATCH[1]}"
+              # Check if this plugin is already in our list
+              if [[ ! " ${PLUGINS_CHANGED[*]} " =~ " $PLUGIN_NAME " ]]; then
+                PLUGINS_CHANGED+=("$PLUGIN_NAME")
+                echo "Found change in plugin: $PLUGIN_NAME"
+              fi
+            fi
+          done <<< "$CHANGED_FILES"
+          
+          # Set outputs
+          echo "agents_changed=$AGENTS_CHANGED" >> $GITHUB_OUTPUT
+          echo "plugins_changed=${PLUGINS_CHANGED[*]}" >> $GITHUB_OUTPUT
+      
+      - name: Check for existing changeset
+        id: check-changeset
+        run: |
+          # Check if there's already a changeset file for this PR
+          if ls .github/next-release/*.md &> /dev/null; then
+            echo "changeset_exists=true" >> $GITHUB_OUTPUT
+            
+            # Parse the existing changeset to get version bumps
+            CHANGESET_FILES=$(ls .github/next-release/*.md)
+            PATCH_PACKAGES=()
+            MINOR_PACKAGES=()
+            MAJOR_PACKAGES=()
+            
+            for file in $CHANGESET_FILES; do
+              # Extract package bumps from each changeset file
+              while IFS=':' read -r line; do
+                if [[ $line =~ \"([^\"]+)\"\:\ *([a-z]+) ]]; then
+                  PACKAGE="${BASH_REMATCH[1]}"
+                  BUMP_TYPE="${BASH_REMATCH[2]}"
+                  
+                  case $BUMP_TYPE in
+                    patch)
+                      PATCH_PACKAGES+=("$PACKAGE")
+                      ;;
+                    minor)
+                      MINOR_PACKAGES+=("$PACKAGE")
+                      ;;
+                    major)
+                      MAJOR_PACKAGES+=("$PACKAGE")
+                      ;;
+                  esac
+                fi
+              done < <(grep -o '"[^"]*": \(patch\|minor\|major\)' "$file")
+            done
+            
+            # Create summary for PR comment
+            SUMMARY=""
+            if [ ${#PATCH_PACKAGES[@]} -gt 0 ]; then
+              SUMMARY="$SUMMARY- Patch: ${PATCH_PACKAGES[*]}\n"
+            fi
+            if [ ${#MINOR_PACKAGES[@]} -gt 0 ]; then
+              SUMMARY="$SUMMARY- Minor: ${MINOR_PACKAGES[*]}\n"
+            fi
+            if [ ${#MAJOR_PACKAGES[@]} -gt 0 ]; then
+              SUMMARY="$SUMMARY- Major: ${MAJOR_PACKAGES[*]}\n"
+            fi
+            
+            echo "version_summary<<EOF" >> $GITHUB_OUTPUT
+            echo -e "$SUMMARY" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "changeset_exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Generate changeset template
+        id: generate-template
+        if: steps.check-changeset.outputs.changeset_exists == 'false' && (steps.changed-files.outputs.agents_changed == 'true' || steps.changed-files.outputs.plugins_changed != '')
+        run: |
+          # Generate a random ID for the changeset file
+          RANDOM_ID=$(openssl rand -hex 6)
+          CHANGESET_PATH=".github/next-release/$RANDOM_ID.md"
+          
+          # Start building the changeset content
+          echo "---" > $CHANGESET_PATH
+          
+          # Add livekit-agents if changed
+          if [[ "${{ steps.changed-files.outputs.agents_changed }}" == "true" ]]; then
+            echo "\"livekit-agents\": patch" >> $CHANGESET_PATH
+          fi
+          
+          # Add plugins that changed
+          for plugin in ${{ steps.changed-files.outputs.plugins_changed }}; do
+            if [[ -n "$plugin" ]]; then
+              echo "\"livekit-plugins-$plugin\": patch" >> $CHANGESET_PATH
+            fi
+          done
+          
+          # Complete the changeset template
+          echo "---" >> $CHANGESET_PATH
+          echo "<!-- Add your changeset description here -->" >> $CHANGESET_PATH
+          
+          # Set outputs
+          echo "changeset_path=$CHANGESET_PATH" >> $GITHUB_OUTPUT
+          echo "random_id=$RANDOM_ID" >> $GITHUB_OUTPUT
+          
+          # Prepare template for PR comment
+          cat $CHANGESET_PATH > changeset_template.txt
+      
+      - name: Find existing bot comment
+        uses: actions/github-script@v7
+        id: find-comment
+        with:
+          result-encoding: string
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            
+            const botComment = comments.find(comment => {
+              return comment.user.type === 'Bot' && 
+                     (comment.body.includes('## Changeset Required 📝') || 
+                      comment.body.includes('## Changeset Detected ✅'));
+            });
+            
+            return botComment ? botComment.id.toString() : '';
+      
+      - name: Update or create PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const commentId = '${{ steps.find-comment.outputs.result }}';
+            const changesetExists = '${{ steps.check-changeset.outputs.changeset_exists }}' === 'true';
+            
+            let body;
+            
+            if (changesetExists) {
+              // Changeset exists, create a "looks good" comment
+              const versionSummary = `${{ steps.check-changeset.outputs.version_summary }}`;
+              
+              body = `## Changeset Detected ✅
+              
+              Great! This pull request includes a changeset file. Here's a summary of the version changes:
+              
+              ${versionSummary}
+              
+              These changes will be included in the next release.`;
+            } else {
+              // No changeset, need to create one
+              const packageChanges = [];
+              
+              // Extract package names for display
+              if ('${{ steps.changed-files.outputs.agents_changed }}' === 'true') {
+                packageChanges.push('livekit-agents');
+              }
+              
+              const pluginsChanged = '${{ steps.changed-files.outputs.plugins_changed }}'.split(' ').filter(Boolean);
+              for (const plugin of pluginsChanged) {
+                packageChanges.push(`livekit-plugins-${plugin}`);
+              }
+              
+              // If no packages changed or template wasn't generated, exit early
+              if (packageChanges.length === 0 || '${{ steps.generate-template.outcome }}' !== 'success') {
+                return;
+              }
+              
+              const template = fs.readFileSync('changeset_template.txt', 'utf8');
+              const randomId = '${{ steps.generate-template.outputs.random_id }}';
+              const fileUrl = `${context.payload.repository.html_url}/new/${context.payload.pull_request.head.ref}?filename=.github/next-release/${randomId}.md&value=${encodeURIComponent(template)}`;
+              
+              body = `## Changeset Required 📝
+              
+              Changes detected in:
+              ${packageChanges.map(pkg => `- \`${pkg}\``).join('\n')}
+              
+              Please add a changeset file describing your changes.
+              
+              [👉 Click here to create a changeset file](${fileUrl})
+              
+              Your changeset file should look like this:
+              
+              \`\`\`markdown
+              ${template}
+              \`\`\`
+              
+              Replace the comment with a brief description of your changes.`;
+            }
+            
+            // Update or create comment
+            if (commentId) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: parseInt(commentId),
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
