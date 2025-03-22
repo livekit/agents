@@ -7,7 +7,7 @@ from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.plugins import deepgram, openai, silero
 
-# from livekit.plugins.turn_detector import EOUModel
+from livekit.plugins.turn_detector import EOUModel
 
 logger = logging.getLogger("vad-realtime-example")
 logger.setLevel(logging.INFO)
@@ -19,7 +19,9 @@ class AlloyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy.",
-            llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
+            llm=openai.realtime.RealtimeModel(
+                voice="alloy", turn_detection=None, input_audio_transcription=None
+            ),
         )
 
     async def on_enter(self):
@@ -30,9 +32,9 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(
-        turn_detection="vad",
+        turn_detection=EOUModel(),
         vad=ctx.proc.userdata["vad"],
-        # stt=deepgram.STT(),
+        stt=deepgram.STT(),
         allow_interruptions=True,
     )
     await session.start(agent=AlloyAgent(), room=ctx.room)

@@ -123,6 +123,7 @@ class AudioRecognition:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
+            self._last_language = ev.alternatives[0].language
             if not transcript:
                 return
 
@@ -188,7 +189,7 @@ class AudioRecognition:
                     {"probability": end_of_turn_probability},
                 )
                 unlikely_threshold = turn_detector.unlikely_threshold()
-                if end_of_turn_probability > unlikely_threshold:
+                if end_of_turn_probability < unlikely_threshold:
                     await asyncio.sleep(self.UNLIKELY_END_OF_TURN_EXTRA_DELAY)
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})

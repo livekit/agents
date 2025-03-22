@@ -632,9 +632,11 @@ class AgentActivity(RecognitionHooks):
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
         #  turn)
         #  - generate a reply to the user input
-
-        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
-            return
+        logger.info("on_end_of_turn", extra={"new_transcript": new_transcript})
+        if isinstance(self.llm, llm.RealtimeModel):
+            if self.llm.capabilities.turn_detection:
+                return
+            new_transcript = ""  # ignore stt transcription for realtime model
 
         user_message = llm.ChatMessage(role="user", content=[new_transcript])
 
