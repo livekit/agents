@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+import numpy as np
+
 from livekit import rtc
 
 from ... import tokenize, utils
@@ -15,6 +17,7 @@ from ...tokenize.tokenizer import PUNCTUATIONS
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.io import AudioOutput, PlaybackFinishedEvent, TextOutput
 from . import _utils
+from ._syllable import SyllableDetector, SyllableStream
 
 # Standard speech rate in hyphens per second
 STANDARD_SPEECH_RATE = 3.83
@@ -27,11 +30,66 @@ class TextSyncOptions:
     language: str = ""
     speed: float = 1.0  # Multiplier of STANDARD_SPEECH_RATE
     new_sentence_delay: float = 0.4
+    silence_to_new_sentence_delay_factor: float = 0.8
     sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(
         retain_format=True
     )
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
     split_words: Callable[[str], list[tuple[str, int, int]]] = tokenize.basic.split_words
+    enable_syllable_rate: bool = True  # use only audio energy if disabled
+
+
+@dataclass
+class _SyllableData:
+    timestamps: list[float] = field(default_factory=list)
+    speaking: list[bool] = field(default_factory=list)
+    syllable_rates: list[float] = field(default_factory=list)
+
+    speaking_time_cumsum: list[float] = field(default_factory=list)
+    syllable_integrals: list[float] = field(default_factory=list)
+
+    def append(self, timestamp: float, speaking: bool, syllable_rate: float) -> None:
+        if not self.timestamps:
+            speak_duration = 0
+            syllable_integral = 0
+        else:
+            speak_duration = self.speaking_time_cumsum[-1]
+            syllable_integral = self.syllable_integrals[-1]
+
+        if speaking:
+            dt = timestamp - self.pushed_duration
+            speak_duration += dt
+            syllable_integral += syllable_rate * dt
+
+        self.timestamps.append(timestamp)
+        self.speaking.append(speaking)
+        self.speaking_time_cumsum.append(speak_duration)
+        self.syllable_rates.append(syllable_rate)
+        self.syllable_integrals.append(syllable_integral)
+
+    def get_accumulated_data(self, timestamp: float) -> tuple[float, float]:
+        """Get the accumulated speaking time and syllable integral up to the given timestamp."""
+        if not self.timestamps:
+            return 0, 0
+
+        idx = np.searchsorted(self.timestamps, timestamp, side="right")
+        if idx == 0:
+            return 0, 0
+
+        speaking_time = self.speaking_time_cumsum[idx - 1]
+        syllable_integral = self.syllable_integrals[idx - 1]
+
+        if self.speaking[idx - 1]:
+            # fill the dt as speaking if the previous timestamp is speaking
+            dt = timestamp - self.timestamps[idx - 1]
+            speaking_time += dt
+            syllable_integral += self.syllable_rates[idx - 1] * dt
+
+        return speaking_time, syllable_integral
+
+    @property
+    def pushed_duration(self) -> float:
+        return self.timestamps[-1] if self.timestamps else 0
 
 
 @dataclass
@@ -39,6 +97,8 @@ class _AudioData:
     pushed_duration: float = 0.0
     done: bool = False
     id: str = field(default_factory=_utils.speech_uuid)
+    syllable_stream: SyllableStream | None = None
+    syllable_data: _SyllableData = field(default_factory=_SyllableData)
 
 
 @dataclass
@@ -47,7 +107,7 @@ class _TextData:
     pushed_text: str = ""
     done: bool = False
     forwarded_hyphens: int = 0
-    forwarded_sentences: int = 0
+    new_sentence_pauses_s: float = 0.0
 
 
 @dataclass
@@ -67,7 +127,6 @@ class _TextAudioSynchronizer:
 
         self._opts = options
         self._speed = options.speed * STANDARD_SPEECH_RATE
-
         self._closed = False
         self._close_future = asyncio.Future[None]()
         self._event_ch = utils.aio.Chan[_TextSegment]()
@@ -80,23 +139,33 @@ class _TextAudioSynchronizer:
         self._audio_q_changed = asyncio.Event()
         self._audio_q = list[Optional[_AudioData]]()
 
+        self._syllable_detector = SyllableDetector(enabled=options.enable_syllable_rate)
         self._text_data: _TextData | None = None
         self._audio_data: _AudioData | None = None
         self._processing_text_data: _TextData | None = None
 
         self._main_task: asyncio.Task | None = None
+        self._tasks: set[asyncio.Task] = set()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """Push an audio frame for the current segment."""
         self._check_not_closed()
 
         if self._audio_data is None:
-            self._audio_data = _AudioData()
+            self._audio_data = _AudioData(syllable_stream=self._syllable_detector.stream())
+            task = asyncio.create_task(
+                self._syllable_task(self._audio_data), name="syllable_stream_task"
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
             self._audio_q.append(self._audio_data)
             self._audio_q_changed.set()
 
         frame_duration = frame.samples_per_channel / frame.sample_rate
         self._audio_data.pushed_duration += frame_duration
+        if self._audio_data.syllable_stream:
+            self._audio_data.syllable_stream.push_frame(frame)
 
     def push_text(self, text: str) -> None:
         """Push text for the current segment."""
@@ -114,16 +183,27 @@ class _TextAudioSynchronizer:
         """Mark the current audio segment as complete."""
         self._check_not_closed()
 
+        logger.debug("mark_audio_segment_end")  # TODO(long): remove it after testing
         if self._audio_data is None:
             return
 
         assert self._audio_data is not None
         self._audio_data.done = True
+
+        # end the syllable stream
+        if self._audio_data.syllable_stream:
+            self._audio_data.syllable_stream.end_input()
+            task = asyncio.create_task(
+                self._audio_data.syllable_stream.aclose(), name="syllable_stream_close"
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
         self._audio_data = None
 
     def mark_text_segment_end(self) -> None:
         """Mark the current text segment as complete."""
         self._check_not_closed()
+        logger.debug("mark_text_segment_end")
 
         if self._text_data is None:
             return
@@ -225,9 +305,19 @@ class _TextAudioSynchronizer:
         sentence: str,
     ) -> None:
         """Synchronize a sentence with audio timing."""
-        real_speed = None
+        real_speed: float | None = None
+        syllable_speed: float | None = None
         if audio_data.pushed_duration > 0 and audio_data.done:
-            real_speed = len(self._calc_hyphens(text_data.pushed_text)) / audio_data.pushed_duration
+            pushed_hyphens = len(self._calc_hyphens(text_data.pushed_text))
+            speaking_duration, syllables = audio_data.syllable_data.get_accumulated_data(
+                audio_data.pushed_duration
+            )
+            if speaking_duration <= 0:
+                speaking_duration = audio_data.pushed_duration
+
+            # estimate the hyphens per speaking seconds and per syllable
+            real_speed = pushed_hyphens / speaking_duration
+            syllable_speed = pushed_hyphens / syllables if syllables > 0 else None
 
         seg_id = _utils.segment_uuid()
         words = self._opts.split_words(sentence)
@@ -249,13 +339,18 @@ class _TextAudioSynchronizer:
             text = text.rstrip("".join(PUNCTUATIONS))
 
             speed = self._speed
-            if real_speed is not None:
-                speed = real_speed
-                estimated_pauses_s = text_data.forwarded_sentences * self._opts.new_sentence_delay
-                hyph_pauses = estimated_pauses_s * speed
+            if syllable_speed is not None or real_speed is not None:
+                speaking_duration, syllables = audio_data.syllable_data.get_accumulated_data(
+                    elapsed_time + 0.5  # make the transcription slightly faster
+                )
+                target_hyphens = (
+                    syllable_speed * syllables
+                    if syllable_speed is not None
+                    else real_speed * speaking_duration
+                )
+                target_hyphens = round(target_hyphens)
 
-                target_hyphens = round(speed * elapsed_time)
-                dt = target_hyphens - text_data.forwarded_hyphens - hyph_pauses
+                dt = target_hyphens - text_data.forwarded_hyphens
                 to_wait_hyphens = max(0.0, word_hyphens - dt)
                 delay = to_wait_hyphens / speed
             else:
@@ -289,8 +384,28 @@ class _TextAudioSynchronizer:
         )
         sent_text = sentence
 
-        await self._sleep_if_not_closed(self._opts.new_sentence_delay)
-        text_data.forwarded_sentences += 1
+        if real_speed is not None or audio_data.syllable_data.pushed_duration < elapsed_time:
+            new_sentence_delay = self._opts.new_sentence_delay
+        else:
+            # estimate the new sentence delay based on the silent duration
+            silent_duration = (
+                elapsed_time - audio_data.syllable_data.get_accumulated_data(elapsed_time)[0]
+            )
+            new_sentence_delay = max(
+                0,
+                silent_duration * self._opts.silence_to_new_sentence_delay_factor
+                - text_data.new_sentence_pauses_s,
+            )
+
+        await self._sleep_if_not_closed(new_sentence_delay)
+        text_data.new_sentence_pauses_s += new_sentence_delay
+
+    async def _syllable_task(self, audio_data: _AudioData) -> None:
+        if audio_data.syllable_stream is None:
+            return
+
+        async for ev in audio_data.syllable_stream:
+            audio_data.syllable_data.append(ev.timestamp, ev.speaking, ev.syllable_rate)
 
     async def _sleep_if_not_closed(self, delay: float) -> None:
         with contextlib.suppress(asyncio.TimeoutError):
