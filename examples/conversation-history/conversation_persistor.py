@@ -7,15 +7,14 @@ from typing import Union
 import aiofiles
 from dotenv import load_dotenv
 from livekit.agents import (
-    AutoSubscribe,
     JobContext,
     WorkerOptions,
     cli,
-    multimodal,
     utils,
 )
-from livekit.agents.llm import ChatMessage
-from livekit.agents.multimodal.multimodal_agent import EventTypes
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.events import AgentEvent, EventTypes
 from livekit.plugins import openai
 
 
@@ -41,15 +40,15 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        model: multimodal.MultimodalAgent | None,
+        session: AgentSession | None,
         log: str | None,
         transcriptions_only: bool = False,
     ):
         """
-        Initializes a ConversationPersistor instance which records the events and transcriptions of a MultimodalAgent.
+        Initializes a ConversationPersistor instance which records the events and transcriptions of a VoiceAgent.
 
         Args:
-            model (multimodal.MultimodalAgent): an instance of a MultiModalAgent
+            model (AgentSession): an instance of an AgentSession
             log (str): name of the external file to record events in
             transcriptions_only (bool): a boolean variable to determine if only transcriptions will be recorded, False by default
             user_transcriptions (arr): list of user transcriptions
@@ -60,7 +59,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
 
-        self._model = model
+        self._session = session
         self._log = log
         self._transcriptions_only = transcriptions_only
 
@@ -75,8 +74,8 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         return self._log
 
     @property
-    def model(self) -> multimodal.MultimodalAgent | None:
-        return self._model
+    def session(self) -> AgentSession | None:
+        return self._session
 
     @property
     def user_transcriptions(self) -> dict:
@@ -123,64 +122,58 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         await self._main_task
 
     def start(self) -> None:
-        # Listens for emitted MultimodalAgent events
+        # Listens for emitted VoiceAgent events
         self._main_task = asyncio.create_task(self._main_atask())
 
-        @self._model.on("user_started_speaking")
-        def _user_started_speaking():
-            event = EventLog(eventname="user_started_speaking")
+        @self.session.on("user_started_speaking")
+        def _user_started_speaking(ev: AgentEvent):
+            event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
-        @self._model.on("user_stopped_speaking")
-        def _user_stopped_speaking():
-            event = EventLog(eventname="user_stopped_speaking")
+        @self.session.on("user_stopped_speaking")
+        def _user_stopped_speaking(ev: AgentEvent):
+            event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
-        @self._model.on("agent_started_speaking")
-        def _agent_started_speaking():
-            event = EventLog(eventname="agent_started_speaking")
+        @self.session.on("user_input_transcribed")
+        def _user_input_transcribed(ev: AgentEvent):
+            if ev.is_final:
+                event = EventLog(eventname=ev.type)
+                self._log_q.put_nowait(event)
+                transcription = TranscriptionLog(
+                    role="user", transcription=ev.transcript
+                )
+                self._log_q.put_nowait(transcription)
+
+        # @self.session.on("agent_state_changed")
+        # def _agent_state_changed(ev: AgentStateChangedEvent):
+        #     """ The state is either "initializing", "listening", or "speaking" """
+        #     name = "agent_state_changed: " + ev.state.value
+        #     event = EventLog(name)
+        #     self._log_q.put_nowait(event)
+
+        @self.session.on("agent_started_speaking")
+        def _agent_started_speaking(ev: AgentEvent):
+            event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
-        @self._model.on("agent_stopped_speaking")
-        def _agent_stopped_speaking():
-            transcription = TranscriptionLog(
-                role="agent",
-                transcription=(self._model._playing_handle._tr_fwd.played_text)[1:],
-            )
-            self._log_q.put_nowait(transcription)
-
-            event = EventLog(eventname="agent_stopped_speaking")
+        @self.session.on("agent_stopped_speaking")
+        def _agent_stopped_speaking(ev: AgentEvent):
+            event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
-        @self._model.on("user_speech_committed")
-        def _user_speech_committed(user_msg: ChatMessage):
-            transcription = TranscriptionLog(
-                role="user", transcription=user_msg.content
-            )
-            self._log_q.put_nowait(transcription)
 
-            event = EventLog(eventname="user_speech_committed")
-            self._log_q.put_nowait(event)
+class MyAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            instructions="You are a helpful assistant that can answer questions and help with tasks.",
+        )
 
-        @self._model.on("agent_speech_committed")
-        def _agent_speech_committed():
-            event = EventLog(eventname="agent_speech_committed")
-            self._log_q.put_nowait(event)
+    @function_tool()
+    async def open_door(self) -> str:
+        await self.session.generate_reply(instructions="Opening the door..")
 
-        @self._model.on("agent_speech_interrupted")
-        def _agent_speech_interrupted():
-            event = EventLog(eventname="agent_speech_interrupted")
-            self._log_q.put_nowait(event)
-
-        @self._model.on("function_calls_collected")
-        def _function_calls_collected():
-            event = EventLog(eventname="function_calls_collected")
-            self._log_q.put_nowait(event)
-
-        @self._model.on("function_calls_finished")
-        def _function_calls_finished():
-            event = EventLog(eventname="function_calls_finished")
-            self._log_q.put_nowait(event)
+        return "The door is open!"
 
 
 load_dotenv()
@@ -190,23 +183,13 @@ logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
-    agent = multimodal.MultimodalAgent(
-        model=openai.realtime.RealtimeModel(
-            voice="alloy",
-            temperature=0.8,
-            instructions="You are a helpful assistant.",
-            turn_detection=openai.realtime.ServerVadOptions(
-                threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
-            ),
-        ),
-    )
+    await ctx.connect()
+    session = AgentSession(llm=openai.realtime.RealtimeModel())
 
-    cp = ConversationPersistor(model=agent, log="log.txt")
+    cp = ConversationPersistor(session=session, log="log.txt")
     cp.start()
 
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    participant = await ctx.wait_for_participant()
-    agent.start(ctx.room, participant)
+    await session.start(agent=MyAgent(), room=ctx.room)
 
 
 if __name__ == "__main__":
