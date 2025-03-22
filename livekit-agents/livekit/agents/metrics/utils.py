@@ -12,7 +12,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None):
 
     if isinstance(metrics, LLMMetrics):
         logger.info(
-            f"LLM metrics: ttft={metrics.ttft:.2f}, input_tokens={metrics.prompt_tokens}, output_tokens={metrics.completion_tokens}, tokens_per_second={metrics.tokens_per_second:.2f}"
+            f"LLM metrics: ttft={metrics.ttft:.2f}, input_tokens={metrics.prompt_tokens}, output_tokens={metrics.completion_tokens}, tokens_per_second={metrics.tokens_per_second:.2f}"  # noqa: E501
         )
     elif isinstance(metrics, TTSMetrics):
         logger.info(
@@ -20,7 +20,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None):
         )
     elif isinstance(metrics, EOUMetrics):
         logger.info(
-            f"Pipeline EOU metrics: end_of_utterance_delay={metrics.end_of_utterance_delay:.2f}, transcription_delay={metrics.transcription_delay:.2f}"
+            f"Pipeline EOU metrics: end_of_utterance_delay={metrics.end_of_utterance_delay:.2f}, transcription_delay={metrics.transcription_delay:.2f}"  # noqa: E501
         )
     elif isinstance(metrics, STTMetrics):
         logger.info(f"STT metrics: audio_duration={metrics.audio_duration:.2f}")

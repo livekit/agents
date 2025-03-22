@@ -393,7 +393,7 @@ class ChatCLI:
         color_code = 31 if amplitude_db > 0.75 else 33 if amplitude_db > 0.5 else 32
         bar = "#" * nb_bar + "-" * (MAX_AUDIO_BAR - nb_bar)
         sys.stdout.write(
-            f"\r[Audio] {self._input_device_name[-20:]} [{self._micro_db:6.2f} dBFS] {_esc(color_code)}[{bar}]{_esc(0)}"
+            f"\r[Audio] {self._input_device_name[-20:]} [{self._micro_db:6.2f} dBFS] {_esc(color_code)}[{bar}]{_esc(0)}"  # noqa: E501
         )
         sys.stdout.flush()
 

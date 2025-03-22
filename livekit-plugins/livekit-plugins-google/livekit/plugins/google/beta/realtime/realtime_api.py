@@ -154,7 +154,7 @@ class RealtimeModel:
 
         Raises:
             ValueError: If the API key is not provided and cannot be found in environment variables.
-        """
+        """  # noqa: E501
         if modalities is None:
             modalities = ["AUDIO"]
         super().__init__()
@@ -170,7 +170,7 @@ class RealtimeModel:
         if vertexai:
             if not self._project or not self._location:
                 raise ValueError(
-                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"
+                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"  # noqa: E501
                 )
             self._api_key = None  # VertexAI does not require an API key
 
@@ -179,7 +179,7 @@ class RealtimeModel:
             self._location = None
             if not self._api_key:
                 raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
         instructions_content = Content(parts=[Part(text=instructions)]) if instructions else None
@@ -343,7 +343,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
         Notes:
         - This will be sent immediately so you should use a sampling frame rate that makes sense for your application and Gemini's constraints. 1 FPS is a good starting point.
-        """
+        """  # noqa: E501
         encoded_data = images.encode(
             frame,
             encode_options,
@@ -407,7 +407,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             )
 
         # self._chat_ctx.append(text=content.text, role="user")
-        # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
+        # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech  # noqa: E501
 
     def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
         if content.response_id and content.text:
@@ -506,7 +506,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                         logger.warning(
                             "function call cancelled",
                             extra={
-                                "function_call_ids": response.tool_call_cancellation.function_call_ids,
+                                "function_call_ids": response.tool_call_cancellation.function_call_ids,  # noqa: E501
                             },
                         )
                         self.emit(

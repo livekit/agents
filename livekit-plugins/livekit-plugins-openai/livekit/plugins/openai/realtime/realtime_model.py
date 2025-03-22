@@ -122,7 +122,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         if api_key is None:
             raise ValueError(
-                "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+                "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"  # noqa: E501
             )
 
         base_url = base_url or OPENAI_BASE_URL
@@ -281,7 +281,7 @@ class RealtimeSession(
                 event = json.loads(msg.data)
 
                 # emit the raw json dictionary instead of the BaseModel because different
-                # providers can have different event types that are not part of the OpenAI Realtime API
+                # providers can have different event types that are not part of the OpenAI Realtime API  # noqa: E501
                 self.emit("openai_server_event_received", event)
 
                 try:
@@ -355,7 +355,7 @@ class RealtimeSession(
         self.send_event(
             SessionUpdateEvent(
                 type="session.update",
-                # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.
+                # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
                 # Other providers support different voices, so we need to accommodate that.
                 session=session_update_event.Session.model_construct(
                     model=self._realtime_model._opts.model,
@@ -511,7 +511,7 @@ class RealtimeSession(
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
-            for f in self._bstream.write(f.data.tobytes()):
+            for f in self._bstream.write(f.data.tobytes()):  # noqa: B020
                 self.send_event(
                     InputAudioBufferAppendEvent(
                         type="input_audio_buffer.append",
@@ -748,7 +748,7 @@ class RealtimeSession(
 
     def _handle_response_done(self, _: ResponseDoneEvent) -> None:
         if self._current_generation is None:
-            return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)
+            return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)  # noqa: E501
 
         assert self._current_generation is not None, "current_generation is None"
         for generation in self._current_generation.messages.values():

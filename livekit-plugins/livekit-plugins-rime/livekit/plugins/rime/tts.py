@@ -74,7 +74,7 @@ class TTS(tts.TTS):
         self._api_key = api_key or os.environ.get("RIME_API_KEY")
         if not self._api_key:
             raise ValueError(
-                "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"
+                "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
             )
 
         self._opts = _TTSOptions(

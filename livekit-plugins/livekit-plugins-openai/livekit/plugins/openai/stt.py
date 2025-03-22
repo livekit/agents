@@ -99,7 +99,7 @@ class STT(stt.STT):
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=use_realtime, interim_results=use_realtime)
@@ -313,9 +313,9 @@ class STT(stt.STT):
             )
 
         except openai.APITimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError()  # noqa: B904
         except openai.APIStatusError as e:
-            raise APIStatusError(
+            raise APIStatusError(  # noqa: B904
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,

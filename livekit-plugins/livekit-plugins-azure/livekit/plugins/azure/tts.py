@@ -49,7 +49,7 @@ class ProsodyConfig:
         rate: Speaking rate. Can be one of "x-slow", "slow", "medium", "fast", "x-fast", or a float. A float value of 1.0 represents normal speed.
         volume: Speaking volume. Can be one of "silent", "x-soft", "soft", "medium", "loud", "x-loud", or a float. A float value of 100 (x-loud) represents the highest volume and it's the default pitch.
         pitch: Speaking pitch. Can be one of "x-low", "low", "medium", "high", "x-high". The default pitch is "medium".
-    """
+    """  # noqa: E501
 
     rate: Literal["x-slow", "slow", "medium", "fast", "x-fast"] | float | None = None
     volume: Literal["silent", "x-soft", "soft", "medium", "loud", "x-loud"] | float | None = None
@@ -81,7 +81,7 @@ class ProsodyConfig:
                 "x-loud",
             ]:
                 raise ValueError(
-                    "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"
+                    "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"  # noqa: E501
                 )
 
         if self.pitch and self.pitch not in [
@@ -183,7 +183,7 @@ class TTS(tts.TTS):
 
         if sample_rate not in SUPPORTED_SAMPLE_RATE:
             raise ValueError(
-                f"Unsupported sample rate {sample_rate}. Supported sample rates: {list(SUPPORTED_SAMPLE_RATE.keys())}"
+                f"Unsupported sample rate {sample_rate}. Supported sample rates: {list(SUPPORTED_SAMPLE_RATE.keys())}"  # noqa: E501
             )
 
         super().__init__(
@@ -202,7 +202,7 @@ class TTS(tts.TTS):
             speech_host or (speech_key and speech_region) or (speech_auth_token and speech_region)
         ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
             )
 
         if prosody:

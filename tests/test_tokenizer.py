@@ -133,7 +133,7 @@ async def test_streamed_word_tokenizer(tokenizer: tokenize.WordTokenizer):
         assert ev.token == WORDS_EXPECTED[i]
 
 
-WORDS_PUNCT_TEXT = 'This is <phoneme alphabet="cmu-arpabet" ph="AE K CH UW AH L IY">actually</phoneme> tricky to handle.'
+WORDS_PUNCT_TEXT = 'This is <phoneme alphabet="cmu-arpabet" ph="AE K CH UW AH L IY">actually</phoneme> tricky to handle.'  # noqa: E501
 
 WORDS_PUNCT_EXPECTED = [
     "This",

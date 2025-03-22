@@ -84,7 +84,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     async def launch_job(self, info: RunningJobInfo) -> None:
         if self._num_idle_processes == 0:
-            self._proc_needed_sem.release()  # ask for a process if prewarmed processes are not disabled
+            self._proc_needed_sem.release()  # ask for a process if prewarmed processes are not disabled  # noqa: E501
             proc = await self._warmed_proc_queue.get()
         else:
             proc = await self._warmed_proc_queue.get()
@@ -142,7 +142,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                     self.emit("process_ready", proc)
                     self._warmed_proc_queue.put_nowait(proc)
                 except Exception:
-                    self._proc_needed_sem.release()  # notify to warm a new process after initialization failure
+                    self._proc_needed_sem.release()  # notify to warm a new process after initialization failure  # noqa: E501
 
             await proc.join()
             self.emit("process_closed", proc)

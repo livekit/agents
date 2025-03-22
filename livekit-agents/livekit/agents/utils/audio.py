@@ -26,7 +26,7 @@ def calculate_audio_duration(frames: AudioBuffer) -> float:
 
     Returns:
     - float: The total duration in seconds of all frames provided.
-    """
+    """  # noqa: E501
     if isinstance(frames, list):
         return sum(frame.duration for frame in frames)
     else:

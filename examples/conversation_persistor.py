@@ -58,7 +58,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
             events (arr): list of all events
             log_q (asyncio.Queue): a queue of EventLog and TranscriptionLog
 
-        """
+        """  # noqa: E501
         super().__init__()
 
         self._model = model

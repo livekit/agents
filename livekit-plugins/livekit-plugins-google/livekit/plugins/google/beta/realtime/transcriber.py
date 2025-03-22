@@ -30,7 +30,7 @@ You are an **Audio Transcriber**. Your task is to convert audio content into acc
 - Do not add explanations, comments, or extra information.
 - Do not include timestamps, speaker labels, or annotations unless specified.
 - Audio Language: {DEFAULT_LANGUAGE}
-"""
+"""  # noqa: E501
 
 
 @dataclass

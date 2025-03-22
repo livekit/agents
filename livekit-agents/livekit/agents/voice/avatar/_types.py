@@ -39,4 +39,4 @@ class VideoGenerator(ABC):
     def __aiter__(
         self,
     ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
-        """Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends"""
+        """Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends"""  # noqa: E501

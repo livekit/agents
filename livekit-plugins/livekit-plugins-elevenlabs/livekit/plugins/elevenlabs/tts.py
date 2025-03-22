@@ -130,7 +130,7 @@ class TTS(tts.TTS):
             chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (str | None): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5". Optional.
-        """
+        """  # noqa: E501
 
         if chunk_length_schedule is None:
             chunk_length_schedule = [80, 120, 200, 260]
@@ -151,7 +151,7 @@ class TTS(tts.TTS):
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
             raise ValueError(
-                "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"
+                "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"  # noqa: E501
             )
 
         if word_tokenizer is None:
@@ -459,7 +459,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ):
                     if not eos_sent:
                         raise APIStatusError(
-                            "11labs connection closed unexpectedly, not all tokens have been consumed",
+                            "11labs connection closed unexpectedly, not all tokens have been consumed",  # noqa: E501
                             request_id=request_id,
                         )
                     return

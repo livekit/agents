@@ -23,7 +23,7 @@ AUDIO_STREAM_TOPIC = "lk.audio_stream"
 class DataStreamAudioOutput(AudioOutput):
     """
     AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.
-    """
+    """  # noqa: E501
 
     def __init__(self, room: rtc.Room, *, destination_identity: str):
         super().__init__()

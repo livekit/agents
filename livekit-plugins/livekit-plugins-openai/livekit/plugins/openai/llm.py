@@ -138,7 +138,7 @@ class LLM(llm.LLM):
         - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
         - `api_version` from `OPENAI_API_VERSION`
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
-        """
+        """  # noqa: E501
 
         azure_client = openai.AsyncAzureOpenAI(
             max_retries=0,
@@ -188,7 +188,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
         if api_key is None:
             raise ValueError(
-                "Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable"
+                "Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -224,7 +224,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("FIREWORKS_API_KEY")
         if api_key is None:
             raise ValueError(
-                "Fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable"
+                "Fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -259,7 +259,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("XAI_API_KEY")
         if api_key is None:
             raise ValueError(
-                "XAI API key is required, either as argument or set XAI_API_KEY environmental variable"
+                "XAI API key is required, either as argument or set XAI_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -295,7 +295,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if api_key is None:
             raise ValueError(
-                "Groq API key is required, either as argument or set GROQ_API_KEY environmental variable"
+                "Groq API key is required, either as argument or set GROQ_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -331,7 +331,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
         if api_key is None:
             raise ValueError(
-                "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable"
+                "DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -367,7 +367,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("OCTOAI_TOKEN")
         if api_key is None:
             raise ValueError(
-                "OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable"
+                "OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -427,7 +427,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("PERPLEXITY_API_KEY")
         if api_key is None:
             raise ValueError(
-                "Perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable"
+                "Perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -463,7 +463,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("TOGETHER_API_KEY")
         if api_key is None:
             raise ValueError(
-                "Together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable"
+                "Together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -499,7 +499,7 @@ class LLM(llm.LLM):
         api_key = api_key or os.environ.get("TELNYX_API_KEY")
         if api_key is None:
             raise ValueError(
-                "Telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable"
+                "Telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
@@ -625,9 +625,9 @@ class LLMStream(llm.LLMStream):
                         self._event_ch.send_nowait(chunk)
 
         except openai.APITimeoutError:
-            raise APITimeoutError(retryable=retryable)
+            raise APITimeoutError(retryable=retryable)  # noqa: B904
         except openai.APIStatusError as e:
-            raise APIStatusError(
+            raise APIStatusError(  # noqa: B904
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,

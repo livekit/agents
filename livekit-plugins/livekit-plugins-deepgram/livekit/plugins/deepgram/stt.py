@@ -165,7 +165,7 @@ class STT(stt.STT):
         Note:
             The api_key must be set either through the constructor argument or by setting
             the DEEPGRAM_API_KEY environmental variable.
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)

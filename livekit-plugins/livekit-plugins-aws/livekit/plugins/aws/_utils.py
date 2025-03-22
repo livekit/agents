@@ -19,7 +19,7 @@ def _get_aws_credentials(api_key: str | None, api_secret: str | None, region: st
     region = region or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         raise ValueError(
-            "AWS_DEFAULT_REGION must be set using the argument or by setting the AWS_DEFAULT_REGION environment variable."
+            "AWS_DEFAULT_REGION must be set using the argument or by setting the AWS_DEFAULT_REGION environment variable."  # noqa: E501
         )
 
     # If API key and secret are provided, create a session with them

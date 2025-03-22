@@ -256,7 +256,7 @@ class _JobProc:
             await asyncio.sleep(10)
             if not self._ctx_connect_called and not self._ctx_shutdown_called:
                 logger.warning(
-                    "The room connection was not established within 10 seconds after calling job_entry. "
+                    "The room connection was not established within 10 seconds after calling job_entry. "  # noqa: E501
                     "This may indicate that job_ctx.connect() was not called. "
                 )
 
@@ -274,8 +274,8 @@ class _JobProc:
                     return
 
                 logger.warning(
-                    "The job task completed without establishing a connection or performing a proper shutdown. "
-                    "Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized."
+                    "The job task completed without establishing a connection or performing a proper shutdown. "  # noqa: E501
+                    "Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized."  # noqa: E501
                 )
 
         job_entry_task.add_done_callback(log_exception)

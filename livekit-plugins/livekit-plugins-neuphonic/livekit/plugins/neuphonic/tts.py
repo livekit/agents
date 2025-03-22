@@ -131,7 +131,7 @@ class TTS(tts.TTS):
             api_key (str | None, optional): The Neuphonic API key. If not provided, it will be read from the NEUPHONIC_API_TOKEN environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Neuphonic API. Defaults to "api.neuphonic.com".
-        """
+        """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
@@ -208,7 +208,7 @@ class TTS(tts.TTS):
             encoding (TTSEncodings | str, optional): The audio encoding format.
             speed (float, optional): The audio playback speed.
             sample_rate (int, optional): The audio sample rate in Hz.
-        """
+        """  # noqa: E501
         self._opts.model = model or self._opts.model
         self._opts.voice_id = voice_id or self._opts.voice_id
         self._opts.lang_code = lang_code or self._opts.lang_code

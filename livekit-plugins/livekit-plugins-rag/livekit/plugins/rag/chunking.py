@@ -10,8 +10,8 @@ class SentenceChunker:
         max_chunk_size: int = 120,
         chunk_overlap: int = 30,
         paragraph_tokenizer: Callable[[str], list[str]] = tokenize.basic.tokenize_paragraphs,
-        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),  # noqa: B008
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
             ignore_punctuation=False
         ),
     ) -> None:

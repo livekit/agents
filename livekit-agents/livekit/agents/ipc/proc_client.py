@@ -85,7 +85,7 @@ class _ProcClient:
                 try:
                     loop.run_until_complete(self._task)
                 except KeyboardInterrupt:
-                    # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
+                    # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process  # noqa: E501
                     # (See proto.ShutdownRequest)
                     pass
         except KeyboardInterrupt:

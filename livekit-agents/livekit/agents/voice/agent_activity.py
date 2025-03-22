@@ -41,7 +41,7 @@ def log_event(event: str, **kwargs) -> None:
     debug.Tracing.log_event(event, kwargs)
 
 
-from .agent import Agent, ModelSettings
+from .agent import Agent, ModelSettings  # noqa: E402
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -80,8 +80,8 @@ class AgentActivity(RecognitionHooks):
             and not self.allow_interruptions
         ):
             raise ValueError(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, "
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
+                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False, "  # noqa: E501
+                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
             )
 
         if not self.vad and self.stt and isinstance(self.llm, llm.LLM) and self.allow_interruptions:
@@ -321,8 +321,8 @@ class AgentActivity(RecognitionHooks):
             and allow_interruptions is False
         ):
             logger.warning(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
+                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
+                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
             )
             allow_interruptions = NOT_GIVEN
 
@@ -366,8 +366,8 @@ class AgentActivity(RecognitionHooks):
             and allow_interruptions is False
         ):
             logger.warning(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"
+                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
+                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
             )
             allow_interruptions = NOT_GIVEN
 
@@ -437,7 +437,7 @@ class AgentActivity(RecognitionHooks):
             bypass_draining: bypass_draining should only be used to allow the last tool response to be scheduled
 
         Raises RuntimeError if the agent is draining
-        """
+        """  # noqa: E501
         if self.draining and not bypass_draining:
             raise RuntimeError("cannot schedule new speech, the agent is draining")
 
@@ -471,13 +471,13 @@ class AgentActivity(RecognitionHooks):
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
-        # self.interrupt() isn't going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.
+        # self.interrupt() isn't going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
         # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
         try:
-            self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session
+            self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
         except RuntimeError:
             logger.exception(
-                "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"
+                "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"  # noqa: E501
             )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
@@ -599,7 +599,7 @@ class AgentActivity(RecognitionHooks):
 
         self.generate_reply(user_input=new_transcript)
 
-    # AudioRecognition is calling this method to retrieve the chat context before running the TurnDetector model
+    # AudioRecognition is calling this method to retrieve the chat context before running the TurnDetector model  # noqa: E501
     def retrieve_chat_ctx(self) -> llm.ChatContext:
         return self._agent.chat_ctx
 
@@ -837,7 +837,7 @@ class AgentActivity(RecognitionHooks):
 
         log_event("playout completed", speech_id=speech_handle.id)
 
-        speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution
+        speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         await exe_task
 
         # important: no agent ouput should be used after this point
@@ -941,7 +941,7 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
         )
 
-        # TODO(theomonnom): reset tool_choice value (not needed for now, because it isn't exposed to the user)
+        # TODO(theomonnom): reset tool_choice value (not needed for now, because it isn't exposed to the user)  # noqa: E501
         # tool_choice is currently only set to None when draining
 
     @utils.log_exceptions(logger=logger)
@@ -1064,7 +1064,7 @@ class AgentActivity(RecognitionHooks):
             # TODO(theomonnom): truncate message (+ OAI serverside mesage)
             return
 
-        speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution
+        speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         await exe_task
 
         # important: no agent ouput should be used after this point
@@ -1100,7 +1100,7 @@ class AgentActivity(RecognitionHooks):
                     await self._rt_session.update_chat_ctx(chat_ctx)
                 except llm.RealtimeError as e:
                     logger.warning(
-                        "failed to update chat context before generating the function calls results",
+                        "failed to update chat context before generating the function calls results",  # noqa: E501
                         extra={"error": str(e)},
                     )
 

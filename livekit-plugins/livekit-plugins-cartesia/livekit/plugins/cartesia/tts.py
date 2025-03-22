@@ -101,7 +101,7 @@ class TTS(tts.TTS):
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
