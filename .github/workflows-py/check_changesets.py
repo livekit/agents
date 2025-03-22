@@ -37,19 +37,31 @@ def parse_changes(files):
         elif f.startswith("livekit-plugins/"):
             parts = f.split("/")
             if len(parts) > 1:
-                changes.add(f"livekit-plugins-{parts[1]}")
+                # Check that the plugin folder exists
+                plugin_dir = os.path.join("livekit-plugins", parts[1])
+                if os.path.isdir(plugin_dir):
+                    changes.add(f"livekit-plugins-{parts[1]}")
         elif f.startswith(".github/next-release/"):
             changeset_exists = True
     return changes, changeset_exists
 
 
-def generate_template(changes):
+def get_pr_title():
+    # Fetch the PR details to get its title
+    pr_url = f"https://api.github.com/repos/{REPO}/pulls/{PR_NUMBER}"
+    r = requests.get(pr_url, headers=headers)
+    r.raise_for_status()
+    pr = r.json()
+    return pr.get("title", "Your changes description here.")
+
+
+def generate_template(changes, description):
     # Build a minimal changeset file content
     lines = ["---"]
     for change in sorted(changes):
         lines.append(f'"{change}": patch')
     lines.append("---")
-    lines.append("\nYour changes description here.")
+    lines.append(f"\n{description}")
     return "\n".join(lines)
 
 
@@ -102,7 +114,8 @@ def main():
                 f"Changeset file detected in this PR. It looks good!\n\nRelease summary:\n{summary}"
             )
         else:
-            template = generate_template(changes)
+            pr_title = get_pr_title()
+            template = generate_template(changes, pr_title)
             # Generate a random filename for the changeset file
             file_name = f"changeset-{uuid.uuid4().hex[:8]}.md"
             # Build a link to GitHub’s file creation page on the contributor's branch
