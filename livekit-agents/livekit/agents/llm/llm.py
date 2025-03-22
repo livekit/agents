@@ -130,11 +130,11 @@ class LLMStream(ABC):
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
-                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",
+                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
                         extra={
                             "llm": self._llm._label,
@@ -145,9 +145,7 @@ class LLMStream(ABC):
                 await asyncio.sleep(self._conn_options.retry_interval)
 
     @utils.log_exceptions(logger=logger)
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[ChatChunk]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
         start_time = time.perf_counter()
         ttft = -1.0
         request_id = ""
@@ -196,7 +194,7 @@ class LLMStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 

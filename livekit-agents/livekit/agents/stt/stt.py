@@ -23,7 +23,7 @@ from ..utils.audio import calculate_audio_duration
 class SpeechEventType(str, Enum):
     START_OF_SPEECH = "start_of_speech"
     """indicate the start of speech
-    if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""
+    if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""  # noqa: E501
     INTERIM_TRANSCRIPT = "interim_transcript"
     """interim transcript, useful for real-time transcription"""
     FINAL_TRANSCRIPT = "final_transcript"
@@ -149,7 +149,7 @@ class STT(
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         raise NotImplementedError(
-            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
+            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"  # noqa: E501
         )
 
     async def aclose(self) -> None:
@@ -191,9 +191,7 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[
-            Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]
-        ]()
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
@@ -240,9 +238,7 @@ class RecognizeStream(ABC):
 
                 num_retries += 1
 
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[SpeechEvent]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         """Task used to collect metrics"""
 
         start_time = time.perf_counter()
@@ -285,7 +281,7 @@ class RecognizeStream(ABC):
                 )
 
         if self._resampler:
-            for frame in self._resampler.push(frame):
+            for frame in self._resampler.push(frame):  # noqa: B020
                 self._input_ch.send_nowait(frame)
         else:
             self._input_ch.send_nowait(frame)
@@ -321,7 +317,7 @@ class RecognizeStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 

@@ -81,8 +81,7 @@ class WaveformVisualizer:
 
             # Apply temporal smoothing
             self.prev_fft = (
-                self.prev_fft * (1 - self.smoothing_factor)
-                + plot_data * self.smoothing_factor
+                self.prev_fft * (1 - self.smoothing_factor) + plot_data * self.smoothing_factor
             )
         else:
             volume = 0
@@ -97,9 +96,9 @@ class WaveformVisualizer:
 
         # Draw the spectrum visualization
         points = np.column_stack((x_smooth, y_smooth)).astype(np.int32)
-        bottom_points = np.column_stack(
-            (x_smooth, np.full_like(x_smooth, center_y))
-        ).astype(np.int32)
+        bottom_points = np.column_stack((x_smooth, np.full_like(x_smooth, center_y))).astype(
+            np.int32
+        )
         wave_points = np.vstack((points, bottom_points[::-1]))
 
         # Draw filled area with transparency

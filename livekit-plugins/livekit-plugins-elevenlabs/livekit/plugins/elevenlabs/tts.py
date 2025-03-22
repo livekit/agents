@@ -21,7 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -130,7 +130,7 @@ class TTS(tts.TTS):
             chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (str | None): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5". Optional.
-        """
+        """  # noqa: E501
 
         if chunk_length_schedule is None:
             chunk_length_schedule = [80, 120, 200, 260]
@@ -151,7 +151,7 @@ class TTS(tts.TTS):
         api_key = api_key or os.environ.get("ELEVEN_API_KEY")
         if not api_key:
             raise ValueError(
-                "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"
+                "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"  # noqa: E501
             )
 
         if word_tokenizer is None:
@@ -220,9 +220,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -325,7 +323,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         session: aiohttp.ClientSession,
         opts: _TTSOptions,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts, self._session = opts, session
@@ -395,15 +393,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         # 11labs protocol expects the first message to be an "init msg"
-        init_pkt = dict(
-            text=" ",
-            voice_settings=_strip_nones(dataclasses.asdict(self._opts.voice.settings))
+        init_pkt = {
+            "text": " ",
+            "voice_settings": _strip_nones(dataclasses.asdict(self._opts.voice.settings))
             if self._opts.voice.settings
             else None,
-            generation_config=dict(
-                chunk_length_schedule=self._opts.chunk_length_schedule
-            ),
-        )
+            "generation_config": {"chunk_length_schedule": self._opts.chunk_length_schedule},
+        }
         await ws_conn.send_str(json.dumps(init_pkt))
         eos_sent = False
 
@@ -426,14 +422,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         continue
 
-                data_pkt = dict(text=f"{text} ")  # must always end with a space
+                data_pkt = {"text": f"{text} "}  # must always end with a space
                 self._mark_started()
                 await ws_conn.send_str(json.dumps(data_pkt))
             if xml_content:
                 logger.warning("11labs stream ended with incomplete xml content")
 
             # no more token, mark eos
-            eos_pkt = dict(text="")
+            eos_pkt = {"text": ""}
             await ws_conn.send_str(json.dumps(eos_pkt))
             eos_sent = True
 
@@ -463,7 +459,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ):
                     if not eos_sent:
                         raise APIStatusError(
-                            "11labs connection closed unexpectedly, not all tokens have been consumed",
+                            "11labs connection closed unexpectedly, not all tokens have been consumed",  # noqa: E501
                             request_id=request_id,
                         )
                     return

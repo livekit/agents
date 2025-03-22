@@ -40,9 +40,7 @@ def test_dict():
         role="user",
         content=[
             ImageContent(
-                image=rtc.VideoFrame(
-                    64, 64, rtc.VideoBufferType.RGB24, b"0" * 64 * 64 * 3
-                )
+                image=rtc.VideoFrame(64, 64, rtc.VideoBufferType.RGB24, b"0" * 64 * 64 * 3)
             )
         ],
     )

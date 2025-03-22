@@ -64,9 +64,7 @@ _RESERVED_ATTRS: tuple[str, ...] = (
 
 def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]):
     for key, value in record.__dict__.items():
-        if key not in _RESERVED_ATTRS and not (
-            hasattr(key, "startswith") and key.startswith("_")
-        ):
+        if key not in _RESERVED_ATTRS and not (hasattr(key, "startswith") and key.startswith("_")):
             target[key] = value
 
 
@@ -140,9 +138,7 @@ class JsonFormatter(logging.Formatter):
         log_record.update(message_dict)
         _merge_record_extra(record, log_record)
 
-        log_record["timestamp"] = datetime.fromtimestamp(
-            record.created, tz=timezone.utc
-        )
+        log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
         return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
@@ -192,9 +188,7 @@ class ColoredFormatter(logging.Formatter):
         args.update(self._esc_codes)
 
         if extra:
-            args["extra"] = json.dumps(
-                extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=True
-            )
+            args["extra"] = json.dumps(extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
         for field in self._required_fields:
             if field in extra:
@@ -212,11 +206,11 @@ def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
         if console:
             # reset the line before each log message
             colored_formatter = ColoredFormatter(
-                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"
+                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
             )
         else:
             colored_formatter = ColoredFormatter(
-                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"
+                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
             )
 
         handler.setFormatter(colored_formatter)

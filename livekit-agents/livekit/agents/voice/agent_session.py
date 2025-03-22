@@ -68,9 +68,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts = tts or None
 
         # configurable IO
-        self._input = io.AgentInput(
-            self._on_video_input_changed, self._on_audio_input_changed
-        )
+        self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
         self._output = io.AgentOutput(
             self._on_video_output_changed,
             self._on_audio_output_changed,
@@ -184,7 +182,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     or self.output.transcription is not None
                 ):
                     logger.warning(
-                        "agent started with the console subcommand, but input.audio or output.audio "
+                        "agent started with the console subcommand, but input.audio or output.audio "  # noqa: E501
                         "or output.transcription is already set, overriding.."
                     )
 
@@ -221,26 +219,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and room_output_options.transcription_enabled
                 ):
                     logger.warning(
-                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."
+                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
                     )
                     room_output_options.transcription_enabled = False
 
                 self._room_io = room_io.RoomIO(
                     room=room,
                     agent_session=self,
-                    input_options=(
-                        room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
-                    ),
-                    output_options=(
-                        room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
-                    ),
+                    input_options=(room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS),
+                    output_options=(room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS),
                 )
                 await self._room_io.start()
 
             else:
                 if not self.output.audio and not self.output.transcription:
                     logger.warning(
-                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"
+                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
 
             # it is ok to await it directly, there is no previous task to drain
@@ -315,9 +309,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if self._activity.draining:
             if self._next_activity is None:
-                raise RuntimeError(
-                    "AgentSession is closing, cannot use generate_reply()"
-                )
+                raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
             return self._next_activity.generate_reply(
                 user_input=user_input,

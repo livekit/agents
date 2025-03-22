@@ -59,9 +59,7 @@ class ProcStartArgs:
 def proc_main(args: ProcStartArgs) -> None:
     from .proc_client import _ProcClient
 
-    job_proc = _JobProc(
-        args.initialize_process_fnc, args.job_entrypoint_fnc, args.user_arguments
-    )
+    job_proc = _JobProc(args.initialize_process_fnc, args.job_entrypoint_fnc, args.user_arguments)
 
     client = _ProcClient(
         args.mp_cch,
@@ -108,9 +106,7 @@ class _InfClient(InferenceExecutor):
     def _on_inference_response(self, resp: InferenceResponse) -> None:
         fut = self._active_requests.pop(resp.request_id, None)
         if fut is None:
-            logger.warning(
-                "received unexpected inference response", extra={"resp": resp}
-            )
+            logger.warning("received unexpected inference response", extra={"resp": resp})
             return
 
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -158,9 +154,7 @@ class _JobProc:
             async for msg in cch:
                 if isinstance(msg, StartJobRequest):
                     if self.has_running_job:
-                        logger.warning(
-                            "trying to start a new job while one is already running"
-                        )
+                        logger.warning("trying to start a new job while one is already running")
                         continue
 
                     self._start_job(msg)
@@ -186,9 +180,7 @@ class _JobProc:
                         tracing_tasks = []
                         for callback in self._job_ctx._tracing_callbacks:
                             tracing_tasks.append(
-                                asyncio.create_task(
-                                    callback(), name="job_tracing_callback"
-                                )
+                                asyncio.create_task(callback(), name="job_tracing_callback")
                             )
 
                         await asyncio.gather(*tracing_tasks)
@@ -198,9 +190,7 @@ class _JobProc:
                     await self._client.send(
                         TracingResponse(
                             request_id=msg.request_id,
-                            info=tracing.Tracing._get_job_handle(
-                                self._job_ctx.job.id
-                            )._export(),
+                            info=tracing.Tracing._get_job_handle(self._job_ctx.job.id)._export(),
                         )
                     )
 
@@ -231,9 +221,7 @@ class _JobProc:
             self._ctx_shutdown_called = True
 
             with contextlib.suppress(asyncio.InvalidStateError):
-                self._shutdown_fut.set_result(
-                    _ShutdownInfo(user_initiated=True, reason=reason)
-                )
+                self._shutdown_fut.set_result(_ShutdownInfo(user_initiated=True, reason=reason))
 
         self._room._info.name = msg.running_job.job.room.name
 
@@ -268,7 +256,7 @@ class _JobProc:
             await asyncio.sleep(10)
             if not self._ctx_connect_called and not self._ctx_shutdown_called:
                 logger.warning(
-                    "The room connection was not established within 10 seconds after calling job_entry. "
+                    "The room connection was not established within 10 seconds after calling job_entry. "  # noqa: E501
                     "This may indicate that job_ctx.connect() was not called. "
                 )
 
@@ -286,8 +274,8 @@ class _JobProc:
                     return
 
                 logger.warning(
-                    "The job task completed without establishing a connection or performing a proper shutdown. "
-                    "Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized."
+                    "The job task completed without establishing a connection or performing a proper shutdown. "  # noqa: E501
+                    "Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized."  # noqa: E501
                 )
 
         job_entry_task.add_done_callback(log_exception)

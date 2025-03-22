@@ -25,9 +25,7 @@ LLMNode = Callable[
     [llm.ChatContext, list[llm.FunctionTool], ModelSettings],
     Union[
         Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]],
-        Awaitable[
-            Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]]
-        ],
+        Awaitable[Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]]],
     ],
 ]
 TTSNode = Callable[
@@ -90,7 +88,7 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         """
         Args:
             sample_rate: The sample rate required by the audio sink, if None, any sample rate is accepted
-        """
+        """  # noqa: E501
         super().__init__()
         self._sample_rate = sample_rate
         self.__capturing = False
@@ -102,9 +100,7 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
             playback_position=0, interrupted=False
         )
 
-    def on_playback_finished(
-        self, *, playback_position: float, interrupted: bool
-    ) -> None:
+    def on_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
         """
         Developers building audio sinks must call this method when a playback/segment is finished.
         Segments are segmented by calls to flush() or clear_buffer()
@@ -119,9 +115,7 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         self.__playback_finished_count += 1
         self.__playback_finished_event.set()
 
-        ev = PlaybackFinishedEvent(
-            playback_position=playback_position, interrupted=interrupted
-        )
+        ev = PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
         self.__last_playback_ev = ev
         self.emit("playback_finished", ev)
 
@@ -178,9 +172,9 @@ class TextOutput(ABC):
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
         ...
 
-    def on_attached(self) -> None: ...
+    def on_attached(self) -> None: ...  # noqa: B027
 
-    def on_detached(self) -> None: ...
+    def on_detached(self) -> None: ...  # noqa: B027
 
 
 # TODO(theomonnom): Add documentation to VideoSink
@@ -191,9 +185,9 @@ class VideoOutput(ABC):
     @abstractmethod
     def flush(self) -> None: ...
 
-    def on_attached(self) -> None: ...
+    def on_attached(self) -> None: ...  # noqa: B027
 
-    def on_detached(self) -> None: ...
+    def on_detached(self) -> None: ...  # noqa: B027
 
 
 class AgentInput:

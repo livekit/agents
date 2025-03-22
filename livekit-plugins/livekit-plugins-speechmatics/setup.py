@@ -17,9 +17,7 @@ import setuptools.command.build_py
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
-with open(
-    os.path.join(here, "livekit", "plugins", "speechmatics", "version.py"), "r"
-) as f:
+with open(os.path.join(here, "livekit", "plugins", "speechmatics", "version.py")) as f:
     exec(f.read(), about)
 
 

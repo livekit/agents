@@ -95,15 +95,11 @@ class JobContext:
         self._room = room
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
-        self._shutdown_callbacks: list[
-            Callable[[str], Coroutine[None, None, None]]
-        ] = []
+        self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
         self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
         self._participant_entrypoints: list[
             tuple[
-                Callable[
-                    [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
-                ],
+                Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
                 list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
             ]
         ] = []
@@ -226,7 +222,7 @@ class JobContext:
             e2ee: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
-        """
+        """  # noqa: E501
         room_options = rtc.RoomOptions(
             e2ee=e2ee,
             auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
@@ -245,9 +241,7 @@ class JobContext:
 
     def add_participant_entrypoint(
         self,
-        entrypoint_fnc: Callable[
-            [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
-        ],
+        entrypoint_fnc: Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
         *_,
         kind: list[rtc.ParticipantKind.ValueType]
         | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
@@ -255,7 +249,7 @@ class JobContext:
         """Adds an entrypoint function to be run when a participant joins the room. In cases where
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
         added and they will each be run in parallel for each participant.
-        """
+        """  # noqa: E501
 
         if entrypoint_fnc in [e for (e, _) in self._participant_entrypoints]:
             raise ValueError("entrypoints cannot be added more than once")
@@ -273,14 +267,12 @@ class JobContext:
 
             if (p.identity, coro) in self._participant_tasks:
                 logger.warning(
-                    f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"
+                    f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"  # noqa: E501
                 )
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
-            task.add_done_callback(
-                lambda _: self._participant_tasks.pop((p.identity, coro))
-            )
+            task.add_done_callback(lambda _: self._participant_tasks.pop((p.identity, coro)))  # noqa: B023
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
@@ -289,12 +281,8 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
 
     def _subscribe_if_needed(pub: rtc.RemoteTrackPublication):
         if (
-            auto_subscribe == AutoSubscribe.AUDIO_ONLY
-            and pub.kind == rtc.TrackKind.KIND_AUDIO
-        ) or (
-            auto_subscribe == AutoSubscribe.VIDEO_ONLY
-            and pub.kind == rtc.TrackKind.KIND_VIDEO
-        ):
+            auto_subscribe == AutoSubscribe.AUDIO_ONLY and pub.kind == rtc.TrackKind.KIND_AUDIO
+        ) or (auto_subscribe == AutoSubscribe.VIDEO_ONLY and pub.kind == rtc.TrackKind.KIND_VIDEO):
             pub.set_subscribed(True)
 
     for p in room.remote_participants.values():
@@ -374,7 +362,7 @@ class JobRequest:
         metadata: str = "",
         attributes: dict[str, str] | None = None,
     ) -> None:
-        """Accept the job request, and start the job if the LiveKit SFU assigns the job to our worker."""
+        """Accept the job request, and start the job if the LiveKit SFU assigns the job to our worker."""  # noqa: E501
         if not identity:
             identity = "agent-" + self.id
 

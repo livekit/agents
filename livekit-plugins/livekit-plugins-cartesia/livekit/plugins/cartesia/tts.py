@@ -101,7 +101,7 @@ class TTS(tts.TTS):
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -138,9 +138,7 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
-        return await asyncio.wait_for(
-            session.ws_connect(url), self._conn_options.timeout
-        )
+        return await asyncio.wait_for(session.ws_connect(url), self._conn_options.timeout)
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()
@@ -197,9 +195,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: APIConnectOptions | None = None
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         return SynthesizeStream(
             tts=self,
             pool=self._pool,

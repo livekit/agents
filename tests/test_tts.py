@@ -41,9 +41,7 @@ async def _assert_valid_synthesized_audio(
 
     merged_frame = merge_frames(frames)
     assert merged_frame.sample_rate == tts.sample_rate, "sample rate should be the same"
-    assert merged_frame.num_channels == tts.num_channels, (
-        "num channels should be the same"
-    )
+    assert merged_frame.num_channels == tts.num_channels, "num channels should be the same"
 
 
 SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
@@ -71,9 +69,7 @@ async def test_synthesize(tts_factory):
     async for audio in tts.synthesize(text=synthesize_transcript):
         frames.append(audio.frame)
 
-    await _assert_valid_synthesized_audio(
-        frames, tts, synthesize_transcript, WER_THRESHOLD
-    )
+    await _assert_valid_synthesized_audio(frames, tts, synthesize_transcript, WER_THRESHOLD)
 
 
 STREAM_SENT_TOKENIZER = tokenize.basic.SentenceTokenizer(min_sentence_len=20)
@@ -93,17 +89,13 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
         id="google.stream",
     ),
     pytest.param(
-        lambda: agents.tts.StreamAdapter(
-            tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
-        ),
+        lambda: agents.tts.StreamAdapter(tts=azure.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER),
         id="azure.stream",
     ),
     pytest.param(lambda: deepgram.TTS(), id="deepgram"),
     pytest.param(lambda: playai.TTS(), id="playai"),
     pytest.param(
-        lambda: agents.tts.StreamAdapter(
-            tts=aws.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER
-        ),
+        lambda: agents.tts.StreamAdapter(tts=aws.TTS(), sentence_tokenizer=STREAM_SENT_TOKENIZER),
         id="aws.stream",
     ),
     pytest.param(lambda: neuphonic.TTS(), id="neuphonic"),
@@ -148,9 +140,7 @@ async def test_stream(tts_factory):
 
     assert is_final, "final audio should be marked as final"
 
-    await _assert_valid_synthesized_audio(
-        frames, tts, synthesize_transcript, WER_THRESHOLD
-    )
+    await _assert_valid_synthesized_audio(frames, tts, synthesize_transcript, WER_THRESHOLD)
 
     # assert len(segments) == 2
     await stream.aclose()

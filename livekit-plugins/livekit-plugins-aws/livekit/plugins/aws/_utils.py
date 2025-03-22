@@ -4,9 +4,10 @@ import base64
 import inspect
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
+from typing import Any, get_args, get_origin
 
 import boto3
+
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
@@ -14,13 +15,11 @@ from livekit.agents.llm.function_context import _is_optional_type
 __all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_credentials"]
 
 
-def _get_aws_credentials(
-    api_key: Optional[str], api_secret: Optional[str], region: Optional[str]
-):
+def _get_aws_credentials(api_key: str | None, api_secret: str | None, region: str | None):
     region = region or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         raise ValueError(
-            "AWS_DEFAULT_REGION must be set using the argument or by setting the AWS_DEFAULT_REGION environment variable."
+            "AWS_DEFAULT_REGION must be set using the argument or by setting the AWS_DEFAULT_REGION environment variable."  # noqa: E501
         )
 
     # If API key and secret are provided, create a session with them
@@ -39,7 +38,7 @@ def _get_aws_credentials(
     return credentials.access_key, credentials.secret_key
 
 
-JSON_SCHEMA_TYPE_MAP: Dict[type, str] = {
+JSON_SCHEMA_TYPE_MAP: dict[type, str] = {
     str: "string",
     int: "integer",
     float: "number",
@@ -49,9 +48,9 @@ JSON_SCHEMA_TYPE_MAP: Dict[type, str] = {
 }
 
 
-def _build_parameters(arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    properties: Dict[str, dict] = {}
-    required: List[str] = []
+def _build_parameters(arguments: dict[str, Any]) -> dict[str, Any] | None:
+    properties: dict[str, dict] = {}
+    required: list[str] = []
 
     for arg_name, arg_info in arguments.items():
         prop = {}
@@ -93,8 +92,8 @@ def _build_parameters(arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _build_tools(fnc_ctx: Any) -> List[dict]:
-    tools: List[dict] = []
+def _build_tools(fnc_ctx: Any) -> list[dict]:
+    tools: list[dict] = []
     for fnc_info in fnc_ctx.ai_functions.values():
         parameters = _build_parameters(fnc_info.arguments)
 
@@ -147,13 +146,11 @@ def _build_image(image: llm.ChatImage, cache_key: Any) -> dict:
     raise ValueError(f"Unsupported image type: {type(image.image)}")
 
 
-def _build_aws_ctx(
-    chat_ctx: llm.ChatContext, cache_key: Any
-) -> Tuple[List[dict], Optional[dict]]:
-    messages: List[dict] = []
-    system: Optional[dict] = None
-    current_role: Optional[str] = None
-    current_content: List[dict] = []
+def _build_aws_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> tuple[list[dict], dict | None]:
+    messages: list[dict] = []
+    system: dict | None = None
+    current_role: str | None = None
+    current_content: list[dict] = []
 
     for msg in chat_ctx.messages:
         if msg.role == "system":

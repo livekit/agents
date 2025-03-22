@@ -51,9 +51,7 @@ async def asend_message(dplx: utils.aio.duplex_unix._AsyncDuplex, msg: Message) 
     await dplx.send_bytes(_write_message(msg))
 
 
-def recv_message(
-    dplx: utils.aio.duplex_unix._Duplex, messages: MessagesDict
-) -> Message:
+def recv_message(dplx: utils.aio.duplex_unix._Duplex, messages: MessagesDict) -> Message:
     return _read_message(dplx.recv_bytes(), messages)
 
 

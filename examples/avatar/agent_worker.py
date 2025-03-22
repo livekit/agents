@@ -50,13 +50,9 @@ async def launch_avatar_worker(
     )
 
     logger.info(f"Sending connection info to avatar dispatcher {avatar_dispatcher_url}")
-    connection_info = AvatarConnectionInfo(
-        room_name=ctx.room.name, url=ctx._info.url, token=token
-    )
+    connection_info = AvatarConnectionInfo(room_name=ctx.room.name, url=ctx._info.url, token=token)
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            avatar_dispatcher_url, json=asdict(connection_info)
-        )
+        response = await client.post(avatar_dispatcher_url, json=asdict(connection_info))
         response.raise_for_status()
     logger.info("Avatar handshake completed")
 
@@ -82,9 +78,7 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
     # connect the output audio to the avatar runner
-    session.output.audio = DataStreamAudioOutput(
-        ctx.room, destination_identity=AVATAR_IDENTITY
-    )
+    session.output.audio = DataStreamAudioOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
 
     # start agent with room input and room text output
     await session.start(
@@ -109,15 +103,13 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--avatar-url", type=str, default="http://localhost:8089/launch"
-    )
+    parser.add_argument("--avatar-url", type=str, default="http://localhost:8089/launch")
     args, remaining_args = parser.parse_known_args()
     print(sys.argv, remaining_args)
     sys.argv = sys.argv[:1] + remaining_args
 
     # WorkerType.ROOM is the default worker type which will create an agent for every room.
-    # You can also use WorkerType.PUBLISHER to create a single agent for all participants that publish a track.
+    # You can also use WorkerType.PUBLISHER to create a single agent for all participants that publish a track.  # noqa: E501
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=partial(entrypoint, avatar_dispatcher_url=args.avatar_url),

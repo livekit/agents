@@ -75,6 +75,6 @@ def _get_api_key(key: str | None) -> str:
     key = key or os.environ.get("GROQ_API_KEY")
     if not key:
         raise ValueError(
-            "GROQ_API_KEY is required, either as argument or set GROQ_API_KEY environmental variable"
+            "GROQ_API_KEY is required, either as argument or set GROQ_API_KEY environmental variable"  # noqa: E501
         )
     return key

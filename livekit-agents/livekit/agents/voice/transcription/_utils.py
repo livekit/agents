@@ -6,9 +6,7 @@ from ...utils import shortuuid
 
 
 def find_micro_track_id(room: rtc.Room, identity: str) -> str:
-    p: rtc.RemoteParticipant | rtc.LocalParticipant | None = (
-        room.remote_participants.get(identity)
-    )
+    p: rtc.RemoteParticipant | rtc.LocalParticipant | None = room.remote_participants.get(identity)
     if identity == room.local_participant.identity:
         p = room.local_participant
 

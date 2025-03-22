@@ -45,7 +45,7 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     speed: float
-    instructions: Optional[str] = None
+    instructions: Optional[str] = None  # noqa: F821
 
 
 class TTS(tts.TTS):
@@ -55,7 +55,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
-        instructions: Optional[str] = None,
+        instructions: Optional[str] = None,  # noqa: F821
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
@@ -103,7 +103,7 @@ class TTS(tts.TTS):
         model: TTSModels | str | None,
         voice: TTSVoices | str | None,
         speed: float | None,
-        instructions: Optional[str] = None,
+        instructions: Optional[str] = None,  # noqa: F821
     ) -> None:
         self._opts.model = model or self._opts.model
         self._opts.voice = voice or self._opts.voice
@@ -135,7 +135,7 @@ class TTS(tts.TTS):
         - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
         - `api_version` from `OPENAI_API_VERSION`
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
-        """
+        """  # noqa: E501
 
         azure_client = openai.AsyncAzureOpenAI(
             max_retries=0,
@@ -224,9 +224,9 @@ class ChunkedStream(tts.ChunkedStream):
                 emitter.push(frame)
             emitter.flush()
         except openai.APITimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError()  # noqa: B904
         except openai.APIStatusError as e:
-            raise APIStatusError(
+            raise APIStatusError(  # noqa: B904
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,

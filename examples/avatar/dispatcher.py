@@ -79,14 +79,14 @@ class WorkerLauncher:
             logger.info(f"Launched avatar worker for room: {room_name}")
         except Exception as e:
             logger.error(f"Failed to launch worker: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e))  # noqa: B904
 
     async def _monitor(self) -> None:
         while True:
             for worker in list(self.workers.values()):
                 if worker.process.poll() is not None:
                     logger.info(
-                        f"Worker for room {worker.room_name} exited with code {worker.process.returncode}"
+                        f"Worker for room {worker.room_name} exited with code {worker.process.returncode}"  # noqa: E501
                     )
                     self.workers.pop(worker.room_name)
             await asyncio.sleep(1)
@@ -115,9 +115,7 @@ class AvatarDispatcher:
             }
         except Exception as e:
             logger.error(f"Error handling launch request: {e}")
-            raise HTTPException(
-                status_code=500, detail=f"Failed to launch worker: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to launch worker: {str(e)}")  # noqa: B904
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8089):

@@ -26,7 +26,7 @@ def calculate_audio_duration(frames: AudioBuffer) -> float:
 
     Returns:
     - float: The total duration in seconds of all frames provided.
-    """
+    """  # noqa: E501
     if isinstance(frames, list):
         return sum(frame.duration for frame in frames)
     else:
@@ -71,9 +71,7 @@ class AudioByteStream:
         if samples_per_channel is None:
             samples_per_channel = sample_rate // 10  # 100ms by default
 
-        self._bytes_per_frame = (
-            num_channels * samples_per_channel * ctypes.sizeof(ctypes.c_int16)
-        )
+        self._bytes_per_frame = num_channels * samples_per_channel * ctypes.sizeof(ctypes.c_int16)
         self._buf = bytearray()
 
     def push(self, data: bytes) -> list[rtc.AudioFrame]:

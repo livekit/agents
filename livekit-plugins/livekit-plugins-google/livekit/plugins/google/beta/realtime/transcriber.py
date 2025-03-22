@@ -30,7 +30,7 @@ You are an **Audio Transcriber**. Your task is to convert audio content into acc
 - Do not add explanations, comments, or extra information.
 - Do not include timestamps, speaker labels, or annotations unless specified.
 - Audio Language: {DEFAULT_LANGUAGE}
-"""
+"""  # noqa: E501
 
 
 @dataclass
@@ -51,9 +51,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
         self._needed_sr = 16000
         self._closed = False
 
-        system_instructions = types.Content(
-            parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
-        )
+        system_instructions = types.Content(parts=[types.Part(text=SYSTEM_INSTRUCTIONS)])
         self._config = types.LiveConnectConfig(
             response_modalities=[types.Modality.TEXT],
             system_instruction=system_instructions,
@@ -81,17 +79,13 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
             for f in self._resampler.push(frame):
                 self._queue_msg(
                     types.LiveClientRealtimeInput(
-                        media_chunks=[
-                            types.Blob(data=f.data.tobytes(), mime_type="audio/pcm")
-                        ]
+                        media_chunks=[types.Blob(data=f.data.tobytes(), mime_type="audio/pcm")]
                     )
                 )
         else:
             self._queue_msg(
                 types.LiveClientRealtimeInput(
-                    media_chunks=[
-                        types.Blob(data=frame.data.tobytes(), mime_type="audio/pcm")
-                    ]
+                    media_chunks=[types.Blob(data=frame.data.tobytes(), mime_type="audio/pcm")]
                 )
             )
 
@@ -157,17 +151,11 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
                 logger.exception(f"Uncaught error in transcriber _recv_task: {e}")
                 self._closed = True
 
-        async with self._client.aio.live.connect(
-            model=self._model, config=self._config
-        ) as session:
+        async with self._client.aio.live.connect(model=self._model, config=self._config) as session:
             self._session = session
             tasks = [
-                asyncio.create_task(
-                    _send_task(), name="gemini-realtime-transcriber-send"
-                ),
-                asyncio.create_task(
-                    _recv_task(), name="gemini-realtime-transcriber-recv"
-                ),
+                asyncio.create_task(_send_task(), name="gemini-realtime-transcriber-send"),
+                asyncio.create_task(_recv_task(), name="gemini-realtime-transcriber-recv"),
             ]
 
             try:
@@ -187,9 +175,7 @@ class ModelTranscriber(utils.EventEmitter[EventTypes]):
         self._client = client
         self._model = model
         self._needed_sr = 16000
-        self._system_instructions = types.Content(
-            parts=[types.Part(text=SYSTEM_INSTRUCTIONS)]
-        )
+        self._system_instructions = types.Content(parts=[types.Part(text=SYSTEM_INSTRUCTIONS)])
         self._config = types.GenerateContentConfig(
             temperature=0.0,
             system_instruction=self._system_instructions,
@@ -198,9 +184,7 @@ class ModelTranscriber(utils.EventEmitter[EventTypes]):
         self._resampler: rtc.AudioResampler | None = None
         self._buffer: rtc.AudioFrame | None = None
         self._audio_ch = utils.aio.Chan[rtc.AudioFrame]()
-        self._main_atask = asyncio.create_task(
-            self._main_task(), name="gemini-model-transcriber"
-        )
+        self._main_atask = asyncio.create_task(self._main_task(), name="gemini-model-transcriber")
 
     async def aclose(self) -> None:
         if self._audio_ch.closed:

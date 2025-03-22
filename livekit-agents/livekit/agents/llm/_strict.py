@@ -33,9 +33,7 @@ def _ensure_strict_json_schema(
     defs = json_schema.get("$defs")
     if is_dict(defs):
         for def_name, def_schema in defs.items():
-            _ensure_strict_json_schema(
-                def_schema, path=(*path, "$defs", def_name), root=root
-            )
+            _ensure_strict_json_schema(def_schema, path=(*path, "$defs", def_name), root=root)
 
     definitions = json_schema.get("definitions")
     if is_dict(definitions):
@@ -56,9 +54,7 @@ def _ensure_strict_json_schema(
     if is_dict(properties):
         json_schema["required"] = list(properties.keys())
         json_schema["properties"] = {
-            key: _ensure_strict_json_schema(
-                prop_schema, path=(*path, "properties", key), root=root
-            )
+            key: _ensure_strict_json_schema(prop_schema, path=(*path, "properties", key), root=root)
             for key, prop_schema in properties.items()
         }
 
@@ -66,17 +62,13 @@ def _ensure_strict_json_schema(
     # { 'type': 'array', 'items': {...} }
     items = json_schema.get("items")
     if is_dict(items):
-        json_schema["items"] = _ensure_strict_json_schema(
-            items, path=(*path, "items"), root=root
-        )
+        json_schema["items"] = _ensure_strict_json_schema(items, path=(*path, "items"), root=root)
 
     # unions
     any_of = json_schema.get("anyOf")
     if is_list(any_of):
         json_schema["anyOf"] = [
-            _ensure_strict_json_schema(
-                variant, path=(*path, "anyOf", str(i)), root=root
-            )
+            _ensure_strict_json_schema(variant, path=(*path, "anyOf", str(i)), root=root)
             for i, variant in enumerate(any_of)
         ]
 
@@ -85,16 +77,12 @@ def _ensure_strict_json_schema(
     if is_list(all_of):
         if len(all_of) == 1:
             json_schema.update(
-                _ensure_strict_json_schema(
-                    all_of[0], path=(*path, "allOf", "0"), root=root
-                )
+                _ensure_strict_json_schema(all_of[0], path=(*path, "allOf", "0"), root=root)
             )
             json_schema.pop("allOf")
         else:
             json_schema["allOf"] = [
-                _ensure_strict_json_schema(
-                    entry, path=(*path, "allOf", str(i)), root=root
-                )
+                _ensure_strict_json_schema(entry, path=(*path, "allOf", str(i)), root=root)
                 for i, entry in enumerate(all_of)
             ]
 
@@ -122,8 +110,8 @@ def _ensure_strict_json_schema(
         # properties from the json schema take priority over the ones on the `$ref`
         json_schema.update({**resolved, **json_schema})
         json_schema.pop("$ref")
-        # Since the schema expanded from `$ref` might not have `additionalProperties: false` applied,
-        # we call `_ensure_strict_json_schema` again to fix the inlined schema and ensure it's valid.
+        # Since the schema expanded from `$ref` might not have `additionalProperties: false` applied,  # noqa: E501
+        # we call `_ensure_strict_json_schema` again to fix the inlined schema and ensure it's valid.  # noqa: E501
         return _ensure_strict_json_schema(json_schema, path=path, root=root)
 
     return json_schema

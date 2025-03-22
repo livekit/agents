@@ -150,7 +150,7 @@ class Agent:
 
         Returns:
             NotGivenOr[_TurnDetector | None]: An optional turn detector for managing conversation flow.
-        """
+        """  # noqa: E501
         return self._eou
 
     @property
@@ -163,7 +163,7 @@ class Agent:
 
         Returns:
             NotGivenOr[stt.STT | None]: An optional STT component.
-        """
+        """  # noqa: E501
         return self._stt
 
     @property
@@ -176,7 +176,7 @@ class Agent:
 
         Returns:
             NotGivenOr[llm.LLM | llm.RealtimeModel | None]: The language model for text generation.
-        """
+        """  # noqa: E501
         return self._llm
 
     @property
@@ -189,7 +189,7 @@ class Agent:
 
         Returns:
             NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
-        """
+        """  # noqa: E501
         return self._tts
 
     @property
@@ -202,7 +202,7 @@ class Agent:
 
         Returns:
             NotGivenOr[vad.VAD | None]: An optional VAD component for detecting voice activity.
-        """
+        """  # noqa: E501
         return self._vad
 
     @property
@@ -253,9 +253,7 @@ class Agent:
         """Called when the task is exited"""
         pass
 
-    async def on_end_of_turn(
-        self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage
-    ) -> None:
+    async def on_end_of_turn(self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
         """Called when the user has finished speaking, and the LLM is about to respond
 
         This is a good opportunity to update the chat context or edit the new message before it is
@@ -282,7 +280,7 @@ class Agent:
 
         Yields:
             stt.SpeechEvent: An event containing transcribed text or other STT-related data.
-        """
+        """  # noqa: E501
         activity = self.__get_activity_or_raise()
         assert activity.stt is not None, "stt_node called but no STT node is available"
 
@@ -291,7 +289,7 @@ class Agent:
         if not activity.stt.capabilities.streaming:
             if not activity.vad:
                 raise RuntimeError(
-                    f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"
+                    f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"  # noqa: E501
                     "Or manually wrap your STT in a stt.StreamAdapter"
                 )
 
@@ -336,7 +334,7 @@ class Agent:
         Yields:
             str: Plain text output from the LLM.
             llm.ChatChunk: An object that can contain both text and optional tool calls.
-        """
+        """  # noqa: E501
         activity = self.__get_activity_or_raise()
         assert activity.llm is not None, "llm_node called but no LLM node is available"
         assert isinstance(activity.llm, llm.LLM), (
@@ -369,7 +367,7 @@ class Agent:
 
         Yields:
             str: Finalized or post-processed text segments.
-        """
+        """  # noqa: E501
         self.__get_activity_or_raise()
         async for delta in text:
             yield delta
@@ -394,7 +392,7 @@ class Agent:
 
         Yields:
             rtc.AudioFrame: Audio frames synthesized from the provided text.
-        """
+        """  # noqa: E501
         activity = self.__get_activity_or_raise()
         assert activity.tts is not None, "tts_node called but no TTS node is available"
 
@@ -471,16 +469,14 @@ class InlineTask(Agent, Generic[TaskResult_T]):
 
     async def __await_impl(self):
         if self.__started:
-            raise RuntimeError(
-                f"{self.__class__.__name__} is not re-entrant, await only once"
-            )
+            raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
 
         self.__started = True
 
         task = asyncio.current_task()
         if task is None or not _is_inline_task_authorized(task):
             raise RuntimeError(
-                f"{self.__class__.__name__} should only be awaited inside an async ai_function or the on_enter/on_exit methods of an AgentTask"
+                f"{self.__class__.__name__} should only be awaited inside an async ai_function or the on_enter/on_exit methods of an AgentTask"  # noqa: E501
             )
 
         def _handle_task_done(_) -> None:
@@ -491,11 +487,11 @@ class InlineTask(Agent, Generic[TaskResult_T]):
             # an error and attempt to recover by terminating the InlineTask.
             self.__fut.set_exception(
                 RuntimeError(
-                    f"{self.__class__.__name__} was not completed by the time the asyncio.Task running it was done"
+                    f"{self.__class__.__name__} was not completed by the time the asyncio.Task running it was done"  # noqa: E501
                 )
             )
             logger.error(
-                f"{self.__class__.__name__} was not completed by the time the asyncio.Task running it was done"
+                f"{self.__class__.__name__} was not completed by the time the asyncio.Task running it was done"  # noqa: E501
             )
 
             # TODO(theomonnom): recover somehow

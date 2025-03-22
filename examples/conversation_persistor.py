@@ -58,7 +58,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
             events (arr): list of all events
             log_q (asyncio.Queue): a queue of EventLog and TranscriptionLog
 
-        """
+        """  # noqa: E501
         super().__init__()
 
         self._model = model
@@ -114,9 +114,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
                     else:
                         self._agent_transcriptions.append(log)
 
-                    await file.write(
-                        "\n" + log.time + " " + log.role + " " + log.transcription
-                    )
+                    await file.write("\n" + log.time + " " + log.role + " " + log.transcription)
 
     async def aclose(self) -> None:
         # Exits
@@ -155,9 +153,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
 
         @self._model.on("user_speech_committed")
         def _user_speech_committed(user_msg: ChatMessage):
-            transcription = TranscriptionLog(
-                role="user", transcription=user_msg.content
-            )
+            transcription = TranscriptionLog(role="user", transcription=user_msg.content)
             self._log_q.put_nowait(transcription)
 
             event = EventLog(eventname="user_speech_committed")

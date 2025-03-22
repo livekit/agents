@@ -75,11 +75,11 @@ class _EUORunner(_InferenceRunner):
             )
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
-                f"Could not find model {HG_MODEL}. Make sure you have downloaded the model before running the agent. "
+                f"Could not find model {HG_MODEL}. Make sure you have downloaded the model before running the agent. "  # noqa: E501
                 "Use `python3 your_agent.py download-files` to download the models."
             )
             raise RuntimeError(
-                f"livekit-plugins-turn-detector initialization failed. Could not find model {HG_MODEL}."
+                f"livekit-plugins-turn-detector initialization failed. Could not find model {HG_MODEL}."  # noqa: E501
             ) from None
 
     def run(self, data: bytes) -> bytes | None:
@@ -100,9 +100,7 @@ class _EUORunner(_InferenceRunner):
             truncation=True,
         )
         # Run inference
-        outputs = self._session.run(
-            None, {"input_ids": inputs["input_ids"].astype("int64")}
-        )
+        outputs = self._session.run(None, {"input_ids": inputs["input_ids"].astype("int64")})
         eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
@@ -120,9 +118,7 @@ class EOUModel:
         inference_executor: InferenceExecutor | None = None,
         unlikely_threshold: float = 0.0289,
     ) -> None:
-        self._executor = (
-            inference_executor or get_current_job_context().inference_executor
-        )
+        self._executor = inference_executor or get_current_job_context().inference_executor
         self._unlikely_threshold = unlikely_threshold
 
     def unlikely_threshold(self) -> float:
@@ -175,9 +171,7 @@ class EOUModel:
             timeout=timeout,
         )
 
-        assert result is not None, (
-            "end_of_utterance prediction should always returns a result"
-        )
+        assert result is not None, "end_of_utterance prediction should always returns a result"
 
         result_json = json.loads(result.decode())
         logger.debug(

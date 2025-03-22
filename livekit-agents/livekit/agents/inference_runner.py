@@ -22,9 +22,7 @@ class _InferenceRunner(ABC, _RunnerMeta):
             raise RuntimeError("InferenceRunner must be registered on the main thread")
 
         if runner_class.INFERENCE_METHOD in cls.registered_runners:
-            raise ValueError(
-                f"InferenceRunner {runner_class.INFERENCE_METHOD} already registered"
-            )
+            raise ValueError(f"InferenceRunner {runner_class.INFERENCE_METHOD} already registered")
 
         cls.registered_runners[runner_class.INFERENCE_METHOD] = runner_class
 

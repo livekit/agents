@@ -195,9 +195,7 @@ class ThreadJobExecutor:
                     asyncio.shield(self._main_atask), timeout=self._opts.close_timeout
                 )
         except asyncio.TimeoutError:
-            logger.error(
-                "job shutdown is taking too much time..", extra=self.logging_extra()
-            )
+            logger.error("job shutdown is taking too much time..", extra=self.logging_extra())
 
         async with self._lock:
             if self._main_atask:
@@ -215,9 +213,7 @@ class ThreadJobExecutor:
             return
 
         try:
-            inf_res = await self._inference_executor.do_inference(
-                inf_req.method, inf_req.data
-            )
+            inf_res = await self._inference_executor.do_inference(inf_req.method, inf_req.data)
             await channel.asend_message(
                 self._pch,
                 proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),
@@ -281,14 +277,10 @@ class ThreadJobExecutor:
                     )
 
             if isinstance(msg, proto.Exiting):
-                logger.debug(
-                    "job exiting", extra={"reason": msg.reason, **self.logging_extra()}
-                )
+                logger.debug("job exiting", extra={"reason": msg.reason, **self.logging_extra()})
 
             if isinstance(msg, proto.InferenceRequest):
-                self._inference_tasks.append(
-                    asyncio.create_task(self._do_inference_task(msg))
-                )
+                self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
 
             if isinstance(msg, proto.TracingResponse):
                 fut = self._tracing_requests.pop(msg.request_id)
@@ -301,9 +293,7 @@ class ThreadJobExecutor:
         while True:
             await ping_interval.tick()
             try:
-                await channel.asend_message(
-                    self._pch, proto.PingRequest(timestamp=utils.time_ms())
-                )
+                await channel.asend_message(self._pch, proto.PingRequest(timestamp=utils.time_ms()))
             except utils.aio.duplex_unix.DuplexClosed:
                 break
 

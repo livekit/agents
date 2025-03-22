@@ -20,9 +20,9 @@ import json
 import os
 import time
 import wave
-from typing import Optional, Union
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
@@ -44,9 +44,9 @@ class STT(stt.STT):
         self,
         *,
         language: ClovaSttLanguages | str = "en-US",
-        secret: Optional[str] = None,
-        invoke_url: Optional[str] = None,
-        http_session: Optional[aiohttp.ClientSession] = None,
+        secret: str | None = None,
+        invoke_url: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
         threshold: float = 0.5,
     ):
         """
@@ -56,9 +56,7 @@ class STT(stt.STT):
         ``CLOVA_STT_SECRET_KEY`` and ``CLOVA_STT_INVOKE_URL`` environmental variables, respectively.
         """
 
-        super().__init__(
-            capabilities=STTCapabilities(streaming=False, interim_results=True)
-        )
+        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
         self._secret = secret or os.environ.get("CLOVA_STT_SECRET_KEY")
         self._invoke_url = invoke_url or os.environ.get("CLOVA_STT_INVOKE_URL")
         self._language = clova_languages_mapping.get(language, language)
@@ -70,25 +68,21 @@ class STT(stt.STT):
         self.threshold = threshold
 
     def update_options(self, *, language: str | None = None) -> None:
-        self._language = (
-            clova_languages_mapping.get(language, language) or self._language
-        )
+        self._language = clova_languages_mapping.get(language, language) or self._language
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
 
-    def url_builder(
-        self, process_method: ClovaSpeechAPIType = "recognizer/upload"
-    ) -> str:
+    def url_builder(self, process_method: ClovaSpeechAPIType = "recognizer/upload") -> str:
         return f"{self._invoke_url}/{process_method}"
 
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,
         *,
-        language: Union[ClovaSttLanguages, str, None],
+        language: ClovaSttLanguages | str | None,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
@@ -111,9 +105,7 @@ class STT(stt.STT):
             headers = {"X-CLOVASPEECH-API-KEY": self._secret}
             form_data = aiohttp.FormData()
             form_data.add_field("params", payload)
-            form_data.add_field(
-                "media", io_buffer, filename="audio.wav", content_type="audio/wav"
-            )
+            form_data.add_field("media", io_buffer, filename="audio.wav", content_type="audio/wav")
             start = time.time()
             async with self._ensure_session().post(
                 url,
