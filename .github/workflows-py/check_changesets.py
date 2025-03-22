@@ -123,10 +123,34 @@ def main():
             base_url = f"https://github.com/{REPO}/new/{HEAD_REF}"
             params = {"filename": f".github/next-release/{file_name}", "value": template}
             link = base_url + "?" + urllib.parse.urlencode(params)
-            comment = (
-                f"Detected changes in relevant packages: {', '.join(sorted(changes))}.\n\n"
+
+            # Pretty formatting: separate livekit-agents and plugins, using collapsible details for plugins.
+            agents = []
+            plugins = []
+            for change in sorted(changes):
+                if change == "livekit-agents":
+                    agents.append(change)
+                elif change.startswith("livekit-plugins-"):
+                    plugins.append(change)
+
+            message_lines = []
+            message_lines.append("Detected changes in relevant packages:\n")
+            if agents:
+                for a in agents:
+                    message_lines.append(f"- `{a}`")
+            if plugins:
+                message_lines.append("")
+                message_lines.append("<details>")
+                message_lines.append("  <summary>`livekit-plugins`</summary>")
+                message_lines.append("")
+                for p in plugins:
+                    message_lines.append(f"  - `{p}`")
+                message_lines.append("</details>")
+            message_lines.append("")
+            message_lines.append(
                 f"Please add a changeset file for your changes by [clicking here]({link})."
             )
+            comment = "\n".join(message_lines)
         post_or_update_comment(comment)
 
 
