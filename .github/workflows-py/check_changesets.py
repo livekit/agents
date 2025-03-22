@@ -58,7 +58,7 @@ def get_pr_title():
 
 
 def generate_template(changes, description):
-    # Build a minimal changeset file content with one line per package.
+    # Build a minimal changeset file content with one package per line.
     lines = ["---"]
     for change in sorted(changes):
         lines.append(f'"{change}": patch')
@@ -70,7 +70,7 @@ def generate_template(changes, description):
 def validate_changeset_content(content):
     """
     Validate that the changeset file format is correct.
-      - Must start with '---' and have a closing '---'
+      - Must start with '---' and include a closing '---'
       - Each non-empty line in the front matter must match: "package-name": patch|minor|major
       - No duplicate package entries.
       - A non-empty change description must follow.
@@ -113,10 +113,12 @@ def validate_changeset_content(content):
 def validate_all_changeset_files():
     """
     Iterates over each file in .github/next-release, validates its content,
-    and collects summaries from valid files. If any file is invalid, returns an error.
+    and collects formatted summaries and release descriptions.
+    If any file is invalid, returns an error.
     """
     errors = []
-    summaries = []
+    summary_lines = []
+    descriptions = []
     path = ".github/next-release"
     if os.path.isdir(path):
         for fname in os.listdir(path):
@@ -128,17 +130,29 @@ def validate_all_changeset_files():
                     if not is_valid:
                         errors.append(f"{fname}: {error}")
                     else:
-                        # Extract the front matter summary.
+                        # Split content into front matter and description.
+                        lines = content.splitlines()
                         try:
-                            second_delim_index = content.splitlines()[1:].index("---") + 1
+                            second_delim_index = lines[1:].index("---") + 1
                         except ValueError:
                             second_delim_index = None
                         if second_delim_index is not None:
-                            front_matter = content.splitlines()[1:second_delim_index]
-                            summaries.append("\n".join(front_matter))
+                            front_matter = lines[1:second_delim_index]
+                            for line in front_matter:
+                                m = re.match(r'^"([^"]+)":\s*(patch|minor|major)$', line.strip())
+                                if m:
+                                    pkg = m.group(1)
+                                    bump = m.group(2)
+                                    summary_lines.append(f"- `{pkg}`: `{bump}`")
+                            # Capture the description (all lines after front matter).
+                            description = "\n".join(lines[second_delim_index + 1 :]).strip()
+                            if description:
+                                descriptions.append(description)
     if errors:
-        return False, "\n".join(errors), None
-    return True, "", "\n\n".join(summaries)
+        return False, "\n".join(errors), None, None
+    summary_text = "\n".join(summary_lines)
+    description_text = "\n\n".join(descriptions)
+    return True, "", summary_text, description_text
 
 
 def post_or_update_comment(body):
@@ -168,8 +182,7 @@ def main():
     changes, changeset_exists = parse_changes(files)
     if changes:
         if changeset_exists:
-            # Validate the existing changeset files.
-            valid, error_msg, summary = validate_all_changeset_files()
+            valid, error_msg, formatted_summary, change_desc = validate_all_changeset_files()
             if not valid:
                 comment = (
                     "### :x: Invalid Changeset Format Detected\n\n"
@@ -184,8 +197,9 @@ def main():
             else:
                 comment = (
                     "### ✅ Changeset File Detected\n\n"
-                    "A valid changeset file is present in this PR. It looks good!\n\n"
-                    f"**Release summary:**\n{summary}"
+                    "The following changeset entries were found:\n\n"
+                    f"{formatted_summary}\n\n"
+                    "**Release description:**\n{change_desc}"
                 )
         else:
             pr_title = get_pr_title()
