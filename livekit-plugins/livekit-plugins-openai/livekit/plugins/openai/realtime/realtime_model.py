@@ -148,6 +148,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_key=api_key,
             base_url=base_url,
         )
+        self._capabilities.turn_detection = turn_detection is not None
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
@@ -168,10 +169,6 @@ class RealtimeModel(llm.RealtimeModel):
         return sess
 
     async def aclose(self) -> None: ...
-
-    @property
-    def server_side_turn_detection(self) -> bool:
-        return self._opts.turn_detection is not None
 
 
 def process_base_url(url: str, model: str) -> str:
@@ -542,7 +539,8 @@ class RealtimeSession(
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        if not self._realtime_model.server_side_turn_detection and self._pushed_duration_s > 0:
+        if not self._realtime_model.capabilities.turn_detection and self._pushed_duration_s > 0:
+            # commit the audio buffer if server side VAD is disabled
             self.commit_audio()
 
         event_id = utils.shortuuid("response_create_")

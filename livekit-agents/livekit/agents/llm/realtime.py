@@ -63,10 +63,6 @@ class RealtimeModel:
     def capabilities(self) -> RealtimeCapabilities:
         return self._capabilities
 
-    @property
-    @abstractmethod
-    def server_side_turn_detection(self) -> bool: ...
-
     @abstractmethod
     def session(self) -> RealtimeSession: ...
 

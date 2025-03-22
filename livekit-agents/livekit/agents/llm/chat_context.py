@@ -24,6 +24,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.misc import is_given
 
 from .. import utils
+from ..log import logger
 
 
 class ImageContent(BaseModel):
@@ -192,20 +193,21 @@ class ChatContext:
         return cls(items)
 
     @property
-    def mutable(self) -> bool:
-        return True
+    def readonly(self) -> bool:
+        return False
 
 
 class _ReadOnlyChatContext(ChatContext):
     """A read-only wrapper for ChatContext that prevents modifications."""
 
     error_msg = (
-        "This is a read-only reference to the chat context. "
-        "Please use .copy() method to make a mutable copy."
+        "trying to modify a read-only chat context, "
+        "please use .copy() and agent.update_chat_ctx() to modify the chat context"
     )
 
     class _ImmutableList(list):
         def _raise_error(self, *args, **kwargs):
+            logger.error(_ReadOnlyChatContext.error_msg)
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
         # override all mutating methods to raise errors
@@ -219,5 +221,5 @@ class _ReadOnlyChatContext(ChatContext):
         self._items = self._ImmutableList(items)
 
     @property
-    def mutable(self) -> bool:
-        return False
+    def readonly(self) -> bool:
+        return True

@@ -89,7 +89,7 @@ class AgentActivity(RecognitionHooks):
             self._turn_detection_mode = None
 
         if isinstance(self.llm, large_language_model.RealtimeModel):
-            if self.llm.server_side_turn_detection and not self.allow_interruptions:
+            if self.llm.capabilities.turn_detection and not self.allow_interruptions:
                 raise ValueError(
                     "the RealtimeModel uses a server-side turn detection, "
                     "allow_interruptions cannot be False, disable turn_detection in "
@@ -98,7 +98,7 @@ class AgentActivity(RecognitionHooks):
 
             if (
                 self._turn_detection_mode == "realtime_llm"
-                and not self.llm.server_side_turn_detection
+                and not self.llm.capabilities.turn_detection
             ):
                 logger.warning(
                     "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
@@ -114,7 +114,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._turn_detection_mode = None
 
-            elif self._turn_detection_mode == "vad" and self.llm.server_side_turn_detection:
+            elif self._turn_detection_mode == "vad" and self.llm.capabilities.turn_detection:
                 logger.warning(
                     "turn_detection is set to 'vad', but the LLM is a RealtimeModel, "
                     "and server-side turn detection enabled, ignoring the turn_detection setting"
@@ -123,7 +123,7 @@ class AgentActivity(RecognitionHooks):
 
             # fallback to VAD if server side turn detection is disabled and VAD is available
             if (
-                not self.llm.server_side_turn_detection
+                not self.llm.capabilities.turn_detection
                 and self.vad
                 and self._turn_detection_mode is None
             ):
@@ -374,7 +374,7 @@ class AgentActivity(RecognitionHooks):
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.server_side_turn_detection
+            and self.llm.capabilities.turn_detection
             and allow_interruptions is False
         ):
             logger.warning(
@@ -419,7 +419,7 @@ class AgentActivity(RecognitionHooks):
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.server_side_turn_detection
+            and self.llm.capabilities.turn_detection
             and allow_interruptions is False
         ):
             logger.warning(
@@ -583,7 +583,7 @@ class AgentActivity(RecognitionHooks):
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and (
             self._turn_detection_mode == "vad"
-            or (not self.llm.server_side_turn_detection and self._turn_detection_mode is None)
+            or (not self.llm.capabilities.turn_detection and self._turn_detection_mode is None)
         ):
             self.generate_reply()
 

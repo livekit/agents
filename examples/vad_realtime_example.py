@@ -4,7 +4,9 @@ from dotenv import load_dotenv
 
 from livekit.agents import JobContext, JobProcess, WorkerOptions, cli
 from livekit.agents.voice import Agent, AgentSession
-from livekit.plugins import openai, silero
+from livekit.plugins import deepgram, openai, silero
+
+# from livekit.plugins.turn_detector import EOUModel
 
 logger = logging.getLogger("vad-realtime-example")
 logger.setLevel(logging.INFO)
@@ -13,11 +15,10 @@ load_dotenv()
 
 
 class AlloyAgent(Agent):
-    def __init__(self, vad: silero.VAD | None = None) -> None:
+    def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy.",
             llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
-            vad=vad,
         )
 
     async def on_enter(self):
@@ -28,13 +29,12 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(
-        turn_detection="vad",  # or not set
+        turn_detection="vad",
+        vad=ctx.proc.userdata["vad"],
+        # stt=deepgram.STT(),
         allow_interruptions=True,
     )
-    await session.start(
-        agent=AlloyAgent(vad=ctx.proc.userdata["vad"]),
-        room=ctx.room,
-    )
+    await session.start(agent=AlloyAgent(), room=ctx.room)
 
 
 def prewarm(proc: JobProcess):
