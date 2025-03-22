@@ -1,2 +1,2 @@
-livekit-agents>=0.12.15
+livekit-agents>=0.12.18
 python-dotenv~=1.0

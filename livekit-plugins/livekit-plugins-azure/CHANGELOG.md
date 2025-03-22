@@ -1,5 +1,19 @@
 # livekit-plugins-azure
 
+## 0.5.6
+
+### Patch Changes
+
+- Add callbacks as updatable Azure TTS options - [#1645](https://github.com/livekit/agents/pull/1645) ([@anishnag](https://github.com/anishnag))
+
+## 0.5.5
+
+### Patch Changes
+
+- feat: Azure.STT support profanity_option - [#1540](https://github.com/livekit/agents/pull/1540) ([@shiftu](https://github.com/shiftu))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.5.4
 
 ### Patch Changes

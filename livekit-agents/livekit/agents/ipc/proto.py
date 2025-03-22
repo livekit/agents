@@ -42,6 +42,13 @@ class InitializeResponse:
     """mark the process as initialized"""
 
     MSG_ID: ClassVar[int] = 1
+    error: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.error)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.error = channel.read_string(b)
 
 
 @dataclass

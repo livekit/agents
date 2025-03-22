@@ -1,5 +1,41 @@
 # livekit-plugins-google
 
+## 0.11.2
+
+### Patch Changes
+
+- fix: double transcript issue for google stt - [#1694](https://github.com/livekit/agents/pull/1694) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.11.1
+
+### Patch Changes
+
+- allow configurable api version in gemini realtime - [#1656](https://github.com/livekit/agents/pull/1656) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.11.0
+
+### Minor Changes
+
+- Add simple video input support for gemini live - [#1536](https://github.com/livekit/agents/pull/1536) ([@bcherry](https://github.com/bcherry))
+
+### Patch Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
+## 0.10.6
+
+### Patch Changes
+
+- google stt: change default model to `latest_long` - [#1552](https://github.com/livekit/agents/pull/1552) ([@jayeshp19](https://github.com/jayeshp19))
+
+- feat: connection pooling. speeds up generation with STT/TTS providers - [#1538](https://github.com/livekit/agents/pull/1538) ([@davidzhao](https://github.com/davidzhao))
+
+- fix: functioncall cancellation ids in realtime - [#1572](https://github.com/livekit/agents/pull/1572) ([@jayeshp19](https://github.com/jayeshp19))
+
+- google-genai version bump & remove id feild from function call and function response - [#1559](https://github.com/livekit/agents/pull/1559) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.10.5
 
 ### Patch Changes

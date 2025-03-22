@@ -1,5 +1,49 @@
 # livekit-plugins-openai
 
+## 0.12.0
+
+### Minor Changes
+
+- support for streaming STT, new STT/TTS models - [#1701](https://github.com/livekit/agents/pull/1701) ([@davidzhao](https://github.com/davidzhao))
+
+### Patch Changes
+
+- openai new STT model and voices - [#1691](https://github.com/livekit/agents/pull/1691) ([@lundin](https://github.com/lundin))
+
+- Make azure and openai take a timeout optionally. Also update the default timeout for Azure OpenAI to 5s from 10 minutes. - [#1674](https://github.com/livekit/agents/pull/1674) ([@martin-purplefish](https://github.com/martin-purplefish))
+
+## 0.11.3
+
+### Patch Changes
+
+- Support more input transcription parameters for openai realtime - [#1637](https://github.com/livekit/agents/pull/1637) ([@adambenali](https://github.com/adambenali))
+
+- Add string type support to model parameter - [#1657](https://github.com/livekit/agents/pull/1657) ([@jayeshp19](https://github.com/jayeshp19))
+
+## 0.11.2
+
+### Patch Changes
+
+- version bump to 0.11.1 - [#1640](https://github.com/livekit/agents/pull/1640) ([@davidzhao](https://github.com/davidzhao))
+
+## 1.0.1
+
+### Patch Changes
+
+- use streaming AudioDecoder to handle compressed encoding - [#1584](https://github.com/livekit/agents/pull/1584) ([@davidzhao](https://github.com/davidzhao))
+
+- fix multimodal agent interrupts itself when creating function call response - [#1585](https://github.com/livekit/agents/pull/1585) ([@longcw](https://github.com/longcw))
+
+- feat: add max_tokens option to LLM and LLMStream classes - [#1576](https://github.com/livekit/agents/pull/1576) ([@davidzhao](https://github.com/davidzhao))
+
+- updated livekit-agent reference to <1.0 - [#1607](https://github.com/livekit/agents/pull/1607) ([@davidzhao](https://github.com/davidzhao))
+
+## 1.0.0
+
+### Major Changes
+
+- feat: add max_tokens option to LLM and LLMStream classes - [#1545](https://github.com/livekit/agents/pull/1545) ([@dorlanpabon](https://github.com/dorlanpabon))
+
 ## 0.11.0
 
 ### Minor Changes
