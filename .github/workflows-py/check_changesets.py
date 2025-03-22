@@ -85,8 +85,8 @@ def get_existing_changeset_summary():
 def post_or_update_comment(body):
     # Use a marker to ensure the comment is unique/updated.
     marker = "<!-- changeset-checker -->"
-    api_url = f"https://api.github.com/repos/{REPO}/issues/{PR_NUMBER}/comments"
-    r = requests.get(api_url, headers=headers)
+    list_url = f"https://api.github.com/repos/{REPO}/issues/{PR_NUMBER}/comments"
+    r = requests.get(list_url, headers=headers)
     r.raise_for_status()
     comments = r.json()
     comment_id = None
@@ -96,11 +96,12 @@ def post_or_update_comment(body):
             break
     body_with_marker = marker + "\n" + body
     if comment_id:
-        update_url = f"{api_url}/{comment_id}"
+        # Use the correct update URL endpoint.
+        update_url = f"https://api.github.com/repos/{REPO}/issues/comments/{comment_id}"
         r = requests.patch(update_url, headers=headers, json={"body": body_with_marker})
         r.raise_for_status()
     else:
-        r = requests.post(api_url, headers=headers, json={"body": body_with_marker})
+        r = requests.post(list_url, headers=headers, json={"body": body_with_marker})
         r.raise_for_status()
 
 
