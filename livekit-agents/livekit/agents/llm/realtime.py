@@ -15,11 +15,12 @@ from .tool_context import FunctionTool, ToolChoice, ToolContext
 
 @dataclass
 class InputSpeechStartedEvent:
-    pass
+    item_id: str
 
 
 @dataclass
 class InputSpeechStoppedEvent:
+    item_id: str
     user_transcription_enabled: bool
 
 
