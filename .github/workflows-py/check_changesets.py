@@ -75,6 +75,10 @@ def validate_changeset_content(content):
         if pkg in packages:
             return False, f"Duplicate package entry found: '{pkg}'."
         packages.add(pkg)
+    # Check that each plugin (other than livekit-agents) exists.
+    for pkg in packages:
+        if pkg != "livekit-agents" and not os.path.isdir(os.path.join("livekit-plugins", pkg)):
+            return False, f"Plugin '{pkg}' directory does not exist."
     description_lines = lines[second_delim_index + 1:]
     if not any(l.strip() for l in description_lines):
         return False, "Missing change description after front matter."
