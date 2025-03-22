@@ -1,1 +1,0 @@
-# livekit-plugins-aws
