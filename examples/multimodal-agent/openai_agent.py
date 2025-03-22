@@ -86,7 +86,9 @@ async def entrypoint(ctx: JobContext):
                 "When performing function calls, let user know that you are checking the weather."
             ),
             turn_detection=openai.realtime.ServerVadOptions(
-                threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
+                threshold=0.6,
+                prefix_padding_ms=200,
+                silence_duration_ms=500,
             ),
         ),
         fnc_ctx=fnc_ctx,
