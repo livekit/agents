@@ -17,7 +17,9 @@ def to_fnc_ctx(
     tools: list[anthropic.types.ToolParam] = []
     for i, fnc in enumerate(fncs):
         cache_ctrl = (
-            CACHE_CONTROL_EPHEMERAL if (i == len(fncs) - 1) and caching == "ephemeral" else None
+            CACHE_CONTROL_EPHEMERAL
+            if (i == len(fncs) - 1) and caching == "ephemeral"
+            else None
         )
         tools.append(_build_anthropic_schema(fnc, cache_ctrl=cache_ctrl))
 
@@ -40,7 +42,9 @@ def to_chat_ctx(
                     system_message = anthropic.types.TextBlockParam(
                         text=content,
                         type="text",
-                        cache_control=CACHE_CONTROL_EPHEMERAL if caching == "ephemeral" else None,
+                        cache_control=CACHE_CONTROL_EPHEMERAL
+                        if caching == "ephemeral"
+                        else None,
                     )
             continue
 
@@ -58,7 +62,9 @@ def to_chat_ctx(
 
         if role != current_role:
             if current_role is not None and content:
-                messages.append(anthropic.types.MessageParam(role=current_role, content=content))
+                messages.append(
+                    anthropic.types.MessageParam(role=current_role, content=content)
+                )
             content = []
             current_role = role
 
@@ -71,7 +77,9 @@ def to_chat_ctx(
                         )
                     )
                 elif isinstance(c, llm.ImageContent):
-                    content.append(_to_image_content(c, cache_key, cache_ctrl=cache_ctrl))
+                    content.append(
+                        _to_image_content(c, cache_key, cache_ctrl=cache_ctrl)
+                    )
         elif msg.type == "function_call":
             content.append(
                 anthropic.types.ToolUseBlockParam(
@@ -93,14 +101,17 @@ def to_chat_ctx(
             )
 
     if current_role is not None and content:
-        messages.append(anthropic.types.MessageParam(role=current_role, content=content))
+        messages.append(
+            anthropic.types.MessageParam(role=current_role, content=content)
+        )
 
     # ensure the messages starts with a "user" message
     if not messages or messages[0]["role"] != "user":
         messages.insert(
             0,
             anthropic.types.MessageParam(
-                role="user", content=[anthropic.types.TextBlockParam(text="(empty)", type="text")]
+                role="user",
+                content=[anthropic.types.TextBlockParam(text="(empty)", type="text")],
             ),
         )
 

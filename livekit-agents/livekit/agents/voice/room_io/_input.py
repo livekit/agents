@@ -68,7 +68,9 @@ class _ParticipantInputStream(Generic[T], ABC):
     def set_participant(self, participant: rtc.Participant | str | None) -> None:
         # set_participant can be called before the participant is connected
         participant_identity = (
-            participant.identity if isinstance(participant, rtc.Participant) else participant
+            participant.identity
+            if isinstance(participant, rtc.Participant)
+            else participant
         )
         if self._participant_identity == participant_identity:
             return
@@ -119,7 +121,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         logger.debug("stream closed", extra=extra)
 
     @abstractmethod
-    def _create_stream(self, track: rtc.RemoteTrack) -> rtc.VideoStream | rtc.AudioStream: ...
+    def _create_stream(
+        self, track: rtc.RemoteTrack
+    ) -> rtc.VideoStream | rtc.AudioStream: ...
 
     def _close_stream(self) -> None:
         if self._stream is not None:

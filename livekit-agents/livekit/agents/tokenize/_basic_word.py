@@ -3,7 +3,9 @@ import re
 from . import tokenizer
 
 
-def split_words(text: str, ignore_punctuation: bool = True) -> list[tuple[str, int, int]]:
+def split_words(
+    text: str, ignore_punctuation: bool = True
+) -> list[tuple[str, int, int]]:
     """
     Split the text into words.
     Returns a list of words with their start and end indices of the original text.

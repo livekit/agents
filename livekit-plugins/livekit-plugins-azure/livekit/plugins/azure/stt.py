@@ -75,13 +75,17 @@ class STT(stt.STT):
 
         if languages is None:
             languages = ["en-US"]
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
+        )
         speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
         speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
         speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
 
         if not (
-            speech_host or (speech_key and speech_region) or (speech_auth_token and speech_region)
+            speech_host
+            or (speech_key and speech_region)
+            or (speech_auth_token and speech_region)
         ):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
@@ -130,7 +134,9 @@ class STT(stt.STT):
         self._streams.add(stream)
         return stream
 
-    def update_options(self, *, language: str | None = None, languages: list[str] | None = None):
+    def update_options(
+        self, *, language: str | None = None, languages: list[str] | None = None
+    ):
         if language and not languages:
             languages = [language]
         if languages is not None:
@@ -140,8 +146,12 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
-    def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+    def __init__(
+        self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions
+    ) -> None:
+        super().__init__(
+            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
+        )
         self._opts = opts
         self._speaking = False
 
@@ -151,7 +161,9 @@ class SpeechStream(stt.SpeechStream):
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, *, language: str | None = None, languages: list[str] | None = None):
+    def update_options(
+        self, *, language: str | None = None, languages: list[str] | None = None
+    ):
         if language and not languages:
             languages = [language]
         if languages:
@@ -167,7 +179,9 @@ class SpeechStream(stt.SpeechStream):
                     channels=self._opts.num_channels,
                 )
             )
-            self._recognizer = _create_speech_recognizer(config=self._opts, stream=self._stream)
+            self._recognizer = _create_speech_recognizer(
+                config=self._opts, stream=self._stream
+            )
             self._recognizer.recognizing.connect(self._on_recognizing)
             self._recognizer.recognized.connect(self._on_recognized)
             self._recognizer.speech_start_detected.connect(self._on_speech_start)
@@ -201,7 +215,9 @@ class SpeechStream(stt.SpeechStream):
                         break
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
+                    await utils.aio.gracefully_cancel(
+                        process_input_task, wait_reconnect_task
+                    )
 
                 self._stream.close()
                 await self._session_stopped_event.wait()
@@ -222,7 +238,9 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.languages:
             detected_lg = self._opts.languages[0]
 
-        final_data = stt.SpeechData(language=detected_lg, confidence=1.0, text=evt.result.text)
+        final_data = stt.SpeechData(
+            language=detected_lg, confidence=1.0, text=evt.result.text
+        )
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -241,7 +259,9 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.languages:
             detected_lg = self._opts.languages[0]
 
-        interim_data = stt.SpeechData(language=detected_lg, confidence=0.0, text=evt.result.text)
+        interim_data = stt.SpeechData(
+            language=detected_lg, confidence=0.0, text=evt.result.text
+        )
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -320,7 +340,9 @@ def _create_speech_recognizer(
     auto_detect_source_language_config = None
     if config.languages and len(config.languages) >= 1:
         auto_detect_source_language_config = (
-            speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.languages)
+            speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
+                languages=config.languages
+            )
         )
 
     audio_config = speechsdk.audio.AudioConfig(stream=stream)

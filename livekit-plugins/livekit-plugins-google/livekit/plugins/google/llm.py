@@ -69,7 +69,9 @@ class LLM(llm.LLM):
         top_k: NotGivenOr[float] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[
+            ToolChoice | Literal["auto", "required", "none"]
+        ] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -97,7 +99,9 @@ class LLM(llm.LLM):
         """
         super().__init__()
         self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
-        self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+        self._location = location or os.environ.get(
+            "GOOGLE_CLOUD_LOCATION", "us-central1"
+        )
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY", None)
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
@@ -147,7 +151,9 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[
+            ToolChoice | Literal["auto", "required", "none"]
+        ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
@@ -335,7 +341,8 @@ class LLMStream(llm.LLMStream):
                         llm.FunctionToolCall(
                             arguments=json.dumps(part.function_call.args),
                             name=part.function_call.name,
-                            call_id=part.function_call.id or utils.shortuuid("function_call_"),
+                            call_id=part.function_call.id
+                            or utils.shortuuid("function_call_"),
                         )
                     ],
                     content=part.text,

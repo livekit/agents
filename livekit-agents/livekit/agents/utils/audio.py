@@ -71,7 +71,9 @@ class AudioByteStream:
         if samples_per_channel is None:
             samples_per_channel = sample_rate // 10  # 100ms by default
 
-        self._bytes_per_frame = num_channels * samples_per_channel * ctypes.sizeof(ctypes.c_int16)
+        self._bytes_per_frame = (
+            num_channels * samples_per_channel * ctypes.sizeof(ctypes.c_int16)
+        )
         self._buf = bytearray()
 
     def push(self, data: bytes) -> list[rtc.AudioFrame]:

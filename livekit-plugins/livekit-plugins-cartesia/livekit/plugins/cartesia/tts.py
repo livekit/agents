@@ -35,7 +35,13 @@ from livekit.agents import (
 )
 
 from .log import logger
-from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels, TTSVoiceEmotion, TTSVoiceSpeed
+from .models import (
+    TTSDefaultVoiceId,
+    TTSEncoding,
+    TTSModels,
+    TTSVoiceEmotion,
+    TTSVoiceSpeed,
+)
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
@@ -132,7 +138,9 @@ class TTS(tts.TTS):
         url = self._opts.get_ws_url(
             f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={API_VERSION}"
         )
-        return await asyncio.wait_for(session.ws_connect(url), self._conn_options.timeout)
+        return await asyncio.wait_for(
+            session.ws_connect(url), self._conn_options.timeout
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
         await ws.close()
@@ -189,7 +197,9 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions | None = None
+    ) -> SynthesizeStream:
         return SynthesizeStream(
             tts=self,
             pool=self._pool,

@@ -15,7 +15,12 @@ from livekit.agents._exceptions import APIConnectionError, APIError
 from .. import utils
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
 from .tool_context import FunctionTool, ToolChoice
@@ -140,7 +145,9 @@ class LLMStream(ABC):
                 await asyncio.sleep(self._conn_options.retry_interval)
 
     @utils.log_exceptions(logger=logger)
-    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
+    async def _metrics_monitor_task(
+        self, event_aiter: AsyncIterable[ChatChunk]
+    ) -> None:
         start_time = time.perf_counter()
         ttft = -1.0
         request_id = ""

@@ -73,7 +73,9 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[
+            ToolChoice | Literal["auto", "required", "none"]
+        ] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
@@ -127,7 +129,9 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[
+            ToolChoice | Literal["auto", "required", "none"]
+        ] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> LLM:
         """
@@ -175,7 +179,9 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[
+            ToolChoice | Literal["auto", "required", "none"]
+        ] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
@@ -520,7 +526,9 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[
+            ToolChoice | Literal["auto", "required", "none"]
+        ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
@@ -535,7 +543,9 @@ class LLM(llm.LLM):
             extra["user"] = self._opts.user
 
         parallel_tool_calls = (
-            parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
+            parallel_tool_calls
+            if is_given(parallel_tool_calls)
+            else self._opts.parallel_tool_calls
         )
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls

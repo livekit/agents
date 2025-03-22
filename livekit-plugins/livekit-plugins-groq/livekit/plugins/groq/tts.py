@@ -171,7 +171,9 @@ class ChunkedStream(tts.ChunkedStream):
         decode_task: Optional[asyncio.Task] = None
         api_url = f"{self._opts.base_url}/audio/speech"
         try:
-            async with self._session.post(api_url, headers=headers, json=payload) as response:
+            async with self._session.post(
+                api_url, headers=headers, json=payload
+            ) as response:
                 if not response.content_type.startswith("audio"):
                     content = await response.text()
                     logger.error("Groq returned non-audio data: %s", content)

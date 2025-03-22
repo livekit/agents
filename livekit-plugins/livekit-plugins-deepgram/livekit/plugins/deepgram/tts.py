@@ -68,7 +68,9 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
         if not api_key:
-            raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
+            raise ValueError(
+                "Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key."
+            )
 
         self._opts = _TTSOptions(
             model=model,
@@ -147,7 +149,9 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions | None = None
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -363,7 +367,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _connection_timeout():
             # Deepgram has a 60-minute timeout period for websocket connections
             await asyncio.sleep(3300)
-            logger.warning("Deepgram TTS maximum connection time reached. Reconnecting...")
+            logger.warning(
+                "Deepgram TTS maximum connection time reached. Reconnecting..."
+            )
             self._reconnect_event.set()
 
         ws: aiohttp.ClientWebSocketResponse | None = None

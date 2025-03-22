@@ -83,7 +83,9 @@ class FakeTTS(TTS):
 
 
 class FakeChunkedStream(ChunkedStream):
-    def __init__(self, *, tts: FakeTTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self, *, tts: FakeTTS, input_text: str, conn_options: APIConnectOptions
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._attempt = 0
 
@@ -108,7 +110,9 @@ class FakeChunkedStream(ChunkedStream):
                 * self._tts.num_channels
             )
             while pushed_samples < max_samples:
-                num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
+                num_samples = min(
+                    self._tts.sample_rate // 100, max_samples - pushed_samples
+                )
                 self._event_ch.send_nowait(
                     SynthesizedAudio(
                         request_id=request_id,
@@ -170,7 +174,9 @@ class FakeSynthesizeStream(SynthesizeStream):
                 * self._tts.num_channels
             )
             while pushed_samples < max_samples:
-                num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
+                num_samples = min(
+                    self._tts.sample_rate // 100, max_samples - pushed_samples
+                )
                 self._event_ch.send_nowait(
                     SynthesizedAudio(
                         request_id=request_id,

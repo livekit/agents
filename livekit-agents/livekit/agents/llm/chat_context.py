@@ -169,20 +169,29 @@ class ChatContext:
     ) -> dict:
         items = []
         for item in self.items:
-            if exclude_function_call and item.type in ["function_call", "function_call_output"]:
+            if exclude_function_call and item.type in [
+                "function_call",
+                "function_call_output",
+            ]:
                 continue
 
             if item.type == "message":
                 item = item.model_copy()
                 if exclude_image:
-                    item.content = [c for c in item.content if not isinstance(c, ImageContent)]
+                    item.content = [
+                        c for c in item.content if not isinstance(c, ImageContent)
+                    ]
                 if exclude_audio:
-                    item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+                    item.content = [
+                        c for c in item.content if not isinstance(c, AudioContent)
+                    ]
 
             items.append(item)
 
         return {
-            "items": [item.model_dump(mode="json", exclude_none=True) for item in items],
+            "items": [
+                item.model_dump(mode="json", exclude_none=True) for item in items
+            ],
         }
 
     @classmethod

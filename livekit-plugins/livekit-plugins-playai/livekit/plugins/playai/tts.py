@@ -133,7 +133,9 @@ class TTS(tts.TTS):
             opts=self._opts,
         )
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions | None = None
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -289,4 +291,6 @@ def _validate_kwargs(kwargs: dict) -> None:
     valid_keys = {field.name for field in fields(TTSOptions)}
     invalid_keys = set(kwargs.keys()) - valid_keys
     if invalid_keys:
-        raise ValueError(f"Invalid parameters: {invalid_keys}. Allowed parameters: {valid_keys}")
+        raise ValueError(
+            f"Invalid parameters: {invalid_keys}. Allowed parameters: {valid_keys}"
+        )

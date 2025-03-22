@@ -25,7 +25,9 @@ logger = logging.getLogger("avatar-example")
 class AudioWaveGenerator(VideoGenerator):
     def __init__(self, options: AvatarOptions):
         self._options = options
-        self._audio_queue: asyncio.Queue[Union[rtc.AudioFrame, AudioSegmentEnd]] = asyncio.Queue()
+        self._audio_queue: asyncio.Queue[Union[rtc.AudioFrame, AudioSegmentEnd]] = (
+            asyncio.Queue()
+        )
 
         self._audio_resampler: Optional[rtc.AudioResampler] = None
 
@@ -80,7 +82,9 @@ class AudioWaveGenerator(VideoGenerator):
                 break
         self._reset_audio_buffer()
 
-    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
+    def __aiter__(
+        self,
+    ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         return self._stream_impl()
 
     async def _stream_impl(
@@ -93,7 +97,9 @@ class AudioWaveGenerator(VideoGenerator):
         )
         background.fill(255)
 
-        wave_visualizer = WaveformVisualizer(sample_rate=self._options.audio_sample_rate)
+        wave_visualizer = WaveformVisualizer(
+            sample_rate=self._options.audio_sample_rate
+        )
 
         def _generate_idle_frame() -> rtc.VideoFrame:
             idle_frame = background.copy()
@@ -125,7 +131,9 @@ class AudioWaveGenerator(VideoGenerator):
                     [n_fill_samples, self._audio_buffer.shape[1]],
                     dtype=self._audio_buffer.dtype,
                 )
-            self._audio_buffer = np.concatenate([self._audio_buffer, audio_samples], axis=0)
+            self._audio_buffer = np.concatenate(
+                [self._audio_buffer, audio_samples], axis=0
+            )
 
             # generate video frames with audio in buffer
             while len(self._audio_buffer) >= samples_per_frame:
@@ -210,7 +218,9 @@ async def main(room: rtc.Room):
         # Set up disconnect handler
         async def handle_disconnect(participant: rtc.RemoteParticipant):
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
-                logging.info("Agent %s disconnected, stopping worker...", participant.identity)
+                logging.info(
+                    "Agent %s disconnected, stopping worker...", participant.identity
+                )
                 stop_event.set()
 
         room.on(

@@ -3,7 +3,16 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli, llm, stt, tts
+from livekit.agents import (
+    AutoSubscribe,
+    JobContext,
+    JobProcess,
+    WorkerOptions,
+    cli,
+    llm,
+    stt,
+    tts,
+)
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import cartesia, deepgram, openai, playai, silero
 

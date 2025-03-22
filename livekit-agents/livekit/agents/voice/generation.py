@@ -10,7 +10,14 @@ from pydantic import ValidationError
 from livekit import rtc
 
 from .. import debug, llm, utils
-from ..llm import ChatChunk, ChatContext, StopResponse, ToolContext, ToolError, utils as llm_utils
+from ..llm import (
+    ChatChunk,
+    ChatContext,
+    StopResponse,
+    ToolContext,
+    ToolError,
+    utils as llm_utils,
+)
 from ..log import logger
 from ..types import NotGivenOr
 from ..utils import aio
@@ -302,7 +309,9 @@ async def _execute_tools_task(
                 continue
 
             try:
-                function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
+                function_model = llm_utils.function_arguments_to_pydantic_model(
+                    function_tool
+                )
                 json_args = fnc_call.arguments or "{}"
                 parsed_args = function_model.model_validate_json(json_args)
 
@@ -477,7 +486,9 @@ class _PythonOutput:
             or isinstance(self.output, tuple)
         ):
             agent_tasks = [item for item in self.output if isinstance(item, Agent)]
-            other_outputs = [item for item in self.output if not isinstance(item, Agent)]
+            other_outputs = [
+                item for item in self.output if not isinstance(item, Agent)
+            ]
             if len(agent_tasks) > 1:
                 logger.error(
                     f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",
@@ -544,7 +555,9 @@ The ID of the instructions message in the chat context. (only for stateless LLMs
 """
 
 
-def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool) -> None:
+def update_instructions(
+    chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool
+) -> None:
     """
     Update the instruction message in the chat context or insert a new one if missing.
 

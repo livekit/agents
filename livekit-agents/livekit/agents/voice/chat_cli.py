@@ -106,7 +106,9 @@ class _AudioOutput(io.AudioOutput):
         if self._capturing:
             self._flush_complete.clear()
             self._capturing = False
-            to_wait = max(0.0, self._pushed_duration - (time.monotonic() - self._capture_start))
+            to_wait = max(
+                0.0, self._pushed_duration - (time.monotonic() - self._capture_start)
+            )
             self._dispatch_handle = self._cli._loop.call_later(
                 to_wait, self._dispatch_playback_finished
             )
@@ -123,14 +125,18 @@ class _AudioOutput(io.AudioOutput):
 
             self._flush_complete.set()
             self._pushed_duration = 0.0
-            played_duration = min(time.monotonic() - self._capture_start, self._pushed_duration)
+            played_duration = min(
+                time.monotonic() - self._capture_start, self._pushed_duration
+            )
             self.on_playback_finished(
                 playback_position=played_duration,
                 interrupted=played_duration + 1.0 < self._pushed_duration,
             )
 
     def _dispatch_playback_finished(self) -> None:
-        self.on_playback_finished(playback_position=self._pushed_duration, interrupted=False)
+        self.on_playback_finished(
+            playback_position=self._pushed_duration, interrupted=False
+        )
         self._flush_complete.set()
         self._pushed_duration = 0.0
 
@@ -299,9 +305,13 @@ class ChatCLI:
 
         with self._render_ring_lock:
             render_chunk = outdata[:, 0].copy()
-            self._render_ring_buffer = np.concatenate((self._render_ring_buffer, render_chunk))
+            self._render_ring_buffer = np.concatenate(
+                (self._render_ring_buffer, render_chunk)
+            )
             if self._render_ring_buffer.size > AEC_RING_BUFFER_SIZE:
-                self._render_ring_buffer = self._render_ring_buffer[-AEC_RING_BUFFER_SIZE:]
+                self._render_ring_buffer = self._render_ring_buffer[
+                    -AEC_RING_BUFFER_SIZE:
+                ]
 
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
         CHUNK_SAMPLES = 240
@@ -333,7 +343,9 @@ class ChatCLI:
         max_int16 = np.iinfo(np.int16).max
         self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
 
-        self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, capture_frame_for_aec)
+        self._loop.call_soon_threadsafe(
+            self._audio_input_ch.send_nowait, capture_frame_for_aec
+        )
 
     @log_exceptions(logger=logger)
     async def _input_cli_task(self, in_ch: aio.Chan[str]) -> None:
@@ -387,7 +399,9 @@ class ChatCLI:
             await asyncio.sleep(max(0, next_frame - time.perf_counter()))
 
     def _print_audio_mode(self):
-        amplitude_db = _normalize_db(self._micro_db, db_min=INPUT_DB_MIN, db_max=INPUT_DB_MAX)
+        amplitude_db = _normalize_db(
+            self._micro_db, db_min=INPUT_DB_MIN, db_max=INPUT_DB_MAX
+        )
         nb_bar = round(amplitude_db * MAX_AUDIO_BAR)
 
         color_code = 31 if amplitude_db > 0.75 else 33 if amplitude_db > 0.5 else 32

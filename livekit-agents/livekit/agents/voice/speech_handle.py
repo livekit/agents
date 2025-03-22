@@ -33,7 +33,9 @@ class SpeechHandle:
 
     @staticmethod
     def create(
-        allow_interruptions: bool = True, step_index: int = 0, parent: SpeechHandle | None = None
+        allow_interruptions: bool = True,
+        step_index: int = 0,
+        parent: SpeechHandle | None = None,
     ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),

@@ -61,7 +61,9 @@ class LogQueueHandler(logging.Handler):
         super().__init__()
         self._duplex = duplex
         self._send_q = queue.SimpleQueue[Optional[bytes]]()
-        self._send_thread = threading.Thread(target=self._forward_logs, name="ipc_log_forwarder")
+        self._send_thread = threading.Thread(
+            target=self._forward_logs, name="ipc_log_forwarder"
+        )
         self._send_thread.start()
 
     def _forward_logs(self):

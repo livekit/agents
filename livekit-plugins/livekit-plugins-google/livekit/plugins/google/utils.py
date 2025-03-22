@@ -120,7 +120,9 @@ class _GeminiJsonSchema:
     def simplify(self) -> dict[str, Any] | None:
         self._simplify(self.schema, refs_stack=())
         # If the schema is an OBJECT with no properties, return None.
-        if self.schema.get("type") == types.Type.OBJECT and not self.schema.get("properties"):
+        if self.schema.get("type") == types.Type.OBJECT and not self.schema.get(
+            "properties"
+        ):
             return None
         return self.schema
 
@@ -130,7 +132,9 @@ class _GeminiJsonSchema:
         if ref := schema.pop("$ref", None):
             key = re.sub(r"^#/\$defs/", "", ref)
             if key in refs_stack:
-                raise ValueError("Recursive `$ref`s in JSON Schema are not supported by Gemini")
+                raise ValueError(
+                    "Recursive `$ref`s in JSON Schema are not supported by Gemini"
+                )
             refs_stack += (key,)
             schema_def = self.defs[key]
             self._simplify(schema_def, refs_stack)
@@ -198,7 +202,9 @@ class _GeminiJsonSchema:
         # Gemini doesn't support additionalProperties
         ad_props = schema.pop("additional_properties", None)
         if ad_props:
-            raise ValueError("Additional properties in JSON Schema are not supported by Gemini")
+            raise ValueError(
+                "Additional properties in JSON Schema are not supported by Gemini"
+            )
 
         if properties := schema.get("properties"):
             for value in properties.values():

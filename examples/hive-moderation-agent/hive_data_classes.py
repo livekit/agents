@@ -18,7 +18,9 @@ def from_dict(cls, data):
                 # Determine if the field_type is itself a dataclass
                 if is_dataclass(field_type):
                     processed_value = from_dict(field_type, value)
-                elif hasattr(field_type, "__origin__") and issubclass(field_type.__origin__, list):
+                elif hasattr(field_type, "__origin__") and issubclass(
+                    field_type.__origin__, list
+                ):
                     # Handle List fields, assuming all elements are of the same type
                     item_type = field_type.__args__[0]
                     processed_value = [from_dict(item_type, item) for item in value]
@@ -31,7 +33,8 @@ def from_dict(cls, data):
         # which might not work as expected without context on the list's element type.
         # A better approach might be needed for handling lists of dataclasses.
         return [
-            from_dict(cls.__args__[0], item) if hasattr(cls, "__args__") else item for item in data
+            from_dict(cls.__args__[0], item) if hasattr(cls, "__args__") else item
+            for item in data
         ]
     else:
         return data

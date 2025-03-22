@@ -62,7 +62,9 @@ class CMakeBuild(build_ext):
         if not self.build_temp.exists():
             self.build_temp.mkdir(parents=True)
 
-        subprocess.run(["cmake", ext.sourcedir, *cmake_args], cwd=self.build_temp, check=True)
+        subprocess.run(
+            ["cmake", ext.sourcedir, *cmake_args], cwd=self.build_temp, check=True
+        )
         subprocess.run(["cmake", "--build", "."], cwd=self.build_temp, check=True)
 
         build_output = self.build_temp / "src" / cfg
@@ -76,7 +78,14 @@ class CMakeBuild(build_ext):
             app = build_output / "lkcef_app.app"
             self.copy_tree(
                 app,
-                str(extdir / "livekit" / "plugins" / "browser" / "resources" / "lkcef_app.app"),
+                str(
+                    extdir
+                    / "livekit"
+                    / "plugins"
+                    / "browser"
+                    / "resources"
+                    / "lkcef_app.app"
+                ),
             )
 
 

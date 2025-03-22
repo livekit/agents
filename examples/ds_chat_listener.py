@@ -102,12 +102,16 @@ async def main(room: rtc.Room, room_name: str):
 
             async for chunk in reader:
                 await stream_printer.queue.put(
-                    StreamMessage(participant_identity, track_id, stream_id, content=chunk)
+                    StreamMessage(
+                        participant_identity, track_id, stream_id, content=chunk
+                    )
                 )
 
             final = reader.info.attributes.get("lk.transcription_final", "null")
             await stream_printer.queue.put(
-                StreamMessage(participant_identity, track_id, stream_id, content="", final=final)
+                StreamMessage(
+                    participant_identity, track_id, stream_id, content="", final=final
+                )
             )
 
         task = asyncio.create_task(_on_text_received())

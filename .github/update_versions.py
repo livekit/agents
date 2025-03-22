@@ -5,7 +5,9 @@ import pathlib
 import re
 
 
-def update_py_version(project_root: pathlib.Path, py_version_path: pathlib.Path) -> str | None:
+def update_py_version(
+    project_root: pathlib.Path, py_version_path: pathlib.Path
+) -> str | None:
     pkg_file = project_root / "package.json"
     if not pkg_file.exists():
         return

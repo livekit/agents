@@ -48,7 +48,9 @@ class TranscriptionConfig:
 
     def asdict(self) -> dict[Any, Any]:
         """Returns model as a dict while excluding None values recursively."""
-        return asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if v is not None})
+        return asdict(
+            self, dict_factory=lambda x: {k: v for (k, v) in x if v is not None}
+        )
 
 
 @dataclass

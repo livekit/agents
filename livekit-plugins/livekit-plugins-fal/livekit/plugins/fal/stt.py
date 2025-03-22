@@ -29,7 +29,9 @@ class WizperSTT(stt.STT):
         chunk_level: str | None = "segment",
         version: str | None = "3",
     ):
-        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
+        super().__init__(
+            capabilities=STTCapabilities(streaming=False, interim_results=True)
+        )
         self._api_key = os.getenv("FAL_KEY")
         self._opts = _STTOptions(
             language=language or "en",
@@ -40,7 +42,9 @@ class WizperSTT(stt.STT):
         self._fal_client = fal_client.AsyncClient()
 
         if not self._api_key:
-            raise ValueError("fal AI API key is required. It should be set with env FAL_KEY")
+            raise ValueError(
+                "fal AI API key is required. It should be set with env FAL_KEY"
+            )
 
     def update_options(self, *, language: str | None = None) -> None:
         self._opts.language = language or self._opts.language

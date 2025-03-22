@@ -120,7 +120,9 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         extra_headers: dict | None = None,
     ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=audio_settings.sample_rate)
+        super().__init__(
+            stt=stt, conn_options=conn_options, sample_rate=audio_settings.sample_rate
+        )
         self._transcription_config = transcription_config
         self._audio_settings = audio_settings
         self._connection_settings = connection_settings
@@ -186,7 +188,9 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(message="Speechmatics connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="Speechmatics connection closed unexpectedly"
+                    )
 
                 try:
                     data = json.loads(msg.data)
@@ -225,7 +229,9 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        api_key = self._connection_settings.api_key or os.environ.get("SPEECHMATICS_API_KEY")
+        api_key = self._connection_settings.api_key or os.environ.get(
+            "SPEECHMATICS_API_KEY"
+        )
         if api_key is None:
             raise ValueError(
                 "Speechmatics API key is required. "
@@ -238,7 +244,9 @@ class SpeechStream(stt.SpeechStream):
             "Authorization": f"Bearer {api_key}",
             **self._extra_headers,
         }
-        url = sanitize_url(self._connection_settings.url, self._transcription_config.language)
+        url = sanitize_url(
+            self._connection_settings.url, self._transcription_config.language
+        )
         return await self._session.ws_connect(
             url,
             ssl=self._connection_settings.ssl_context,
@@ -273,7 +281,9 @@ class SpeechStream(stt.SpeechStream):
                 usage_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
                     alternatives=[],
-                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
+                    recognition_usage=stt.RecognitionUsage(
+                        audio_duration=self._speech_duration
+                    ),
                 )
                 self._event_ch.send_nowait(usage_event)
                 self._speech_duration = 0

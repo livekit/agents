@@ -98,7 +98,9 @@ def _parse_sse_message(message: str) -> dict:
     message = json.loads(value)
 
     if message.get("errors") is not None:
-        raise Exception(f"Status {message.status_code} error received: {message.errors}.")
+        raise Exception(
+            f"Status {message.status_code} error received: {message.errors}."
+        )
 
     return message
 
@@ -232,7 +234,9 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: Optional[APIConnectOptions] = None
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
@@ -307,7 +311,9 @@ class ChunkedStream(tts.ChunkedStream):
                             parsed_message is not None
                             and parsed_message.get("data", {}).get("audio") is not None
                         ):
-                            audio_bytes = base64.b64decode(parsed_message["data"]["audio"])
+                            audio_bytes = base64.b64decode(
+                                parsed_message["data"]["audio"]
+                            )
 
                             for frame in bstream.write(audio_bytes):
                                 emitter.push(frame)
@@ -386,7 +392,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     for frame in audio_bstream.write(b64data):
                         emitter.push(frame)
 
-                    if data["data"].get("stop"):  # A bool flag, is True when audio reaches "<STOP>"
+                    if data["data"].get(
+                        "stop"
+                    ):  # A bool flag, is True when audio reaches "<STOP>"
                         for frame in audio_bstream.flush():
                             emitter.push(frame)
                         emitter.flush()

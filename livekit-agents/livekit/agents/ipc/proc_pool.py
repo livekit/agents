@@ -64,7 +64,11 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     def get_by_job_id(self, job_id: str) -> JobExecutor | None:
         return next(
-            (x for x in self._executors if x.running_job and x.running_job.job.id == job_id),
+            (
+                x
+                for x in self._executors
+                if x.running_job and x.running_job.job.id == job_id
+            ),
             None,
         )
 

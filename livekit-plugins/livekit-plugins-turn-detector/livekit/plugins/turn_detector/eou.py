@@ -100,7 +100,9 @@ class _EUORunner(_InferenceRunner):
             truncation=True,
         )
         # Run inference
-        outputs = self._session.run(None, {"input_ids": inputs["input_ids"].astype("int64")})
+        outputs = self._session.run(
+            None, {"input_ids": inputs["input_ids"].astype("int64")}
+        )
         eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
@@ -118,7 +120,9 @@ class EOUModel:
         inference_executor: InferenceExecutor | None = None,
         unlikely_threshold: float = 0.0289,
     ) -> None:
-        self._executor = inference_executor or get_current_job_context().inference_executor
+        self._executor = (
+            inference_executor or get_current_job_context().inference_executor
+        )
         self._unlikely_threshold = unlikely_threshold
 
     def unlikely_threshold(self) -> float:
@@ -171,7 +175,9 @@ class EOUModel:
             timeout=timeout,
         )
 
-        assert result is not None, "end_of_utterance prediction should always returns a result"
+        assert result is not None, (
+            "end_of_utterance prediction should always returns a result"
+        )
 
         result_json = json.loads(result.decode())
         logger.debug(

@@ -95,11 +95,15 @@ class JobContext:
         self._room = room
         self._on_connect = on_connect
         self._on_shutdown = on_shutdown
-        self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
+        self._shutdown_callbacks: list[
+            Callable[[str], Coroutine[None, None, None]]
+        ] = []
         self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
         self._participant_entrypoints: list[
             tuple[
-                Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
+                Callable[
+                    [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
+                ],
                 list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
             ]
         ] = []
@@ -241,7 +245,9 @@ class JobContext:
 
     def add_participant_entrypoint(
         self,
-        entrypoint_fnc: Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
+        entrypoint_fnc: Callable[
+            [JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]
+        ],
         *_,
         kind: list[rtc.ParticipantKind.ValueType]
         | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
@@ -272,7 +278,9 @@ class JobContext:
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
-            task.add_done_callback(lambda _: self._participant_tasks.pop((p.identity, coro)))
+            task.add_done_callback(
+                lambda _: self._participant_tasks.pop((p.identity, coro))
+            )
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
@@ -281,8 +289,12 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
 
     def _subscribe_if_needed(pub: rtc.RemoteTrackPublication):
         if (
-            auto_subscribe == AutoSubscribe.AUDIO_ONLY and pub.kind == rtc.TrackKind.KIND_AUDIO
-        ) or (auto_subscribe == AutoSubscribe.VIDEO_ONLY and pub.kind == rtc.TrackKind.KIND_VIDEO):
+            auto_subscribe == AutoSubscribe.AUDIO_ONLY
+            and pub.kind == rtc.TrackKind.KIND_AUDIO
+        ) or (
+            auto_subscribe == AutoSubscribe.VIDEO_ONLY
+            and pub.kind == rtc.TrackKind.KIND_VIDEO
+        ):
             pub.set_subscribed(True)
 
     for p in room.remote_participants.values():

@@ -111,7 +111,9 @@ class ProcJobExecutor(SupervisedProc):
         try:
             async for msg in ipc_ch:
                 if isinstance(msg, proto.InferenceRequest):
-                    self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+                    self._inference_tasks.append(
+                        asyncio.create_task(self._do_inference_task(msg))
+                    )
         finally:
             await aio.cancel_and_wait(*self._inference_tasks)
 
@@ -120,7 +122,9 @@ class ProcJobExecutor(SupervisedProc):
         try:
             await super()._supervise_task()
         finally:
-            self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
+            self._job_status = (
+                JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
+            )
 
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
@@ -134,7 +138,9 @@ class ProcJobExecutor(SupervisedProc):
             return
 
         try:
-            inf_res = await self._inference_executor.do_inference(inf_req.method, inf_req.data)
+            inf_res = await self._inference_executor.do_inference(
+                inf_req.method, inf_req.data
+            )
             await channel.asend_message(
                 self._pch,
                 proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),

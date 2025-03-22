@@ -49,7 +49,9 @@ class AvatarRunner:
             num_channels=options.audio_channels,
             queue_size_ms=self._queue_size_ms,
         )
-        self._video_source = rtc.VideoSource(width=options.video_width, height=options.video_height)
+        self._video_source = rtc.VideoSource(
+            width=options.video_width, height=options.video_height
+        )
         # AV synchronizer
         self._av_sync = rtc.AVSynchronizer(
             audio_source=self._audio_source,
@@ -77,15 +79,21 @@ class AvatarRunner:
         self._audio_recv.on("clear_buffer", _on_clear_buffer)
 
         # Publish tracks
-        audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self._audio_source)
-        video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self._video_source)
-        audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
-        self._avatar_audio_publication = await self._room.local_participant.publish_track(
-            audio_track, audio_options
+        audio_track = rtc.LocalAudioTrack.create_audio_track(
+            "avatar_audio", self._audio_source
         )
-        self._avatar_video_publication = await self._room.local_participant.publish_track(
-            video_track, video_options
+        video_track = rtc.LocalVideoTrack.create_video_track(
+            "avatar_video", self._video_source
+        )
+        audio_options = rtc.TrackPublishOptions(
+            source=rtc.TrackSource.SOURCE_MICROPHONE
+        )
+        video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+        self._avatar_audio_publication = (
+            await self._room.local_participant.publish_track(audio_track, audio_options)
+        )
+        self._avatar_video_publication = (
+            await self._room.local_participant.publish_track(video_track, video_options)
         )
 
         # Start processing

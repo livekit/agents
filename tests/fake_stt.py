@@ -76,7 +76,9 @@ class FakeSTT(STT):
 
         return SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[SpeechData(text=self._fake_transcript or "", language=language or "")],
+            alternatives=[
+                SpeechData(text=self._fake_transcript or "", language=language or "")
+            ],
         )
 
     async def recognize(
@@ -87,7 +89,9 @@ class FakeSTT(STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ):
         self._recognize_ch.send_nowait(RecognizeSentinel())
-        return await super().recognize(buffer, language=language, conn_options=conn_options)
+        return await super().recognize(
+            buffer, language=language, conn_options=conn_options
+        )
 
     def stream(
         self,

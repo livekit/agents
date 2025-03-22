@@ -20,13 +20,17 @@ class Unit(Enum):
 
 
 class FncCtx(FunctionContext):
-    @ai_callable(description="Get the current weather in a given location", auto_retry=True)
+    @ai_callable(
+        description="Get the current weather in a given location", auto_retry=True
+    )
     def get_weather(
         self,
         location: Annotated[
             str, TypeInfo(description="The city and state, e.g. San Francisco, CA")
         ],
-        unit: Annotated[Unit, TypeInfo(description="The temperature unit to use.")] = Unit.CELSIUS,
+        unit: Annotated[
+            Unit, TypeInfo(description="The temperature unit to use.")
+        ] = Unit.CELSIUS,
     ) -> None: ...
 
     @ai_callable(description="Play a music")
@@ -60,7 +64,9 @@ class FncCtx(FunctionContext):
     @ai_callable(description="Update user info")
     def update_user_info(
         self,
-        email: Annotated[str | None, TypeInfo(description="The user address email")] = None,
+        email: Annotated[
+            str | None, TypeInfo(description="The user address email")
+        ] = None,
         name: Annotated[str | None, TypeInfo(description="The user name")] = None,
         address: Annotated[str, TypeInfo(description="The user address")] | None = None,
     ) -> None: ...
@@ -128,7 +134,9 @@ async def test_llm_chat_with_consecutive_messages(
         role="assistant",
     )
     chat_ctx.append(text="I see that you have a busy day ahead.", role="assistant")
-    chat_ctx.append(text="Actually, I need some help with my recent order.", role="user")
+    chat_ctx.append(
+        text="Actually, I need some help with my recent order.", role="user"
+    )
     chat_ctx.append(text="I want to cancel my order.", role="user")
 
     stream = input_llm.chat(chat_ctx=chat_ctx)
@@ -206,7 +214,9 @@ async def test_cancelled_calls(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     fnc_ctx = FncCtx()
 
-    stream = await _request_fnc_call(input_llm, "Turn off the lights in the bedroom", fnc_ctx)
+    stream = await _request_fnc_call(
+        input_llm, "Turn off the lights in the bedroom", fnc_ctx
+    )
     calls = stream.execute_functions()
     await asyncio.sleep(0.2)  # wait for the loop executor to start the task
 
@@ -401,7 +411,9 @@ with open(_HEARTS_RGBA_PATH, "rb") as f:
 
 _HEARTS_JPEG_PATH = Path(__file__).parent / "hearts.jpg"
 with open(_HEARTS_JPEG_PATH, "rb") as f:
-    _HEARTS_IMAGE_DATA_URL = f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
+    _HEARTS_IMAGE_DATA_URL = (
+        f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
+    )
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -416,7 +428,9 @@ async def test_chat_with_image_data_url(llm_factory: Callable[[], llm.LLM]):
         )
         .append(
             text="Describe this image",
-            images=[llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")],
+            images=[
+                llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")
+            ],
             role="user",
         )
     )
@@ -446,7 +460,9 @@ async def test_chat_with_image_frame(llm_factory: Callable[[], llm.LLM]):
         )
         .append(
             text="Describe this image",
-            images=[llm.ChatImage(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low")],
+            images=[
+                llm.ChatImage(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low")
+            ],
             role="user",
         )
     )

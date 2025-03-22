@@ -13,7 +13,10 @@ SUPPORTED_SAMPLE_RATES = [8000, 16000]
 
 
 def new_inference_session(force_cpu: bool) -> onnxruntime.InferenceSession:
-    res = importlib.resources.files("livekit.plugins.silero.resources") / "silero_vad.onnx"
+    res = (
+        importlib.resources.files("livekit.plugins.silero.resources")
+        / "silero_vad.onnx"
+    )
     ctx = importlib.resources.as_file(res)
     path = str(_resource_files.enter_context(ctx))
 
@@ -35,7 +38,9 @@ def new_inference_session(force_cpu: bool) -> onnxruntime.InferenceSession:
 
 
 class OnnxModel:
-    def __init__(self, *, onnx_session: onnxruntime.InferenceSession, sample_rate: int) -> None:
+    def __init__(
+        self, *, onnx_session: onnxruntime.InferenceSession, sample_rate: int
+    ) -> None:
         self._sess = onnx_session
         self._sample_rate = sample_rate
 

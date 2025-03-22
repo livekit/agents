@@ -157,7 +157,9 @@ def _create_tracing_app(w: Worker) -> web.Application:
                     "id": runner.id,
                     "status": runner.status.name,
                     "job_id": runner.running_job.job.id if runner.running_job else None,
-                    "room": runner.running_job.job.room.name if runner.running_job else None,
+                    "room": runner.running_job.job.room.name
+                    if runner.running_job
+                    else None,
                 }
                 for runner in w._proc_pool.processes
                 if runner.started and runner.running_job
@@ -176,7 +178,9 @@ def _create_tracing_app(w: Worker) -> web.Application:
         if not runner:
             return web.Response(status=404)
 
-        info = await asyncio.wait_for(runner.tracing_info(), timeout=5.0)  # proc could be stuck
+        info = await asyncio.wait_for(
+            runner.tracing_info(), timeout=5.0
+        )  # proc could be stuck
         return web.json_response({"tracing": info})
 
     async def worker(request: web.Request) -> web.Response:

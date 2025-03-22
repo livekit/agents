@@ -31,7 +31,9 @@ class APIError(Exception):
     retryable: bool = False
     """Whether the error can be retried."""
 
-    def __init__(self, message: str, *, body: object | None, retryable: bool = True) -> None:
+    def __init__(
+        self, message: str, *, body: object | None, retryable: bool = True
+    ) -> None:
         super().__init__(message)
 
         self.message = message
@@ -78,12 +80,16 @@ class APIStatusError(APIError):
 class APIConnectionError(APIError):
     """Raised when an API request failed due to a connection error."""
 
-    def __init__(self, message: str = "Connection error.", *, retryable: bool = True) -> None:
+    def __init__(
+        self, message: str = "Connection error.", *, retryable: bool = True
+    ) -> None:
         super().__init__(message, body=None, retryable=retryable)
 
 
 class APITimeoutError(APIConnectionError):
     """Raised when an API request timed out."""
 
-    def __init__(self, message: str = "Request timed out.", *, retryable: bool = True) -> None:
+    def __init__(
+        self, message: str = "Request timed out.", *, retryable: bool = True
+    ) -> None:
         super().__init__(message, retryable=retryable)

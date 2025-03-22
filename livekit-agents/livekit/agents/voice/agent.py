@@ -253,7 +253,9 @@ class Agent:
         """Called when the task is exited"""
         pass
 
-    async def on_end_of_turn(self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
+    async def on_end_of_turn(
+        self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
         """Called when the user has finished speaking, and the LLM is about to respond
 
         This is a good opportunity to update the chat context or edit the new message before it is
@@ -310,7 +312,10 @@ class Agent:
                 await utils.aio.cancel_and_wait(forward_task)
 
     async def llm_node(
-        self, chat_ctx: llm.ChatContext, tools: list[FunctionTool], model_settings: ModelSettings
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list[FunctionTool],
+        model_settings: ModelSettings,
     ) -> AsyncIterable[llm.ChatChunk] | None | AsyncIterable[str] | None | str | None:
         """
         A node in the processing pipeline that processes text generation with an LLM.
@@ -466,7 +471,9 @@ class InlineTask(Agent, Generic[TaskResult_T]):
 
     async def __await_impl(self):
         if self.__started:
-            raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
+            raise RuntimeError(
+                f"{self.__class__.__name__} is not re-entrant, await only once"
+            )
 
         self.__started = True
 
