@@ -10,7 +10,7 @@
 "livekit-plugins-deepgram": patch
 "livekit-plugins-elevenlabs": patch
 "livekit-plugins-fal": patch
-"livekit-plugins-godogle": patch
+"livekit-plugins-google": patch
 "livekit-plugins-groq": patch
 "livekit-plugins-llama-index": patch
 "livekit-plugins-minimal": patch
