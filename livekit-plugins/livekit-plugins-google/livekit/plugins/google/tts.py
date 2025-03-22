@@ -126,17 +126,13 @@ class TTS(tts.TTS):
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
         if self._client is None:
             if self._credentials_info:
-                self._client = (
-                    texttospeech.TextToSpeechAsyncClient.from_service_account_info(
-                        self._credentials_info
-                    )
+                self._client = texttospeech.TextToSpeechAsyncClient.from_service_account_info(
+                    self._credentials_info
                 )
 
             elif self._credentials_file:
-                self._client = (
-                    texttospeech.TextToSpeechAsyncClient.from_service_account_file(
-                        self._credentials_file
-                    )
+                self._client = texttospeech.TextToSpeechAsyncClient.from_service_account_file(
+                    self._credentials_file
                 )
             else:
                 self._client = texttospeech.TextToSpeechAsyncClient()

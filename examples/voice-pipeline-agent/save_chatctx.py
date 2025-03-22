@@ -36,9 +36,7 @@ async def entrypoint(ctx: JobContext):
     def on_user_speech_committed(msg: llm.ChatMessage):
         # convert string lists to strings, drop images
         if isinstance(msg.content, list):
-            msg.content = "\n".join(
-                "[image]" if isinstance(x, llm.ChatImage) else x for x in msg
-            )
+            msg.content = "\n".join("[image]" if isinstance(x, llm.ChatImage) else x for x in msg)
         log_queue.put_nowait(f"[{datetime.now()}] USER:\n{msg.content}\n\n")
 
     @agent.on("agent_speech_committed")

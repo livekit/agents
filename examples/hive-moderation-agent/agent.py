@@ -107,9 +107,7 @@ async def entrypoint(ctx: agents.JobContext):
 
         # get the current frame and convert to png format
         argb_frame = frame.frame.convert(rtc.VideoBufferType.RGBA)
-        image = Image.frombytes(
-            "RGBA", (argb_frame.width, argb_frame.height), argb_frame.data
-        )
+        image = Image.frombytes("RGBA", (argb_frame.width, argb_frame.height), argb_frame.data)
         buffer = BytesIO()
         image.save(buffer, format="PNG")
         buffer.seek(0)  # reset buffer position to beginning after writing

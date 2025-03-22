@@ -31,9 +31,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
     @click.option(
         "--log-level",
         default="INFO",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
+        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
         help="Set the logging level",
     )
     @click.option(
@@ -56,9 +54,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
         default=60,
         help="Time in seconds to wait for jobs to finish before shutting down",
     )
-    def start(
-        log_level: str, url: str, api_key: str, api_secret: str, drain_timeout: int
-    ) -> None:
+    def start(log_level: str, url: str, api_key: str, api_secret: str, drain_timeout: int) -> None:
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
@@ -77,9 +73,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
     @click.option(
         "--log-level",
         default="DEBUG",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
+        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
         help="Set the logging level",
     )
     @click.option(
@@ -176,9 +170,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
     @click.option(
         "--log-level",
         default="DEBUG",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
+        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
         help="Set the logging level",
     )
     @click.option(
@@ -207,9 +199,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
         help="Watch for changes in the current directory and plugins in editable mode",
     )
     @click.option("--room", help="Room name to connect to", required=True)
-    @click.option(
-        "--participant-identity", help="Participant identity (JobType.JT_PUBLISHER)"
-    )
+    @click.option("--participant-identity", help="Participant identity (JobType.JT_PUBLISHER)")
     def connect(
         log_level: str,
         url: str,
@@ -243,9 +233,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
     @click.option(
         "--log-level",
         default="DEBUG",
-        type=click.Choice(
-            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
-        ),
+        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
         help="Set the logging level",
     )
     def download_files(log_level: str) -> None:
@@ -269,9 +257,7 @@ def _run_dev(
         main_file = pathlib.Path(sys.argv[0]).parent
 
         async def _run_loop():
-            server = WatchServer(
-                run_worker, main_file, args, loop=asyncio.get_event_loop()
-            )
+            server = WatchServer(run_worker, main_file, args, loop=asyncio.get_event_loop())
             await server.run()
 
         try:
@@ -309,9 +295,7 @@ def run_worker(args: proto.CliArgs) -> None:
         if args.simulate_job and args.reload_count == 0:
             # logger.info("connecting to room %s", args.simulate_job.room)
             loop.create_task(
-                worker.simulate_job(
-                    args.simulate_job.room, args.simulate_job.participant_identity
-                )
+                worker.simulate_job(args.simulate_job.room, args.simulate_job.participant_identity)
             )
 
         if args.devmode:

@@ -54,9 +54,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(
-            llm, chat_ctx=chat_ctx, fnc_ctx=None, conn_options=conn_options
-        )
+        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=None, conn_options=conn_options)
         self._chat_engine = chat_engine
         self._stream: StreamingAgentChatResponse | None = None
 
@@ -65,13 +63,9 @@ class LLMStream(llm.LLMStream):
         user_msg = chat_ctx.messages.pop()
 
         if user_msg.role != "user":
-            raise ValueError(
-                "The last message in the chat context must be from the user"
-            )
+            raise ValueError("The last message in the chat context must be from the user")
 
-        assert isinstance(user_msg.content, str), (
-            "user message content must be a string"
-        )
+        assert isinstance(user_msg.content, str), "user message content must be a string"
 
         try:
             if not self._stream:

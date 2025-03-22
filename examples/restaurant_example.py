@@ -115,9 +115,7 @@ class BaseAgent(Agent):
         await self.update_chat_ctx(chat_ctx)
         self.session.generate_reply()
 
-    async def _transfer_to_agent(
-        self, name: str, context: RunContext_T
-    ) -> tuple[Agent, str]:
+    async def _transfer_to_agent(self, name: str, context: RunContext_T) -> tuple[Agent, str]:
         userdata = context.userdata
         current_agent = context.session.current_agent
         next_agent = userdata.agents[name]
@@ -143,11 +141,7 @@ class BaseAgent(Agent):
         """Truncate the chat context to keep the last n messages."""
 
         def _valid_item(item: llm.ChatItem) -> bool:
-            if (
-                not keep_system_message
-                and item.type == "message"
-                and item.role == "system"
-            ):
+            if not keep_system_message and item.type == "message" and item.role == "system":
                 return False
             if not keep_function_call and item.type in [
                 "function_call",
@@ -221,9 +215,7 @@ class Reservation(BaseAgent):
         return f"The reservation time is updated to {time}"
 
     @function_tool()
-    async def confirm_reservation(
-        self, context: RunContext_T
-    ) -> str | tuple[Agent, str]:
+    async def confirm_reservation(self, context: RunContext_T) -> str | tuple[Agent, str]:
         userdata = context.userdata
         if not userdata.customer_name or not userdata.customer_phone:
             return "Please provide your name and phone number first."

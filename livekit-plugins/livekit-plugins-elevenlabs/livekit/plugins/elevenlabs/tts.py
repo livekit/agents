@@ -220,9 +220,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: Optional[APIConnectOptions] = None) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -400,9 +398,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             voice_settings=_strip_nones(dataclasses.asdict(self._opts.voice.settings))
             if self._opts.voice.settings
             else None,
-            generation_config=dict(
-                chunk_length_schedule=self._opts.chunk_length_schedule
-            ),
+            generation_config=dict(chunk_length_schedule=self._opts.chunk_length_schedule),
         )
         await ws_conn.send_str(json.dumps(init_pkt))
         eos_sent = False

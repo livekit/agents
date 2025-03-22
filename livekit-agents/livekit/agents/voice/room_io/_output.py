@@ -31,9 +31,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
-        self._republish_task: asyncio.Task | None = (
-            None  # used to republish track on reconnection
-        )
+        self._republish_task: asyncio.Task | None = None  # used to republish track on reconnection
         self._flush_task: asyncio.Task | None = None
 
         self._pushed_duration: float = 0.0
@@ -41,9 +39,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
     async def _publish_track(self) -> None:
         async with self._lock:
-            track = rtc.LocalAudioTrack.create_audio_track(
-                "roomio_audio", self._audio_source
-            )
+            track = rtc.LocalAudioTrack.create_audio_track("roomio_audio", self._audio_source)
             self._publication = await self._room.local_participant.publish_track(
                 track, self._publish_options
             )
@@ -84,9 +80,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             pushed_duration, interrupted = self._pushed_duration, self._interrupted
             self._pushed_duration = 0
             self._interrupted = False
-            self.on_playback_finished(
-                playback_position=pushed_duration, interrupted=interrupted
-            )
+            self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
         self._flush_task = asyncio.create_task(self._audio_source.wait_for_playout())
         self._flush_task.add_done_callback(_playback_finished)
@@ -128,9 +122,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         participant: rtc.Participant | str | None,
     ) -> None:
         self._participant_identity = (
-            participant.identity
-            if isinstance(participant, rtc.Participant)
-            else participant
+            participant.identity if isinstance(participant, rtc.Participant) else participant
         )
         if self._participant_identity is None:
             return
@@ -165,17 +157,11 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         else:
             self._pushed_text = text
 
-        await self._publish_transcription(
-            self._current_id, self._pushed_text, final=False
-        )
+        await self._publish_transcription(self._current_id, self._pushed_text, final=False)
 
     @utils.log_exceptions(logger=logger)
     def flush(self) -> None:
-        if (
-            self._participant_identity is None
-            or self._track_id is None
-            or not self._capturing
-        ):
+        if self._participant_identity is None or self._track_id is None or not self._capturing:
             return
 
         self._flush_task = asyncio.create_task(
@@ -218,9 +204,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
 
         self._track_id = track.sid
 
-    def _on_local_track_published(
-        self, track: rtc.LocalTrackPublication, _: rtc.Track
-    ) -> None:
+    def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
         if (
             self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
@@ -258,9 +242,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         participant: rtc.Participant | str | None,
     ) -> None:
         self._participant_identity = (
-            participant.identity
-            if isinstance(participant, rtc.Participant)
-            else participant
+            participant.identity if isinstance(participant, rtc.Participant) else participant
         )
         if self._participant_identity is None:
             return
@@ -358,9 +340,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
 
         self._track_id = track.sid
 
-    def _on_local_track_published(
-        self, track: rtc.LocalTrackPublication, _: rtc.Track
-    ) -> None:
+    def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
         if (
             self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity

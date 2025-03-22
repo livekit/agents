@@ -177,13 +177,10 @@ class VAD(agents.vad.VAD):
         """
         self._opts = _VADOptions(
             min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
-            min_silence_duration=min_silence_duration
-            or self._opts.min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration
-            or self._opts.prefix_padding_duration,
+            min_silence_duration=min_silence_duration or self._opts.min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration or self._opts.prefix_padding_duration,
             max_buffered_speech=max_buffered_speech or self._opts.max_buffered_speech,
-            activation_threshold=activation_threshold
-            or self._opts.activation_threshold,
+            activation_threshold=activation_threshold or self._opts.activation_threshold,
             sample_rate=self._opts.sample_rate,
         )
         for stream in self._streams:
@@ -197,9 +194,7 @@ class VAD(agents.vad.VAD):
 
 
 class VADStream(agents.vad.VADStream):
-    def __init__(
-        self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel
-    ) -> None:
+    def __init__(self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
         super().__init__(vad)
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
@@ -238,13 +233,10 @@ class VADStream(agents.vad.VADStream):
 
         self._opts = _VADOptions(
             min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
-            min_silence_duration=min_silence_duration
-            or self._opts.min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration
-            or self._opts.prefix_padding_duration,
+            min_silence_duration=min_silence_duration or self._opts.min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration or self._opts.prefix_padding_duration,
             max_buffered_speech=max_buffered_speech or self._opts.max_buffered_speech,
-            activation_threshold=activation_threshold
-            or self._opts.activation_threshold,
+            activation_threshold=activation_threshold or self._opts.activation_threshold,
             sample_rate=self._opts.sample_rate,
         )
 
@@ -354,17 +346,14 @@ class VADStream(agents.vad.VADStream):
                 )
                 p = self._exp_filter.apply(exp=1.0, sample=p)
 
-                window_duration = (
-                    self._model.window_size_samples / self._opts.sample_rate
-                )
+                window_duration = self._model.window_size_samples / self._opts.sample_rate
 
                 pub_current_sample += self._model.window_size_samples
                 pub_timestamp += window_duration
 
                 resampling_ratio = self._input_sample_rate / self._model.sample_rate
                 to_copy = (
-                    self._model.window_size_samples * resampling_ratio
-                    + input_copy_remaining_fract
+                    self._model.window_size_samples * resampling_ratio + input_copy_remaining_fract
                 )
                 to_copy_int = int(to_copy)
                 input_copy_remaining_fract = to_copy - to_copy_int
@@ -403,8 +392,7 @@ class VADStream(agents.vad.VADStream):
                         return
 
                     padding_data = self._speech_buffer[
-                        speech_buffer_index
-                        - self._prefix_padding_samples : speech_buffer_index
+                        speech_buffer_index - self._prefix_padding_samples : speech_buffer_index
                     ]
 
                     self._speech_buffer_max_reached = False
@@ -482,8 +470,7 @@ class VADStream(agents.vad.VADStream):
 
                     if (
                         pub_speaking
-                        and silence_threshold_duration
-                        >= self._opts.min_silence_duration
+                        and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
                         pub_speech_duration = 0.0
@@ -520,9 +507,7 @@ class VADStream(agents.vad.VADStream):
                     )
 
                 if len(inference_frame.data) - self._model.window_size_samples > 0:
-                    data = inference_frame.data[
-                        self._model.window_size_samples :
-                    ].tobytes()
+                    data = inference_frame.data[self._model.window_size_samples :].tobytes()
                     inference_frames.append(
                         rtc.AudioFrame(
                             data=data,

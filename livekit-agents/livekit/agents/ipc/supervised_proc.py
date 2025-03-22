@@ -68,9 +68,7 @@ class SupervisedProc(ABC):
         self._lock = asyncio.Lock()
 
     @abstractmethod
-    def _create_process(
-        self, cch: socket.socket, log_cch: socket.socket
-    ) -> mp.Process: ...
+    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process: ...
 
     @abstractmethod
     async def _main_task(self, ipc_ch: aio.ChanReceiver[channel.Message]) -> None: ...
@@ -185,9 +183,7 @@ class SupervisedProc(ABC):
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("process initialization timed out")
             )
-            logger.error(
-                "initialization timed out, killing process", extra=self.logging_extra()
-            )
+            logger.error("initialization timed out, killing process", extra=self.logging_extra())
             self._send_kill_signal()
             raise
         except Exception as e:  # should be channel.ChannelClosed most of the time
@@ -325,17 +321,13 @@ class SupervisedProc(ABC):
             while True:
                 await ping_interval.tick()
                 try:
-                    await channel.asend_message(
-                        self._pch, proto.PingRequest(timestamp=time_ms())
-                    )
+                    await channel.asend_message(self._pch, proto.PingRequest(timestamp=time_ms()))
                 except duplex_unix.DuplexClosed:
                     break
 
         async def _pong_timeout_co():
             await pong_timeout
-            logger.error(
-                "process is unresponsive, killing process", extra=self.logging_extra()
-            )
+            logger.error("process is unresponsive, killing process", extra=self.logging_extra())
             self._send_kill_signal()
 
         tasks = [
@@ -361,10 +353,7 @@ class SupervisedProc(ABC):
                 memory_info = process.memory_info()
                 memory_mb = memory_info.rss / (1024 * 1024)  # Convert to MB
 
-                if (
-                    self._opts.memory_limit_mb > 0
-                    and memory_mb > self._opts.memory_limit_mb
-                ):
+                if self._opts.memory_limit_mb > 0 and memory_mb > self._opts.memory_limit_mb:
                     logger.error(
                         "process exceeded memory limit, killing process",
                         extra={
@@ -374,10 +363,7 @@ class SupervisedProc(ABC):
                         },
                     )
                     self._send_kill_signal()
-                elif (
-                    self._opts.memory_warn_mb > 0
-                    and memory_mb > self._opts.memory_warn_mb
-                ):
+                elif self._opts.memory_warn_mb > 0 and memory_mb > self._opts.memory_warn_mb:
                     logger.warning(
                         "process memory usage is high",
                         extra={

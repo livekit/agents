@@ -59,9 +59,7 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            ToolChoice | Literal["auto", "required", "none"]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """
@@ -109,9 +107,7 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            ToolChoice | Literal["auto", "required", "none"]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
     ) -> LLMStream:
         opts = {}
 
@@ -125,9 +121,7 @@ class LLM(llm.LLM):
                 return None
 
             tool_config: dict[str, Any] = {"tools": to_fnc_ctx(tools)}
-            tool_choice = (
-                tool_choice if is_given(tool_choice) else self._opts.tool_choice
-            )
+            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 if isinstance(tool_choice, ToolChoice):
                     tool_config["toolChoice"] = {"tool": {"name": tool_choice.name}}
@@ -256,9 +250,7 @@ class LLMStream(llm.LLMStream):
                     logger.warning("aws bedrock llm: no function name in the response")
                     return None
                 if self._fnc_raw_arguments is None:
-                    logger.warning(
-                        "aws bedrock llm: no function arguments in the response"
-                    )
+                    logger.warning("aws bedrock llm: no function arguments in the response")
                     return None
                 chat_chunk = llm.ChatChunk(
                     id=request_id,

@@ -120,9 +120,7 @@ class BrowserPage(utils.EventEmitter[EventTypes]):
         self._framebuffer._width = acq.width
         self._framebuffer._height = acq.height
 
-        proto.copy_paint_data(
-            acq, old_width, old_height, self._shm.buf, self._framebuffer.data
-        )
+        proto.copy_paint_data(acq, old_width, old_height, self._shm.buf, self._framebuffer.data)
 
         paint_data = PaintData(
             dirty_rects=acq.dirty_rects,
@@ -158,9 +156,7 @@ class BrowserContext:
         mp_cch.close()
 
         if not self._remote_debugging_port:
-            with contextlib.closing(
-                socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            ) as s:
+            with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
                 s.bind(("", 0))
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 self._remote_debugging_port = s.getsockname()[1]

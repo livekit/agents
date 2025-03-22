@@ -7,8 +7,7 @@ def test_process_base_url():
         == "wss://api.openai.com/v1/realtime?model=gpt-4"
     )
     assert (
-        process_base_url("http://example.com", "gpt-4")
-        == "ws://example.com/realtime?model=gpt-4"
+        process_base_url("http://example.com", "gpt-4") == "ws://example.com/realtime?model=gpt-4"
     )
     assert (
         process_base_url(

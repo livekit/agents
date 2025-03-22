@@ -89,9 +89,7 @@ class InputTranscriptionCompleted:
     """transcript of the input audio"""
 
 
-class RealtimeSession(
-    ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]
-):
+class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__()
         self._realtime_model = realtime_model
@@ -120,9 +118,7 @@ class RealtimeSession(
     async def update_tools(self, tools: list[FunctionTool]) -> None: ...
 
     @abstractmethod
-    def update_options(
-        self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
-    ) -> None: ...
+    def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None: ...
 
     @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
@@ -132,9 +128,7 @@ class RealtimeSession(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
-    ) -> asyncio.Future[
-        GenerationCreatedEvent
-    ]: ...  # can raise RealtimeError on Timeout
+    ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
 
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod

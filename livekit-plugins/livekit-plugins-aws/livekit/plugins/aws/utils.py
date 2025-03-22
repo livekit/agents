@@ -12,9 +12,7 @@ from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
 __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
 
 
-def get_aws_credentials(
-    api_key: str | None, api_secret: str | None, region: str | None
-):
+def get_aws_credentials(api_key: str | None, api_secret: str | None, region: str | None):
     region = region or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         raise ValueError(
@@ -33,18 +31,14 @@ def get_aws_credentials(
     credentials = session.get_credentials()
     if not credentials or not credentials.access_key or not credentials.secret_key:
         raise ValueError("No valid AWS credentials found.")
-    return cast(
-        tuple[str, str, str], (credentials.access_key, credentials.secret_key, region)
-    )
+    return cast(tuple[str, str, str], (credentials.access_key, credentials.secret_key, region))
 
 
 def to_fnc_ctx(fncs: list[FunctionTool]) -> list[dict]:
     return [_build_tool_spec(fnc) for fnc in fncs]
 
 
-def to_chat_ctx(
-    chat_ctx: ChatContext, cache_key: Any
-) -> tuple[list[dict], dict | None]:
+def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict | None]:
     messages: list[dict] = []
     system_message: dict | None = None
     current_role: str | None = None

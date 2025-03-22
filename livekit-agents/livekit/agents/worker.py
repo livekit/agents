@@ -145,9 +145,7 @@ class WorkerOptions:
     When left empty, all jobs are accepted."""
     prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
     """A function to perform any necessary initialization before the job starts."""
-    load_fnc: Callable[[Worker], float] | Callable[[], float] = (
-        _DefaultLoadCalc.get_load
-    )
+    load_fnc: Callable[[Worker], float] | Callable[[], float] = _DefaultLoadCalc.get_load
     """Called to determine the current load of the worker. Should return a value between 0 and 1."""
     job_executor_type: JobExecutorType = _default_job_executor_type
     """Which executor to use to run jobs. (currently thread or process are supported)"""
@@ -196,9 +194,7 @@ class WorkerOptions:
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
     host: str = ""  # default to all interfaces
-    port: int | _WorkerEnvOption[int] = _WorkerEnvOption(
-        dev_default=0, prod_default=8081
-    )
+    port: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
 
     The HTTP server is used as a health check endpoint.
@@ -235,24 +231,17 @@ class Worker(utils.EventEmitter[EventTypes]):
         opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
         if not opts.ws_url:
-            raise ValueError(
-                "ws_url is required, or add LIVEKIT_URL in your environment"
-            )
+            raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
 
         if not opts.api_key:
-            raise ValueError(
-                "api_key is required, or add LIVEKIT_API_KEY in your environment"
-            )
+            raise ValueError("api_key is required, or add LIVEKIT_API_KEY in your environment")
 
         if not opts.api_secret:
             raise ValueError(
                 "api_secret is required, or add LIVEKIT_API_SECRET in your environment"
             )
 
-        if (
-            opts.job_memory_limit_mb > 0
-            and opts.job_executor_type != JobExecutorType.PROCESS
-        ):
+        if opts.job_memory_limit_mb > 0 and opts.job_executor_type != JobExecutorType.PROCESS:
             logger.warning(
                 "max_job_memory_usage is only supported for process-based job executors, "
                 "ignoring max_job_memory_usage"
@@ -274,31 +263,25 @@ class Worker(utils.EventEmitter[EventTypes]):
         # Linux with forkserver, but for now, this is the safest option
         mp_ctx = mp.get_context("spawn")
 
-        self._inference_executor: (
-            ipc.inference_proc_executor.InferenceProcExecutor | None
-        ) = None
+        self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = None
         if len(_InferenceRunner.registered_runners) > 0:
-            self._inference_executor = (
-                ipc.inference_proc_executor.InferenceProcExecutor(
-                    runners=_InferenceRunner.registered_runners,
-                    initialize_timeout=30,
-                    close_timeout=5,
-                    memory_warn_mb=2000,
-                    memory_limit_mb=0,  # no limit
-                    ping_interval=5,
-                    ping_timeout=60,
-                    high_ping_threshold=2.5,
-                    mp_ctx=mp_ctx,
-                    loop=self._loop,
-                )
+            self._inference_executor = ipc.inference_proc_executor.InferenceProcExecutor(
+                runners=_InferenceRunner.registered_runners,
+                initialize_timeout=30,
+                close_timeout=5,
+                memory_warn_mb=2000,
+                memory_limit_mb=0,  # no limit
+                ping_interval=5,
+                ping_timeout=60,
+                high_ping_threshold=2.5,
+                mp_ctx=mp_ctx,
+                loop=self._loop,
             )
 
         self._proc_pool = ipc.proc_pool.ProcPool(
             initialize_process_fnc=opts.prewarm_fnc,
             job_entrypoint_fnc=opts.entrypoint_fnc,
-            num_idle_processes=_WorkerEnvOption.getvalue(
-                opts.num_idle_processes, self._devmode
-            ),
+            num_idle_processes=_WorkerEnvOption.getvalue(opts.num_idle_processes, self._devmode),
             loop=self._loop,
             job_executor_type=opts.job_executor_type,
             inference_executor=self._inference_executor,
@@ -370,9 +353,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._proc_pool.on("process_job_launched", _update_job_status)
         self._proc_pool.start()
 
-        self._api = api.LiveKitAPI(
-            self._opts.ws_url, self._opts.api_key, self._opts.api_secret
-        )
+        self._api = api.LiveKitAPI(self._opts.ws_url, self._opts.api_key, self._opts.api_secret)
         self._http_session = aiohttp.ClientSession()
         self._close_future = asyncio.Future(loop=self._loop)
 
@@ -391,9 +372,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
                     return self._opts.load_fnc(self)  # type: ignore
 
-                self._worker_load = await asyncio.get_event_loop().run_in_executor(
-                    None, load_fnc
-                )
+                self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
                 self._worker_load_graph.plot(time.time(), self._worker_load)
 
         tasks = []
@@ -401,9 +380,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         tasks.append(self._load_task)
 
         if self._register:
-            self._conn_task = asyncio.create_task(
-                self._connection_task(), name="worker_conn_task"
-            )
+            self._conn_task = asyncio.create_task(self._connection_task(), name="worker_conn_task")
             tasks.append(self._conn_task)
 
         self.emit("worker_started")
@@ -421,9 +398,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
     @property
     def active_jobs(self) -> list[RunningJobInfo]:
-        return [
-            proc.running_job for proc in self._proc_pool.processes if proc.running_job
-        ]
+        return [proc.running_job for proc in self._proc_pool.processes if proc.running_job]
 
     async def drain(self, timeout: int | None = None) -> None:
         """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""
@@ -440,15 +415,11 @@ class Worker(utils.EventEmitter[EventTypes]):
                     await proc.join()
 
         if timeout:
-            await asyncio.wait_for(
-                _join_jobs(), timeout
-            )  # raises asyncio.TimeoutError on timeout
+            await asyncio.wait_for(_join_jobs(), timeout)  # raises asyncio.TimeoutError on timeout
         else:
             await _join_jobs()
 
-    async def simulate_job(
-        self, room: str, participant_identity: str | None = None
-    ) -> None:
+    async def simulate_job(self, room: str, participant_identity: str | None = None) -> None:
         assert self._api is not None
 
         from livekit.protocol.models import Room
@@ -457,14 +428,10 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         participant = None
         if cli.CLI_ARGUMENTS is None or not cli.CLI_ARGUMENTS.console:
-            room_obj = await self._api.room.create_room(
-                api.CreateRoomRequest(name=room)
-            )
+            room_obj = await self._api.room.create_room(api.CreateRoomRequest(name=room))
             if participant_identity:
                 participant = await self._api.room.get_participant(
-                    api.RoomParticipantIdentity(
-                        room=room, identity=participant_identity
-                    )
+                    api.RoomParticipantIdentity(room=room, identity=participant_identity)
                 )
         else:
             room_obj = Room(sid=utils.shortuuid("RM_"), name=room)
@@ -487,9 +454,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         running_info = RunningJobInfo(
             worker_id=self._id,
-            accept_arguments=JobAcceptArguments(
-                identity=agent_id, name="", metadata=""
-            ),
+            accept_arguments=JobAcceptArguments(identity=agent_id, name="", metadata=""),
             job=job,
             url=self._opts.ws_url,
             token=token,
@@ -568,9 +533,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 path_parts = [f"{scheme}://{parse.netloc}", parse.path, "/agent"]
                 agent_url = reduce(urljoin, path_parts)
 
-                ws = await self._http_session.ws_connect(
-                    agent_url, headers=headers, autoping=True
-                )
+                ws = await self._http_session.ws_connect(agent_url, headers=headers, autoping=True)
 
                 retry_count = 0
 
@@ -616,9 +579,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
 
-                logger.warning(
-                    f"failed to connect to livekit, retrying in {retry_delay}s: {e}"
-                )
+                logger.warning(f"failed to connect to livekit, retrying in {retry_delay}s: {e}")
                 await asyncio.sleep(retry_delay)
             finally:
                 if ws is not None:
@@ -702,12 +663,8 @@ class Worker(utils.EventEmitter[EventTypes]):
             # take the original jwt token and extend it while keeping all the same data that was generated
             # by the SFU for the original join token.
             original_token = aj.token
-            decoded = jwt.decode(
-                original_token, self._opts.api_secret, algorithms=["HS256"]
-            )
-            decoded["exp"] = (
-                int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600
-            )
+            decoded = jwt.decode(original_token, self._opts.api_secret, algorithms=["HS256"])
+            decoded["exp"] = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600
             running_info = RunningJobInfo(
                 accept_arguments=aj.accept_arguments,
                 job=aj.job,
@@ -761,9 +718,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_name = args.name
             availability_resp.availability.participant_metadata = args.metadata
             if args.attributes:
-                availability_resp.availability.participant_attributes.update(
-                    args.attributes
-                )
+                availability_resp.availability.participant_attributes.update(args.attributes)
             await self._queue_msg(availability_resp)
 
             wait_assignment = asyncio.Future[agent.JobAssignment]()
@@ -845,9 +800,7 @@ class Worker(utils.EventEmitter[EventTypes]):
     async def _update_worker_status(self):
         job_cnt = len(self.active_jobs)
         if self._draining:
-            update = agent.UpdateWorkerStatus(
-                status=agent.WorkerStatus.WS_FULL, job_count=job_cnt
-            )
+            update = agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL, job_count=job_cnt)
             msg = agent.WorkerMessage(update_worker=update)
             await self._queue_msg(msg)
             return
@@ -858,14 +811,10 @@ class Worker(utils.EventEmitter[EventTypes]):
         currently_available = not is_full and not self._draining
 
         status = (
-            agent.WorkerStatus.WS_AVAILABLE
-            if currently_available
-            else agent.WorkerStatus.WS_FULL
+            agent.WorkerStatus.WS_AVAILABLE if currently_available else agent.WorkerStatus.WS_FULL
         )
 
-        update = agent.UpdateWorkerStatus(
-            load=self._worker_load, status=status, job_count=job_cnt
-        )
+        update = agent.UpdateWorkerStatus(load=self._worker_load, status=status, job_count=job_cnt)
 
         # only log if status has changed
         if self._previous_status != status and not self._draining:

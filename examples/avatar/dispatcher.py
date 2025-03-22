@@ -115,9 +115,7 @@ class AvatarDispatcher:
             }
         except Exception as e:
             logger.error(f"Error handling launch request: {e}")
-            raise HTTPException(
-                status_code=500, detail=f"Failed to launch worker: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to launch worker: {str(e)}")
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8089):

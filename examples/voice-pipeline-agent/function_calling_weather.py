@@ -31,18 +31,14 @@ class AssistantFnc(llm.FunctionContext):
     @llm.ai_callable()
     async def get_weather(
         self,
-        location: Annotated[
-            str, llm.TypeInfo(description="The location to get the weather for")
-        ],
+        location: Annotated[str, llm.TypeInfo(description="The location to get the weather for")],
         latitude: Annotated[
             str,
             llm.TypeInfo(description="The latitude of location to get the weather for"),
         ],
         longitude: Annotated[
             str,
-            llm.TypeInfo(
-                description="The longitude of location to get the weather for"
-            ),
+            llm.TypeInfo(description="The longitude of location to get the weather for"),
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location.
@@ -81,9 +77,7 @@ class AssistantFnc(llm.FunctionContext):
                         "temperature_unit": "Celsius",
                     }
                 else:
-                    raise Exception(
-                        f"Failed to get weather data, status code: {response.status}"
-                    )
+                    raise Exception(f"Failed to get weather data, status code: {response.status}")
 
         # artificially delay the function call for testing
         await asyncio.sleep(2)
@@ -137,9 +131,7 @@ async def entrypoint(ctx: JobContext):
 
     # Start the assistant. This will automatically publish a microphone track and listen to the participant.
     agent.start(ctx.room, participant)
-    await agent.say(
-        "Hello from the weather station. Tell me your location to check the weather."
-    )
+    await agent.say("Hello from the weather station. Tell me your location to check the weather.")
 
 
 if __name__ == "__main__":

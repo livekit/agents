@@ -64,9 +64,7 @@ class LLM(llm.LLM):
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            ToolChoice | Literal["auto", "required", "none"]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
     ) -> None:
         """
@@ -123,9 +121,7 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[
-            ToolChoice | Literal["auto", "required", "none"]
-        ] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
@@ -142,15 +138,11 @@ class LLM(llm.LLM):
         if is_given(self._opts.top_k):
             extra["top_k"] = self._opts.top_k
 
-        extra["max_tokens"] = (
-            self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
-        )
+        extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
         if tools:
             extra["tools"] = to_fnc_ctx(tools, self._opts.caching)
-            tool_choice = (
-                tool_choice if is_given(tool_choice) else self._opts.tool_choice
-            )
+            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if isinstance(tool_choice, ToolChoice):
@@ -172,14 +164,10 @@ class LLM(llm.LLM):
                         else self._opts.parallel_tool_calls
                     )
                     if is_given(parallel_tool_calls):
-                        anthropic_tool_choice[
-                            "disable_parallel_tool_use"
-                        ] = not parallel_tool_calls
+                        anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
                     extra["tool_choice"] = anthropic_tool_choice
 
-        anthropic_ctx, system_message = to_chat_ctx(
-            chat_ctx, id(self), caching=self._opts.caching
-        )
+        anthropic_ctx, system_message = to_chat_ctx(chat_ctx, id(self), caching=self._opts.caching)
 
         if system_message:
             extra["system"] = [system_message]
@@ -205,9 +193,7 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        anthropic_stream: Awaitable[
-            anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]
-        ],
+        anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool] | None,
         conn_options: APIConnectOptions,
@@ -270,17 +256,13 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_event(
-        self, event: anthropic.types.RawMessageStreamEvent
-    ) -> llm.ChatChunk | None:
+    def _parse_event(self, event: anthropic.types.RawMessageStreamEvent) -> llm.ChatChunk | None:
         if event.type == "message_start":
             self._request_id = event.message.id
             self._input_tokens = event.message.usage.input_tokens
             self._output_tokens = event.message.usage.output_tokens
             if event.message.usage.cache_creation_input_tokens:
-                self._cache_creation_tokens = (
-                    event.message.usage.cache_creation_input_tokens
-                )
+                self._cache_creation_tokens = event.message.usage.cache_creation_input_tokens
             if event.message.usage.cache_read_input_tokens:
                 self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":

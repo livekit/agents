@@ -54,12 +54,8 @@ class QueueAudioOutput(
                 break
         self.emit("clear_buffer")
 
-    def notify_playback_finished(
-        self, playback_position: float, interrupted: bool
-    ) -> None:
-        self.on_playback_finished(
-            playback_position=playback_position, interrupted=interrupted
-        )
+    def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
+        self.on_playback_finished(playback_position=playback_position, interrupted=interrupted)
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self._data_ch

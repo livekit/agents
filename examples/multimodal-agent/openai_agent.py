@@ -31,9 +31,7 @@ async def entrypoint(ctx: JobContext):
 
     @fnc_ctx.ai_callable()
     async def get_weather(
-        location: Annotated[
-            str, llm.TypeInfo(description="The location to get the weather for")
-        ],
+        location: Annotated[str, llm.TypeInfo(description="The location to get the weather for")],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location."""
         logger.info(f"getting weather for {location}")
@@ -45,9 +43,7 @@ async def entrypoint(ctx: JobContext):
                     # response from the function call is returned to the LLM
                     return f"The weather in {location} is {weather_data}."
                 else:
-                    raise Exception(
-                        f"Failed to get weather data, status code: {response.status}"
-                    )
+                    raise Exception(f"Failed to get weather data, status code: {response.status}")
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()

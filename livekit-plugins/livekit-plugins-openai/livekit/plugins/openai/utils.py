@@ -26,15 +26,11 @@ def to_fnc_ctx(fnc_ctx: list[llm.FunctionTool]) -> list[ChatCompletionToolParam]
     return [llm.utils.build_strict_openai_schema(fnc) for fnc in fnc_ctx]
 
 
-def to_chat_ctx(
-    chat_ctx: llm.ChatContext, cache_key: Any
-) -> list[ChatCompletionMessageParam]:
+def to_chat_ctx(chat_ctx: llm.ChatContext, cache_key: Any) -> list[ChatCompletionMessageParam]:
     # group the message and function_calls
     item_groups: dict[str, list[llm.ChatItem]] = OrderedDict()
     for item in chat_ctx.items:
-        if (
-            item.type == "message" and item.role == "assistant"
-        ) or item.type == "function_call":
+        if (item.type == "message" and item.role == "assistant") or item.type == "function_call":
             group_id = item.id.split("/")[0]
             if group_id not in item_groups:
                 item_groups[group_id] = []
@@ -45,21 +41,15 @@ def to_chat_ctx(
     return [_group_to_chat_item(items, cache_key) for items in item_groups.values()]
 
 
-def _group_to_chat_item(
-    items: list[llm.ChatItem], cache_key: Any
-) -> ChatCompletionMessageParam:
+def _group_to_chat_item(items: list[llm.ChatItem], cache_key: Any) -> ChatCompletionMessageParam:
     if len(items) == 1:
         return _to_chat_item(items[0], cache_key)
     else:
         msg = {"role": "assistant", "tool_calls": []}
         for item in items:
             if item.type == "message":
-                assert item.role == "assistant", (
-                    "only assistant messages can be grouped"
-                )
-                assert "content" not in msg, (
-                    "only one assistant message is allowed in a group"
-                )
+                assert item.role == "assistant", "only assistant messages can be grouped"
+                assert "content" not in msg, "only one assistant message is allowed in a group"
 
                 msg.update(_to_chat_item(item, cache_key))
             elif item.type == "function_call":
@@ -110,9 +100,7 @@ def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessagePar
         }
 
 
-def _to_image_content(
-    image: llm.ImageContent, cache_key: Any
-) -> ChatCompletionContentPartParam:
+def _to_image_content(image: llm.ImageContent, cache_key: Any) -> ChatCompletionContentPartParam:
     img = llm.utils.serialize_image(image)
     if cache_key not in image._cache:
         image._cache[cache_key] = img.data_bytes

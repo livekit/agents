@@ -115,9 +115,7 @@ class RealtimeModel(llm.RealtimeModel):
     ) -> None:
         super().__init__(
             # TODO(theomonnom): add a way to disable turn detection (And use VAD on the VoiceAgent)
-            capabilities=llm.RealtimeCapabilities(
-                message_truncation=True, turn_detection=True
-            )
+            capabilities=llm.RealtimeCapabilities(message_truncation=True, turn_detection=True)
         )
 
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -174,17 +172,13 @@ def process_base_url(url: str, model: str) -> str:
         path = parsed_url.path
 
     new_query = urlencode(query_params, doseq=True)
-    new_url = urlunparse(
-        (parsed_url.scheme, parsed_url.netloc, path, "", new_query, "")
-    )
+    new_url = urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", new_query, ""))
 
     return new_url
 
 
 class RealtimeSession(
-    llm.RealtimeSession[
-        Literal["openai_server_event_received", "openai_client_event_queued"]
-    ]
+    llm.RealtimeSession[Literal["openai_server_event_received", "openai_client_event_queued"]]
 ):
     """
     A session for the OpenAI Realtime API.
@@ -204,13 +198,9 @@ class RealtimeSession(
         self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
-        self._main_atask = asyncio.create_task(
-            self._main_task(), name="RealtimeSession._main_task"
-        )
+        self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
 
-        self._response_created_futures: dict[
-            str, asyncio.Future[llm.GenerationCreatedEvent]
-        ] = {}
+        self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
@@ -311,9 +301,7 @@ class RealtimeSession(
                             InputAudioBufferSpeechStoppedEvent.construct(**event)
                         )
                     elif event["type"] == "response.created":
-                        self._handle_response_created(
-                            ResponseCreatedEvent.construct(**event)
-                        )
+                        self._handle_response_created(ResponseCreatedEvent.construct(**event))
                     elif event["type"] == "response.output_item.added":
                         self._handle_response_output_item_added(
                             ResponseOutputItemAddedEvent.construct(**event)
@@ -326,23 +314,13 @@ class RealtimeSession(
                         self._handle_conversion_item_deleted(
                             ConversationItemDeletedEvent.construct(**event)
                         )
-                    elif (
-                        event["type"]
-                        == "conversation.item.input_audio_transcription.completed"
-                    ):
+                    elif event["type"] == "conversation.item.input_audio_transcription.completed":
                         self._handle_conversion_item_input_audio_transcription_completed(
-                            ConversationItemInputAudioTranscriptionCompletedEvent.construct(
-                                **event
-                            )
+                            ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
                         )
-                    elif (
-                        event["type"]
-                        == "conversation.item.input_audio_transcription.failed"
-                    ):
+                    elif event["type"] == "conversation.item.input_audio_transcription.failed":
                         self._handle_conversion_item_input_audio_transcription_failed(
-                            ConversationItemInputAudioTranscriptionFailedEvent.construct(
-                                **event
-                            )
+                            ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
                         )
                     elif event["type"] == "response.audio_transcript.delta":
                         self._handle_response_audio_transcript_delta(event)
@@ -355,9 +333,7 @@ class RealtimeSession(
                             ResponseAudioTranscriptDoneEvent.construct(**event)
                         )
                     elif event["type"] == "response.audio.done":
-                        self._handle_response_audio_done(
-                            ResponseAudioDoneEvent.construct(**event)
-                        )
+                        self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
                     elif event["type"] == "response.output_item.done":
                         self._handle_response_output_item_done(
                             ResponseOutputItemDoneEvent.construct(**event)
@@ -369,14 +345,10 @@ class RealtimeSession(
                 except Exception:
                     logger.exception("failed to handle event", extra={"event": event})
 
-        input_audio_transcription: (
-            session_update_event.SessionInputAudioTranscription | None
-        ) = None
+        input_audio_transcription: session_update_event.SessionInputAudioTranscription | None = None
         if self._realtime_model._opts.input_audio_transcription:
-            input_audio_transcription = (
-                session_update_event.SessionInputAudioTranscription(
-                    model=self._realtime_model._opts.input_audio_transcription.model,
-                )
+            input_audio_transcription = session_update_event.SessionInputAudioTranscription(
+                model=self._realtime_model._opts.input_audio_transcription.model,
             )
 
         # initial session update
@@ -479,9 +451,7 @@ class RealtimeSession(
                     ConversationItemCreateEvent(
                         type="conversation.item.create",
                         item=_livekit_item_to_openai_item(chat_item),
-                        previous_item_id=(
-                            "root" if previous_msg_id is None else previous_msg_id
-                        ),
+                        previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
                         event_id=event_id,
                     )
                 )
@@ -489,9 +459,7 @@ class RealtimeSession(
                 self._item_create_future[msg_id] = f
 
             try:
-                await asyncio.wait_for(
-                    asyncio.gather(*futs, return_exceptions=True), timeout=5.0
-                )
+                await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
             except asyncio.TimeoutError:
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
@@ -501,13 +469,9 @@ class RealtimeSession(
             retained_tools: list[llm.FunctionTool] = []
 
             for tool in tools:
-                tool_desc = llm.utils.build_legacy_openai_schema(
-                    tool, internally_tagged=True
-                )
+                tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
                 try:
-                    session_tool = session_update_event.SessionTool.model_validate(
-                        tool_desc
-                    )
+                    session_tool = session_update_event.SessionTool.model_validate(tool_desc)
                     oai_tools.append(session_tool)
                     retained_tools.append(tool)
                 except ValidationError:
@@ -540,9 +504,7 @@ class RealtimeSession(
         self.send_event(
             SessionUpdateEvent(
                 type="session.update",
-                session=session_update_event.Session.model_construct(
-                    instructions=instructions
-                ),
+                session=session_update_event.Session.model_construct(instructions=instructions),
                 event_id=event_id,
             )
         )
@@ -633,9 +595,7 @@ class RealtimeSession(
         )
         self.emit(
             "input_speech_stopped",
-            llm.InputSpeechStoppedEvent(
-                user_transcription_enabled=user_transcription_enabled
-            ),
+            llm.InputSpeechStoppedEvent(user_transcription_enabled=user_transcription_enabled),
         )
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
@@ -663,9 +623,7 @@ class RealtimeSession(
 
         self.emit("generation_created", generation_ev)
 
-    def _handle_response_output_item_added(
-        self, event: ResponseOutputItemAddedEvent
-    ) -> None:
+    def _handle_response_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
@@ -685,9 +643,7 @@ class RealtimeSession(
             )
             self._current_generation.messages[item_id] = item_generation
 
-    def _handle_conversion_item_created(
-        self, event: ConversationItemCreatedEvent
-    ) -> None:
+    def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
 
         try:
@@ -702,9 +658,7 @@ class RealtimeSession(
         if fut := self._item_create_future.pop(event.item.id, None):
             fut.set_result(None)
 
-    def _handle_conversion_item_deleted(
-        self, event: ConversationItemDeletedEvent
-    ) -> None:
+    def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         assert event.item_id is not None, "item_id is None"
 
         try:
@@ -726,9 +680,7 @@ class RealtimeSession(
 
         self.emit(
             "input_audio_transcription_completed",
-            llm.InputTranscriptionCompleted(
-                item_id=event.item_id, transcript=event.transcript
-            ),
+            llm.InputTranscriptionCompleted(item_id=event.item_id, transcript=event.transcript),
         )
 
     def _handle_conversion_item_input_audio_transcription_failed(
@@ -765,17 +717,13 @@ class RealtimeSession(
             )
         )
 
-    def _handle_response_audio_transcript_done(
-        self, _: ResponseAudioTranscriptDoneEvent
-    ) -> None:
+    def _handle_response_audio_transcript_done(self, _: ResponseAudioTranscriptDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
 
-    def _handle_response_output_item_done(
-        self, event: ResponseOutputItemDoneEvent
-    ) -> None:
+    def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
@@ -868,9 +816,9 @@ def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
                 continue  # not supported for now
             elif isinstance(c, llm.AudioContent):
                 if conversation_item.role == "user":
-                    encoded_audio = base64.b64encode(
-                        rtc.combine_audio_frames(c.frame).data
-                    ).decode("utf-8")
+                    encoded_audio = base64.b64encode(rtc.combine_audio_frames(c.frame).data).decode(
+                        "utf-8"
+                    )
 
                     content_list.append(
                         ConversationItemContent(
