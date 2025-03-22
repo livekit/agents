@@ -153,7 +153,7 @@ def validate_all_changeset_files():
         return False, "\n".join(errors), None, None
     # Sort entries: major first, then minor, then patch.
     entries.sort(key=lambda x: x[0])
-    summary_lines = [f"- {bump} - `{pkg}`" for _, bump, pkg in entries]
+    summary_lines = [f"- `{bump}` - `{pkg}`" for _, bump, pkg in entries]
     summary_text = "\n".join(summary_lines)
     description_text = "\n\n".join(descriptions)
     return True, "", summary_text, description_text
