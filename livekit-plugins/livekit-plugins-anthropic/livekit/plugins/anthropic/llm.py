@@ -597,10 +597,10 @@ def _build_function_description(
             raise ValueError(f"unsupported type {t} for ai_property")
 
         p: dict[str, Any] = {}
-        if arg_info.default is inspect.Parameter.empty:
-            p["required"] = True
-        else:
-            p["required"] = False
+        # if arg_info.default is inspect.Parameter.empty:
+        #     p["required"] = True
+        # else:
+        #     p["required"] = False
 
         if arg_info.description:
             p["description"] = arg_info.description
@@ -622,11 +622,12 @@ def _build_function_description(
 
         return p
 
-    input_schema: dict[str, object] = {"type": "object"}
+    input_schema: dict[str, object] = {"type": "object", "properties": {}}
 
     for arg_info in fnc_info.arguments.values():
-        input_schema[arg_info.name] = build_schema_field(arg_info)
+        input_schema["properties"][arg_info.name] = build_schema_field(arg_info)
 
+    input_schema["required"] = [arg_info.name for arg_info in fnc_info.arguments.values() if arg_info.default is inspect.Parameter.empty]
     return anthropic.types.ToolParam(
         name=fnc_info.name,
         description=fnc_info.description,
