@@ -2,6 +2,7 @@ name: Changeset Checker
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 
 on:
