@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents import JobContext, JobProcess, WorkerOptions, cli, metrics
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, RunContext
 from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
@@ -11,7 +11,6 @@ from livekit.plugins import cartesia, deepgram, openai, silero
 # from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("roomio-example")
-logger.setLevel(logging.INFO)
 
 load_dotenv()
 
@@ -24,7 +23,6 @@ class EchoAgent(Agent):
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
             tts=cartesia.TTS(),
-            vad=silero.VAD.load(),
         )
 
     async def on_enter(self):
@@ -52,10 +50,30 @@ class AlloyAgent(Agent):
         return EchoAgent(), "Transferring you to Echo."
 
 
+def prewarm(proc: JobProcess):
+    proc.userdata["vad"] = silero.VAD.load()
+
+
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    session = AgentSession()
+    session = AgentSession(
+        vad=ctx.proc.userdata["vad"],
+    )
+
+    # log metrics as they are emitted, and total usage after session is over
+    usage_collector = metrics.UsageCollector()
+
+    @session.on("metrics_collected")
+    def _on_metrics_collected(mtrcs: metrics.AgentMetrics):
+        metrics.log_metrics(mtrcs)
+        usage_collector.collect(mtrcs)
+
+    async def log_usage():
+        summary = usage_collector.get_summary()
+        logger.info(f"Usage: ${summary}")
+
+    ctx.add_shutdown_callback(log_usage)
 
     await session.start(
         agent=EchoAgent(),
@@ -68,4 +86,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
