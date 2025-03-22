@@ -55,7 +55,7 @@ class ImageContent(BaseModel):
     # With an external URL
     chat_image = ImageContent(image="https://example.com/image.jpg")
     ```
-    """
+    """  # noqa: E501
 
     type: Literal["image_content"] = Field(default="image_content")
 
@@ -178,20 +178,14 @@ class ChatContext:
             if item.type == "message":
                 item = item.model_copy()
                 if exclude_image:
-                    item.content = [
-                        c for c in item.content if not isinstance(c, ImageContent)
-                    ]
+                    item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
-                    item.content = [
-                        c for c in item.content if not isinstance(c, AudioContent)
-                    ]
+                    item.content = [c for c in item.content if not isinstance(c, AudioContent)]
 
             items.append(item)
 
         return {
-            "items": [
-                item.model_dump(mode="json", exclude_none=True) for item in items
-            ],
+            "items": [item.model_dump(mode="json", exclude_none=True) for item in items],
         }
 
     @classmethod

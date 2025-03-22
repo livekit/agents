@@ -20,7 +20,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Optional
 
 import aiohttp
 
@@ -98,9 +97,7 @@ def _parse_sse_message(message: str) -> dict:
     message = json.loads(value)
 
     if message.get("errors") is not None:
-        raise Exception(
-            f"Status {message.status_code} error received: {message.errors}."
-        )
+        raise Exception(f"Status {message.status_code} error received: {message.errors}.")
 
     return message
 
@@ -134,7 +131,7 @@ class TTS(tts.TTS):
             api_key (str | None, optional): The Neuphonic API key. If not provided, it will be read from the NEUPHONIC_API_TOKEN environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Neuphonic API. Defaults to "api.neuphonic.com".
-        """
+        """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
@@ -211,7 +208,7 @@ class TTS(tts.TTS):
             encoding (TTSEncodings | str, optional): The audio encoding format.
             speed (float, optional): The audio playback speed.
             sample_rate (int, optional): The audio sample rate in Hz.
-        """
+        """  # noqa: E501
         self._opts.model = model or self._opts.model
         self._opts.voice_id = voice_id or self._opts.voice_id
         self._opts.lang_code = lang_code or self._opts.lang_code
@@ -224,7 +221,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -234,9 +231,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
@@ -263,7 +258,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._session = opts, session
@@ -311,9 +306,7 @@ class ChunkedStream(tts.ChunkedStream):
                             parsed_message is not None
                             and parsed_message.get("data", {}).get("audio") is not None
                         ):
-                            audio_bytes = base64.b64decode(
-                                parsed_message["data"]["audio"]
-                            )
+                            audio_bytes = base64.b64decode(parsed_message["data"]["audio"])
 
                             for frame in bstream.write(audio_bytes):
                                 emitter.push(frame)
@@ -392,9 +385,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     for frame in audio_bstream.write(b64data):
                         emitter.push(frame)
 
-                    if data["data"].get(
-                        "stop"
-                    ):  # A bool flag, is True when audio reaches "<STOP>"
+                    if data["data"].get("stop"):  # A bool flag, is True when audio reaches "<STOP>"
                         for frame in audio_bstream.flush():
                             emitter.push(frame)
                         emitter.flush()

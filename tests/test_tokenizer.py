@@ -59,9 +59,7 @@ def test_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, expected: list[st
 
 
 @pytest.mark.parametrize("tokenizer, expected", SENT_TOKENIZERS)
-async def test_streamed_sent_tokenizer(
-    tokenizer: tokenize.SentenceTokenizer, expected: list[str]
-):
+async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, expected: list[str]):
     # divide text by chunks of arbitrary length (1-4)
     pattern = [1, 2, 4]
     text = TEXT
@@ -85,9 +83,7 @@ async def test_streamed_sent_tokenizer(
         assert ev.token == expected[i]
 
 
-WORDS_TEXT = (
-    "This is a test. Blabla another test! multiple consecutive spaces:     done"
-)
+WORDS_TEXT = "This is a test. Blabla another test! multiple consecutive spaces:     done"
 WORDS_EXPECTED = [
     "This",
     "is",
@@ -137,7 +133,7 @@ async def test_streamed_word_tokenizer(tokenizer: tokenize.WordTokenizer):
         assert ev.token == WORDS_EXPECTED[i]
 
 
-WORDS_PUNCT_TEXT = 'This is <phoneme alphabet="cmu-arpabet" ph="AE K CH UW AH L IY">actually</phoneme> tricky to handle.'
+WORDS_PUNCT_TEXT = 'This is <phoneme alphabet="cmu-arpabet" ph="AE K CH UW AH L IY">actually</phoneme> tricky to handle.'  # noqa: E501
 
 WORDS_PUNCT_EXPECTED = [
     "This",
@@ -235,9 +231,7 @@ REPLACE_REPLACEMENTS = {
 
 
 def test_replace_words():
-    replaced = tokenize.utils.replace_words(
-        text=REPLACE_TEXT, replacements=REPLACE_REPLACEMENTS
-    )
+    replaced = tokenize.utils.replace_words(text=REPLACE_TEXT, replacements=REPLACE_REPLACEMENTS)
     assert replaced == REPLACE_EXPECTED
 
 

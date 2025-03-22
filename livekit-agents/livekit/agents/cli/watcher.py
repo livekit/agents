@@ -126,9 +126,7 @@ class WatchServer:
                 with contextlib.suppress(asyncio.InvalidStateError):
                     self._recv_jobs_fut.set_result(None)
             if isinstance(msg, proto.ReloadJobsRequest):
-                await channel.asend_message(
-                    self._pch, proto.ReloadJobsResponse(jobs=active_jobs)
-                )
+                await channel.asend_message(self._pch, proto.ReloadJobsResponse(jobs=active_jobs))
             if isinstance(msg, proto.Reloaded):
                 self._worker_reloading = False
 
@@ -151,9 +149,7 @@ class WatchClient:
     async def _run(self) -> None:
         assert self._cli_args.mp_cch
         try:
-            self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(
-                self._cli_args.mp_cch
-            )
+            self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(self._cli_args.mp_cch)
 
             await channel.asend_message(self._cch, proto.ReloadJobsRequest())
 

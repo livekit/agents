@@ -31,9 +31,7 @@ class TextSyncOptions:
         retain_format=True
     )
     hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
-    split_words: Callable[[str], list[tuple[str, int, int]]] = (
-        tokenize.basic.split_words
-    )
+    split_words: Callable[[str], list[tuple[str, int, int]]] = tokenize.basic.split_words
 
 
 @dataclass
@@ -105,9 +103,7 @@ class _TextAudioSynchronizer:
         self._check_not_closed()
 
         if self._text_data is None:
-            self._text_data = _TextData(
-                sentence_stream=self._opts.sentence_tokenizer.stream()
-            )
+            self._text_data = _TextData(sentence_stream=self._opts.sentence_tokenizer.stream())
             self._text_q.append(self._text_data)
             self._text_q_changed.set()
 
@@ -231,10 +227,7 @@ class _TextAudioSynchronizer:
         """Synchronize a sentence with audio timing."""
         real_speed = None
         if audio_data.pushed_duration > 0 and audio_data.done:
-            real_speed = (
-                len(self._calc_hyphens(text_data.pushed_text))
-                / audio_data.pushed_duration
-            )
+            real_speed = len(self._calc_hyphens(text_data.pushed_text)) / audio_data.pushed_duration
 
         seg_id = _utils.segment_uuid()
         words = self._opts.split_words(sentence)
@@ -258,9 +251,7 @@ class _TextAudioSynchronizer:
             speed = self._speed
             if real_speed is not None:
                 speed = real_speed
-                estimated_pauses_s = (
-                    text_data.forwarded_sentences * self._opts.new_sentence_delay
-                )
+                estimated_pauses_s = text_data.forwarded_sentences * self._opts.new_sentence_delay
                 hyph_pauses = estimated_pauses_s * speed
 
                 target_hyphens = round(speed * elapsed_time)
@@ -444,12 +435,8 @@ class _AudioSyncOutput(AudioOutput):
         self._interrupted = True
         self._base_output.clear_buffer()
 
-    def on_playback_finished(
-        self, *, playback_position: float, interrupted: bool
-    ) -> None:
-        super().on_playback_finished(
-            playback_position=playback_position, interrupted=interrupted
-        )
+    def on_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
+        super().on_playback_finished(playback_position=playback_position, interrupted=interrupted)
 
         if not self._parent._sync_enabled:
             return

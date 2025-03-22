@@ -29,9 +29,9 @@ class FallbackAdapterTester(FallbackAdapter):
 
         self.on("stt_availability_changed", self._on_stt_availability_changed)
 
-        self._availability_changed_ch: dict[
-            int, utils.aio.Chan[AvailabilityChangedEvent]
-        ] = {id(t): utils.aio.Chan[AvailabilityChangedEvent]() for t in stt}
+        self._availability_changed_ch: dict[int, utils.aio.Chan[AvailabilityChangedEvent]] = {
+            id(t): utils.aio.Chan[AvailabilityChangedEvent]() for t in stt
+        }
 
     def _on_stt_availability_changed(self, ev: AvailabilityChangedEvent) -> None:
         self._availability_changed_ch[id(ev.stt)].send_nowait(ev)
@@ -119,9 +119,7 @@ async def test_stt_recover() -> None:
     assert not fallback_adapter.availability_changed_ch(fake2).recv_nowait().available
 
     assert (
-        await asyncio.wait_for(
-            fallback_adapter.availability_changed_ch(fake2).recv(), 1.0
-        )
+        await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake2).recv(), 1.0)
     ).available, "fake2 should have recovered"
 
     await fallback_adapter.recognize([])

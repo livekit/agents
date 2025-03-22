@@ -23,7 +23,7 @@ AUDIO_STREAM_TOPIC = "lk.audio_stream"
 class DataStreamAudioOutput(AudioOutput):
     """
     AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.
-    """
+    """  # noqa: E501
 
     def __init__(self, room: rtc.Room, *, destination_identity: str):
         super().__init__()
@@ -124,9 +124,7 @@ class DataStreamAudioReceiver(AudioReceiver):
 
     async def start(self) -> None:
         # wait for the first agent participant to join
-        self._remote_participant = await self._wait_for_participant(
-            identity=self._sender_identity
-        )
+        self._remote_participant = await self._wait_for_participant(identity=self._sender_identity)
 
         def _handle_clear_buffer(data: rtc.RpcInvocationData) -> str:
             assert self._remote_participant is not None
@@ -145,9 +143,7 @@ class DataStreamAudioReceiver(AudioReceiver):
             self.emit("clear_buffer")
             return "ok"
 
-        self._room.local_participant.register_rpc_method(
-            RPC_CLEAR_BUFFER, _handle_clear_buffer
-        )
+        self._room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handle_clear_buffer)
 
         def _handle_stream_received(
             reader: rtc.ByteStreamReader, remote_participant_id: str
@@ -158,18 +154,12 @@ class DataStreamAudioReceiver(AudioReceiver):
             self._stream_readers.append(reader)
             self._stream_reader_changed.set()
 
-        self._room.register_byte_stream_handler(
-            AUDIO_STREAM_TOPIC, _handle_stream_received
-        )
+        self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
 
-    async def notify_playback_finished(
-        self, playback_position: int, interrupted: bool
-    ) -> None:
+    async def notify_playback_finished(self, playback_position: int, interrupted: bool) -> None:
         """Notify the sender that playback has finished"""
         assert self._remote_participant is not None
-        event = PlaybackFinishedEvent(
-            playback_position=playback_position, interrupted=interrupted
-        )
+        event = PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
         try:
             logger.debug(
                 f"notifying playback finished: {event.playback_position:.3f}s, "
@@ -202,9 +192,7 @@ class DataStreamAudioReceiver(AudioReceiver):
                         # ignore the rest data of the current reader if clear_buffer was called
                         continue
 
-                    samples_per_channel = (
-                        len(data) // num_channels // ctypes.sizeof(ctypes.c_int16)
-                    )
+                    samples_per_channel = len(data) // num_channels // ctypes.sizeof(ctypes.c_int16)
                     frame = rtc.AudioFrame(
                         data=data,
                         sample_rate=sample_rate,
@@ -218,9 +206,7 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             self._stream_reader_changed.clear()
 
-    async def _wait_for_participant(
-        self, identity: str | None = None
-    ) -> rtc.RemoteParticipant:
+    async def _wait_for_participant(self, identity: str | None = None) -> rtc.RemoteParticipant:
         """Wait for a participant to join the room and return it"""
 
         def _is_matching_participant(participant: rtc.RemoteParticipant) -> bool:

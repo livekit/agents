@@ -109,9 +109,7 @@ def test_sync_channel():
 
 def _generate_fake_job() -> job.RunningJobInfo:
     return job.RunningJobInfo(
-        job=agent.Job(
-            id="fake_job_" + str(uuid.uuid4().hex), type=agent.JobType.JT_ROOM
-        ),
+        job=agent.Job(id="fake_job_" + str(uuid.uuid4().hex), type=agent.JobType.JT_ROOM),
         url="fake_url",
         token="fake_token",
         accept_arguments=job.JobAcceptArguments(name="", identity="", metadata=""),
@@ -175,7 +173,7 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
     await asyncio.sleep(start_args.entrypoint_simulate_work_time)
 
     job_ctx.shutdown(
-        "calling shutdown inside the test to avoid a warning when neither shutdown nor connect is called."
+        "calling shutdown inside the test to avoid a warning when neither shutdown nor connect is called."  # noqa: E501
     )
 
     with start_args.update_ev:
@@ -257,7 +255,7 @@ async def test_proc_pool():
 
     await _wait_for_elements(close_q, num_idle_processes + jobs_to_start)
 
-    # the way we check that a process doesn't exist anymore isn't technically reliable (pid recycle could happen)
+    # the way we check that a process doesn't exist anymore isn't technically reliable (pid recycle could happen)  # noqa: E501
     for pid in pids:
         assert not psutil.pid_exists(pid)
 
@@ -355,9 +353,7 @@ async def test_shutdown_no_job():
 
     assert proc.exitcode == 0
     assert not proc.killed
-    assert start_args.shutdown_counter.value == 0, (
-        "shutdown_cb isn't called when there is no job"
-    )
+    assert start_args.shutdown_counter.value == 0, "shutdown_cb isn't called when there is no job"
 
 
 async def test_job_slow_shutdown():

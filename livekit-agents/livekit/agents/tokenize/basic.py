@@ -76,9 +76,7 @@ class WordTokenizer(tokenizer.WordTokenizer):
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         return [
             tok[0]
-            for tok in _basic_word.split_words(
-                text, ignore_punctuation=self._ignore_punctuation
-            )
+            for tok in _basic_word.split_words(text, ignore_punctuation=self._ignore_punctuation)
         ]
 
     def stream(self, *, language: str | None = None) -> tokenizer.WordStream:
@@ -95,9 +93,7 @@ def hyphenate_word(word: str) -> list[str]:
     return _basic_hyphenator.hyphenate_word(word)
 
 
-def split_words(
-    text: str, ignore_punctuation: bool = True
-) -> list[tuple[str, int, int]]:
+def split_words(text: str, ignore_punctuation: bool = True) -> list[tuple[str, int, int]]:
     return _basic_word.split_words(text, ignore_punctuation=ignore_punctuation)
 
 

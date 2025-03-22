@@ -41,8 +41,8 @@ async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
-            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
-            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
+            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "  # noqa: E501
+            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."  # noqa: E501
         ),
     )
 
@@ -57,11 +57,9 @@ async def entrypoint(ctx: JobContext):
 
     @fnc_ctx.ai_callable()
     async def get_weather(
-        location: Annotated[
-            str, llm.TypeInfo(description="The location to get the weather for")
-        ],
+        location: Annotated[str, llm.TypeInfo(description="The location to get the weather for")],
     ):
-        """Called when the user asks about the weather. This function will return the weather for the given location."""
+        """Called when the user asks about the weather. This function will return the weather for the given location."""  # noqa: E501
         return f"The weather in {location} is sunny."
 
     agent = VoicePipelineAgent(

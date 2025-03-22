@@ -99,12 +99,10 @@ class STT(stt.STT):
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
-        """
+        """  # noqa: E501
 
         super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=use_realtime, interim_results=use_realtime
-            )
+            capabilities=stt.STTCapabilities(streaming=use_realtime, interim_results=use_realtime)
         )
         if detect_language:
             language = ""
@@ -211,12 +209,8 @@ class STT(stt.STT):
         self._opts.prompt = prompt or self._opts.prompt
         self._opts.vad_threshold = vad_threshold or self._opts.vad_threshold
         self._opts.prefix_padding_ms = prefix_padding_ms or self._opts.prefix_padding_ms
-        self._opts.silence_duration_ms = (
-            silence_duration_ms or self._opts.silence_duration_ms
-        )
-        self._opts.noise_reduction_type = (
-            noise_reduction_type or self._opts.noise_reduction_type
-        )
+        self._opts.silence_duration_ms = silence_duration_ms or self._opts.silence_duration_ms
+        self._opts.noise_reduction_type = noise_reduction_type or self._opts.noise_reduction_type
 
         for stream in self._streams:
             stream.update_options(language=language or self._opts.language)
@@ -241,9 +235,9 @@ class STT(stt.STT):
             },
         }
         if self._opts.noise_reduction_type:
-            realtime_config["session"]["input_audio_transcription"][
-                "noise_reduction_type"
-            ] = self._opts.noise_reduction_type
+            realtime_config["session"]["input_audio_transcription"]["noise_reduction_type"] = (
+                self._opts.noise_reduction_type
+            )
 
         query_params: dict[str, str] = {
             "intent": "transcription",
@@ -289,9 +283,7 @@ class STT(stt.STT):
         try:
             config = self._sanitize_options(language=language)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
-            prompt = (
-                self._opts.prompt if self._opts.prompt is not None else openai.NOT_GIVEN
-            )
+            prompt = self._opts.prompt if self._opts.prompt is not None else openai.NOT_GIVEN
 
             format = "json"
             if self._opts.model == "whisper-1":
@@ -321,9 +313,9 @@ class STT(stt.STT):
             )
 
         except openai.APITimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError()  # noqa: B904
         except openai.APIStatusError as e:
-            raise APIStatusError(
+            raise APIStatusError(  # noqa: B904
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
@@ -341,9 +333,7 @@ class SpeechStream(stt.SpeechStream):
         opts: _STTOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ) -> None:
-        super().__init__(
-            stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS, sample_rate=SAMPLE_RATE
-        )
+        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS, sample_rate=SAMPLE_RATE)
 
         self._pool = pool
         self._opts = opts
@@ -428,10 +418,7 @@ class SpeechStream(stt.SpeechStream):
                         delta = data.get("delta", "")
                         if delta:
                             current_text += delta
-                            if (
-                                time.time() - last_interim_at
-                                > _delta_transcript_interval
-                            ):
+                            if time.time() - last_interim_at > _delta_transcript_interval:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(
                                         type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -444,10 +431,7 @@ class SpeechStream(stt.SpeechStream):
                                     )
                                 )
                                 last_interim_at = time.time()
-                    elif (
-                        msg_type
-                        == "conversation.item.input_audio_transcription.completed"
-                    ):
+                    elif msg_type == "conversation.item.input_audio_transcription.completed":
                         current_text = ""
                         transcript = data.get("transcript", "")
                         if transcript:

@@ -48,7 +48,7 @@ class VAD(agents.vad.VAD):
     Silero Voice Activity Detection (VAD) class.
 
     This class provides functionality to detect speech segments within audio data using the Silero VAD model.
-    """
+    """  # noqa: E501
 
     @classmethod
     def load(
@@ -105,13 +105,13 @@ class VAD(agents.vad.VAD):
 
         Raises:
             ValueError: If an unsupported sample rate is provided.
-        """
+        """  # noqa: E501
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
         if padding_duration is not None:
             logger.warning(
-                "padding_duration is deprecated and will be removed in 1.5.0, use prefix_padding_duration instead",
+                "padding_duration is deprecated and will be removed in 1.5.0, use prefix_padding_duration instead",  # noqa: E501
             )
             prefix_padding_duration = padding_duration
 
@@ -174,16 +174,13 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
-        """
+        """  # noqa: E501
         self._opts = _VADOptions(
             min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
-            min_silence_duration=min_silence_duration
-            or self._opts.min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration
-            or self._opts.prefix_padding_duration,
+            min_silence_duration=min_silence_duration or self._opts.min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration or self._opts.prefix_padding_duration,
             max_buffered_speech=max_buffered_speech or self._opts.max_buffered_speech,
-            activation_threshold=activation_threshold
-            or self._opts.activation_threshold,
+            activation_threshold=activation_threshold or self._opts.activation_threshold,
             sample_rate=self._opts.sample_rate,
         )
         for stream in self._streams:
@@ -197,9 +194,7 @@ class VAD(agents.vad.VAD):
 
 
 class VADStream(agents.vad.VADStream):
-    def __init__(
-        self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel
-    ) -> None:
+    def __init__(self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
         super().__init__(vad)
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
@@ -233,18 +228,15 @@ class VADStream(agents.vad.VADStream):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
-        """
+        """  # noqa: E501
         old_max_buffered_speech = self._opts.max_buffered_speech
 
         self._opts = _VADOptions(
             min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
-            min_silence_duration=min_silence_duration
-            or self._opts.min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration
-            or self._opts.prefix_padding_duration,
+            min_silence_duration=min_silence_duration or self._opts.min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration or self._opts.prefix_padding_duration,
             max_buffered_speech=max_buffered_speech or self._opts.max_buffered_speech,
-            activation_threshold=activation_threshold
-            or self._opts.activation_threshold,
+            activation_threshold=activation_threshold or self._opts.activation_threshold,
             sample_rate=self._opts.sample_rate,
         )
 
@@ -354,17 +346,14 @@ class VADStream(agents.vad.VADStream):
                 )
                 p = self._exp_filter.apply(exp=1.0, sample=p)
 
-                window_duration = (
-                    self._model.window_size_samples / self._opts.sample_rate
-                )
+                window_duration = self._model.window_size_samples / self._opts.sample_rate
 
                 pub_current_sample += self._model.window_size_samples
                 pub_timestamp += window_duration
 
                 resampling_ratio = self._input_sample_rate / self._model.sample_rate
                 to_copy = (
-                    self._model.window_size_samples * resampling_ratio
-                    + input_copy_remaining_fract
+                    self._model.window_size_samples * resampling_ratio + input_copy_remaining_fract
                 )
                 to_copy_int = int(to_copy)
                 input_copy_remaining_fract = to_copy - to_copy_int
@@ -381,7 +370,7 @@ class VADStream(agents.vad.VADStream):
                     # reached self._opts.max_buffered_speech (padding is included)
                     speech_buffer_max_reached = True
                     logger.warning(
-                        "max_buffered_speech reached, ignoring further data for the current speech input"
+                        "max_buffered_speech reached, ignoring further data for the current speech input"  # noqa: E501
                     )
 
                 inference_duration = time.perf_counter() - start_time
@@ -403,8 +392,7 @@ class VADStream(agents.vad.VADStream):
                         return
 
                     padding_data = self._speech_buffer[
-                        speech_buffer_index
-                        - self._prefix_padding_samples : speech_buffer_index
+                        speech_buffer_index - self._prefix_padding_samples : speech_buffer_index
                     ]
 
                     self._speech_buffer_max_reached = False
@@ -414,12 +402,12 @@ class VADStream(agents.vad.VADStream):
                 def _copy_speech_buffer() -> rtc.AudioFrame:
                     # copy the data from speech_buffer
                     assert self._speech_buffer is not None
-                    speech_data = self._speech_buffer[:speech_buffer_index].tobytes()
+                    speech_data = self._speech_buffer[:speech_buffer_index].tobytes()  # noqa: B023
 
                     return rtc.AudioFrame(
                         sample_rate=self._input_sample_rate,
                         num_channels=1,
-                        samples_per_channel=speech_buffer_index,
+                        samples_per_channel=speech_buffer_index,  # noqa: B023
                         data=speech_data,
                     )
 
@@ -482,8 +470,7 @@ class VADStream(agents.vad.VADStream):
 
                     if (
                         pub_speaking
-                        and silence_threshold_duration
-                        >= self._opts.min_silence_duration
+                        and silence_threshold_duration >= self._opts.min_silence_duration
                     ):
                         pub_speaking = False
                         pub_speech_duration = 0.0
@@ -520,9 +507,7 @@ class VADStream(agents.vad.VADStream):
                     )
 
                 if len(inference_frame.data) - self._model.window_size_samples > 0:
-                    data = inference_frame.data[
-                        self._model.window_size_samples :
-                    ].tobytes()
+                    data = inference_frame.data[self._model.window_size_samples :].tobytes()
                     inference_frames.append(
                         rtc.AudioFrame(
                             data=data,

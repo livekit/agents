@@ -9,11 +9,9 @@ class SentenceChunker:
         *,
         max_chunk_size: int = 120,
         chunk_overlap: int = 30,
-        paragraph_tokenizer: Callable[
-            [str], list[str]
-        ] = tokenize.basic.tokenize_paragraphs,
-        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        paragraph_tokenizer: Callable[[str], list[str]] = tokenize.basic.tokenize_paragraphs,
+        sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(),  # noqa: B008
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
             ignore_punctuation=False
         ),
     ) -> None:
@@ -32,9 +30,7 @@ class SentenceChunker:
 
             for sentence in self._sentence_tokenizer.tokenize(text=paragraph):
                 for word in self._word_tokenizer.tokenize(text=sentence):
-                    reconstructed = self._word_tokenizer.format_words(
-                        buf_words + [word]
-                    )
+                    reconstructed = self._word_tokenizer.format_words(buf_words + [word])
 
                     if len(reconstructed) > self._max_chunk_size:
                         while (
@@ -43,9 +39,7 @@ class SentenceChunker:
                         ):
                             last_buf_words = last_buf_words[1:]
 
-                        new_chunk = self._word_tokenizer.format_words(
-                            last_buf_words + buf_words
-                        )
+                        new_chunk = self._word_tokenizer.format_words(last_buf_words + buf_words)
                         chunks.append(new_chunk)
                         last_buf_words = buf_words
                         buf_words = []
@@ -53,15 +47,10 @@ class SentenceChunker:
                     buf_words.append(word)
 
             if buf_words:
-                while (
-                    len(self._word_tokenizer.format_words(last_buf_words))
-                    > self._chunk_overlap
-                ):
+                while len(self._word_tokenizer.format_words(last_buf_words)) > self._chunk_overlap:
                     last_buf_words = last_buf_words[1:]
 
-                new_chunk = self._word_tokenizer.format_words(
-                    last_buf_words + buf_words
-                )
+                new_chunk = self._word_tokenizer.format_words(last_buf_words + buf_words)
                 chunks.append(new_chunk)
                 buf_words = []
 

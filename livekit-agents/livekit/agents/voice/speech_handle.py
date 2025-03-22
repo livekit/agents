@@ -65,7 +65,7 @@ class SpeechHandle:
         """
         The parent handle that initiated the creation of the current speech handle.
         This happens when a tool call is made, a new SpeechHandle will be created for the tool response.
-        """
+        """  # noqa: E501
         return self._parent
 
     def done(self) -> bool:

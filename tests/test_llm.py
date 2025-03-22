@@ -20,17 +20,13 @@ class Unit(Enum):
 
 
 class FncCtx(FunctionContext):
-    @ai_callable(
-        description="Get the current weather in a given location", auto_retry=True
-    )
+    @ai_callable(description="Get the current weather in a given location", auto_retry=True)
     def get_weather(
         self,
         location: Annotated[
             str, TypeInfo(description="The city and state, e.g. San Francisco, CA")
         ],
-        unit: Annotated[
-            Unit, TypeInfo(description="The temperature unit to use.")
-        ] = Unit.CELSIUS,
+        unit: Annotated[Unit, TypeInfo(description="The temperature unit to use.")] = Unit.CELSIUS,
     ) -> None: ...
 
     @ai_callable(description="Play a music")
@@ -64,9 +60,7 @@ class FncCtx(FunctionContext):
     @ai_callable(description="Update user info")
     def update_user_info(
         self,
-        email: Annotated[
-            str | None, TypeInfo(description="The user address email")
-        ] = None,
+        email: Annotated[str | None, TypeInfo(description="The user address email")] = None,
         name: Annotated[str | None, TypeInfo(description="The user name")] = None,
         address: Annotated[str, TypeInfo(description="The user address")] | None = None,
     ) -> None: ...
@@ -100,7 +94,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
 async def test_chat(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     chat_ctx = ChatContext().append(
-        text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
+        text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.',  # noqa: E501
     )
 
     # Anthropic and vertex requires at least one message (system messages don't count)
@@ -134,9 +128,7 @@ async def test_llm_chat_with_consecutive_messages(
         role="assistant",
     )
     chat_ctx.append(text="I see that you have a busy day ahead.", role="assistant")
-    chat_ctx.append(
-        text="Actually, I need some help with my recent order.", role="user"
-    )
+    chat_ctx.append(text="Actually, I need some help with my recent order.", role="user")
     chat_ctx.append(text="I want to cancel my order.", role="user")
 
     stream = input_llm.chat(chat_ctx=chat_ctx)
@@ -214,13 +206,12 @@ async def test_cancelled_calls(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     fnc_ctx = FncCtx()
 
-    stream = await _request_fnc_call(
-        input_llm, "Turn off the lights in the bedroom", fnc_ctx
-    )
+    stream = await _request_fnc_call(input_llm, "Turn off the lights in the bedroom", fnc_ctx)
     calls = stream.execute_functions()
     await asyncio.sleep(0.2)  # wait for the loop executor to start the task
 
-    # don't wait for gather_function_results and directly close (this should cancel the ongoing calls)
+    # don't wait for gather_function_results and directly close (this should cancel the
+    # ongoing calls)
     await stream.aclose()
 
     assert len(calls) == 1
@@ -236,7 +227,7 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
 
     stream = await _request_fnc_call(
         input_llm,
-        "Can you select all currencies in Europe at once from given choices using function call `select_currencies`?",
+        "Can you select all currencies in Europe at once from given choices using function call `select_currencies`?",  # noqa: E501
         fnc_ctx,
         temperature=0.2,
     )
@@ -385,7 +376,7 @@ async def _request_fnc_call(
     stream = model.chat(
         chat_ctx=ChatContext()
         .append(
-            text="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",
+            text="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",  # noqa: E501
             role="system",
         )
         .append(text=request, role="user"),
@@ -411,9 +402,7 @@ with open(_HEARTS_RGBA_PATH, "rb") as f:
 
 _HEARTS_JPEG_PATH = Path(__file__).parent / "hearts.jpg"
 with open(_HEARTS_JPEG_PATH, "rb") as f:
-    _HEARTS_IMAGE_DATA_URL = (
-        f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
-    )
+    _HEARTS_IMAGE_DATA_URL = f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode()}"
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -428,9 +417,7 @@ async def test_chat_with_image_data_url(llm_factory: Callable[[], llm.LLM]):
         )
         .append(
             text="Describe this image",
-            images=[
-                llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")
-            ],
+            images=[llm.ChatImage(image=_HEARTS_IMAGE_DATA_URL, inference_detail="low")],
             role="user",
         )
     )
@@ -460,9 +447,7 @@ async def test_chat_with_image_frame(llm_factory: Callable[[], llm.LLM]):
         )
         .append(
             text="Describe this image",
-            images=[
-                llm.ChatImage(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low")
-            ],
+            images=[llm.ChatImage(image=_HEARTS_IMAGE_VIDEO_FRAME, inference_detail="low")],
             role="user",
         )
     )
