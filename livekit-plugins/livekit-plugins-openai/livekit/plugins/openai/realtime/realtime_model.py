@@ -131,7 +131,7 @@ class RealtimeModel(llm.RealtimeModel):
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
                 turn_detection=turn_detection is not None,
-                speech_to_text=input_audio_transcription is not None,
+                user_transcription=input_audio_transcription is not None,
             )
         )
 

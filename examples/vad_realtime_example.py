@@ -6,7 +6,6 @@ from livekit.agents import JobContext, JobProcess, WorkerOptions, cli
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.plugins import deepgram, openai, silero
-
 from livekit.plugins.turn_detector import EOUModel
 
 logger = logging.getLogger("vad-realtime-example")

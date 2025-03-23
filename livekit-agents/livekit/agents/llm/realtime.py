@@ -48,7 +48,7 @@ class ErrorEvent:
 class RealtimeCapabilities:
     message_truncation: bool
     turn_detection: bool
-    speech_to_text: bool
+    user_transcription: bool
 
 
 class RealtimeError(Exception):

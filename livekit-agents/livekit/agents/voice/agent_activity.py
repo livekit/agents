@@ -605,7 +605,7 @@ class AgentActivity(RecognitionHooks):
                 self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
-        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.speech_to_text:
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if speech_to_text is enabled on the realtime model
             return
 
@@ -615,7 +615,7 @@ class AgentActivity(RecognitionHooks):
         )
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
-        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.speech_to_text:
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if speech_to_text is enabled on the realtime model
             return
 
