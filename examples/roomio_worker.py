@@ -2,9 +2,18 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import JobContext, JobProcess, WorkerOptions, cli, metrics
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    JobProcess,
+    RunContext,
+    WorkerOptions,
+    cli,
+    metrics,
+)
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession, RunContext
+from livekit.agents.voice import MetricsCollectedEvent
 from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
 from livekit.plugins import cartesia, deepgram, openai, silero
 
@@ -65,9 +74,9 @@ async def entrypoint(ctx: JobContext):
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
-    def _on_metrics_collected(mtrcs: metrics.AgentMetrics):
-        metrics.log_metrics(mtrcs)
-        usage_collector.collect(mtrcs)
+    def _on_metrics_collected(ev: MetricsCollectedEvent):
+        metrics.log_metrics(ev.metrics)
+        usage_collector.collect(ev.metrics)
 
     async def log_usage():
         summary = usage_collector.get_summary()

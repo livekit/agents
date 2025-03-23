@@ -157,7 +157,7 @@ class WorkerOptions:
     Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
     """
 
-    job_memory_warn_mb: float = 300
+    job_memory_warn_mb: float = 500
     """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""  # noqa: E501
     job_memory_limit_mb: float = 0
     """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
