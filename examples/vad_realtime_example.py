@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import JobContext, JobProcess, WorkerOptions, cli
+from livekit.agents import JobContext, JobProcess, WorkerOptions, cli, llm
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.plugins import deepgram, openai, silero
@@ -25,6 +25,16 @@ class AlloyAgent(Agent):
 
     async def on_enter(self):
         self.session.generate_reply()
+
+    @llm.function_tool
+    async def fetch_weather_today(self) -> str:
+        """Called when the user asks for the weather today"""
+        return "The weather today is sunny and 70 degrees."
+
+    @llm.function_tool
+    async def fetch_weather_tomorrow(self) -> str:
+        """Called when the user asks for the weather tomorrow"""
+        return "The weather tomorrow is rainy and 60 degrees."
 
 
 async def entrypoint(ctx: JobContext):

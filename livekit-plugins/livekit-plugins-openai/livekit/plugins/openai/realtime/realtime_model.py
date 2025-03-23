@@ -541,10 +541,6 @@ class RealtimeSession(
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        if not self._realtime_model.capabilities.turn_detection and self._pushed_duration_s > 0:
-            # commit the audio buffer if server side VAD is disabled
-            self.commit_audio()
-
         event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future()
         self._response_created_futures[event_id] = fut
@@ -580,9 +576,10 @@ class RealtimeSession(
             )
         )
 
-    def commit_audio(self) -> None:
-        self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))
-        self._pushed_duration_s = 0
+    def commit_input_audio(self) -> None:
+        if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
+            self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))
+            self._pushed_duration_s = 0
 
     async def aclose(self) -> None:
         self._msg_ch.close()

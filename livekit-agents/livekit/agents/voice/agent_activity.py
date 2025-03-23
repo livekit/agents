@@ -609,7 +609,7 @@ class AgentActivity(RecognitionHooks):
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
-            # skip stt transcription if speech_to_text is enabled on the realtime model
+            # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
         self._session.emit(
@@ -619,7 +619,7 @@ class AgentActivity(RecognitionHooks):
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
-            # skip stt transcription if speech_to_text is enabled on the realtime model
+            # skip stt transcription if user_transcription is enabled on the realtime model
             return
 
         self._session.emit(
@@ -636,10 +636,12 @@ class AgentActivity(RecognitionHooks):
         #  turn)
         #  - generate a reply to the user input
         logger.info("on_end_of_turn", extra={"new_transcript": new_transcript})
-        if isinstance(self.llm, llm.RealtimeModel):
+        if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
             if self.llm.capabilities.turn_detection:
                 return
-            new_transcript = ""  # ignore stt transcription for realtime model
+            # ignore stt transcription for realtime model and commit the audio buffer
+            new_transcript = ""
+            self._rt_session.commit_input_audio()
 
         user_message = llm.ChatMessage(role="user", content=[new_transcript])
 

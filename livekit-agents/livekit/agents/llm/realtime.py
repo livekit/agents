@@ -131,6 +131,10 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
         instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
 
+    # commit the input audio buffer to the server
+    @abstractmethod
+    def commit_input_audio(self) -> None: ...
+
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod
     def interrupt(self) -> None: ...
