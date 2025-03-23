@@ -36,7 +36,7 @@ async def entrypoint(ctx: JobContext):
             assistant_opts=AssistantOptions(
                 create_options=AssistantCreateOptions(
                     model="gpt-4o",
-                    instructions="You are a voice assistant created by LiveKit. Your interface with users will be voice.",
+                    instructions="You are a voice assistant created by LiveKit. Your interface with users will be voice.",  # noqa: E501
                     name="KITT",
                 )
             ),

@@ -3,7 +3,15 @@ from __future__ import annotations
 import base64
 import inspect
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, Callable, get_args, get_origin, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Callable,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, create_model
 from pydantic.fields import Field, FieldInfo

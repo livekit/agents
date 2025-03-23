@@ -23,7 +23,7 @@ AUDIO_STREAM_TOPIC = "lk.audio_stream"
 class DataStreamAudioOutput(AudioOutput):
     """
     AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.
-    """
+    """  # noqa: E501
 
     def __init__(self, room: rtc.Room, *, destination_identity: str):
         super().__init__()
@@ -177,7 +177,9 @@ class DataStreamAudioReceiver(AudioReceiver):
         return self._stream_impl()
 
     @utils.log_exceptions(logger=logger)
-    async def _stream_impl(self) -> AsyncGenerator[rtc.AudioFrame | AudioSegmentEnd, None]:
+    async def _stream_impl(
+        self,
+    ) -> AsyncGenerator[rtc.AudioFrame | AudioSegmentEnd, None]:
         while True:
             await self._stream_reader_changed.wait()
 

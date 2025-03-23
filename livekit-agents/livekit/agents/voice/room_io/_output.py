@@ -6,7 +6,11 @@ from livekit import rtc
 
 from ... import utils
 from ...log import logger
-from ...types import ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TOPIC_CHAT
+from ...types import (
+    ATTRIBUTE_TRANSCRIPTION_FINAL,
+    ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+    TOPIC_CHAT,
+)
 from .. import io
 from ..transcription import find_micro_track_id
 

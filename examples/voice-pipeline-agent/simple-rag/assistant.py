@@ -40,8 +40,8 @@ async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
-            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
-            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
+            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "  # noqa: E501
+            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."  # noqa: E501
             "Use the provided context to answer the user's question if needed."
         ),
     )

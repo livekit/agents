@@ -15,7 +15,12 @@ from livekit.agents._exceptions import APIConnectionError, APIError
 from .. import utils
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
 from .tool_context import FunctionTool, ToolChoice
@@ -125,11 +130,11 @@ class LLMStream(ABC):
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
-                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",
+                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
                         extra={
                             "llm": self._llm._label,
@@ -189,7 +194,7 @@ class LLMStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 

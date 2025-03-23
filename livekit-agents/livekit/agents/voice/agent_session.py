@@ -206,7 +206,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     or self.output.transcription is not None
                 ):
                     logger.warning(
-                        "agent started with the console subcommand, but input.audio or output.audio "
+                        "agent started with the console subcommand, but input.audio or output.audio "  # noqa: E501
                         "or output.transcription is already set, overriding.."
                     )
 
@@ -243,7 +243,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and room_output_options.transcription_enabled
                 ):
                     logger.warning(
-                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."
+                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
                     )
                     room_output_options.transcription_enabled = False
 
@@ -258,7 +258,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else:
                 if not self.output.audio and not self.output.transcription:
                     logger.warning(
-                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"
+                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
 
             # it is ok to await it directly, there is no previous task to drain

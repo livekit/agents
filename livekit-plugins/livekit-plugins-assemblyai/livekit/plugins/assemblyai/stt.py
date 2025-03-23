@@ -227,7 +227,7 @@ class SpeechStream(stt.SpeechStream):
                 await ws.send_str(
                     json.dumps(
                         {
-                            "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold
+                            "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold  # noqa: E501
                         }
                     )
                 )

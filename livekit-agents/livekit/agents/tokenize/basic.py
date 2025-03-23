@@ -3,7 +3,14 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass
 
-from . import _basic_hyphenator, _basic_paragraph, _basic_sent, _basic_word, token_stream, tokenizer
+from . import (
+    _basic_hyphenator,
+    _basic_paragraph,
+    _basic_sent,
+    _basic_word,
+    token_stream,
+    tokenizer,
+)
 
 # Really naive implementation of SentenceTokenizer, WordTokenizer + hyphenate_word
 # The basic tokenizer is rule-based and only English is really tested

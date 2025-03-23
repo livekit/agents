@@ -48,7 +48,7 @@ class VAD(agents.vad.VAD):
     Silero Voice Activity Detection (VAD) class.
 
     This class provides functionality to detect speech segments within audio data using the Silero VAD model.
-    """
+    """  # noqa: E501
 
     @classmethod
     def load(
@@ -105,13 +105,13 @@ class VAD(agents.vad.VAD):
 
         Raises:
             ValueError: If an unsupported sample rate is provided.
-        """
+        """  # noqa: E501
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
         if padding_duration is not None:
             logger.warning(
-                "padding_duration is deprecated and will be removed in 1.5.0, use prefix_padding_duration instead",
+                "padding_duration is deprecated and will be removed in 1.5.0, use prefix_padding_duration instead",  # noqa: E501
             )
             prefix_padding_duration = padding_duration
 
@@ -174,7 +174,7 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
-        """
+        """  # noqa: E501
         self._opts = _VADOptions(
             min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
             min_silence_duration=min_silence_duration or self._opts.min_silence_duration,
@@ -228,7 +228,7 @@ class VADStream(agents.vad.VADStream):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
-        """
+        """  # noqa: E501
         old_max_buffered_speech = self._opts.max_buffered_speech
 
         self._opts = _VADOptions(
@@ -370,7 +370,7 @@ class VADStream(agents.vad.VADStream):
                     # reached self._opts.max_buffered_speech (padding is included)
                     speech_buffer_max_reached = True
                     logger.warning(
-                        "max_buffered_speech reached, ignoring further data for the current speech input"
+                        "max_buffered_speech reached, ignoring further data for the current speech input"  # noqa: E501
                     )
 
                 inference_duration = time.perf_counter() - start_time
@@ -402,12 +402,12 @@ class VADStream(agents.vad.VADStream):
                 def _copy_speech_buffer() -> rtc.AudioFrame:
                     # copy the data from speech_buffer
                     assert self._speech_buffer is not None
-                    speech_data = self._speech_buffer[:speech_buffer_index].tobytes()
+                    speech_data = self._speech_buffer[:speech_buffer_index].tobytes()  # noqa: B023
 
                     return rtc.AudioFrame(
                         sample_rate=self._input_sample_rate,
                         num_channels=1,
-                        samples_per_channel=speech_buffer_index,
+                        samples_per_channel=speech_buffer_index,  # noqa: B023
                         data=speech_data,
                     )
 

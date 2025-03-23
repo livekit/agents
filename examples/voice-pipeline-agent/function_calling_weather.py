@@ -5,7 +5,15 @@ from typing import Annotated
 import aiohttp
 from dotenv import load_dotenv
 
-from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli, llm, metrics
+from livekit.agents import (
+    AutoSubscribe,
+    JobContext,
+    JobProcess,
+    WorkerOptions,
+    cli,
+    llm,
+    metrics,
+)
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
@@ -34,12 +42,12 @@ class AssistantFnc(llm.FunctionContext):
         ],
     ):
         """Called when the user asks about the weather. This function will return the weather for the given location.
-        When given a location, please estimate the latitude and longitude of the location and do not ask the user for them."""
+        When given a location, please estimate the latitude and longitude of the location and do not ask the user for them."""  # noqa: E501
 
         # When a function call is running, there are a couple of options to inform the user
         # that it might take awhile:
         # Option 1: you can use .say filler message immediately after the call is triggered
-        # Option 2: you can prompt the agent to return a text response when it's making a function call
+        # Option 2: you can prompt the agent to return a text response when it's making a function call  # noqa: E501
 
         # uncomment for option 1
         # agent = AgentRunContext.get_current().agent
@@ -76,7 +84,7 @@ class AssistantFnc(llm.FunctionContext):
         logger.info(f"weather data: {weather_data}")
 
         # (optional) To wait for the speech to finish before giving results of the function call
-        # without waiting, the new speech result will be queued and played after current speech is finished
+        # without waiting, the new speech result will be queued and played after current speech is finished  # noqa: E501
         # await speech_handle.join()
         return weather_data
 
@@ -91,7 +99,7 @@ async def entrypoint(ctx: JobContext):
     fnc_ctx = AssistantFnc()  # create our fnc ctx instance
     initial_chat_ctx = llm.ChatContext().append(
         text=(
-            "You are a weather assistant created by LiveKit. Your interface with users will be voice. "
+            "You are a weather assistant created by LiveKit. Your interface with users will be voice. "  # noqa: E501
             "You will provide weather information for a given location. "
             # when using option 1, you can suppress from the agent with prompt
             # "do not return any text while calling the function."
@@ -121,7 +129,7 @@ async def entrypoint(ctx: JobContext):
         summary = usage_collector.get_summary()
         logger.info(f"Usage: ${summary}")
 
-    # Start the assistant. This will automatically publish a microphone track and listen to the participant.
+    # Start the assistant. This will automatically publish a microphone track and listen to the participant.  # noqa: E501
     agent.start(ctx.room, participant)
     await agent.say("Hello from the weather station. Tell me your location to check the weather.")
 

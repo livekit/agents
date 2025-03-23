@@ -158,11 +158,11 @@ class WorkerOptions:
     """
 
     job_memory_warn_mb: float = 300
-    """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""
+    """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""  # noqa: E501
     job_memory_limit_mb: float = 0
     """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
     Defaults to 0 (disabled).
-    """
+    """  # noqa: E501
 
     """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
@@ -176,7 +176,7 @@ class WorkerOptions:
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
-    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API"""
+    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API"""  # noqa: E501
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -401,7 +401,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         return [proc.running_job for proc in self._proc_pool.processes if proc.running_job]
 
     async def drain(self, timeout: int | None = None) -> None:
-        """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""
+        """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""  # noqa: E501
         if self._draining:
             return
 
@@ -572,7 +572,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._opts.max_retry:
-                    raise RuntimeError(
+                    raise RuntimeError(  # noqa: B904
                         f"failed to connect to livekit after {retry_count} attempts",
                     )
 
@@ -660,7 +660,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 extra={"job_id": aj.job.id, "agent_name": aj.job.agent_name},
             )
 
-            # take the original jwt token and extend it while keeping all the same data that was generated
+            # take the original jwt token and extend it while keeping all the same data that was generated  # noqa: E501
             # by the SFU for the original join token.
             original_token = aj.token
             decoded = jwt.decode(original_token, self._opts.api_secret, algorithms=["HS256"])
@@ -732,7 +732,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     f"assignment for job {job_req.id} timed out",
                     extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
-                raise AssignmentTimeoutError()
+                raise AssignmentTimeoutError()  # noqa: B904
 
             job_assign = wait_assignment.result()
             running_info = RunningJobInfo(
@@ -770,7 +770,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
             if not answered:
                 logger.warning(
-                    "no answer was given inside the job_request_fnc, automatically rejecting the job",
+                    "no answer was given inside the job_request_fnc, automatically rejecting the job",  # noqa: E501
                     extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
                 await _on_reject()

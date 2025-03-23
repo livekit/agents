@@ -33,7 +33,7 @@ async def entrypoint(ctx: JobContext):
     async def get_weather(
         location: Annotated[str, llm.TypeInfo(description="The location to get the weather for")],
     ):
-        """Called when the user asks about the weather. This function will return the weather for the given location."""
+        """Called when the user asks about the weather. This function will return the weather for the given location."""  # noqa: E501
         logger.info(f"getting weather for {location}")
         url = f"https://wttr.in/{location}?format=%C+%t"
         async with aiohttp.ClientSession() as session:
@@ -70,7 +70,7 @@ async def entrypoint(ctx: JobContext):
     chat_ctx = llm.ChatContext()
     # chat_ctx.append(text="I'm planning a trip to Paris next month.", role="user")
     # chat_ctx.append(
-    #     text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",
+    #     text="How exciting! Paris is a beautiful city. I'd be happy to suggest some must-visit places and help you plan your trip.",  # noqa: E501
     #     role="assistant",
     # )
 
@@ -78,7 +78,10 @@ async def entrypoint(ctx: JobContext):
         model=openai.realtime.RealtimeModel(
             voice="alloy",
             temperature=0.8,
-            instructions="You are a helpful assistant, greet the user and help them with their trip planning",
+            instructions=(
+                "You are a helpful assistant, greet the user and help them with their trip planning. "  # noqa: E501
+                "When performing function calls, let user know that you are checking the weather."
+            ),
             turn_detection=openai.realtime.ServerVadOptions(
                 threshold=0.6, prefix_padding_ms=200, silence_duration_ms=500
             ),

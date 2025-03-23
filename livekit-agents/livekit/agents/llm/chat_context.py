@@ -56,7 +56,7 @@ class ImageContent(BaseModel):
     # With an external URL
     chat_image = ImageContent(image="https://example.com/image.jpg")
     ```
-    """
+    """  # noqa: E501
 
     type: Literal["image_content"] = Field(default="image_content")
 
@@ -170,7 +170,10 @@ class ChatContext:
     ) -> dict:
         items = []
         for item in self.items:
-            if exclude_function_call and item.type in ["function_call", "function_call_output"]:
+            if exclude_function_call and item.type in [
+                "function_call",
+                "function_call_output",
+            ]:
                 continue
 
             if item.type == "message":

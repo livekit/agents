@@ -23,7 +23,13 @@ import wave
 
 import aiohttp
 
-from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, stt, utils
+from livekit.agents import (
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.utils import AudioBuffer, merge_frames
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
@@ -37,7 +43,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: ClovaSttLanguages = "en-US",
+        language: ClovaSttLanguages | str = "en-US",
         secret: str | None = None,
         invoke_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,

@@ -73,7 +73,8 @@ RunContext_T = RunContext[UserData]
 
 @function_tool()
 async def update_name(
-    name: Annotated[str, Field(description="The customer's name")], context: RunContext_T
+    name: Annotated[str, Field(description="The customer's name")],
+    context: RunContext_T,
 ) -> str:
     """Called when the user provides their name.
     Confirm the spelling with the user before calling the function."""
@@ -84,7 +85,8 @@ async def update_name(
 
 @function_tool()
 async def update_phone(
-    phone: Annotated[str, Field(description="The customer's phone number")], context: RunContext_T
+    phone: Annotated[str, Field(description="The customer's phone number")],
+    context: RunContext_T,
 ) -> str:
     """Called when the user provides their phone number.
     Confirm the spelling with the user before calling the function."""
@@ -141,7 +143,10 @@ class BaseAgent(Agent):
         def _valid_item(item: llm.ChatItem) -> bool:
             if not keep_system_message and item.type == "message" and item.role == "system":
                 return False
-            if not keep_function_call and item.type in ["function_call", "function_call_output"]:
+            if not keep_function_call and item.type in [
+                "function_call",
+                "function_call_output",
+            ]:
                 return False
             return True
 

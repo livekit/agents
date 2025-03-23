@@ -68,7 +68,7 @@ class TTS(tts.TTS):
             speaking_rate (float, optional): Speed of speech. Default is 1.0.
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -115,7 +115,7 @@ class TTS(tts.TTS):
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
             voice_name (str, optional): Specific voice name. Default is an empty string.
             speaking_rate (float, optional): Speed of speech. Default is 1.0.
-        """
+        """  # noqa: E501
         self._opts.voice = texttospeech.VoiceSelectionParams(
             name=voice_name,
             language_code=language,
@@ -199,9 +199,9 @@ class ChunkedStream(tts.ChunkedStream):
                 await decoder.aclose()
 
         except DeadlineExceeded:
-            raise APITimeoutError()
+            raise APITimeoutError()  # noqa: B904
         except GoogleAPICallError as e:
-            raise APIStatusError(
+            raise APIStatusError(  # noqa: B904
                 e.message,
                 status_code=e.code or -1,
                 request_id=None,

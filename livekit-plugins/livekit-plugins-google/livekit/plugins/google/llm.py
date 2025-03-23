@@ -94,7 +94,7 @@ class LLM(llm.LLM):
             presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
-        """
+        """  # noqa: E501
         super().__init__()
         self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
         self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
@@ -102,7 +102,7 @@ class LLM(llm.LLM):
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
             logger.warning(
-                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."  # noqa: E501
             )
 
         if vertexai:
@@ -117,7 +117,7 @@ class LLM(llm.LLM):
             self._location = None
             if not self._api_key:
                 raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
         self._opts = _LLMOptions(
@@ -273,7 +273,7 @@ class LLMStream(llm.LLMStream):
 
                 if len(response.candidates) > 1:
                     logger.warning(
-                        "gemini llm: there are multiple candidates in the response, returning response from the first one."
+                        "gemini llm: there are multiple candidates in the response, returning response from the first one."  # noqa: E501
                     )
 
                 for part in response.candidates[0].content.parts:

@@ -10,7 +10,14 @@ from pydantic import ValidationError
 from livekit import rtc
 
 from .. import debug, llm, utils
-from ..llm import ChatChunk, ChatContext, StopResponse, ToolContext, ToolError, utils as llm_utils
+from ..llm import (
+    ChatChunk,
+    ChatContext,
+    StopResponse,
+    ToolContext,
+    ToolError,
+    utils as llm_utils,
+)
 from ..log import logger
 from ..types import NotGivenOr
 from ..utils import aio
@@ -352,17 +359,17 @@ async def _execute_tools_task(
                     logger.error(
                         "exception occurred while executing tool",
                         extra={
-                            "function": fnc_call.name,
+                            "function": fnc_call.name,  # noqa: B023
                             "speech_id": speech_handle.id,
                         },
                         exc_info=task.exception(),
                     )
-                    py_out.exception = task.exception()
-                    out.append(py_out)
+                    py_out.exception = task.exception()  # noqa: B023
+                    out.append(py_out)  # noqa: B023
                     return
 
-                py_out.output = task.result()
-                out.append(py_out)
+                py_out.output = task.result()  # noqa: B023
+                out.append(py_out)  # noqa: B023
                 tasks.remove(task)
 
             task.add_done_callback(_log_exceptions)
@@ -462,7 +469,7 @@ class _PythonOutput:
                 fnc_call_out=llm.FunctionCallOutput(
                     name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
-                    output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information
+                    output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information  # noqa: E501
                     is_error=True,
                 ),
                 agent_task=None,
@@ -480,7 +487,7 @@ class _PythonOutput:
             other_outputs = [item for item in self.output if not isinstance(item, Agent)]
             if len(agent_tasks) > 1:
                 logger.error(
-                    f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",
+                    f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
                     extra={
                         "call_id": self.fnc_call.call_id,
                         "output": self.output,

@@ -47,7 +47,7 @@ class FallbackAdapter(
             raise ValueError("at least one LLM instance must be provided.")
 
         super().__init__(
-            capabilities=LLMCapabilities(
+            capabilities=LLMCapabilities(  # noqa: F821
                 supports_choices_on_int=all(t.capabilities.supports_choices_on_int for t in llm),
                 requires_persistent_functions=all(
                     t.capabilities.requires_persistent_functions for t in llm
@@ -110,7 +110,7 @@ class FallbackLLMStream(LLMStream):
         self._current_stream: LLMStream | None = None
 
     @property
-    def function_calls(self) -> list[FunctionCallInfo]:
+    def function_calls(self) -> list[FunctionCallInfo]:  # noqa: F821
         if self._current_stream is None:
             return []
         return self._current_stream.function_calls
@@ -127,7 +127,7 @@ class FallbackLLMStream(LLMStream):
             return self._tools
         return self._current_stream.tools
 
-    def execute_functions(self) -> list[CalledFunction]:
+    def execute_functions(self) -> list[CalledFunction]:  # noqa: F821
         # this function is unused, but putting it in place for completeness
         if self._current_stream is None:
             return []
@@ -255,5 +255,5 @@ class FallbackLLMStream(LLMStream):
             self._try_recovery(llm)
 
         raise APIConnectionError(
-            f"all LLMs failed ({[llm.label for llm in self._fallback_adapter._llm_instances]}) after {time.time() - start_time} seconds"
+            f"all LLMs failed ({[llm.label for llm in self._fallback_adapter._llm_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
         )

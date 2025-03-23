@@ -5,7 +5,10 @@ from typing import Literal
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from llama_index.core.chat_engine.types import BaseChatEngine, StreamingAgentChatResponse
+from llama_index.core.chat_engine.types import (
+    BaseChatEngine,
+    StreamingAgentChatResponse,
+)
 from llama_index.core.llms import ChatMessage, MessageRole
 
 from .log import logger

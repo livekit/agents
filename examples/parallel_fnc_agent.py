@@ -20,7 +20,7 @@ class EchoTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are Echo. Call the get_weather_today and get_weather_tomorrow functions when user asks for the weather."
+                "You are Echo. Call the get_weather_today and get_weather_tomorrow functions when user asks for the weather."  # noqa: E501
                 "Tell the user when you are calling the functions."
             ),
             # llm=openai.realtime.RealtimeModel(voice="echo"),
@@ -48,7 +48,7 @@ class AlloyTask(AgentTask):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are Alloy. Call the get_weather_today and get_weather_tomorrow functions when user asks for the weather."
+                "You are Alloy. Call the get_weather_today and get_weather_tomorrow functions when user asks for the weather."  # noqa: E501
                 "Tell the user when you are calling the functions."
             ),
             llm=openai.realtime.RealtimeModel(voice="alloy"),

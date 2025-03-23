@@ -88,7 +88,7 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         """
         Args:
             sample_rate: The sample rate required by the audio sink, if None, any sample rate is accepted
-        """
+        """  # noqa: E501
         super().__init__()
         self._sample_rate = sample_rate
         self.__capturing = False
@@ -172,9 +172,9 @@ class TextOutput(ABC):
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
         ...
 
-    def on_attached(self) -> None: ...
+    def on_attached(self) -> None: ...  # noqa: B027
 
-    def on_detached(self) -> None: ...
+    def on_detached(self) -> None: ...  # noqa: B027
 
 
 # TODO(theomonnom): Add documentation to VideoSink
@@ -185,9 +185,9 @@ class VideoOutput(ABC):
     @abstractmethod
     def flush(self) -> None: ...
 
-    def on_attached(self) -> None: ...
+    def on_attached(self) -> None: ...  # noqa: B027
 
-    def on_detached(self) -> None: ...
+    def on_detached(self) -> None: ...  # noqa: B027
 
 
 class AgentInput:
@@ -258,7 +258,10 @@ class AgentInput:
 
 class AgentOutput:
     def __init__(
-        self, video_changed: Callable, audio_changed: Callable, transcription_changed: Callable
+        self,
+        video_changed: Callable,
+        audio_changed: Callable,
+        transcription_changed: Callable,
     ) -> None:
         self._video_sink: VideoOutput | None = None
         self._audio_sink: AudioOutput | None = None

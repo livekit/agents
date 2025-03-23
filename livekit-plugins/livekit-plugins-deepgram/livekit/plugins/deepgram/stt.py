@@ -95,7 +95,7 @@ class STTOptions:
     detect_language: bool
     interim_results: bool
     punctuate: bool
-    model: DeepgramModels
+    model: DeepgramModels | str
     smart_format: bool
     no_delay: bool
     endpointing_ms: int
@@ -106,14 +106,15 @@ class STTOptions:
     keyterms: list[str]
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
+    numerals: bool = False
 
 
 class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: DeepgramModels = "nova-2-general",
-        language: DeepgramLanguages = "en-US",
+        model: DeepgramModels | str = "nova-2-general",
+        language: DeepgramLanguages | str = "en-US",
         detect_language: bool = False,
         interim_results: bool = True,
         punctuate: bool = True,
@@ -130,6 +131,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
+        numerals: bool = False,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -155,6 +157,7 @@ class STT(stt.STT):
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             energy_filter: Audio energy filter configuration for voice activity detection.
                          Can be a boolean or AudioEnergyFilter instance. Defaults to False.
+            numerals: Whether to include numerals in the transcription. Defaults to False.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -162,7 +165,7 @@ class STT(stt.STT):
         Note:
             The api_key must be set either through the constructor argument or by setting
             the DEEPGRAM_API_KEY environmental variable.
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
@@ -193,6 +196,7 @@ class STT(stt.STT):
             keyterms=keyterms or [],
             profanity_filter=profanity_filter,
             energy_filter=energy_filter,
+            numerals=numerals,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -219,6 +223,7 @@ class STT(stt.STT):
             "smart_format": config.smart_format,
             "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
+            "numerals": config.numerals,
         }
         if config.language:
             recognize_config["language"] = config.language
@@ -275,8 +280,8 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        language: DeepgramLanguages | None = None,
-        model: DeepgramModels | None = None,
+        language: DeepgramLanguages | str | None = None,
+        model: DeepgramModels | str | None = None,
         interim_results: bool | None = None,
         punctuate: bool | None = None,
         smart_format: bool | None = None,
@@ -287,6 +292,7 @@ class STT(stt.STT):
         keywords: list[tuple[str, float]] | None = None,
         keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
+        numerals: bool | None = None,
     ):
         if language is not None:
             self._opts.language = language
@@ -327,6 +333,7 @@ class STT(stt.STT):
                 keywords=keywords,
                 keyterms=keyterms,
                 profanity_filter=profanity_filter,
+                numerals=numerals,
             )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -376,15 +383,14 @@ class SpeechStream(stt.SpeechStream):
             else:
                 self._audio_energy_filter = AudioEnergyFilter()
 
-        self._pushed_audio_duration = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
     def update_options(
         self,
         *,
-        language: DeepgramLanguages | None = None,
-        model: DeepgramModels | None = None,
+        language: DeepgramLanguages | str | None = None,
+        model: DeepgramModels | str | None = None,
         interim_results: bool | None = None,
         punctuate: bool | None = None,
         smart_format: bool | None = None,
@@ -395,6 +401,7 @@ class SpeechStream(stt.SpeechStream):
         keywords: list[tuple[str, float]] | None = None,
         keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
+        numerals: bool | None = None,
     ):
         if language is not None:
             self._opts.language = language
@@ -420,6 +427,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.keyterms = keyterms
         if profanity_filter is not None:
             self._opts.profanity_filter = profanity_filter
+        if numerals is not None:
+            self._opts.numerals = numerals
 
         self._reconnect_event.set()
 
@@ -465,14 +474,14 @@ class SpeechStream(stt.SpeechStream):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif state == AudioEnergyFilter.State.END:
                         # no need to buffer as we have cooldown period
-                        frames = audio_bstream.flush()
+                        frames.extend(audio_bstream.flush())
                         has_ended = True
                     elif state == AudioEnergyFilter.State.SILENCE:
                         # buffer the last silence frame, since it could contain beginning of speech
                         # TODO: improve accuracy by using a ring buffer with longer window
                         last_frame = data
                 elif isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
+                    frames.extend(audio_bstream.flush())
                     has_ended = True
 
                 for frame in frames:
@@ -559,6 +568,7 @@ class SpeechStream(stt.SpeechStream):
             "endpointing": False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms,
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
+            "numerals": self._opts.numerals,
         }
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
@@ -722,8 +732,8 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
 
 
 def _validate_model(
-    model: DeepgramModels, language: DeepgramLanguages | str | None
-) -> DeepgramModels:
+    model: DeepgramModels | str, language: DeepgramLanguages | str | None
+) -> DeepgramModels | str:
     en_only_models = {
         "nova-2-meeting",
         "nova-2-phonecall",
