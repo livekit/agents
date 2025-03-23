@@ -68,6 +68,8 @@ class _STTOptions:
     silence_duration_ms: int = 350
     prompt: NotGivenOr[str] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[str] = NOT_GIVEN
+    vad_type: str = "server_vad"
+    vad_eagerness: str = "auto"
 
 
 class STT(stt.STT):
@@ -81,6 +83,8 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         prefix_padding_ms: NotGivenOr[int] = NOT_GIVEN,
         silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_type: str = "server_vad",
+        vad_eagerness: str = "auto",
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -95,9 +99,11 @@ class STT(stt.STT):
             detect_language: Whether to automatically detect the language.
             model: The OpenAI model to use for transcription.
             prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
-            vad_threshold: Voice activity detection threshold (0.0 to 1.0).
-            prefix_padding_ms: Padding to add before speech in milliseconds.
-            silence_duration_ms: Duration of silence to consider end of speech in milliseconds.
+            vad_threshold: Voice activity detection threshold (0.0 to 1.0). Used for server_vad.
+            prefix_padding_ms: Padding to add before speech in milliseconds. Used for server_vad.
+            silence_duration_ms: Duration of silence to consider end of speech in milliseconds. Used for server_vad.
+            vad_type: Type of voice activity detection to use. "server_vad" or "semantic_vad".
+            vad_eagerness: For semantic_vad, control how eager the model is to interrupt. "low", "medium", "high", or "auto".
             noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
                 This isn't needed when using LiveKit's noise cancellation.
             base_url: Custom base URL for OpenAI API.
@@ -116,6 +122,8 @@ class STT(stt.STT):
             detect_language=detect_language,
             model=model,
             prompt=prompt,
+            vad_type=vad_type,
+            vad_eagerness=vad_eagerness,
         )
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
@@ -208,6 +216,8 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         prefix_padding_ms: NotGivenOr[int] = NOT_GIVEN,
         silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_type: str | None = None,
+        vad_eagerness: str | None = None,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
@@ -224,6 +234,8 @@ class STT(stt.STT):
             self._opts.silence_duration_ms = silence_duration_ms
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
+        self._opts.vad_type = vad_type or self._opts.vad_type
+        self._opts.vad_eagerness = vad_eagerness or self._opts.vad_eagerness
 
         for stream in self._streams:
             if is_given(language):
@@ -242,14 +254,26 @@ class STT(stt.STT):
                     "language": language,
                 },
                 "turn_detection": {
-                    "type": "server_vad",
+                    "type": self._opts.vad_type,
+                },
+            },
+        }
+
+        if self._opts.vad_type == "server_vad":
+            realtime_config["session"]["turn_detection"].update(
+                {
                     "threshold": self._opts.vad_threshold,
                     "prefix_padding_ms": self._opts.prefix_padding_ms,
                     "silence_duration_ms": self._opts.silence_duration_ms,
-                },
-                # "include": ["item.input_audio_transcription.logprobs"],
-            },
-        }
+                }
+            )
+        elif self._opts.vad_type == "semantic_vad":
+            realtime_config["session"]["turn_detection"].update(
+                {
+                    "eagerness": self._opts.vad_eagerness,
+                }
+            )
+
         if self._opts.noise_reduction_type:
             realtime_config["session"]["input_audio_transcription"]["noise_reduction_type"] = (
                 self._opts.noise_reduction_type
