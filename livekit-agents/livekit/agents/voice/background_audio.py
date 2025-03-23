@@ -16,8 +16,8 @@ class BackgroundAudio:
         self,
         room: rtc.Room,
         *,
-        ambiant_sound: NotGivenOr[str] = NOT_GIVEN,
-        thinking_sound: NotGivenOr[str] = NOT_GIVEN,
+        ambiant_sound: NotGivenOr[str | None] = NOT_GIVEN,
+        thinking_sound: NotGivenOr[str | None] = NOT_GIVEN,
         agent_session: NotGivenOr[AgentSession] = NOT_GIVEN,
         track_publish_options: NotGivenOr[rtc.TrackPublishOptions] = NOT_GIVEN,
     ) -> None:
@@ -84,5 +84,5 @@ class BackgroundAudio:
 
     async def _loop_audio_frames(self, file_path: str) -> AsyncIterable[rtc.AudioFrame]:
         while True:
-            async for frame in audio_frames_from_file(file_path, sample_rate=48000, num_channels=1):
+            async for frame in audio_frames_from_file(file_path):
                 yield frame
