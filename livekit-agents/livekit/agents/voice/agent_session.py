@@ -44,6 +44,7 @@ The mode of turn detection to use.
     based on available models (realtime_llm -> vad -> stt -> manual)
 
 If the model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
+If a _TurnDetector is provided, use the default mode with the provided turn detector.
 """
 
 

@@ -66,7 +66,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._pushed_duration += frame.duration
         await self._audio_source.capture_frame(frame)
-        # self._interrupted_event.clear()
 
     def flush(self) -> None:
         super().flush()

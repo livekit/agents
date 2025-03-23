@@ -629,27 +629,26 @@ class AgentActivity(RecognitionHooks):
 
     async def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:
-        #  - check if realtime model server-side turn detection is enabled
         #  - check if the turn detection mode is set to "manual"
+        #  - check if realtime model server-side turn detection is enabled
         #  - check if there is no current generation happening
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
         #  turn)
         #  - generate a reply to the user input
-        logger.info("on_end_of_turn", extra={"new_transcript": new_transcript})
+
+        user_message = llm.ChatMessage(role="user", content=[new_transcript])
+        if self._turn_detection_mode == "manual":
+            await self._agent.on_end_of_turn(
+                self._agent.chat_ctx, user_message, generating_reply=False
+            )
+            return
+
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
             if self.llm.capabilities.turn_detection:
                 return
             # ignore stt transcription for realtime model and commit the audio buffer
             new_transcript = ""
             self._rt_session.commit_input_audio()
-
-        user_message = llm.ChatMessage(role="user", content=[new_transcript])
-
-        if self._turn_detection_mode == "manual":
-            await self._agent.on_end_of_turn(
-                self._agent.chat_ctx, user_message, generating_reply=False
-            )
-            return
 
         if self._current_speech is not None:
             if not self._current_speech.allow_interruptions:
