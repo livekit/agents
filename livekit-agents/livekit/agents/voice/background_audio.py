@@ -8,6 +8,8 @@ from ..utils.aio import cancel_and_wait
 from ..utils import log_exceptions
 from ..log import logger
 
+from .events import AgentStateChangedEvent
+
 
 class BackgroundAudio:
     def __init__(
@@ -29,6 +31,8 @@ class BackgroundAudio:
         self._publication: rtc.LocalTrackPublication | None = None
         self._republish_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        self._mixer_task: asyncio.Task | None = None
+        self._thinking_task: asyncio.Task | None = None
 
     async def _publish_track(self) -> None:
         async with self._lock:
@@ -53,6 +57,13 @@ class BackgroundAudio:
 
         self._room.on("reconnected", _on_reconnected)
 
+        if self._agent_session:
+            self._agent_session.on("agent_state_changed", self._agent_state_changed)
+
+    async def _agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
+        if ev.state == "thinking" and self._thinking_sound:
+            self._audio_mixer.add_stream(audio_frames_from_file(self._thinking_sound))
+
     @log_exceptions(logger=logger)
     async def _mixer(self) -> None:
         async for frame in self._audio_mixer:
@@ -60,6 +71,7 @@ class BackgroundAudio:
 
     async def aclose(self) -> None:
         async with self._lock:
+            assert self._mixer_task
             await cancel_and_wait(self._mixer_task)
             await self._audio_source.aclose()
             await self._audio_mixer.aclose()
