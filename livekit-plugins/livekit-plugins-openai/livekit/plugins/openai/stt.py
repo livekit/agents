@@ -248,18 +248,22 @@ class STT(stt.STT):
                 },
             },
         }
-        
+
         if self._opts.vad_type == "server_vad":
-            realtime_config["session"]["turn_detection"].update({
-                "threshold": self._opts.vad_threshold,
-                "prefix_padding_ms": self._opts.prefix_padding_ms,
-                "silence_duration_ms": self._opts.silence_duration_ms,
-            })
+            realtime_config["session"]["turn_detection"].update(
+                {
+                    "threshold": self._opts.vad_threshold,
+                    "prefix_padding_ms": self._opts.prefix_padding_ms,
+                    "silence_duration_ms": self._opts.silence_duration_ms,
+                }
+            )
         elif self._opts.vad_type == "semantic_vad":
-            realtime_config["session"]["turn_detection"].update({
-                "eagerness": self._opts.vad_eagerness,
-            })
-        
+            realtime_config["session"]["turn_detection"].update(
+                {
+                    "eagerness": self._opts.vad_eagerness,
+                }
+            )
+
         if self._opts.noise_reduction_type:
             realtime_config["session"]["input_audio_transcription"][
                 "noise_reduction_type"
