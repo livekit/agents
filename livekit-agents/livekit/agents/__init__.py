@@ -42,7 +42,7 @@ from .types import (
 )
 from .version import __version__
 from .voice import Agent, AgentEvent, AgentSession, RunContext, io
-from .voice.room_io import RoomIO
+from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
@@ -61,6 +61,8 @@ __all__ = [
     "ChatContext",
     "ChatItem",
     "RoomIO",
+    "RoomInputOptions",
+    "RoomOutputOptions",
     "ChatMessage",
     "ChatRole",
     "ChatContent",
