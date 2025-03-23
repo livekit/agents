@@ -13,6 +13,7 @@ from .events import (
     UserStoppedSpeakingEvent,
 )
 from .speech_handle import SpeechHandle
+from .background_audio import BackgroundAudio
 
 __all__ = [
     "ChatCLI",
@@ -29,4 +30,5 @@ __all__ = [
     "AgentStoppedSpeakingEvent",
     "MetricsCollectedEvent",
     "ConversationItemAddedEvent",
+    "BackgroundAudio",
 ]

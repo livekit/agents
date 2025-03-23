@@ -16,14 +16,14 @@ class BackgroundAudio:
         self,
         room: rtc.Room,
         *,
-        ambiant_sound: NotGivenOr[str | None] = NOT_GIVEN,
+        ambient_sound: NotGivenOr[str | None] = NOT_GIVEN,
         thinking_sound: NotGivenOr[str | None] = NOT_GIVEN,
         agent_session: NotGivenOr[AgentSession] = NOT_GIVEN,
         track_publish_options: NotGivenOr[rtc.TrackPublishOptions] = NOT_GIVEN,
     ) -> None:
         self._room = room
         self._agent_session = agent_session or None
-        self._ambiant_sound = ambiant_sound or None
+        self._ambient_sound = ambient_sound or None
         self._thinking_sound = thinking_sound or None
         self._track_publish_options = track_publish_options or None
         self._audio_source = rtc.AudioSource(48000, 1)
@@ -44,8 +44,8 @@ class BackgroundAudio:
     async def start(self) -> None:
         await self._publish_track()
 
-        if self._ambiant_sound:
-            ambient_stream = self._loop_audio_frames(self._ambiant_sound)
+        if self._ambient_sound:
+            ambient_stream = self._loop_audio_frames(self._ambient_sound)
             self._audio_mixer.add_stream(ambient_stream)
 
         self._mixer_task = asyncio.create_task(self._mixer())
