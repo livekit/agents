@@ -3,8 +3,8 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli
-from livekit.agents.llm import ChatContext, ChatMessage, function_tool
+from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli
+from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("push-to-talk-example")
@@ -13,64 +13,48 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
-class EchoAgent(Agent):
+class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are Echo.",
+            instructions="You are a helpful assistant.",
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
             tts=cartesia.TTS(),
         )
 
-    @function_tool
-    async def talk_to_alloy(self, context: RunContext):
-        """Called when want to talk to Alloy."""
-        return AlloyAgent(), "Transferring you to Alloy."
-
     async def on_end_of_turn(
         self, chat_ctx: ChatContext, new_message: ChatMessage, generating_reply: bool
     ) -> None:
+        # callback when user input is transcribed
         chat_ctx = chat_ctx.copy()
         chat_ctx.items.append(new_message)
         await self.update_chat_ctx(chat_ctx)
         logger.info("add user message to chat context", extra={"content": new_message.content})
 
 
-class AlloyAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="You are Alloy.",
-            llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
-        )
-
-    @function_tool
-    async def talk_to_echo(self, context: RunContext):
-        """Called when want to talk to Echo."""
-        return EchoAgent(), "Transferring you to Echo."
-
-
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(turn_detection="manual")
+    room_io = RoomIO(session, room=ctx.room)
+    await room_io.start()
+    await session.start(agent=MyAgent())
 
-    await session.start(
-        agent=EchoAgent(),
-        room=ctx.room,
-    )
-
-    # disable input audio if in PPT mode
+    # disable input audio at the start
     session.input.set_audio_enabled(False)
 
-    @ctx.room.local_participant.register_rpc_method("push")
-    async def on_pushed(data: rtc.RpcInvocationData):
+    @ctx.room.local_participant.register_rpc_method("start_turn")
+    async def start_turn(data: rtc.RpcInvocationData):
         session.interrupt()
+
+        # listen to the caller if multi-user
+        room_io.set_participant(data.caller_identity)
         session.input.set_audio_enabled(True)
 
-    @ctx.room.local_participant.register_rpc_method("talk")
-    async def on_talk(data: rtc.RpcInvocationData):
-        session.generate_reply()
+    @ctx.room.local_participant.register_rpc_method("end_turn")
+    async def end_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
+        session.generate_reply()
 
 
 if __name__ == "__main__":

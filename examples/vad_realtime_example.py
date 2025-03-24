@@ -12,7 +12,7 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
-class AlloyAgent(Agent):
+class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy.",
@@ -44,7 +44,7 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(),
         allow_interruptions=True,
     )
-    await session.start(agent=AlloyAgent(), room=ctx.room)
+    await session.start(agent=MyAgent(), room=ctx.room)
 
 
 def prewarm(proc: JobProcess):
