@@ -650,7 +650,7 @@ class AgentActivity(RecognitionHooks):
                 return
             # ignore stt transcription for realtime model and commit the audio buffer
             new_transcript = ""
-            self._rt_session.commit_input_audio()
+            self._rt_session.commit_audio()
 
         if self._current_speech is not None:
             if not self._current_speech.allow_interruptions:

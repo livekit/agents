@@ -538,6 +538,11 @@ class RealtimeSession(
                 )
                 self._pushed_duration_s += f.duration
 
+    def commit_audio(self) -> None:
+        if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
+            self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))
+            self._pushed_duration_s = 0
+
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
@@ -575,11 +580,6 @@ class RealtimeSession(
                 audio_end_ms=audio_end_ms,
             )
         )
-
-    def commit_input_audio(self) -> None:
-        if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
-            self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))
-            self._pushed_duration_s = 0
 
     async def aclose(self) -> None:
         self._msg_ch.close()
