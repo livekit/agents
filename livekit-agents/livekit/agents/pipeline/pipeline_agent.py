@@ -1342,6 +1342,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 continue
 
             if speech.allow_interruptions:
+                speech.interrupt()
         
         logger.info(f"_pending_agent_reply = {self._pending_agent_reply}")
         logger.info(f"cancelling agent reply task: {self._agent_reply_task}")
