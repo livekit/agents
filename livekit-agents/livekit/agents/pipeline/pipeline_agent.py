@@ -1337,15 +1337,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # due to timing, we could end up with two pushed agent replies inside the speech queue.
         # so make sure we directly interrupt every reply when validating a new one
-        for speech in self._speech_q:
-            if not speech.is_reply:
-                continue
+        # for speech in self._speech_q:
+        #     if not speech.is_reply:
+        #         continue
 
-            if speech.allow_interruptions:
-                speech.interrupt()
+        #     if speech.allow_interruptions:
+        #         speech.interrupt()
+                # speech.interrupt(cancel_nested=True)
+        if self._should_interrupt():
+            self.interrupt()
         
         logger.info(f"_pending_agent_reply = {self._pending_agent_reply}")
         logger.info(f"cancelling agent reply task: {self._agent_reply_task}")
+        # self._agent_reply_task.cancel()
 
         logger.debug(
             "validated agent reply",
@@ -1376,8 +1380,14 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _interrupt_if_possible(self) -> None:
         """Check whether the current assistant speech should be interrupted"""
-        if self._playing_speech and self._should_interrupt():
-            self._playing_speech.interrupt()
+        # if self._playing_speech and self._should_interrupt():
+        #     self._playing_speech.interrupt()
+        if self._should_interrupt():
+            self.interrupt()
+        # if self._pending_agent_reply and self._should_interrupt():
+        #     self._pending_agent_reply.interrupt()
+        
+        # if self._agent_reply_task and 
 
     def _should_interrupt(self) -> bool:
         if self._playing_speech is None:
