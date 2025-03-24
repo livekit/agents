@@ -522,8 +522,10 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # Stop current LLM stream
         logger.info(f"cancelling agent reply task: {self._agent_reply_task}")
-        self._agent_reply_task.cancel()
-        self._pending_agent_reply.cancel()
+        if self._agent_reply_task is not None:
+            self._agent_reply_task.cancel()
+        if self._pending_agent_reply is not None:
+            self._pending_agent_reply.cancel()
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""

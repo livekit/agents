@@ -198,7 +198,7 @@ class SpeechHandle:
     def cancel(self, cancel_nested: bool = False) -> None:
         self._init_fut.cancel()
 
-        if isinstance(self._source, LLMStream):
+        if isinstance(self._source, LLMStream) and self._source._task is not None:
             self._source._task.cancel()
         elif isinstance(self._source, AsyncIterable):
             self._source.aclose()
