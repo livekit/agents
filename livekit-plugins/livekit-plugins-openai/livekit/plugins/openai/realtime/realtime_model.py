@@ -7,7 +7,7 @@ import json
 import os
 import weakref
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal, Union
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -29,6 +29,7 @@ from openai.types.beta.realtime import (
     ConversationItemTruncateEvent,
     ErrorEvent,
     InputAudioBufferAppendEvent,
+    InputAudioBufferCommitEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
     RealtimeClientEvent,
@@ -74,7 +75,18 @@ class _InputAudioTranscription:
     model: Literal["whisper-1"] = "whisper-1"
 
 
+@dataclass
+class _TurnDetection:
+    type: Literal["server_vad"] = "server_vad"
+    create_response: bool | None = True
+    interrupt_response: bool | None = True
+    prefix_padding_ms: int | None = 300
+    silence_duration_ms: int | None = 500
+    threshold: float | None = 0.65
+
+
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = _InputAudioTranscription()
+DEFAULT_TURN_DETECTION = _TurnDetection()
 
 
 @dataclass
@@ -82,6 +94,7 @@ class _RealtimeOptions:
     model: str
     voice: str
     input_audio_transcription: _InputAudioTranscription | None
+    turn_detection: _TurnDetection | None
     api_key: str
     base_url: str
 
@@ -110,12 +123,16 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: _InputAudioTranscription
         | None = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: _TurnDetection | None = DEFAULT_TURN_DETECTION,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
-            # TODO(theomonnom): add a way to disable turn detection (And use VAD on the VoiceAgent)
-            capabilities=llm.RealtimeCapabilities(message_truncation=True, turn_detection=True)
+            capabilities=llm.RealtimeCapabilities(
+                message_truncation=True,
+                turn_detection=turn_detection is not None,
+                user_transcription=input_audio_transcription is not None,
+            )
         )
 
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -130,6 +147,7 @@ class RealtimeModel(llm.RealtimeModel):
             model=model,
             voice=voice,
             input_audio_transcription=input_audio_transcription,
+            turn_detection=turn_detection,
             api_key=api_key,
             base_url=base_url,
         )
@@ -215,6 +233,7 @@ class RealtimeSession(
             NUM_CHANNELS,
             samples_per_channel=SAMPLE_RATE // 10,  # 100ms
         )
+        self._pushed_duration_s = 0  # duration of audio pushed to the OpenAI Realtime API
 
     def send_event(self, event: RealtimeClientEvent | dict) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
@@ -248,7 +267,7 @@ class RealtimeSession(
                 try:
                     if isinstance(msg, BaseModel):
                         msg = msg.model_dump(
-                            by_alias=True, exclude_unset=True, exclude_defaults=True
+                            by_alias=True, exclude_unset=True, exclude_defaults=False
                         )
 
                     self.emit("openai_client_event_queued", msg)
@@ -351,6 +370,12 @@ class RealtimeSession(
                 model=self._realtime_model._opts.input_audio_transcription.model,
             )
 
+        turn_detection: session_update_event.SessionTurnDetection | None = None
+        if self._realtime_model._opts.turn_detection:
+            turn_detection = session_update_event.SessionTurnDetection.model_validate(
+                asdict(self._realtime_model._opts.turn_detection)
+            )
+
         # initial session update
         self.send_event(
             SessionUpdateEvent(
@@ -363,14 +388,7 @@ class RealtimeSession(
                     input_audio_format="pcm16",
                     output_audio_format="pcm16",
                     modalities=["text", "audio"],
-                    turn_detection=session_update_event.SessionTurnDetection(
-                        type="server_vad",
-                        create_response=True,
-                        interrupt_response=True,
-                        prefix_padding_ms=300,
-                        silence_duration_ms=500,
-                        threshold=0.65,
-                    ),
+                    turn_detection=turn_detection,
                     input_audio_transcription=input_audio_transcription,
                 ),
                 event_id=utils.shortuuid("session_update_"),
@@ -518,6 +536,7 @@ class RealtimeSession(
                         audio=base64.b64encode(f.data).decode("utf-8"),
                     )
                 )
+                self._pushed_duration_s += f.duration
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
@@ -556,6 +575,11 @@ class RealtimeSession(
                 audio_end_ms=audio_end_ms,
             )
         )
+
+    def commit_input_audio(self) -> None:
+        if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
+            self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))
+            self._pushed_duration_s = 0
 
     async def aclose(self) -> None:
         self._msg_ch.close()

@@ -4,7 +4,7 @@ import asyncio
 import copy
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from livekit import rtc
 
@@ -32,12 +32,27 @@ class VoiceOptions:
 
 Userdata_T = TypeVar("Userdata_T")
 
+TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"]
+"""
+The mode of turn detection to use.
+
+- "stt": use speech-to-text result to detect the end of the user's turn
+- "vad": use VAD to detect the start and end of the user's turn
+- "realtime_llm": use server-side turn detection provided by the realtime LLM
+- "manual": manually manage the turn detection
+- (default) None or not provided: automatically choose the best mode
+    based on available models (realtime_llm -> vad -> stt -> manual)
+
+If the model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
+If a _TurnDetector is provided, use the default mode with the provided turn detector.
+"""
+
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        turn_detector: NotGivenOr[_TurnDetector] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | _TurnDetector | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
@@ -61,7 +76,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_tool_steps=max_tool_steps,
         )
         self._started = False
-        self._turn_detector = turn_detector or None
+        self._turn_detection_mode: TurnDetectionMode | None = None
+        self._turn_detector: _TurnDetector | None = None
+        if isinstance(turn_detection, str):
+            self._turn_detection_mode = turn_detection
+        else:
+            self._turn_detector = turn_detection or None
+
         self._stt = stt or None
         self._vad = vad or None
         self._llm = llm or None
@@ -100,6 +121,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @userdata.setter
     def userdata(self, value: Userdata_T) -> None:
         self._userdata = value
+
+    @property
+    def turn_detection_mode(self) -> TurnDetectionMode | None:
+        return self._turn_detection_mode
 
     @property
     def turn_detector(self) -> _TurnDetector | None:
