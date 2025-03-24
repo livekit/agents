@@ -523,6 +523,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # Stop current LLM stream
         # self._playing_speech.synthesis_handle.
+        logger.info(f"cancelling agent reply task: {self._agent_reply_task}")
         self._agent_reply_task.cancel()
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
