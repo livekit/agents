@@ -24,7 +24,7 @@ from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import LLMCapabilities, ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
-from ._utils import _build_aws_ctx, _build_tools, _get_aws_session
+from ._utils import _build_aws_ctx, _build_tools, _get_aws_async_session
 from .log import logger
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
@@ -98,8 +98,8 @@ class LLM(llm.LLM):
         )
         self._region = region
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
-        self._session = session or _get_aws_session(
-            api_key=api_key, api_secret=api_secret, region=region, async_session=True
+        self._session = session or _get_aws_async_session(
+            api_key=api_key, api_secret=api_secret, region=region
         )
 
     def chat(

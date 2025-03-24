@@ -16,30 +16,27 @@ from livekit.agents.llm.function_context import _is_optional_type
 __all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_session"]
 
 
-def _get_aws_session(
-    api_key: str | None = None,
-    api_secret: str | None = None,
-    region: str | None = None,
-    async_session: bool = False,
-) -> aioboto3.Session | boto3.Session:
-    """Get an AWS session with the given credentials and region.
+def _get_session_params(
+    api_key: str | None = None, api_secret: str | None = None, region: str | None = None
+) -> dict:
+    """Get common session parameters for AWS sessions.
 
     Args:
         api_key: AWS access key id.
         api_secret: AWS secret access key.
         region: AWS region.
-        async_session: Whether to return an aioboto3 session.
 
     Returns:
-        An AWS session.
+        Dictionary with session parameters.
 
     Raises:
-        NoCredentialsError: If no valid credentials are found.
+        ValueError: If AWS region is not specified.
     """
     # Validate AWS region first
     region = (
         region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     )
+
     if not region:
         raise ValueError(
             "AWS region must be set using the argument or by setting the AWS_REGION environment variable."
@@ -54,10 +51,59 @@ def _get_aws_session(
             }
         )
 
-    if async_session:
-        session: aioboto3.Session | boto3.Session = aioboto3.Session(**session_params)
-    else:
-        session: aioboto3.Session | boto3.Session = boto3.Session(**session_params)
+    return session_params
+
+
+def _get_aws_session(
+    api_key: str | None = None,
+    api_secret: str | None = None,
+    region: str | None = None,
+) -> boto3.Session:
+    """Get an AWS session with the given credentials and region.
+
+    Args:
+        api_key: AWS access key id.
+        api_secret: AWS secret access key.
+        region: AWS region.
+
+    Returns:
+        An AWS session.
+
+    Raises:
+        NoCredentialsError: If no valid credentials are found.
+    """
+    session_params = _get_session_params(api_key, api_secret, region)
+    session = boto3.Session(**session_params)
+
+    # Validate session by checking if we can get credentials
+    try:
+        session.get_credentials()
+    except NoCredentialsError:
+        raise NoCredentialsError("Unable to locate AWS credentials")
+
+    return session
+
+
+def _get_aws_async_session(
+    api_key: str | None = None,
+    api_secret: str | None = None,
+    region: str | None = None,
+) -> aioboto3.Session:
+    """Get an AWS session with the given credentials and region.
+
+    Args:
+        api_key: AWS access key id.
+        api_secret: AWS secret access key.
+        region: AWS region.
+
+    Returns:
+        An AWS session.
+
+    Raises:
+        NoCredentialsError: If no valid credentials are found.
+    """
+    session_params = _get_session_params(api_key, api_secret, region)
+    session = aioboto3.Session(**session_params)
 
     # Validate session by checking if we can get credentials
     try:

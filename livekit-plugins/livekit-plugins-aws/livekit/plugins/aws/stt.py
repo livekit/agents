@@ -22,7 +22,7 @@ from amazon_transcribe.model import Result, TranscriptEvent
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
 
-from ._utils import _get_aws_session
+from ._utils import _get_aws_async_session
 from .log import logger
 
 
@@ -75,11 +75,10 @@ class STT(stt.STT):
             os.environ["AWS_SECRET_ACCESS_KEY"] = api_secret
         else:
             # Get credentials from boto3 session
-            session = _get_aws_session(
+            session = _get_aws_async_session(
                 api_key=api_key,
                 api_secret=api_secret,
                 region=speech_region,
-                async_session=True,
             )
             credentials = session.get_credentials()
             os.environ["AWS_ACCESS_KEY_ID"] = credentials.access_key

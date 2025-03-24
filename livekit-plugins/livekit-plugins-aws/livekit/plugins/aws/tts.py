@@ -27,7 +27,7 @@ from livekit.agents import (
     utils,
 )
 
-from ._utils import _get_aws_session
+from ._utils import _get_aws_async_session
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
 
 TTS_NUM_CHANNELS: int = 1
@@ -93,11 +93,8 @@ class TTS(tts.TTS):
             language=language,
             sample_rate=sample_rate,
         )
-        self._session = session or _get_aws_session(
-            api_key=api_key,
-            api_secret=api_secret,
-            region=speech_region,
-            async_session=True,
+        self._session = session or _get_aws_async_session(
+            api_key=api_key, api_secret=api_secret, region=speech_region
         )
 
     def synthesize(
