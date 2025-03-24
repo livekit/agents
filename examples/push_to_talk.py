@@ -3,10 +3,8 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.agents.llm import function_tool
-from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.agents.voice import Agent, AgentSession, RunContext
+from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli
+from livekit.agents.llm import ChatContext, ChatMessage, function_tool
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("push-to-talk-example")
