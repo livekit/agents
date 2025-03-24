@@ -133,7 +133,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
 
     # commit the input audio buffer to the server
     @abstractmethod
-    def commit_input_audio(self) -> None: ...
+    def commit_audio(self) -> None: ...
 
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod
