@@ -518,7 +518,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # interrupt the playing speech
         if self._playing_speech is not None:
-            self._playing_speech.cancel()
+            self._playing_speech.cancel(cancel_nested=True) # TODO - Sai: ??
+
+        # Stop current LLM stream
+        # self._playing_speech.synthesis_handle.
+        self._agent_reply_task.cancel()
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
