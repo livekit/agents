@@ -50,6 +50,7 @@ EventTypes = Literal[
     "user_started_speaking",
     "user_stopped_speaking",
     "user_input_transcribed",
+    "agent_output_transcribed",
     "agent_started_speaking",
     "agent_stopped_speaking",
     "agent_state_changed",
@@ -71,6 +72,11 @@ class UserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
+
+
+class AgentOutputTranscribedEvent(BaseModel):
+    type: Literal["agent_output_transcribed"] = "agent_output_transcribed"
+    transcript: str
 
 
 class AgentStartedSpeakingEvent(BaseModel):

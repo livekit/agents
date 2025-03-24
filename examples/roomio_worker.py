@@ -15,7 +15,11 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import MetricsCollectedEvent
+from livekit.agents.voice import (
+    MetricsCollectedEvent,
+    AgentOutputTranscribedEvent,
+    UserInputTranscribedEvent,
+)
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 # from livekit.plugins import noise_cancellation
@@ -81,6 +85,15 @@ async def entrypoint(ctx: JobContext):
     def _on_metrics_collected(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
+
+    @session.on("user_input_transcribed")
+    def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
+        if ev.is_final:
+            logger.info(f"User input transcribed: {ev.transcript}")
+
+    @session.on("agent_output_transcribed")
+    def _on_agent_output_transcribed(ev: AgentOutputTranscribedEvent):
+        logger.info(f"Agent output transcribed: {ev.transcript}")
 
     async def log_usage():
         summary = usage_collector.get_summary()

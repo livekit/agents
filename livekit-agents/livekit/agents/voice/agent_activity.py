@@ -16,6 +16,7 @@ from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
 from .events import (
+    AgentOutputTranscribedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -495,6 +496,13 @@ class AgentActivity(RecognitionHooks):
             UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
         )
 
+    def _on_agent_output_transcribed(self, text: str) -> None:
+        log_event("agent_output_transcribed")
+        self._session.emit(
+            "agent_output_transcribed",
+            AgentOutputTranscribedEvent(transcript=text),
+        )
+
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
             # user_initiated generations are directly handled inside _realtime_reply_task
@@ -648,6 +656,7 @@ class AgentActivity(RecognitionHooks):
             text_output=tr_output,
             source=self._agent.transcription_node(text_source, model_settings),
         )
+        forward_text.add_done_callback(lambda _: self._on_agent_output_transcribed(text_out.text))
         tasks.append(forward_text)
         if audio_output is None:
             # update the agent state based on text if no audio output
@@ -770,6 +779,7 @@ class AgentActivity(RecognitionHooks):
             text_output=text_output,
             source=self._agent.transcription_node(llm_output, model_settings),
         )
+        forward_task.add_done_callback(lambda _: self._on_agent_output_transcribed(text_out.text))
         tasks.append(forward_task)
 
         if audio_output is not None:
@@ -990,28 +1000,26 @@ class AgentActivity(RecognitionHooks):
                     )
                     break
 
-                text_out = None
+                forward_task, text_out = perform_text_forwarding(
+                    text_output=text_output,
+                    source=self._agent.transcription_node(msg.text_stream, model_settings),
+                )
+                forward_task.add_done_callback(
+                    lambda _, text_out=text_out: self._on_agent_output_transcribed(text_out.text)
+                )
+                forward_tasks.append(forward_task)
+
                 audio_out = None
-
-                if text_output is not None:
-                    forward_task, text_out = perform_text_forwarding(
-                        text_output=text_output,
-                        source=self._agent.transcription_node(msg.text_stream, model_settings),
-                    )
-
-                    forward_tasks.append(forward_task)
-
-                    if text_out is not None:
-                        text_out.first_text_fut.add_done_callback(
-                            lambda _: self._session._update_agent_state(AgentState.SPEAKING)
-                        )
-
                 if audio_output is not None:
                     forward_task, audio_out = perform_audio_forwarding(
                         audio_output=audio_output, tts_output=msg.audio_stream
                     )
                     forward_tasks.append(forward_task)
                     audio_out.first_frame_fut.add_done_callback(
+                        lambda _: self._session._update_agent_state(AgentState.SPEAKING)
+                    )
+                else:
+                    text_out.first_text_fut.add_done_callback(
                         lambda _: self._session._update_agent_state(AgentState.SPEAKING)
                     )
 

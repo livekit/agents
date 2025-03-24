@@ -3,6 +3,7 @@ from .agent_session import AgentSession
 from .chat_cli import ChatCLI
 from .events import (
     AgentEvent,
+    AgentOutputTranscribedEvent,
     AgentStartedSpeakingEvent,
     AgentStoppedSpeakingEvent,
     ConversationItemAddedEvent,
@@ -25,6 +26,7 @@ __all__ = [
     "UserStoppedSpeakingEvent",
     "AgentEvent",
     "UserInputTranscribedEvent",
+    "AgentOutputTranscribedEvent",
     "AgentStartedSpeakingEvent",
     "AgentStoppedSpeakingEvent",
     "MetricsCollectedEvent",
