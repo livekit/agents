@@ -78,6 +78,14 @@ class ImageContent(BaseModel):
 
     Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
     """
+    mime_type: str | None = None
+    """
+    MIME type of the image
+    """
+    id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
+    """
+    Unique identifier for the image
+    """
     _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
 
 
