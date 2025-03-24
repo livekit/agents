@@ -58,6 +58,11 @@ class ImageContent(BaseModel):
     ```
     """  # noqa: E501
 
+    id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
+    """
+    Unique identifier for the image
+    """
+
     type: Literal["image_content"] = Field(default="image_content")
 
     image: str | rtc.VideoFrame
@@ -81,10 +86,6 @@ class ImageContent(BaseModel):
     mime_type: str | None = None
     """
     MIME type of the image
-    """
-    id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
-    """
-    Unique identifier for the image
     """
     _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
 
