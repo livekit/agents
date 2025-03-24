@@ -198,6 +198,11 @@ class SpeechHandle:
     def cancel(self, cancel_nested: bool = False) -> None:
         self._init_fut.cancel()
 
+        if isinstance(self._source, LLMStream):
+            self._source._task.cancel()
+        elif isinstance(self._source, AsyncIterable):
+            self._source.aclose()
+
         if self._synthesis_handle is not None:
             self._synthesis_handle.interrupt()
 
