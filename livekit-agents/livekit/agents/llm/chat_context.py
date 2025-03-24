@@ -58,6 +58,11 @@ class ImageContent(BaseModel):
     ```
     """  # noqa: E501
 
+    id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
+    """
+    Unique identifier for the image
+    """
+
     type: Literal["image_content"] = Field(default="image_content")
 
     image: str | rtc.VideoFrame
@@ -77,6 +82,10 @@ class ImageContent(BaseModel):
     Detail parameter for LLM provider, if supported.
 
     Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
+    """
+    mime_type: str | None = None
+    """
+    MIME type of the image
     """
     _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
 
