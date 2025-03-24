@@ -55,9 +55,9 @@ def _get_aws_session(
         )
 
     if async_session:
-        session = aioboto3.Session(**session_params)
+        session: aioboto3.Session | boto3.Session = aioboto3.Session(**session_params)
     else:
-        session = boto3.Session(**session_params)
+        session: aioboto3.Session | boto3.Session = boto3.Session(**session_params)
 
     # Validate session by checking if we can get credentials
     try:
