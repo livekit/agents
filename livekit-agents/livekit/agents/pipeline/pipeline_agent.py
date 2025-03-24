@@ -518,7 +518,11 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # interrupt the playing speech
         if self._playing_speech is not None:
-            self._playing_speech.cancel()
+            self._playing_speech.cancel(cancel_nested=True)
+
+        # Stop current LLM stream
+        logger.info(f"cancelling agent reply task: {self._agent_reply_task}")
+        self._agent_reply_task.cancel()
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -699,7 +703,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _synthesize_agent_reply(self):
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
-
+        logger.info("inside _synthesize_agent_reply")
         if self._pending_agent_reply is not None:
             self._pending_agent_reply.cancel()
 
@@ -1331,12 +1335,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # due to timing, we could end up with two pushed agent replies inside the speech queue.
         # so make sure we directly interrupt every reply when validating a new one
-        for speech in self._speech_q:
-            if not speech.is_reply:
-                continue
-
-            if speech.allow_interruptions:
-                speech.interrupt()
+        if self._should_interrupt():
+            self.interrupt()
 
         logger.debug(
             "validated agent reply",
@@ -1367,8 +1367,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
     def _interrupt_if_possible(self) -> None:
         """Check whether the current assistant speech should be interrupted"""
-        if self._playing_speech and self._should_interrupt():
-            self._playing_speech.interrupt()
+        if self._should_interrupt():
+            self.interrupt()
 
     def _should_interrupt(self) -> bool:
         if self._playing_speech is None:
