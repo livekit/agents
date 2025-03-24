@@ -13,9 +13,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Optional
 
+import boto3
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import Result, TranscriptEvent
 from livekit import rtc
@@ -26,7 +28,7 @@ from livekit.agents import (
     utils,
 )
 
-from ._utils import _get_aws_credentials
+from ._utils import _get_aws_session
 from .log import logger
 
 
@@ -73,9 +75,25 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
         )
 
-        self._api_key, self._api_secret = _get_aws_credentials(
-            api_key, api_secret, speech_region
+        # Set credentials in environment variables if provided
+        if api_key and api_secret:
+            os.environ["AWS_ACCESS_KEY_ID"] = api_key
+            os.environ["AWS_SECRET_ACCESS_KEY"] = api_secret
+        else:
+            # Get credentials from boto3 session
+            session = _get_aws_session(
+            api_key=api_key,
+            api_secret=api_secret,
+            region=speech_region,
+            async_session=True
         )
+            credentials = session.get_credentials()
+            os.environ["AWS_ACCESS_KEY_ID"] = credentials.access_key
+            os.environ["AWS_SECRET_ACCESS_KEY"] = credentials.secret_key
+            if credentials.token:
+                os.environ["AWS_SESSION_TOKEN"] = credentials.token
+
+
         self._config = STTOptions(
             speech_region=speech_region,
             language=language,
@@ -116,6 +134,12 @@ class STT(stt.STT):
             opts=self._config,
         )
 
+    def _get_client(self) -> TranscribeStreamingClient:
+        """Get a new TranscribeStreamingClient instance."""
+        return TranscribeStreamingClient(
+            region=self._config.speech_region
+        )
+
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
@@ -128,7 +152,7 @@ class SpeechStream(stt.SpeechStream):
             stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
         )
         self._opts = opts
-        self._client = TranscribeStreamingClient(region=self._opts.speech_region)
+        self._client = stt._get_client()
 
     async def _run(self) -> None:
         stream = await self._client.start_stream_transcription(
