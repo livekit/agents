@@ -680,9 +680,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             "registered worker",
             extra={
                 "id": reg.worker_id,
+                "url": self._opts.ws_url,
                 "region": reg.server_info.region,
                 "protocol": reg.server_info.protocol,
-                "node_id": reg.server_info.node_id,
             },
         )
         self.emit("worker_registered", reg.worker_id, reg.server_info)
