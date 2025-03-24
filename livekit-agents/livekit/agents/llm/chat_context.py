@@ -154,10 +154,13 @@ class ChatContext:
         role: ChatRole,
         content: list[ChatContent] | str,
         id: NotGivenOr[str] = NOT_GIVEN,
+        interrupted: NotGivenOr[bool] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs = {}
         if is_given(id):
             kwargs["id"] = id
+        if is_given(interrupted):
+            kwargs["interrupted"] = interrupted
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
