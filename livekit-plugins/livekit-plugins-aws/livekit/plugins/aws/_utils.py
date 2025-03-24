@@ -4,16 +4,16 @@ import base64
 import inspect
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin, Union
+from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
-import boto3
 import aioboto3
+import boto3
 from botocore.exceptions import NoCredentialsError
-from botocore.session import Session as BotocoreSession
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
-from botocore.client import BaseClient
+
+from .log import logger
 
 __all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_session"]
 

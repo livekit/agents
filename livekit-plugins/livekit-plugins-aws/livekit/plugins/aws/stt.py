@@ -13,11 +13,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
-import boto3
+import aioboto3
+from botocore.exceptions import NoCredentialsError
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import Result, TranscriptEvent
 from livekit import rtc
