@@ -80,7 +80,7 @@ class SynthesisHandle:
         """Interrupt the speech"""
         if self.interrupted:
             return
-        
+
         logger.debug(
             "agent interrupted",
             extra={"speech_id": self.speech_id},
