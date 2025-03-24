@@ -31,8 +31,10 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
+
         self._republish_task: asyncio.Task | None = None  # used to republish track on reconnection
         self._flush_task: asyncio.Task | None = None
+        self._interrupted_event = asyncio.Event()
 
         self._pushed_duration: float = 0.0
         self._interrupted: bool = False
@@ -76,25 +78,35 @@ class _ParticipantAudioOutput(io.AudioOutput):
             logger.error("flush called while playback is in progress")
             self._flush_task.cancel()
 
-        def _playback_finished(task: asyncio.Task[None]) -> None:
-            pushed_duration, interrupted = self._pushed_duration, self._interrupted
-            self._pushed_duration = 0
-            self._interrupted = False
-            self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
-
-        self._flush_task = asyncio.create_task(self._audio_source.wait_for_playout())
-        self._flush_task.add_done_callback(_playback_finished)
+        self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
         super().clear_buffer()
-
         if not self._pushed_duration:
             return
+        self._interrupted_event.set()
 
-        queued_duration = self._audio_source.queued_duration
-        self._pushed_duration = max(self._pushed_duration - queued_duration, 0)
-        self._interrupted = True
-        self._audio_source.clear_queue()
+    async def _wait_for_playout(self) -> None:
+        wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
+        wait_for_playout = asyncio.create_task(self._audio_source.wait_for_playout())
+        await asyncio.wait(
+            [wait_for_playout, wait_for_interruption],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        interrupted = wait_for_interruption.done()
+        pushed_duration = self._pushed_duration
+
+        if interrupted:
+            pushed_duration = max(pushed_duration - self._audio_source.queued_duration, 0)
+            self._audio_source.clear_queue()
+            wait_for_playout.cancel()
+        else:
+            wait_for_interruption.cancel()
+
+        self._pushed_duration = 0
+        self._interrupted_event.clear()
+        self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
 
 class _ParticipantLegacyTranscriptionOutput(io.TextOutput):

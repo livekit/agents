@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterable
 from typing import Protocol
 
@@ -56,6 +57,7 @@ class AudioRecognition:
         self._vad = vad
 
         self._speaking = False
+        self._last_speaking_time: float = 0
         self._audio_transcript = ""
         self._last_language: str | None = None
         self._vad_graph = tracing.Tracing.add_graph(
@@ -123,6 +125,7 @@ class AudioRecognition:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
+            self._last_language = ev.alternatives[0].language
             if not transcript:
                 return
 
@@ -143,6 +146,10 @@ class AudioRecognition:
             self._audio_transcript = self._audio_transcript.lstrip()
 
             if not self._speaking:
+                if not self._vad:
+                    # vad disabled, use stt timestamp
+                    self._last_speaking_time = time.time()
+
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
@@ -163,23 +170,24 @@ class AudioRecognition:
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             self._hooks.on_end_of_speech(ev)
             self._speaking = False
+            self._last_speaking_time = time.time()
 
-            if not self._speaking:
-                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+            self._run_eou_detection(chat_ctx)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
-        if not self._audio_transcript:
+        if self._stt and not self._audio_transcript:
+            # stt enabled but no transcript yet
             return
 
-        # TODO
-        # chat_ctx = self._agent._chat_ctx.copy()
-        # chat_ctx.append(role="user", text=self._audio_transcript)
-        turn_detector = self._turn_detector
+        chat_ctx = chat_ctx.copy()
+        chat_ctx.add_message(role="user", content=self._audio_transcript)
+        turn_detector = self._turn_detector if self._audio_transcript else None
 
         @utils.log_exceptions(logger=logger)
         async def _bounce_eou_task() -> None:
-            await asyncio.sleep(self._min_endpointing_delay)
+            delay = max(self._last_speaking_time + self._min_endpointing_delay - time.time(), 0)
+            await asyncio.sleep(delay)
 
             if turn_detector is not None and turn_detector.supports_language(self._last_language):
                 end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
@@ -188,8 +196,14 @@ class AudioRecognition:
                     {"probability": end_of_turn_probability},
                 )
                 unlikely_threshold = turn_detector.unlikely_threshold()
-                if end_of_turn_probability > unlikely_threshold:
-                    await asyncio.sleep(self.UNLIKELY_END_OF_TURN_EXTRA_DELAY)
+                if end_of_turn_probability < unlikely_threshold:
+                    delay = max(
+                        self._last_speaking_time
+                        + self.UNLIKELY_END_OF_TURN_EXTRA_DELAY
+                        - time.time(),
+                        0,
+                    )
+                    await asyncio.sleep(delay)
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
             await self._hooks.on_end_of_turn(self._audio_transcript)
