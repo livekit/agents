@@ -157,7 +157,7 @@ class WorkerOptions:
     Defaults to 0.75 on "production" mode, and is disabled in "development" mode.
     """
 
-    job_memory_warn_mb: float = 300
+    job_memory_warn_mb: float = 500
     """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""  # noqa: E501
     job_memory_limit_mb: float = 0
     """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
@@ -680,9 +680,9 @@ class Worker(utils.EventEmitter[EventTypes]):
             "registered worker",
             extra={
                 "id": reg.worker_id,
+                "url": self._opts.ws_url,
                 "region": reg.server_info.region,
                 "protocol": reg.server_info.protocol,
-                "node_id": reg.server_info.node_id,
             },
         )
         self.emit("worker_registered", reg.worker_id, reg.server_info)

@@ -2,10 +2,20 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import JobContext, JobProcess, WorkerOptions, cli, metrics
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    JobProcess,
+    RoomInputOptions,
+    RoomOutputOptions,
+    RunContext,
+    WorkerOptions,
+    cli,
+    metrics,
+)
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession, RunContext
-from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
+from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 # from livekit.plugins import noise_cancellation
@@ -19,18 +29,21 @@ class EchoAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Echo.",
-            # llm=openai.realtime.RealtimeModel(voice="echo"),
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
+            # Agents support both LLM and Realtime APIs
+            # llm=openai.realtime.RealtimeModel(voice="echo"),
             tts=cartesia.TTS(),
         )
 
     async def on_enter(self):
+        # when the agent is added to the session, it'll generate a reply
+        # according to its instructions
         self.session.generate_reply()
 
     @function_tool
-    async def talk_to_alloy(self, context: RunContext):
-        """Called when want to talk to Alloy."""
+    async def transfer_to_alloy(self, context: RunContext):
+        """Called when the user wants to be transferred to Alloy."""
         return AlloyAgent(), "Transferring you to Alloy."
 
 
@@ -45,8 +58,8 @@ class AlloyAgent(Agent):
         self.session.generate_reply()
 
     @function_tool
-    async def talk_to_echo(self, context: RunContext):
-        """Called when want to talk to Echo."""
+    async def transfer_to_echo(self, context: RunContext):
+        """Called when the user wants to be transferred to Echo."""
         return EchoAgent(), "Transferring you to Echo."
 
 
@@ -65,9 +78,9 @@ async def entrypoint(ctx: JobContext):
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
-    def _on_metrics_collected(mtrcs: metrics.AgentMetrics):
-        metrics.log_metrics(mtrcs)
-        usage_collector.collect(mtrcs)
+    def _on_metrics_collected(ev: MetricsCollectedEvent):
+        metrics.log_metrics(ev.metrics)
+        usage_collector.collect(ev.metrics)
 
     async def log_usage():
         summary = usage_collector.get_summary()
