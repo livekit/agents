@@ -16,10 +16,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import aiohttp
 import aioboto3
-from botocore.exceptions import NoCredentialsError
-from livekit import rtc
+import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -28,7 +26,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.llm.function_context import _is_optional_type
 
 from ._utils import _get_aws_session
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
@@ -100,9 +97,8 @@ class TTS(tts.TTS):
             api_key=api_key,
             api_secret=api_secret,
             region=speech_region,
-            async_session=True
+            async_session=True,
         )
-
 
     def synthesize(
         self,
@@ -131,7 +127,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
         self._segment_id = utils.shortuuid()
         self._client = tts._session.client("polly")
-
 
     async def _run(self):
         request_id = utils.shortuuid()

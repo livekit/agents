@@ -17,17 +17,10 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-import aioboto3
-from botocore.exceptions import NoCredentialsError
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import Result, TranscriptEvent
 from livekit import rtc
-from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
-    stt,
-    utils,
-)
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
 
 from ._utils import _get_aws_session
 from .log import logger
@@ -83,17 +76,16 @@ class STT(stt.STT):
         else:
             # Get credentials from boto3 session
             session = _get_aws_session(
-            api_key=api_key,
-            api_secret=api_secret,
-            region=speech_region,
-            async_session=True
-        )
+                api_key=api_key,
+                api_secret=api_secret,
+                region=speech_region,
+                async_session=True,
+            )
             credentials = session.get_credentials()
             os.environ["AWS_ACCESS_KEY_ID"] = credentials.access_key
             os.environ["AWS_SECRET_ACCESS_KEY"] = credentials.secret_key
             if credentials.token:
                 os.environ["AWS_SESSION_TOKEN"] = credentials.token
-
 
         self._config = STTOptions(
             speech_region=speech_region,
@@ -137,9 +129,7 @@ class STT(stt.STT):
 
     def _get_client(self) -> TranscribeStreamingClient:
         """Get a new TranscribeStreamingClient instance."""
-        return TranscribeStreamingClient(
-            region=self._config.speech_region
-        )
+        return TranscribeStreamingClient(region=self._config.speech_region)
 
 
 class SpeechStream(stt.SpeechStream):

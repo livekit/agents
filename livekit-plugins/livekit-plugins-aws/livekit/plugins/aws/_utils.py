@@ -13,15 +13,14 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
 
-
 __all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_session"]
 
 
 def _get_aws_session(
-        api_key: str | None = None,
-        api_secret: str | None = None,
-        region: str | None = None,
-        async_session: bool = False,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+    region: str | None = None,
+    async_session: bool = False,
 ) -> aioboto3.Session | boto3.Session:
     """Get an AWS session with the given credentials and region.
 
@@ -38,16 +37,22 @@ def _get_aws_session(
         NoCredentialsError: If no valid credentials are found.
     """
     # Validate AWS region first
-    region = region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    region = (
+        region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    )
     if not region:
-        raise ValueError("AWS region must be set using the argument or by setting the AWS_REGION environment variable.")
+        raise ValueError(
+            "AWS region must be set using the argument or by setting the AWS_REGION environment variable."
+        )
 
     session_params = {"region_name": region}
     if api_key and api_secret:
-        session_params.update({
-            "aws_access_key_id": api_key,
-            "aws_secret_access_key": api_secret,
-        })
+        session_params.update(
+            {
+                "aws_access_key_id": api_key,
+                "aws_secret_access_key": api_secret,
+            }
+        )
 
     if async_session:
         session = aioboto3.Session(**session_params)
@@ -172,7 +177,7 @@ def _build_image(image: llm.ChatImage, cache_key: Any) -> dict:
 
 
 def _build_aws_ctx(
-        chat_ctx: llm.ChatContext, cache_key: Any
+    chat_ctx: llm.ChatContext, cache_key: Any
 ) -> Tuple[List[dict], Optional[dict]]:
     messages: List[dict] = []
     system: Optional[dict] = None

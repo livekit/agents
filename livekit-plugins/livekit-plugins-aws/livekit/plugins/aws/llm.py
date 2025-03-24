@@ -20,11 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, MutableSet, Union
 
 import aioboto3
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    llm,
-)
+from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import LLMCapabilities, ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
@@ -103,10 +99,7 @@ class LLM(llm.LLM):
         self._region = region
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
         self._session = session or _get_aws_session(
-            api_key=api_key,
-            api_secret=api_secret,
-            region=region,
-            async_session=True
+            api_key=api_key, api_secret=api_secret, region=region, async_session=True
         )
 
     def chat(
