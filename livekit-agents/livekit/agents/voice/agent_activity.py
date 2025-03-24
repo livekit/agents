@@ -15,7 +15,7 @@ from ..metrics import AgentMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
-from .audio_recognition import AudioRecognition, RecognitionHooks, _TurnDetector
+from .audio_recognition import AudioRecognition, RecognitionHooks
 from .events import (
     MetricsCollectedEvent,
     SpeechCreatedEvent,
@@ -43,7 +43,7 @@ def log_event(event: str, **kwargs) -> None:
 
 
 if TYPE_CHECKING:
-    from .agent_session import AgentSession
+    from .agent_session import AgentSession, TurnDetectionMode
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -73,18 +73,18 @@ class AgentActivity(RecognitionHooks):
 
         from .. import llm as large_language_model
 
-        self._turn_detection_mode = self._session.turn_detection_mode
+        self._turn_detection_mode = (
+            self.turn_detection if isinstance(self.turn_detection, str) else None
+        )
 
         if self._turn_detection_mode == "vad" and not self.vad:
             logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
             self._turn_detection_mode = None
 
-        if self._turn_detection_mode == "stt" and (
-            not self.stt or not self.stt.capabilities.streaming
-        ):
+        if self._turn_detection_mode == "stt" and not self.stt:
             logger.warning(
-                "turn_detection is set to 'stt', but no STT model is provided or the STT model "
-                "does not support streaming, ignoring the turn_detection setting"
+                "turn_detection is set to 'stt', but no STT model is provided, "
+                "ignoring the turn_detection setting"
             )
             self._turn_detection_mode = None
 
@@ -160,8 +160,8 @@ class AgentActivity(RecognitionHooks):
         return self._session
 
     @property
-    def turn_detector(self) -> _TurnDetector | None:
-        return self._agent._eou or self._session._turn_detector
+    def turn_detection(self) -> TurnDetectionMode | None:
+        return self._agent._turn_detection or self._session._turn_detection
 
     @property
     def stt(self) -> stt.STT | None:
@@ -303,16 +303,17 @@ class AgentActivity(RecognitionHooks):
             if isinstance(self.tts, tts.TTS):
                 self.tts.on("metrics_collected", self._on_metrics_collected)
 
-            agent_vad = self.vad if self._turn_detection_mode in ("vad", None) else None
-            if isinstance(agent_vad, vad.VAD):
-                agent_vad.on("metrics_collected", self._on_metrics_collected)
+            if isinstance(self.vad, vad.VAD):
+                self.vad.on("metrics_collected", self._on_metrics_collected)
 
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
                 hooks=self,
                 stt=self._agent.stt_node if self.stt else None,
-                vad=agent_vad,
-                turn_detector=self.turn_detector,
+                vad=self.vad,
+                turn_detector=(
+                    self.turn_detection if not isinstance(self.turn_detection, str) else None
+                ),
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
             )
             self._audio_recognition.start()
@@ -592,7 +593,8 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("user_stopped_speaking", UserStoppedSpeakingEvent())
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
-        if self._turn_detection_mode == "manual":
+        if self._turn_detection_mode not in ("vad", None):
+            # ignore vad inference done event if turn_detection is not set to vad or default
             return
 
         if ev.speech_duration > self._session.options.min_interruption_duration:

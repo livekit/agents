@@ -15,8 +15,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 
 if TYPE_CHECKING:
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession
-    from .audio_recognition import _TurnDetector
+    from .agent_session import AgentSession, TurnDetectionMode
 
 
 @dataclass
@@ -32,7 +31,7 @@ class Agent:
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: list[llm.FunctionTool] | None = None,
-        turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
@@ -43,7 +42,7 @@ class Agent:
         self._instructions = instructions
         self._chat_ctx = chat_ctx or ChatContext.empty()
         self._tools = tools + find_function_tools(self)
-        self._eou = turn_detector
+        self._turn_detection = turn_detection
         self._stt = stt
         self._llm = llm
         self._tts = tts
@@ -141,17 +140,17 @@ class Agent:
         await self._activity.update_chat_ctx(chat_ctx)
 
     @property
-    def turn_detector(self) -> NotGivenOr[_TurnDetector | None]:
+    def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:
         """
-        Retrieves the turn detector for identifying conversational turns.
+        Retrieves the turn detection mode for identifying conversational turns.
 
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a turn detector,
-        the session's turn detector will be used at runtime instead.
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a turn detection,
+        the session's turn detection mode will be used at runtime instead.
 
         Returns:
-            NotGivenOr[_TurnDetector | None]: An optional turn detector for managing conversation flow.
+            NotGivenOr[TurnDetectionMode | None]: An optional turn detection mode for managing conversation flow.
         """  # noqa: E501
-        return self._eou
+        return self._turn_detection
 
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
@@ -439,7 +438,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: list[llm.FunctionTool] | None = None,
-        turn_detector: NotGivenOr[_TurnDetector | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
@@ -450,7 +449,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
             instructions=instructions,
             chat_ctx=chat_ctx,
             tools=tools,
-            turn_detector=turn_detector,
+            turn_detection=turn_detection,
             stt=stt,
             vad=vad,
             llm=llm,
