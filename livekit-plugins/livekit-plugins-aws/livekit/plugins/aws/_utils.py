@@ -13,7 +13,6 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
 
-from .log import logger
 
 __all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_session"]
 

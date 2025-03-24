@@ -13,11 +13,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
-import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
+from typing import Any, Optional
 
 import aiohttp
 import aioboto3
@@ -35,7 +32,6 @@ from livekit.agents.llm.function_context import _is_optional_type
 
 from ._utils import _get_aws_session
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
-from .log import logger
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
