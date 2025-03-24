@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import inspect
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
@@ -78,8 +79,9 @@ def _get_aws_session(
     # Validate session by checking if we can get credentials
     try:
         session.get_credentials()
-    except NoCredentialsError:
-        raise NoCredentialsError("Unable to locate AWS credentials")
+    except NoCredentialsError as e:
+        logging.error("Unable to locate AWS credentials")
+        raise e
 
     return session
 
@@ -108,8 +110,9 @@ def _get_aws_async_session(
     # Validate session by checking if we can get credentials
     try:
         session.get_credentials()
-    except NoCredentialsError:
-        raise NoCredentialsError("Unable to locate AWS credentials")
+    except NoCredentialsError as e:
+        logging.error("Unable to locate AWS credentials")
+        raise e
 
     return session
 
