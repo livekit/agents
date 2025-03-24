@@ -705,7 +705,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     def _synthesize_agent_reply(self):
         """Synthesize the agent reply to the user question, also make sure only one reply
         is synthesized/played at a time"""
-
+        logger.info(f"inside _synthesize_agent_reply: {self._pending_agent_reply}")
         if self._pending_agent_reply is not None:
             self._pending_agent_reply.cancel()
 
@@ -1342,7 +1342,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 continue
 
             if speech.allow_interruptions:
-                speech.interrupt()
+        
+        logger.info(f"_pending_agent_reply = {self._pending_agent_reply}")
+        logger.info(f"cancelling agent reply task: {self._agent_reply_task}")
 
         logger.debug(
             "validated agent reply",

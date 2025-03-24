@@ -81,10 +81,13 @@ class SynthesisHandle:
         if self.interrupted:
             return
 
+        import traceback
+        
         logger.debug(
             "agent interrupted",
             extra={"speech_id": self.speech_id},
         )
+        logger.debug("interrupt traceback: %s", "".join(traceback.format_stack()))
         logger.info(f"AGENT INTERRUPTED TEXT: {self.tts_forwarder.played_text}")
         if (
             self.tts_forwarder.played_text
