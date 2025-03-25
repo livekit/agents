@@ -202,26 +202,16 @@ class STT(stt.STT):
         model: STTModels | GroqAudioModels | str | None = None,
         language: str | None = None,
         prompt: str | None = None,
-        vad_threshold: float | None = None,
-        prefix_padding_ms: int | None = None,
-        silence_duration_ms: int | None = None,
-        vad_type: str | None = None,
-        vad_eagerness: str | None = None,
+        turn_detection: SessionTurnDetection | None = None,
         noise_reduction_type: str | None = None,
     ) -> None:
         self._opts.model = model or self._opts.model
         self._opts.language = language or self._opts.language
         self._opts.prompt = prompt or self._opts.prompt
-        self._opts.vad_threshold = vad_threshold or self._opts.vad_threshold
-        self._opts.prefix_padding_ms = prefix_padding_ms or self._opts.prefix_padding_ms
-        self._opts.silence_duration_ms = (
-            silence_duration_ms or self._opts.silence_duration_ms
-        )
         self._opts.noise_reduction_type = (
             noise_reduction_type or self._opts.noise_reduction_type
         )
-        self._opts.vad_type = vad_type or self._opts.vad_type
-        self._opts.vad_eagerness = vad_eagerness or self._opts.vad_eagerness
+        self._opts.turn_detection = turn_detection or self._opts.turn_detection
 
         for stream in self._streams:
             stream.update_options(language=language or self._opts.language)
