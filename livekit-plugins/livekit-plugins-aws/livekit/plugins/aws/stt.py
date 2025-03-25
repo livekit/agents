@@ -124,7 +124,7 @@ class STT(stt.STT):
             session_token=credentials.token,
         )
         return TranscribeStreamingClient(
-            region=self._config.speech_region, credentials_resolver=self.cred_resolver
+            region=self._config.speech_region, credential_resolver=self.cred_resolver
         )
 
 
