@@ -2,482 +2,423 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import time
-from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Callable
 
 from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
-from ...tokenize.tokenizer import PUNCTUATIONS
 from ...types import NOT_GIVEN, NotGivenOr
-from ...voice.io import AudioOutput, PlaybackFinishedEvent, TextOutput
-from . import _utils
+from ...utils import is_given
+from .. import io
 
-# Standard speech rate in hyphens per second
-STANDARD_SPEECH_RATE = 3.83
-
-
-@dataclass
-class TextSyncOptions:
-    """Options for synchronizing TTS segments with audio playback."""
-
-    language: str = ""
-    speed: float = 1.0  # Multiplier of STANDARD_SPEECH_RATE
-    new_sentence_delay: float = 0.4
-    sentence_tokenizer: tokenize.SentenceTokenizer = tokenize.basic.SentenceTokenizer(
-        retain_format=True
-    )
-    hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word
-    split_words: Callable[[str], list[tuple[str, int, int]]] = tokenize.basic.split_words
+STANDARD_SPEECH_RATE = 3.83  # hyphens (syllables) per second
 
 
 @dataclass
-class _AudioData:
-    pushed_duration: float = 0.0
-    done: bool = False
-    id: str = field(default_factory=_utils.speech_uuid)
-
-
-@dataclass
-class _TextData:
-    sentence_stream: tokenize.SentenceStream
-    pushed_text: str = ""
-    done: bool = False
-    forwarded_hyphens: int = 0
-    forwarded_sentences: int = 0
+class _TextSyncOptions:
+    speed: float
+    hyphenate_word: Callable[[str], list[str]]
+    split_words: Callable[[str], list[tuple[str, int, int]]]
 
 
 @dataclass
 class _TextSegment:
-    delta: str
-    stream_id: str
-    sentence_id: str
-    end_of_sentence: bool
-    language: str
+    text: str
+    start_time: float | None  # When the transcript should start playing
+    end_time: float | None  # When the transcript should be fully played
 
 
-class _TextAudioSynchronizer:
-    """Synchronizes text with audio playback timing."""
+@dataclass
+class _AudioSegment:
+    frame: rtc.AudioFrame
+    # TODO(theomonnom): support TTS alignments
 
-    def __init__(self, options: TextSyncOptions):
-        super().__init__()
+
+class _SegmentSynchronizerImpl:
+    """Synchronizes one text segment with one audio segment"""
+
+    def __init__(self, options: _TextSyncOptions, *, next_in_chain: io.TextOutput) -> None:
+        self._text_ch = utils.aio.Chan[_TextSegment]()
+        self._audio_ch = utils.aio.Chan[_AudioSegment]()
+        self._text_segments: list[_TextSegment] = []
+        self._audio_segments: list[_AudioSegment] = []
+        self._next_in_chain = next_in_chain
 
         self._opts = options
-        self._speed = options.speed * STANDARD_SPEECH_RATE
+        self._start_wall_time: float | None = None
+        self._start_fut: asyncio.Event = asyncio.Event()
 
-        self._closed = False
+        self._speed = STANDARD_SPEECH_RATE * self._opts.speed
+        self._out_ch = utils.aio.Chan[str]()
         self._close_future = asyncio.Future[None]()
-        self._event_ch = utils.aio.Chan[_TextSegment]()
 
-        self._playing_seg_index = -1
-        self._finished_seg_index = -1
+        self._main_atask = asyncio.create_task(self._main_task())
+        self._main_atask.add_done_callback(lambda _: self._out_ch.close())
+        self._capture_atask = asyncio.create_task(self._capture_task())
 
-        self._text_q_changed = asyncio.Event()
-        self._text_q = list[Optional[_TextData]]()
-        self._audio_q_changed = asyncio.Event()
-        self._audio_q = list[Optional[_AudioData]]()
+        self._playback_completed = False
 
-        self._text_data: _TextData | None = None
-        self._audio_data: _AudioData | None = None
-        self._processing_text_data: _TextData | None = None
-
-        self._main_task: asyncio.Task | None = None
+    @property
+    def closed(self) -> bool:
+        return self._close_future.done()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        """Push an audio frame for the current segment."""
-        self._check_not_closed()
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.push_audio called after close")
+            return
 
-        if self._audio_data is None:
-            self._audio_data = _AudioData()
-            self._audio_q.append(self._audio_data)
-            self._audio_q_changed.set()
+        # the first audio frame we receive marks the start of the sync
+        # see `TranscriptSynchronizer` docstring
+        if self._start_wall_time is None and frame.duration > 0:
+            self._start_wall_time = time.time()
+            self._start_fut.set()
 
-        frame_duration = frame.samples_per_channel / frame.sample_rate
-        self._audio_data.pushed_duration += frame_duration
+        seg = _AudioSegment(frame=frame)
+        self._audio_segments.append(seg)
+        self._audio_ch.send_nowait(seg)
+
+    def end_audio_input(self) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.end_audio_input called after close")
+            return
+
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._audio_ch.close()
+
+        self._reestimate_speed()
 
     def push_text(self, text: str) -> None:
-        """Push text for the current segment."""
-        self._check_not_closed()
-
-        if self._text_data is None:
-            self._text_data = _TextData(sentence_stream=self._opts.sentence_tokenizer.stream())
-            self._text_q.append(self._text_data)
-            self._text_q_changed.set()
-
-        self._text_data.pushed_text += text
-        self._text_data.sentence_stream.push_text(text)
-
-    def mark_audio_segment_end(self) -> None:
-        """Mark the current audio segment as complete."""
-        self._check_not_closed()
-
-        if self._audio_data is None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.push_text called after close")
             return
 
-        assert self._audio_data is not None
-        self._audio_data.done = True
-        self._audio_data = None
+        start_time, end_time = None, None
+        if isinstance(text, io.TimedString):
+            start_time = text.start_time or None
+            end_time = text.end_time or None
 
-    def mark_text_segment_end(self) -> None:
-        """Mark the current text segment as complete."""
-        self._check_not_closed()
+        seg = _TextSegment(text=text, start_time=start_time, end_time=end_time)
+        print(seg)
+        self._text_segments.append(seg)
+        self._text_ch.send_nowait(seg)
 
-        if self._text_data is None:
+    def end_text_input(self) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.end_text_input called after close")
             return
 
-        assert self._text_data is not None
-        self._text_data.done = True
-        self._text_data.sentence_stream.end_input()
-        self._text_data = None
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._text_ch.close()
 
-    def segment_playout_started(self) -> None:
-        """Notify that audio playout has started for current segment."""
-        self._check_not_closed()
-        self._playing_seg_index += 1
+        self._reestimate_speed()
 
-        if self._main_task is None:
-            self._main_task = asyncio.create_task(self._main_loop())
-
-    def segment_playout_finished(self) -> None:
-        """Notify that audio playout has finished for current segment."""
-        self._check_not_closed()
-        self._finished_seg_index += 1
-
-    async def aclose(self) -> None:
-        """Close the syncer and stop processing."""
-        if self._closed:
+    def _reestimate_speed(self) -> None:
+        if not self._text_ch.closed or not self._audio_ch.closed:
             return
 
-        self._closed = True
-        self._close_future.set_result(None)
+        # calculate the true syllables per second based on the complete text and audio input
+        words = self._opts.split_words("".join(seg.text for seg in self._text_segments))
+        total_syllables = sum(len(self._opts.hyphenate_word(w)) for w, _, _ in words)
+        total_duration = sum(seg.frame.duration for seg in self._audio_segments)
+        self._speed = total_syllables / total_duration
 
-        if self._processing_text_data is not None:
-            await self._processing_text_data.sentence_stream.aclose()
-            self._processing_text_data = None
+    def playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.playback_finished called after close")
+            return
 
-        for text_data in self._text_q:
-            if text_data is not None:
-                await text_data.sentence_stream.aclose()
+        if not self._text_ch.closed or not self._audio_ch.closed:
+            logger.warning(
+                "_SegmentSynchronizerImpl.playback_finished called before text/audio input closed"
+            )
+            return
 
-        self._text_q.append(None)
-        self._audio_q.append(None)
-        self._text_q_changed.set()
-        self._audio_q_changed.set()
-
-        if self._main_task is not None:
-            await self._main_task
-        self._event_ch.close()
-
-    async def __anext__(self) -> _TextSegment:
-        return await self._event_ch.__anext__()
-
-    def __aiter__(self) -> AsyncIterator[_TextSegment]:
-        return self
+        # if the playback of the segment is done and were not interrupted, make sure the whole
+        # transcript is sent. (In case we're late)
+        if not interrupted:
+            self._playback_completed = True
 
     @utils.log_exceptions(logger=logger)
-    async def _main_loop(self) -> None:
-        """Main processing loop that synchronizes text with audio timing."""
-        seg_index = 0
-        q_done = False
-
-        while not q_done and not self._closed:
-            await self._text_q_changed.wait()
-            await self._audio_q_changed.wait()
-
-            while self._text_q and self._audio_q:
-                text_data = self._text_q.pop(0)
-                audio_data = self._audio_q.pop(0)
-                self._processing_text_data = text_data
-
-                if text_data is None or audio_data is None:
-                    q_done = True
-                    break
-
-                # Wait for segment to start playing
-                while not self._closed:
-                    if self._playing_seg_index >= seg_index:
-                        break
-                    await self._sleep_if_not_closed(0.125)
-
-                sentence_stream = text_data.sentence_stream
-                forward_start_time = time.time()
-
-                async for ev in sentence_stream:
-                    await self._sync_sentence(
-                        seg_index, forward_start_time, text_data, audio_data, ev.token
-                    )
-                self._processing_text_data = None
-                seg_index += 1
-
-            self._text_q_changed.clear()
-            self._audio_q_changed.clear()
+    async def _capture_task(self) -> None:
+        try:
+            async for text in self._out_ch:
+                await self._next_in_chain.capture_text(text)
+        finally:
+            self._next_in_chain.flush()
 
     @utils.log_exceptions(logger=logger)
-    async def _sync_sentence(
-        self,
-        segment_index: int,
-        segment_start_time: float,
-        text_data: _TextData,
-        audio_data: _AudioData,
-        sentence: str,
-    ) -> None:
-        """Synchronize a sentence with audio timing."""
-        real_speed = None
-        if audio_data.pushed_duration > 0 and audio_data.done:
-            real_speed = len(self._calc_hyphens(text_data.pushed_text)) / audio_data.pushed_duration
+    async def _main_task(self) -> None:
+        await self._start_fut.wait()
 
-        seg_id = _utils.segment_uuid()
-        words = self._opts.split_words(sentence)
-        processed_words: list[str] = []
+        if self.closed and not self._playback_completed:
+            return
 
-        sent_text = ""
-        for word, _start_pos, end_pos in words:
-            if segment_index <= self._finished_seg_index:
-                break
+        assert self._start_wall_time is not None
 
-            if self._closed:
+        i = 0
+        async for text_seg in self._text_ch:
+            i += 1
+
+            base_start = text_seg.start_time or 0.0
+            elapsed = time.time() - self._start_wall_time
+
+            if (delay_until_start := base_start - elapsed) > 0:
+                await self._sleep_if_not_closed(delay_until_start)
+
+            # check if closed after waiting for the base_start time (it could be several seconds in
+            # extreme cases)
+            # However, if playback *is* completed, we keep going so we can flush out
+            # all remaining text segments without pacing delays.
+            if self.closed and not self._playback_completed:
                 return
 
-            word_hyphens = len(self._opts.hyphenate_word(word))
-            processed_words.append(word)
+            acc_syllables = 0
+            text_cursor = 0
+            for word, _, end_pos in self._opts.split_words(text_seg.text):
+                if self._playback_completed:
+                    self._out_ch.send_nowait(text_seg.text[text_cursor:end_pos])
+                    continue
 
-            elapsed_time = time.time() - segment_start_time
-            text = sentence[0:end_pos]
-            text = text.rstrip("".join(PUNCTUATIONS))
+                word_syllables = len(self._opts.hyphenate_word(word))
+                elapsed = time.time() - self._start_wall_time
 
-            speed = self._speed
-            if real_speed is not None:
-                speed = real_speed
-                estimated_pauses_s = text_data.forwarded_sentences * self._opts.new_sentence_delay
-                hyph_pauses = estimated_pauses_s * speed
+                # since the speed can change at anytime, calculate the word delay based on
+                # the "target_syllables"
+                target_syllables = round(self._speed * (elapsed - base_start))
+                dt = target_syllables - acc_syllables
+                to_wait_hyphens = max(0.0, word_syllables - dt)
+                delay = to_wait_hyphens / self._speed
 
-                target_hyphens = round(speed * elapsed_time)
-                dt = target_hyphens - text_data.forwarded_hyphens - hyph_pauses
-                to_wait_hyphens = max(0.0, word_hyphens - dt)
-                delay = to_wait_hyphens / speed
-            else:
-                delay = word_hyphens / speed
+                # if the next text segment should have started, flush the word as soon as possible
+                # for this current segment to catch up
+                if (i + 1) < len(self._text_segments):
+                    next_seg = self._text_segments[i + 1]
+                    if next_seg.start_time is not None and next_seg.start_time <= elapsed:
+                        delay = 0
 
-            first_delay = min(delay / 2, 2 / speed)
-            await self._sleep_if_not_closed(first_delay)
+                # if playback completed, flush the word as soon as possible
+                if self._playback_completed:
+                    delay = 0
 
-            self._event_ch.send_nowait(
-                _TextSegment(
-                    delta=text[len(sent_text) :],
-                    stream_id=audio_data.id,
-                    sentence_id=seg_id,
-                    language=self._opts.language,
-                    end_of_sentence=False,
-                )
-            )
-            sent_text = text
+                await self._sleep_if_not_closed(delay / 2.0)
+                self._out_ch.send_nowait(text_seg.text[text_cursor:end_pos])
+                await self._sleep_if_not_closed(delay / 2.0)
 
-            await self._sleep_if_not_closed(delay - first_delay)
-            text_data.forwarded_hyphens += word_hyphens
-
-        self._event_ch.send_nowait(
-            _TextSegment(
-                delta=sentence[len(sent_text) :],
-                stream_id=audio_data.id,
-                sentence_id=seg_id,
-                language=self._opts.language,
-                end_of_sentence=True,
-            )
-        )
-        sent_text = sentence
-
-        await self._sleep_if_not_closed(self._opts.new_sentence_delay)
-        text_data.forwarded_sentences += 1
+                acc_syllables += word_syllables
+                text_cursor = end_pos
 
     async def _sleep_if_not_closed(self, delay: float) -> None:
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait([self._close_future], timeout=delay)
 
-    def _calc_hyphens(self, text: str) -> list[str]:
-        """Calculate hyphens for text."""
-        hyphens: list[str] = []
-        words: list[tuple[str, int, int]] = self._opts.split_words(text=text)
-        for word, _, _ in words:
-            new = self._opts.hyphenate_word(word)
-            hyphens.extend(new)
-        return hyphens
-
-    def _check_not_closed(self) -> None:
-        if self._closed:
-            raise RuntimeError("TranscriptionSyncer is closed")
-
-
-class TextSynchronizer:
-    def __init__(
-        self,
-        audio_output: AudioOutput,
-        text_output: TextOutput,
-        *,
-        sync_options: NotGivenOr[TextSyncOptions] = NOT_GIVEN,
-    ) -> None:
-        super().__init__()
-        self._closed = False
-        self._sync_options = sync_options or TextSyncOptions()
-        self._synchronizer = _TextAudioSynchronizer(options=self._sync_options)
-        self._sync_enabled = True
-
-        self._base_text_output = text_output
-        self._text_output = _TextOutput(self)
-        self._audio_output = _AudioSyncOutput(audio_output, self)
-        self._text_attached = True
-        self._audio_attached = True
-        self._tasks: set[asyncio.Task] = set()
-        self._main_task = asyncio.create_task(self._forward_event())
-
-    def set_sync_enabled(self, enable: bool) -> None:
-        if self._sync_enabled == enable:
+    async def aclose(self) -> None:
+        if self.closed:
             return
 
-        self._sync_enabled = enable
-        self._flush()
+        self._close_future.set_result(None)
+        self._start_fut.set()  # avoid deadlock of main_task in case it never started
+        # not using end_text_input/end_audio_input, because they may change the speed calculation
+        self._text_ch.close()
+        self._audio_ch.close()
+        await self._capture_atask
+
+
+class TranscriptSynchronizer:
+    """
+    Synchronizes text with audio playback timing.
+
+    This class is responsible for synchronizing text with audio playback timing.
+    It currently assumes that the first push_audio is starting the audio playback of a segment.
+    """
+
+    def __init__(
+        self,
+        *,
+        next_in_chain_audio: io.AudioOutput,
+        next_in_chain_text: io.TextOutput,
+        speed: float = 1.0,
+        hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
+        split_words: Callable[[str], list[tuple[str, int, int]]] = functools.partial(
+            tokenize.basic.split_words, ignore_punctuation=False
+        ),
+    ) -> None:
+        super().__init__()
+
+        self._text_output = _SyncedTextOutput(self, next_in_chain=next_in_chain_text)
+        self._audio_output = _SyncedAudioOutput(self, next_in_chain=next_in_chain_audio)
+        self._text_attached, self._audio_attached = True, True
+        self._opts = _TextSyncOptions(
+            speed=speed, hyphenate_word=hyphenate_word, split_words=split_words
+        )
+        self._enabled = True
+        self._closed = False
+
+        # initial segment/first segment, recreated for each new segment
+        self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
+        self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task())
 
     @property
-    def audio_output(self) -> _AudioSyncOutput:
-        """Get the audio output wrapper"""
+    def audio_output(self) -> _SyncedAudioOutput:
         return self._audio_output
 
     @property
-    def text_output(self) -> _TextOutput:
-        """Get the text output wrapper"""
+    def text_output(self) -> _SyncedTextOutput:
         return self._text_output
 
-    async def _forward_event(self) -> None:
-        last_stream_id: str | None = None
-
-        while not self._closed:
-            async for segment in self._synchronizer:
-                if last_stream_id != segment.stream_id:
-                    self._base_text_output.flush()
-                    last_stream_id = segment.stream_id
-
-                await self._base_text_output.capture_text(segment.delta)
-
-            self._base_text_output.flush()
-
-    def _flush(self) -> None:
-        """Close the old transcription segment and create a new one"""
-        current_synchronizer = self._synchronizer
-        self._synchronizer = _TextAudioSynchronizer(options=self._sync_options)
-        # close the old synchronizer
-        task = asyncio.create_task(current_synchronizer.aclose())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    def _on_output_attach_changed(
-        self, *, audio_attached: bool | None = None, text_attached: bool | None = None
-    ) -> None:
-        if audio_attached is not None:
-            self._audio_attached = audio_attached
-        if text_attached is not None:
-            self._text_attached = text_attached
-
-        self.set_sync_enabled(self._audio_attached and self._text_attached)
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
 
     async def aclose(self) -> None:
-        """Close the forwarder and cleanup resources"""
         self._closed = True
-        await self._synchronizer.aclose()
+        await self.barrier()
+        await self._impl.aclose()
 
-        await utils.aio.cancel_and_wait(self._main_task)
-        await utils.aio.cancel_and_wait(*self._tasks)
-        self._tasks.clear()
-        self._base_text_output.flush()
-
-
-class _AudioSyncOutput(AudioOutput):
-    def __init__(self, base_output: AudioOutput, parent: TextSynchronizer) -> None:
-        super().__init__(sample_rate=base_output.sample_rate)
-        self._parent = parent
-        self._capturing = False
-        self._interrupted = False
-
-        self._base_output = base_output
-        self._base_output.on("playback_finished", self._on_playback_finished)
-
-    def set_base_output(self, base_output: AudioOutput) -> None:
-        if self._base_output:
-            self._base_output.off("playback_finished", self._on_playback_finished)
-        self._base_output = base_output
-        self._base_output.on("playback_finished", self._on_playback_finished)
-
-    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        await super().capture_frame(frame)
-        await self._base_output.capture_frame(frame)
-        if not self._parent._sync_enabled:
+    def set_enabled(self, enabled: bool) -> None:
+        if self._enabled == enabled:
             return
 
-        if not self._capturing:
-            self._parent._synchronizer.segment_playout_started()
-            self._capturing = True
-            self._interrupted = False
+        self._enabled = enabled
+        self.rotate_segment()
 
-        self._parent._synchronizer.push_audio(frame)
+    def _on_attachment_changed(
+        self,
+        *,
+        audio_attached: NotGivenOr[bool] = NOT_GIVEN,
+        text_attached: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> None:
+        if is_given(audio_attached):
+            self._audio_attached = audio_attached
+
+        if is_given(text_attached):
+            self._text_attached = text_attached
+
+        self.set_enabled(self._audio_attached and self._text_attached)
+
+    async def _rotate_segment_task(self) -> None:
+        await self._impl.aclose()
+        self._impl = _SegmentSynchronizerImpl(
+            options=self._opts, next_in_chain=self._text_output._next_in_chain
+        )
+
+    def rotate_segment(self) -> None:
+        if self._closed:
+            return
+
+        if not self._rotate_segment_atask.done():
+            logger.warning("rotate_segment called while previous segment is still being rotated")
+
+        self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task())
+
+    async def barrier(self) -> None:
+        if self._rotate_segment_atask is None:
+            return
+
+        # using a while loop in case rotate_segment is called twice (this should not happen, but
+        # just in case, we do log a warning if it does)
+        while not self._rotate_segment_atask.done():
+            await self._rotate_segment_atask
+
+
+class _SyncedAudioOutput(io.AudioOutput):
+    def __init__(
+        self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.AudioOutput
+    ) -> None:
+        super().__init__(next_in_chain=next_in_chain, sample_rate=next_in_chain.sample_rate)
+        self._next_in_chain = next_in_chain  # redefined for better typing
+        self._synchronizer = synchronizer
+        self._capturing = False
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        # using barrier() on capture should be sufficient, flush() must not be called if
+        # capture_frame isn't completed
+        await self._synchronizer.barrier()
+
+        self._capturing = True
+        await super().capture_frame(frame)
+        await self._next_in_chain.capture_frame(frame)  # passthrough audio
+
+        if not self._synchronizer.enabled:
+            return
+
+        self._synchronizer._impl.push_audio(frame)
 
     def flush(self) -> None:
         super().flush()
-        self._base_output.flush()
-        if not self._parent._sync_enabled:
+        self._next_in_chain.flush()
+
+        if not self._synchronizer.enabled or not self._capturing:
             return
 
         self._capturing = False
-        if not self._interrupted and not self._parent._synchronizer._closed:
-            self._parent._synchronizer.mark_audio_segment_end()
+        self._synchronizer._impl.end_audio_input()
 
     def clear_buffer(self) -> None:
-        self._interrupted = True
-        self._base_output.clear_buffer()
+        super().clear_buffer()
+        self._next_in_chain.clear_buffer()
+        self._capturing = False
 
+    # this is going to be automatically called by the next_in_chain
     def on_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
         super().on_playback_finished(playback_position=playback_position, interrupted=interrupted)
 
-        if not self._parent._sync_enabled:
+        if not self._synchronizer.enabled:
             return
 
-        if not interrupted and not self._parent._synchronizer._closed:
-            self._parent._synchronizer.segment_playout_finished()
-        self._parent._flush()
-
-    def _on_playback_finished(self, ev: PlaybackFinishedEvent) -> None:
-        self.on_playback_finished(
-            playback_position=ev.playback_position, interrupted=ev.interrupted
+        self._synchronizer._impl.playback_finished(
+            playback_position=playback_position, interrupted=interrupted
         )
+        self._synchronizer.rotate_segment()
 
     def on_attached(self) -> None:
-        self._parent._on_output_attach_changed(audio_attached=True)
+        super().on_attached()
+        self._synchronizer._on_attachment_changed(audio_attached=True)
 
     def on_detached(self) -> None:
-        self._parent._on_output_attach_changed(audio_attached=False)
+        super().on_detached()
+        self._synchronizer._on_attachment_changed(audio_attached=False)
 
 
-class _TextOutput(TextOutput):
-    def __init__(self, parent: TextSynchronizer) -> None:
-        super().__init__()
-        self._parent = parent
+class _SyncedTextOutput(io.TextOutput):
+    def __init__(
+        self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.TextOutput
+    ) -> None:
+        super().__init__(next_in_chain=next_in_chain)
+        self._next_in_chain = next_in_chain  # redefined for better typing
+        self._synchronizer = synchronizer
+        self._capturing = False
 
     async def capture_text(self, text: str) -> None:
-        if not self._parent._sync_enabled:
-            await self._parent._base_text_output.capture_text(text)
+        await self._synchronizer.barrier()
+
+        await super().capture_text(text)
+        if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
+            await self._next_in_chain.capture_text(text)
             return
 
-        self._parent._synchronizer.push_text(text)
+        self._capturing = True
+        self._synchronizer._impl.push_text(text)
 
     def flush(self) -> None:
-        if not self._parent._sync_enabled:
-            self._parent._base_text_output.flush()
+        super().flush()
+        if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
+            self._next_in_chain.flush()
             return
 
-        self._parent._synchronizer.mark_text_segment_end()
+        if not self._capturing:
+            return
+
+        self._capturing = False
+        self._synchronizer._impl.end_text_input()
 
     def on_attached(self) -> None:
-        self._parent._on_output_attach_changed(text_attached=True)
+        super().on_attached()
+        self._synchronizer._on_attachment_changed(text_attached=True)
 
     def on_detached(self) -> None:
-        self._parent._on_output_attach_changed(text_attached=False)
+        super().on_detached()
+        self._synchronizer._on_attachment_changed(text_attached=False)
