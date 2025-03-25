@@ -50,7 +50,7 @@ setuptools.setup(
     install_requires=[
         "livekit-agents[codecs]>=0.12.16,<1.0.0",
         "aioboto3==14.1.0",
-        "boto3==1.36.20",
+        "boto3>= 1.37.0,< 1.37.2",
         "amazon-transcribe>=0.6.2",
     ],
     project_urls={
