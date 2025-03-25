@@ -20,6 +20,7 @@ from pydantic_core import PydanticUndefined
 from livekit import rtc
 from livekit.agents import llm, utils
 
+from ..log import logger
 from . import _strict
 from .chat_context import ChatContext
 from .tool_context import FunctionTool, get_function_info
@@ -109,27 +110,45 @@ def is_context_type(ty: type) -> bool:
 
 @dataclass
 class SerializedImage:
-    data_bytes: bytes
-    media_type: str
+    data_bytes: bytes | None = None
+    external_url: str | None = None
+    media_type: str | None
     inference_detail: str
 
 
 def serialize_image(image: llm.ImageContent) -> SerializedImage:
     if isinstance(image.image, str):
-        header, b64_data = image.image.split(",", 1)
-        encoded_data = base64.b64decode(b64_data)
-        media_type = header.split(";")[0].split(":")[1]
-        supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-        if media_type not in supported_types:
-            raise ValueError(
-                f"Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+        if image.image.startswith("data:"):
+            header, b64_data = image.image.split(",", 1)
+            encoded_data = base64.b64decode(b64_data)
+            header_mime = header.split(";")[0].split(":")[1]
+            if image.mime_type:
+                if image.mime_type != header_mime:
+                    logger.warning(
+                        f"""Provided mime_type '{image.mime_type}' does not match data URL mime type
+                        '{header_mime}'. Using provided mime_type."""
+                    )
+                media_type = image.mime_type
+            else:
+                media_type = header_mime
+            supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+            if media_type not in supported_types:
+                raise ValueError(
+                    f"Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+                )
+
+            return SerializedImage(
+                data_bytes=encoded_data,
+                media_type=media_type,
+                inference_detail=image.inference_detail,
+            )
+        else:
+            return SerializedImage(
+                media_type=image.mime_type,
+                inference_detail=image.inference_detail,
+                external_url=image.image,
             )
 
-        return SerializedImage(
-            data_bytes=encoded_data,
-            media_type=media_type,
-            inference_detail=image.inference_detail,
-        )
     elif isinstance(image.image, rtc.VideoFrame):
         opts = utils.images.EncodeOptions()
         if image.inference_width and image.inference_height:

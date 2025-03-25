@@ -9,6 +9,8 @@ from google.genai import types
 from livekit.agents import llm
 from livekit.agents.llm import FunctionTool
 
+from .log import logger
+
 __all__ = ["to_chat_ctx", "to_fnc_ctx"]
 
 
@@ -81,6 +83,16 @@ def to_chat_ctx(
 
 def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
     img = llm.utils.serialize_image(image)
+    if img.external_url:
+        if img.media_type:
+            mime_type = img.media_type
+        else:
+            logger.warning(
+                "No media type provided for image, using default image/jpeg. "
+                "Please provide a media type for better performance."
+            )
+            mime_type = "image/jpeg"
+        return types.Part.from_uri(file_uri=img.external_url, mime_type=mime_type)
     if cache_key not in image._cache:
         image._cache[cache_key] = img.data_bytes
     return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.media_type)

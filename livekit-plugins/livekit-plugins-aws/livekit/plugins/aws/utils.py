@@ -127,6 +127,8 @@ def _build_tool_spec(fnc: FunctionTool) -> dict:
 
 def _build_image(image: ImageContent, cache_key: Any) -> dict:
     img = utils.serialize_image(image)
+    if img.external_url:
+        raise ValueError("external_url is not supported by AWS Bedrock.")
     if cache_key not in image._cache:
         image._cache[cache_key] = img.data_bytes
     return {
