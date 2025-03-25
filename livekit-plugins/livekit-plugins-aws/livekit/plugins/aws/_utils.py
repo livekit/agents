@@ -14,7 +14,7 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
 
-__all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_session"]
+__all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_async_session"]
 
 
 def _get_session_params(
@@ -53,37 +53,6 @@ def _get_session_params(
         )
 
     return session_params
-
-
-def _get_aws_session(
-    api_key: str | None = None,
-    api_secret: str | None = None,
-    region: str | None = None,
-) -> boto3.Session:
-    """Get an AWS session with the given credentials and region.
-
-    Args:
-        api_key: AWS access key id.
-        api_secret: AWS secret access key.
-        region: AWS region.
-
-    Returns:
-        An AWS session.
-
-    Raises:
-        NoCredentialsError: If no valid credentials are found.
-    """
-    session_params = _get_session_params(api_key, api_secret, region)
-    session = boto3.Session(**session_params)
-
-    # Validate session by checking if we can get credentials
-    try:
-        session.get_credentials()
-    except NoCredentialsError as e:
-        logging.error("Unable to locate AWS credentials")
-        raise e
-
-    return session
 
 
 def _get_aws_async_session(

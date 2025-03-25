@@ -227,14 +227,11 @@ class LLMStream(llm.LLMStream):
                         request_id=request_id,
                     )
 
-                for chunk in response["stream"]:
+                async for chunk in response["stream"]:
                     chat_chunk = self._parse_chunk(request_id, chunk)
                     if chat_chunk is not None:
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
-
-                    # Let other coroutines run
-                    await asyncio.sleep(0)
 
         except Exception as e:
             raise APIConnectionError(
