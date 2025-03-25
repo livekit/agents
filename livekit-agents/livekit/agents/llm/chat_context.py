@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
@@ -25,6 +25,9 @@ from livekit.agents.utils.misc import is_given
 
 from .. import utils
 from ..log import logger
+
+if TYPE_CHECKING:
+    from ..llm import FunctionTool
 
 
 class ImageContent(BaseModel):
@@ -167,8 +170,42 @@ class ChatContext:
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
 
-    def copy(self) -> ChatContext:
-        return ChatContext(self.items.copy())
+    def copy(
+        self,
+        *,
+        include_instructions: bool = True,
+        include_tools: bool | list[FunctionTool | str] = True,
+    ) -> ChatContext:
+        if include_instructions and include_tools is True:
+            # use copy directly if no filtering is needed
+            return ChatContext(self.items.copy())
+
+        items = []
+
+        if isinstance(include_tools, bool):
+            include_tools_name = None if include_tools else set()
+        else:
+            from .tool_context import get_function_info
+
+            include_tools_name = {
+                tool if isinstance(tool, str) else get_function_info(tool).name
+                for tool in include_tools
+            }
+
+        for item in self.items:
+            if not include_instructions and item.type == "message" and item.role == "system":
+                continue
+
+            if (
+                item.type in ["function_call", "function_call_output"]
+                and include_tools_name is not None
+                and item.name not in include_tools_name
+            ):
+                continue
+
+            items.append(item)
+
+        return ChatContext(items)
 
     def to_dict(
         self,

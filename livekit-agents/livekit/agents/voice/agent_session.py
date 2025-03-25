@@ -317,6 +317,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         user_input: NotGivenOr[str] = NOT_GIVEN,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._activity is None:
@@ -329,12 +330,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return self._next_activity.generate_reply(
                 user_input=user_input,
                 instructions=instructions,
+                tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
             )
 
         return self._activity.generate_reply(
             user_input=user_input,
             instructions=instructions,
+            tool_choice=tool_choice,
             allow_interruptions=allow_interruptions,
         )
 
