@@ -122,12 +122,11 @@ def serialize_image(image: llm.ImageContent) -> SerializedImage:
             header, b64_data = image.image.split(",", 1)
             encoded_data = base64.b64decode(b64_data)
             header_mime = header.split(";")[0].split(":")[1]
-            if image.mime_type:
-                if image.mime_type != header_mime:
-                    logger.warning(
-                        f"""Provided mime_type '{image.mime_type}' does not match data URL mime type
-                        '{header_mime}'. Using provided mime_type."""
-                    )
+            if image.mime_type and image.mime_type != header_mime:
+                logger.warning(
+                    f"""Provided mime_type '{image.mime_type}' does not match data URL mime type
+                    '{header_mime}'. Using provided mime_type."""
+                )
                 media_type = image.mime_type
             else:
                 media_type = header_mime
