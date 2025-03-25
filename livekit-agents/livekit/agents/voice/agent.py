@@ -49,6 +49,7 @@ class Agent:
         self._vad = vad
         self._allow_interruptions = allow_interruptions
         self._activity: AgentActivity | None = None
+        self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
 
     @property
     def instructions(self) -> str:
@@ -115,6 +116,7 @@ class Agent:
         """
         if self._activity is None:
             self._tools = list(set(tools))
+            self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 
         await self._activity.update_tools(tools)
@@ -134,7 +136,7 @@ class Agent:
             llm.RealtimeError: If updating the realtime session chat context fails.
         """
         if self._activity is None:
-            self._chat_ctx = chat_ctx.copy()
+            self._chat_ctx = chat_ctx.copy(tools=self._tools)
             return
 
         await self._activity.update_chat_ctx(chat_ctx)
