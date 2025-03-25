@@ -8,7 +8,6 @@ import os
 from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
 import aioboto3
-import boto3
 from botocore.exceptions import NoCredentialsError
 from livekit import rtc
 from livekit.agents import llm, utils
