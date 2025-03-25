@@ -41,6 +41,9 @@ from livekit.agents.utils import AudioBuffer
 
 import openai
 from openai.types.audio import TranscriptionVerbose
+from openai.types.beta.realtime.transcription_session_update_param import (
+    SessionTurnDetection,
+)
 
 from .log import logger
 from .models import GroqAudioModels, STTModels
@@ -59,13 +62,9 @@ class _STTOptions:
     model: STTModels | str
     language: str
     detect_language: bool
-    vad_threshold: float = 0.5
-    prefix_padding_ms: int = 600
-    silence_duration_ms: int = 350
+    turn_detection: SessionTurnDetection
     prompt: str | None = None
     noise_reduction_type: str | None = None
-    vad_type: str = "server_vad"
-    vad_eagerness: str = "auto"
 
 
 class STT(stt.STT):
@@ -74,13 +73,9 @@ class STT(stt.STT):
         *,
         language: str = "en",
         detect_language: bool = False,
-        model: STTModels | str = "gpt-4o-mini-transcribe",
+        model: STTModels | str = "gpt-4o-transcribe",
         prompt: str | None = None,
-        vad_threshold: float | None = None,
-        prefix_padding_ms: int | None = None,
-        silence_duration_ms: int | None = None,
-        vad_type: str = "server_vad",
-        vad_eagerness: str = "auto",
+        turn_detection: SessionTurnDetection | None = None,
         noise_reduction_type: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
@@ -95,11 +90,8 @@ class STT(stt.STT):
             detect_language: Whether to automatically detect the language.
             model: The OpenAI model to use for transcription.
             prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
-            vad_threshold: Voice activity detection threshold (0.0 to 1.0). Used for server_vad.
-            prefix_padding_ms: Padding to add before speech in milliseconds. Used for server_vad.
-            silence_duration_ms: Duration of silence to consider end of speech in milliseconds. Used for server_vad.
-            vad_type: Type of voice activity detection to use. "server_vad" or "semantic_vad".
-            vad_eagerness: For semantic_vad, control how eager the model is to interrupt. "low", "medium", "high", or "auto".
+            turn_detection: When using realtime transcription, this controls how model detects the user is done speaking.
+                Final transcripts are generated only after the turn is over. See: https://platform.openai.com/docs/guides/realtime-vad
             noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
                 This isn't needed when using LiveKit's noise cancellation.
             base_url: Custom base URL for OpenAI API.
@@ -115,20 +107,21 @@ class STT(stt.STT):
         if detect_language:
             language = ""
 
+        if turn_detection is None:
+            turn_detection = {
+                "type": "server_vad",
+                "threshold": 0.5,
+                "prefix_padding_ms": 600,
+                "silence_duration_ms": 350,
+            }
+
         self._opts = _STTOptions(
             language=language,
             detect_language=detect_language,
             model=model,
             prompt=prompt,
-            vad_type=vad_type,
-            vad_eagerness=vad_eagerness,
+            turn_detection=turn_detection,
         )
-        if vad_threshold is not None:
-            self._opts.vad_threshold = vad_threshold
-        if prefix_padding_ms is not None:
-            self._opts.prefix_padding_ms = prefix_padding_ms
-        if silence_duration_ms is not None:
-            self._opts.silence_duration_ms = silence_duration_ms
         if noise_reduction_type is not None:
             self._opts.noise_reduction_type = noise_reduction_type
 
@@ -243,26 +236,9 @@ class STT(stt.STT):
                     "prompt": self._opts.prompt or "",
                     "language": self._opts.language or "",
                 },
-                "turn_detection": {
-                    "type": self._opts.vad_type,
-                },
+                "turn_detection": self._opts.turn_detection,
             },
         }
-
-        if self._opts.vad_type == "server_vad":
-            realtime_config["session"]["turn_detection"].update(
-                {
-                    "threshold": self._opts.vad_threshold,
-                    "prefix_padding_ms": self._opts.prefix_padding_ms,
-                    "silence_duration_ms": self._opts.silence_duration_ms,
-                }
-            )
-        elif self._opts.vad_type == "semantic_vad":
-            realtime_config["session"]["turn_detection"].update(
-                {
-                    "eagerness": self._opts.vad_eagerness,
-                }
-            )
 
         if self._opts.noise_reduction_type:
             realtime_config["session"]["input_audio_transcription"][
