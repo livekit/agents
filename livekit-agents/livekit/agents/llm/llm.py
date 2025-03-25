@@ -2,19 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import (
-    Any,
-    AsyncIterable,
-    AsyncIterator,
-    Generic,
-    Literal,
-    TypeVar,
-    Union,
-)
+from typing import Any, AsyncIterable, AsyncIterator, Generic, Literal, TypeVar, Union
 
+from app_config import AppConfig
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
 
@@ -141,8 +135,15 @@ class LLMStream(ABC):
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
 
+        llm_stream_task_id = uuid.uuid4()
+        pending_tasks = (
+            AppConfig().get_call_metadata().setdefault("pending_livekit_tasks", [])
+        )
+        pending_tasks.append(llm_stream_task_id)
         self._task = asyncio.create_task(self._main_task())
+
         self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._task.add_done_callback(lambda _: pending_tasks.remove(llm_stream_task_id))
 
         self._function_calls_info: list[function_context.FunctionCallInfo] = []
         self._function_tasks = set[asyncio.Task[Any]]()
