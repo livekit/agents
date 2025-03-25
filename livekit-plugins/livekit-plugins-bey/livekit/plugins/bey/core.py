@@ -17,6 +17,11 @@ _API_URL = "https://api.bey.dev/v1"
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
 
+EGE_STOCK_AVATAR_ID = "b9be11b8-89fb-4227-8f86-4a881393cbdb"
+"""
+The ID of Ege's stock avatar
+"""
+
 
 class BeyAvatarSession:
     """A Beyond Presence avatar session"""
@@ -55,7 +60,10 @@ class BeyAvatarSession:
         return self._local_agent_room_output_options
 
 
-async def start_bey_avatar_session(ctx: JobContext, avatar_id: str) -> BeyAvatarSession:
+async def start_bey_avatar_session(
+    ctx: JobContext,
+    avatar_id: str = EGE_STOCK_AVATAR_ID,
+) -> BeyAvatarSession:
     """
     Start a Beyond Presence avatar session
 
