@@ -37,7 +37,6 @@ class Agent:
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-        filter_tool_messages: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         self._instructions = instructions
@@ -50,13 +49,7 @@ class Agent:
         self._vad = vad
         self._allow_interruptions = allow_interruptions
         self._activity: AgentActivity | None = None
-
-        filter_tool_messages = (
-            filter_tool_messages if utils.is_given(filter_tool_messages) else True
-        )
-        self._chat_ctx = self._chat_ctx.copy(
-            include_tools=self._tools if filter_tool_messages else True
-        )
+        self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
 
     @property
     def instructions(self) -> str:
@@ -107,9 +100,7 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(
-        self, tools: list[llm.FunctionTool], *, filter_tool_messages: bool = True
-    ) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
         """
         Updates the agent's available function tools.
 
@@ -119,24 +110,18 @@ class Agent:
         Args:
             tools (list[llm.FunctionTool]):
                 The new list of function tools available to the agent.
-            filter_tool_messages (bool):
-                If True, filter invalid tool messages from the chat context.
 
         Raises:
             llm.RealtimeError: If updating the realtime session tools fails.
         """
         if self._activity is None:
             self._tools = list(set(tools))
-            self._chat_ctx = self._chat_ctx.copy(
-                include_tools=self.tools if filter_tool_messages else True
-            )
+            self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 
-        await self._activity.update_tools(tools, filter_tool_messages=filter_tool_messages)
+        await self._activity.update_tools(tools)
 
-    async def update_chat_ctx(
-        self, chat_ctx: llm.ChatContext, *, filter_tool_messages: bool = True
-    ) -> None:
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """
         Updates the agent's chat context.
 
@@ -146,19 +131,15 @@ class Agent:
         Args:
             chat_ctx (llm.ChatContext):
                 The new or updated chat context for the agent.
-            filter_tool_messages (bool):
-                If True, filter invalid tool messages from the chat context.
 
         Raises:
             llm.RealtimeError: If updating the realtime session chat context fails.
         """
         if self._activity is None:
-            self._chat_ctx = chat_ctx.copy(
-                include_tools=self.tools if filter_tool_messages else True
-            )
+            self._chat_ctx = chat_ctx.copy(tools=self._tools)
             return
 
-        await self._activity.update_chat_ctx(chat_ctx, filter_tool_messages=filter_tool_messages)
+        await self._activity.update_chat_ctx(chat_ctx)
 
     @property
     def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:

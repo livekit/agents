@@ -173,33 +173,30 @@ class ChatContext:
     def copy(
         self,
         *,
-        include_instructions: bool = True,
-        include_tools: bool | list[FunctionTool | str] = True,
+        exclude_function_call: bool = False,
+        tools: NotGivenOr[list[FunctionTool]] = NOT_GIVEN,
     ) -> ChatContext:
-        if include_instructions and include_tools is True:
-            # use copy directly if no filtering is needed
-            return ChatContext(self.items.copy())
-
         items = []
 
-        if isinstance(include_tools, bool):
-            include_tools_name = None if include_tools else set()
-        else:
-            from .tool_context import get_function_info
+        from .tool_context import get_function_info
 
-            include_tools_name = {
-                tool if isinstance(tool, str) else get_function_info(tool).name
-                for tool in include_tools
+        valid_tools = set()
+        if is_given(tools):
+            valid_tools = {
+                tool if isinstance(tool, str) else get_function_info(tool).name for tool in tools
             }
 
         for item in self.items:
-            if not include_instructions and item.type == "message" and item.role == "system":
+            if exclude_function_call and item.type in [
+                "function_call",
+                "function_call_output",
+            ]:
                 continue
 
             if (
-                item.type in ["function_call", "function_call_output"]
-                and include_tools_name is not None
-                and item.name not in include_tools_name
+                is_given(tools)
+                and item.type in ["function_call", "function_call_output"]
+                and item.name not in valid_tools
             ):
                 continue
 
