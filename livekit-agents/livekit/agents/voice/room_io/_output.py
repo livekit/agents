@@ -23,9 +23,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
         sample_rate: int,
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
-        queue_size_ms: int = 100_000,  # TODO(long): move buffer to python
+        queue_size_ms: int = 300_000,  # TODO(long): move buffer to python
     ) -> None:
-        super().__init__(sample_rate=sample_rate)
+        super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._room = room
         self._lock = asyncio.Lock()
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
@@ -117,7 +117,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
     ):
-        super().__init__()
+        super().__init__(next_in_chain=None)
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
@@ -235,7 +235,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
     ):
-        super().__init__()
+        super().__init__(next_in_chain=None)
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
@@ -365,7 +365,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
 
 # Keep this utility private for now
 class _ParallelTextOutput(io.TextOutput):
-    def __init__(self, *sinks: io.TextOutput) -> None:
+    def __init__(
+        self, sinks: list[io.TextOutput], *, next_in_chain: io.TextOutput | None = None
+    ) -> None:
+        super().__init__(next_in_chain=next_in_chain)
         self._sinks = sinks
 
     async def capture_text(self, text: str) -> None:
