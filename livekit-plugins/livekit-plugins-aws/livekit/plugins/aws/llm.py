@@ -271,7 +271,7 @@ class LLMStream(llm.LLMStream):
         elif "metadata" in chunk:
             metadata = chunk["metadata"]
             if self._text:
-                chat_chunk = llm.ChatChunk(
+                chat_chunk_text = llm.ChatChunk(
                     request_id=request_id,
                     choices=[
                         llm.Choice(
@@ -287,12 +287,11 @@ class LLMStream(llm.LLMStream):
                 )
                 self._text = ""
                 self._index = 0
-                return chat_chunk
+                return chat_chunk_text
             elif self._tool_call_id:
                 chat_chunk_function = self._try_build_function(request_id, chunk)
                 self._index = 0
-                if chat_chunk_function:
-                    return chat_chunk_function
+                return chat_chunk_function
 
         return None
 
