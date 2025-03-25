@@ -67,7 +67,7 @@ async def start_bey_avatar_session(ctx: JobContext, avatar_id: str) -> BeyAvatar
         The context for the Beyond Presence avatar session
     """
 
-    if (bey_api_key := os.environ.get(_API_KEY_ENV_VAR)) is None:
+    if (api_key := os.environ.get(_API_KEY_ENV_VAR)) is None:
         raise ValueError(f"{_API_KEY_ENV_VAR} environment variable not set")
 
     livekit_avatar_token = (
@@ -85,7 +85,7 @@ async def start_bey_avatar_session(ctx: JobContext, avatar_id: str) -> BeyAvatar
         response = await client.post(
             f"{_API_URL}/session",
             headers={
-                "x-api-key": bey_api_key,
+                "x-api-key": api_key,
             },
             json={
                 "avatar_id": avatar_id,
