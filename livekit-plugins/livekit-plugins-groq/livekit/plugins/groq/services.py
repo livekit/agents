@@ -68,6 +68,7 @@ class STT(OpenAISTT):
             language=language,
             detect_language=detect_language,
             prompt=prompt,
+            use_realtime=False,
         )
 
 
