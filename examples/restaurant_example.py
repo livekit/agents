@@ -44,6 +44,7 @@ class UserData:
     checked_out: Optional[bool] = None
 
     agents: dict[str, Agent] = field(default_factory=dict)
+    prev_agent: Optional[Agent] = None
 
     def summarize(self) -> str:
         data = {
@@ -105,9 +106,22 @@ async def to_greeter(context: RunContext_T) -> Agent:
 
 class BaseAgent(Agent):
     async def on_enter(self) -> None:
-        logger.info(f"entering task {self.__class__.__name__}")
+        agent_name = self.__class__.__name__
+        logger.info(f"entering task {agent_name}")
+
         userdata: UserData = self.session.userdata
         chat_ctx = self.chat_ctx.copy()
+
+        # add the previous agent's chat history to the current agent
+        if userdata.prev_agent:
+            items_copy = self._truncate_chat_ctx(
+                userdata.prev_agent.chat_ctx.items, keep_function_call=True
+            )
+            existing_ids = {item.id for item in chat_ctx.items}
+            items_copy = [item for item in items_copy if item.id not in existing_ids]
+            chat_ctx.items.extend(items_copy)
+
+        # add an instructions including the user data as a system message
         chat_ctx.add_message(
             role="system",
             content=f"Current user data is {userdata.summarize()}",
@@ -119,15 +133,7 @@ class BaseAgent(Agent):
         userdata = context.userdata
         current_agent = context.session.current_agent
         next_agent = userdata.agents[name]
-
-        # copy part of chat history from current task to next task
-        items_copy = self._truncate_chat_ctx(current_agent.chat_ctx.items)
-        existing_ids = {item.id for item in next_agent.chat_ctx.items}
-        items_copy = [item for item in items_copy if item.id not in existing_ids]
-
-        chat_ctx = next_agent.chat_ctx.copy()
-        chat_ctx.items.extend(items_copy)
-        await next_agent.update_chat_ctx(chat_ctx)
+        userdata.prev_agent = current_agent
 
         return next_agent, f"Transferring to {name}."
 
@@ -158,8 +164,8 @@ class BaseAgent(Agent):
                 break
         new_items = new_items[::-1]
 
-        # drop the function_call_output at the beginning
-        while new_items and new_items[0].type == "function_call_output":
+        # the truncated items should not start with function_call or function_call_output
+        while new_items and new_items[0].type in ["function_call", "function_call_output"]:
             new_items.pop(0)
 
         return new_items
@@ -229,9 +235,11 @@ class Reservation(BaseAgent):
 class Takeaway(BaseAgent):
     def __init__(self, menu: str) -> None:
         super().__init__(
-            instructions=f"Our menu is: {menu}. Your jobs are to record the order from the "
-            "customer. Clarify special requests and confirm the order with the "
-            "customer.",
+            instructions=(
+                f"Your are a takeaway agent that takes orders from the customer. "
+                f"Our menu is: {menu}\n"
+                "Clarify special requests and confirm the order with the customer."
+            ),
             tools=[to_greeter],
             tts=cartesia.TTS(voice=voices["takeaway"]),
         )
@@ -259,8 +267,8 @@ class Checkout(BaseAgent):
     def __init__(self, menu: str) -> None:
         super().__init__(
             instructions=(
-                "You are a professional checkout agent at a restaurant. The menu is: "
-                f"{menu}. Your are responsible for confirming the expense of the "
+                f"You are a checkout agent at a restaurant. The menu is: {menu}\n"
+                "Your are responsible for confirming the expense of the "
                 "order and then collecting customer's name, phone number and credit card "
                 "information, including the card number, expiry date, and CVV step by step."
             ),
