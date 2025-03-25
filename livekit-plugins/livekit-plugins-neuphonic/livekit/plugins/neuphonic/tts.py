@@ -64,7 +64,7 @@ class _TTSOptions:
             "sampling_rate": self.sampling_rate,
             "speed": self.speed,
         }
-        return {k: v for k, v in params.items() if is_given(v)}
+        return {k: v for k, v in params.items() if is_given(v) and v is not None}
 
     def get_query_param_string(self):
         """Forms the query parameter string from all model parameters."""

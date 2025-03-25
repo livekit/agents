@@ -95,8 +95,8 @@ class LLM(llm.LLM):
             metadata=metadata,
         )
         self._client = client or openai.AsyncClient(
-            api_key=api_key or None,
-            base_url=base_url or None,
+            api_key=api_key if is_given(api_key) else None,
+            base_url=base_url if is_given(base_url) else None,
             max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=timeout

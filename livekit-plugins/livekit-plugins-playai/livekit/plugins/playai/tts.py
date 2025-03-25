@@ -70,10 +70,10 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        api_key = api_key if is_given(api_key) else os.environ.get("PLAYHT_API_KEY")
-        user_id = user_id if is_given(user_id) else os.environ.get("PLAYHT_USER_ID")
+        pyht_api_key = api_key if is_given(api_key) else os.environ.get("PLAYHT_API_KEY")
+        pyht_user_id = user_id if is_given(user_id) else os.environ.get("PLAYHT_USER_ID")
 
-        if not api_key or not user_id:
+        if not pyht_api_key or not pyht_user_id:
             raise ValueError(
                 "PlayHT API key and user ID are required. Set environment variables PLAYHT_API_KEY and PLAYHT_USER_ID or pass them explicitly."  # noqa: E501
             )
@@ -93,8 +93,8 @@ class TTS(tts.TTS):
         )
 
         self._client = PlayHTAsyncClient(
-            user_id=user_id,
-            api_key=api_key,
+            user_id=pyht_user_id,
+            api_key=pyht_api_key,
         )
 
         self._streams = weakref.WeakSet[SynthesizeStream]()

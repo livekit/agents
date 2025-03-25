@@ -114,8 +114,8 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
-        api_key = api_key if is_given(api_key) else os.environ.get("CARTESIA_API_KEY")
-        if not is_given(api_key):
+        cartesia_api_key = api_key if is_given(api_key) else os.environ.get("CARTESIA_API_KEY")
+        if not cartesia_api_key:
             raise ValueError("CARTESIA_API_KEY must be set")
 
         self._opts = _TTSOptions(
@@ -385,12 +385,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
     voice: dict[str, Any] = {}
-    if isinstance(opts.voice, str):
-        voice["mode"] = "id"
-        voice["id"] = opts.voice
-    else:
-        voice["mode"] = "embedding"
-        voice["embedding"] = opts.voice
+    if is_given(opts.voice):
+        if isinstance(opts.voice, str):
+            voice["mode"] = "id"
+            voice["id"] = opts.voice
+        else:
+            voice["mode"] = "embedding"
+            voice["embedding"] = opts.voice
 
     voice_controls: dict = {}
     if is_given(opts.speed):

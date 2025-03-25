@@ -146,8 +146,8 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
-        if not is_given(api_key):
+        elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
+        if not elevenlabs_api_key:
             raise ValueError(
                 "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"  # noqa: E501
             )
@@ -160,7 +160,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             voice=voice,
             model=model,
-            api_key=api_key,
+            api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             encoding=_DefaultEncoding,
             sample_rate=self.sample_rate,

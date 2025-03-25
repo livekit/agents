@@ -166,9 +166,8 @@ class STT(stt.STT):
         ``api_key`` must be set to your Groq API key, either using the argument or by setting
         the ``GROQ_API_KEY`` environmental variable.
         """
-        if not is_given(api_key):
-            api_key = os.environ.get("GROQ_API_KEY")
-        if not is_given(api_key):
+        groq_api_key = api_key if is_given(api_key) else os.environ.get("GROQ_API_KEY")
+        if not groq_api_key:
             raise ValueError("Groq API key is required")
 
         if not is_given(base_url):
@@ -176,7 +175,7 @@ class STT(stt.STT):
 
         return STT(
             model=model,
-            api_key=api_key,
+            api_key=groq_api_key,
             base_url=base_url,
             client=client,
             language=language,

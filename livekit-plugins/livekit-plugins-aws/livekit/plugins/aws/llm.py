@@ -86,8 +86,8 @@ class LLM(llm.LLM):
             api_key, api_secret, region
         )
 
-        model = model or os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
-        if not is_given(model):
+        model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
+        if not model:
             raise ValueError(
                 "model or inference profile arn must be set using the argument or by setting the BEDROCK_INFERENCE_PROFILE_ARN environment variable."  # noqa: E501
             )

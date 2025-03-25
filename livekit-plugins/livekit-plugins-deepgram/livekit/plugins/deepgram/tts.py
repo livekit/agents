@@ -70,8 +70,8 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        if not is_given(api_key):
+        self._api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
+        if not self._api_key:
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
         if not is_given(word_tokenizer):
@@ -86,7 +86,6 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
         )
         self._session = http_session
-        self._api_key = api_key
         self._base_url = base_url
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](

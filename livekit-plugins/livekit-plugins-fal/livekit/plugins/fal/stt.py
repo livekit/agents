@@ -32,7 +32,7 @@ class WizperSTT(stt.STT):
     ):
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
         self._api_key = api_key if is_given(api_key) else os.getenv("FAL_KEY")
-        if not is_given(api_key):
+        if not self._api_key:
             raise ValueError("fal AI API key is required. It should be set with env FAL_KEY")
         self._opts = _STTOptions(language=language)
         self._fal_client = fal_client.AsyncClient(key=self._api_key)

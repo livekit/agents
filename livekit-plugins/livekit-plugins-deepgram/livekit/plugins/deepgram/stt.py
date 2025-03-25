@@ -176,13 +176,11 @@ class STT(stt.STT):
         )
         self._base_url = base_url
 
-        api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        if not is_given(api_key):
+        self._api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
+        if not self._api_key:
             raise ValueError("Deepgram API key is required")
 
         model = _validate_model(model, language)
-
-        self._api_key = api_key
 
         self._opts = STTOptions(
             language=language,

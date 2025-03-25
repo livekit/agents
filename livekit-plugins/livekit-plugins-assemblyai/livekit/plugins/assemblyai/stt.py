@@ -88,15 +88,13 @@ class STT(stt.STT):
                 interim_results=True,
             ),
         )
-        if is_given(api_key):
-            api_key = api_key or os.environ.get("ASSEMBLYAI_API_KEY")
-        if not is_given(api_key):
+        self._api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
+        if not self._api_key:
             raise ValueError(
                 "AssemblyAI API key is required. "
                 "Pass one in via the `api_key` parameter, "
                 "or set it as the `ASSEMBLYAI_API_KEY` environment variable"
             )
-        self._api_key = api_key
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
