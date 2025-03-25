@@ -1,13 +1,14 @@
 import asyncio
 from collections.abc import AsyncIterable
-from livekit import rtc
-from .agent_session import AgentSession
-from ..types import NotGiven, NOT_GIVEN, NotGivenOr
-from ..utils.audio import audio_frames_from_file
-from ..utils.aio import cancel_and_wait
-from ..utils import log_exceptions
-from ..log import logger
 
+from livekit import rtc
+
+from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import log_exceptions
+from ..utils.aio import cancel_and_wait
+from ..utils.audio import audio_frames_from_file
+from .agent_session import AgentSession
 from .events import AgentStateChangedEvent
 
 

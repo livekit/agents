@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import aiofiles
 import asyncio
 import ctypes
-from typing import Union
 from collections.abc import AsyncIterable
+from typing import Union
+
+import aiofiles
 
 from livekit import rtc
 
