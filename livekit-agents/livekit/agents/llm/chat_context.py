@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
@@ -25,6 +25,9 @@ from livekit.agents.utils.misc import is_given
 
 from .. import utils
 from ..log import logger
+
+if TYPE_CHECKING:
+    from ..llm import FunctionTool
 
 
 class ImageContent(BaseModel):
@@ -167,8 +170,39 @@ class ChatContext:
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
 
-    def copy(self) -> ChatContext:
-        return ChatContext(self.items.copy())
+    def copy(
+        self,
+        *,
+        exclude_function_call: bool = False,
+        tools: NotGivenOr[list[FunctionTool]] = NOT_GIVEN,
+    ) -> ChatContext:
+        items = []
+
+        from .tool_context import get_function_info
+
+        valid_tools = set()
+        if is_given(tools):
+            valid_tools = {
+                tool if isinstance(tool, str) else get_function_info(tool).name for tool in tools
+            }
+
+        for item in self.items:
+            if exclude_function_call and item.type in [
+                "function_call",
+                "function_call_output",
+            ]:
+                continue
+
+            if (
+                is_given(tools)
+                and item.type in ["function_call", "function_call_output"]
+                and item.name not in valid_tools
+            ):
+                continue
+
+            items.append(item)
+
+        return ChatContext(items)
 
     def to_dict(
         self,

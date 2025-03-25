@@ -208,8 +208,13 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             await self._rt_session.update_tools(tools)
 
+        if isinstance(self.llm, llm.LLM):
+            # for realtime LLM, we assume the server will remove unvalid tool messages
+            await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
+
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        chat_ctx = chat_ctx.copy()
+        chat_ctx = chat_ctx.copy(tools=self._agent.tools)
+
         self._agent._chat_ctx = chat_ctx
         update_instructions(chat_ctx, instructions=self._agent.instructions, add_if_missing=True)
 
@@ -419,6 +424,7 @@ class AgentActivity(RecognitionHooks):
         *,
         user_input: NotGivenOr[str] = NOT_GIVEN,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._current_speech is not None and not self._current_speech.interrupted:
@@ -457,7 +463,7 @@ class AgentActivity(RecognitionHooks):
                     speech_handle=handle,
                     user_input=user_input or None,
                     instructions=instructions or None,
-                    model_settings=ModelSettings(),
+                    model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
                 owned_speech_handle=handle,
                 name="AgentActivity.realtime_reply",
@@ -471,7 +477,7 @@ class AgentActivity(RecognitionHooks):
                     tools=self._agent.tools,
                     user_input=user_input or None,
                     instructions=instructions or None,
-                    model_settings=ModelSettings(),
+                    model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
                 owned_speech_handle=handle,
                 name="AgentActivity.pipeline_reply",

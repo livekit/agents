@@ -124,10 +124,10 @@ class BaseAgent(Agent):
         # add an instructions including the user data as a system message
         chat_ctx.add_message(
             role="system",
-            content=f"Current user data is {userdata.summarize()}",
+            content=f"You are {agent_name} agent. Current user data is {userdata.summarize()}",
         )
         await self.update_chat_ctx(chat_ctx)
-        self.session.generate_reply()
+        self.session.generate_reply(tool_choice="none")
 
     async def _transfer_to_agent(self, name: str, context: RunContext_T) -> tuple[Agent, str]:
         userdata = context.userdata
@@ -179,7 +179,7 @@ class Greeter(BaseAgent):
                 "Your jobs are to greet the caller and understand if they want to "
                 "make a reservation or order takeaway. Guide them to the right agent using tools."
             ),
-            # llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
+            llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
             tts=cartesia.TTS(voice=voices["greeter"]),
         )
         self.menu = menu
