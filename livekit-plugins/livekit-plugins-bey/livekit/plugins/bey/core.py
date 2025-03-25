@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
-from typing import Awaitable
+from collections.abc import Awaitable
 
 import httpx
+
 from livekit import api, rtc
 from livekit.agents import (
     JobContext,
