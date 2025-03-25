@@ -4,7 +4,7 @@ import asyncio
 import copy
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -32,7 +32,7 @@ class VoiceOptions:
 
 Userdata_T = TypeVar("Userdata_T")
 
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
+TurnDetectionMode = Union[Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector]
 """
 The mode of turn detection to use.
 
