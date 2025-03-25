@@ -33,6 +33,12 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import (
@@ -57,8 +63,8 @@ class _TTSOptions:
     encoding: TTSEncoding
     sample_rate: int
     voice: str | list[float]
-    speed: TTSVoiceSpeed | float | None
-    emotion: list[TTSVoiceEmotion | str] | None
+    speed: NotGivenOr[TTSVoiceSpeed | float]
+    emotion: NotGivenOr[list[TTSVoiceEmotion | str]]
     api_key: str
     language: str
     base_url: str
@@ -78,10 +84,10 @@ class TTS(tts.TTS):
         language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
-        speed: TTSVoiceSpeed | float | None = None,
-        emotion: list[TTSVoiceEmotion | str] | None = None,
+        speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
+        emotion: NotGivenOr[list[TTSVoiceEmotion | str]] = NOT_GIVEN,
         sample_rate: int = 24000,
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
     ) -> None:
@@ -108,9 +114,8 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
-
-        api_key = api_key or os.environ.get("CARTESIA_API_KEY")
-        if not api_key:
+        api_key = api_key if is_given(api_key) else os.environ.get("CARTESIA_API_KEY")
+        if not is_given(api_key):
             raise ValueError("CARTESIA_API_KEY must be set")
 
         self._opts = _TTSOptions(
@@ -155,11 +160,11 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: TTSModels | str | None = None,
-        language: str | None = None,
-        voice: str | list[float] | None = None,
-        speed: TTSVoiceSpeed | float | None = None,
-        emotion: list[TTSVoiceEmotion | str] | None = None,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[str | list[float]] = NOT_GIVEN,
+        speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
+        emotion: NotGivenOr[list[TTSVoiceEmotion | str]] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -174,18 +179,22 @@ class TTS(tts.TTS):
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
         """
-        self._opts.model = model or self._opts.model
-        self._opts.language = language or self._opts.language
-        self._opts.voice = voice or self._opts.voice
-        self._opts.speed = speed or self._opts.speed
-        if emotion is not None:
+        if is_given(model):
+            self._opts.model = model
+        if is_given(language):
+            self._opts.language = language
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(speed):
+            self._opts.speed = speed
+        if is_given(emotion):
             self._opts.emotion = emotion
 
     def synthesize(
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -195,7 +204,9 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         return SynthesizeStream(
             tts=self,
             pool=self._pool,
@@ -220,7 +231,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._session = opts, session

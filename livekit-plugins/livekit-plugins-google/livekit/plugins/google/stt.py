@@ -37,6 +37,12 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import SpeechLanguages, SpeechModels
@@ -62,10 +68,10 @@ class STTOptions:
     spoken_punctuation: bool
     model: SpeechModels | str
     sample_rate: int
-    keywords: list[tuple[str, float]] | None
+    keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
-        if self.keywords:
+        if is_given(self.keywords):
             return cloud_speech.SpeechAdaptation(
                 phrase_sets=[
                     cloud_speech.SpeechAdaptation.AdaptationPhraseSet(
@@ -93,9 +99,9 @@ class STT(stt.STT):
         model: SpeechModels | str = "latest_long",
         location: str = "global",
         sample_rate: int = 16000,
-        credentials_info: dict | None = None,
-        credentials_file: str | None = None,
-        keywords: list[tuple[str, float]] | None = None,
+        credentials_info: NotGivenOr[dict] = NOT_GIVEN,
+        credentials_file: NotGivenOr[str] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
     ):
         """
         Create a new instance of Google STT.
@@ -123,7 +129,7 @@ class STT(stt.STT):
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
 
-        if credentials_file is None and credentials_info is None:
+        if not is_given(credentials_file) and not is_given(credentials_info):
             try:
                 gauth_default()
             except DefaultCredentialsError:
@@ -159,20 +165,16 @@ class STT(stt.STT):
         client: SpeechAsyncClient | None = None
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
-        if self._credentials_info:
+        if is_given(self._credentials_info):
             client = SpeechAsyncClient.from_service_account_info(
-                self._credentials_info,
-                client_options=client_options,
+                self._credentials_info, client_options=client_options
             )
-        elif self._credentials_file:
+        elif is_given(self._credentials_file):
             client = SpeechAsyncClient.from_service_account_file(
-                self._credentials_file,
-                client_options=client_options,
+                self._credentials_file, client_options=client_options
             )
         else:
-            client = SpeechAsyncClient(
-                client_options=client_options,
-            )
+            client = SpeechAsyncClient(client_options=client_options)
         assert client is not None
         return client
 
@@ -189,10 +191,10 @@ class STT(stt.STT):
             _, project_id = ga_default()
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
-    def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
+    def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
         config = dataclasses.replace(self._config)
 
-        if language:
+        if is_given(language):
             config.languages = [language]
 
         if not isinstance(config.languages, list):
@@ -208,7 +210,7 @@ class STT(stt.STT):
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: SpeechLanguages | str | None,
+        language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
@@ -255,7 +257,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: SpeechLanguages | str | None = None,
+        language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = self._sanitize_options(language=language)
@@ -272,34 +274,34 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        languages: LanguageCode | None = None,
-        detect_language: bool | None = None,
-        interim_results: bool | None = None,
-        punctuate: bool | None = None,
-        spoken_punctuation: bool | None = None,
-        model: SpeechModels | None = None,
-        location: str | None = None,
-        keywords: list[tuple[str, float]] | None = None,
+        languages: NotGivenOr[LanguageCode] = NOT_GIVEN,
+        detect_language: NotGivenOr[bool] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        punctuate: NotGivenOr[bool] = NOT_GIVEN,
+        spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        location: NotGivenOr[str] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
     ):
-        if languages is not None:
+        if is_given(languages):
             if isinstance(languages, str):
                 languages = [languages]
             self._config.languages = languages
-        if detect_language is not None:
+        if is_given(detect_language):
             self._config.detect_language = detect_language
-        if interim_results is not None:
+        if is_given(interim_results):
             self._config.interim_results = interim_results
-        if punctuate is not None:
+        if is_given(punctuate):
             self._config.punctuate = punctuate
-        if spoken_punctuation is not None:
+        if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
-        if model is not None:
+        if is_given(model):
             self._config.model = model
-        if location is not None:
+        if is_given(location):
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
             self._pool.invalidate()
-        if keywords is not None:
+        if is_given(keywords):
             self._config.keywords = keywords
 
         for stream in self._streams:
@@ -339,29 +341,29 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        languages: LanguageCode | None = None,
-        detect_language: bool | None = None,
-        interim_results: bool | None = None,
-        punctuate: bool | None = None,
-        spoken_punctuation: bool | None = None,
-        model: SpeechModels | None = None,
-        keywords: list[tuple[str, float]] | None = None,
+        languages: NotGivenOr[LanguageCode] = NOT_GIVEN,
+        detect_language: NotGivenOr[bool] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        punctuate: NotGivenOr[bool] = NOT_GIVEN,
+        spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
     ):
-        if languages is not None:
+        if is_given(languages):
             if isinstance(languages, str):
                 languages = [languages]
             self._config.languages = languages
-        if detect_language is not None:
+        if is_given(detect_language):
             self._config.detect_language = detect_language
-        if interim_results is not None:
+        if is_given(interim_results):
             self._config.interim_results = interim_results
-        if punctuate is not None:
+        if is_given(punctuate):
             self._config.punctuate = punctuate
-        if spoken_punctuation is not None:
+        if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
-        if model is not None:
+        if is_given(model):
             self._config.model = model
-        if keywords is not None:
+        if is_given(keywords):
             self._config.keywords = keywords
 
         self._reconnect_event.set()

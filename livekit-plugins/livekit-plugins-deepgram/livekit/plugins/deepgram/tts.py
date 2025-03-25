@@ -18,6 +18,12 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 
@@ -40,11 +46,9 @@ class TTS(tts.TTS):
         model: str = "aura-asteria-en",
         encoding: str = "linear16",
         sample_rate: int = 24000,
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: str = BASE_URL,
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
-            ignore_punctuation=False
-        ),
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
@@ -66,9 +70,14 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
-        if not api_key:
+        api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
+        if not is_given(api_key):
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
+
+        if not is_given(word_tokenizer):
+            word_tokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
+                ignore_punctuation=False
+            )
 
         self._opts = _TTSOptions(
             model=model,
@@ -113,17 +122,17 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: str | None = None,
-        sample_rate: int | None = None,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         args:
             model (str): TTS model to use.
             sample_rate (int): Sample rate of audio.
         """
-        if model is not None:
+        if is_given(model):
             self._opts.model = model
-        if sample_rate is not None:
+        if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
         for stream in self._streams:
             stream.update_options(
@@ -135,7 +144,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -147,7 +156,9 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -180,7 +191,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
@@ -254,7 +265,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         api_key: str,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
@@ -267,12 +278,12 @@ class SynthesizeStream(tts.SynthesizeStream):
     def update_options(
         self,
         *,
-        model: str | None = None,
-        sample_rate: int | None = None,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
-        if model is not None:
+        if is_given(model):
             self._opts.model = model
-        if sample_rate is not None:
+        if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
 
         self._reconnect_event.set()

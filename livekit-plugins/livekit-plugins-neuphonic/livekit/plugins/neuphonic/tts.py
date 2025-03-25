@@ -31,6 +31,8 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSEncodings, TTSLangCodes, TTSModels
@@ -49,26 +51,20 @@ class _TTSOptions:
     encoding: TTSEncodings | str
     sampling_rate: int
     speed: float
-    voice_id: str | None = None
+    voice_id: NotGivenOr[str] = NOT_GIVEN
 
     @property
     def model_params(self) -> dict:
-        """Returns a dict of all model parameters and their values."""
-        params = [
-            "voice_id",
-            "model",
-            "lang_code",
-            "encoding",
-            "sampling_rate",
-            "speed",
-        ]
-        values = {}
-
-        for param in params:
-            if hasattr(self, param) and getattr(self, param) is not None:
-                values[param] = getattr(self, param)
-
-        return values
+        """Returns a dictionary of model parameters for API requests."""
+        params = {
+            "voice_id": self.voice_id,
+            "model": self.model,
+            "lang_code": self.lang_code,
+            "encoding": self.encoding,
+            "sampling_rate": self.sampling_rate,
+            "speed": self.speed,
+        }
+        return {k: v for k, v in params.items() if is_given(v)}
 
     def get_query_param_string(self):
         """Forms the query parameter string from all model parameters."""
@@ -107,12 +103,12 @@ class TTS(tts.TTS):
         self,
         *,
         model: TTSModels | str = "neu_hq",
-        voice_id: str | None = None,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
         lang_code: TTSLangCodes | str = "en",
         encoding: TTSEncodings | str = "pcm_linear",
         speed: float = 1.0,
         sample_rate: int = 22050,
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = API_BASE_URL,
     ) -> None:
@@ -138,10 +134,9 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.environ.get("NEUPHONIC_API_TOKEN")
-
+        api_key = api_key if is_given(api_key) else os.environ.get("NEUPHONIC_API_TOKEN")
         if not api_key:
-            raise ValueError("NEUPHONIC_API_TOKEN must be set")
+            raise ValueError("API key must be provided or set in NEUPHONIC_API_TOKEN")
 
         self._opts = _TTSOptions(
             model=model,
@@ -221,7 +216,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -231,7 +226,9 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
         )
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
@@ -258,7 +255,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._session = opts, session

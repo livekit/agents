@@ -28,6 +28,12 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSModels, TTSVoices
@@ -45,7 +51,7 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     speed: float
-    instructions: Optional[str] = None  # noqa: F821
+    instructions: NotGivenOr[str] = NOT_GIVEN
 
 
 class TTS(tts.TTS):
@@ -55,9 +61,9 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
-        instructions: Optional[str] = None,  # noqa: F821
-        base_url: str | None = None,
-        api_key: str | None = None,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
     ) -> None:
         """
@@ -84,8 +90,8 @@ class TTS(tts.TTS):
 
         self._client = client or openai.AsyncClient(
             max_retries=0,
-            api_key=api_key,
-            base_url=base_url,
+            api_key=api_key if is_given(api_key) else None,
+            base_url=base_url if is_given(base_url) else None,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -100,15 +106,19 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: TTSModels | str | None,
-        voice: TTSVoices | str | None,
-        speed: float | None,
-        instructions: Optional[str] = None,  # noqa: F821
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        self._opts.model = model or self._opts.model
-        self._opts.voice = voice or self._opts.voice
-        self._opts.speed = speed or self._opts.speed
-        self._opts.instructions = instructions or self._opts.instructions
+        if is_given(model):
+            self._opts.model = model
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(speed):
+            self._opts.speed = speed
+        if is_given(instructions):
+            self._opts.instructions = instructions
 
     @staticmethod
     def create_azure_client(
@@ -116,7 +126,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
-        instructions: str | None = None,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -162,7 +172,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -179,7 +189,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
         opts: _TTSOptions,
         client: openai.AsyncClient,
     ) -> None:
@@ -194,7 +204,7 @@ class ChunkedStream(tts.ChunkedStream):
             voice=self._opts.voice,
             response_format="opus",
             speed=self._opts.speed,
-            instructions=self._opts.instructions,
+            instructions=self._opts.instructions if is_given(self._opts.instructions) else None,
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
