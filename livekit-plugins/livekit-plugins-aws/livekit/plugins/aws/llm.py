@@ -289,10 +289,10 @@ class LLMStream(llm.LLMStream):
                 self._index = 0
                 return chat_chunk
             elif self._tool_call_id:
-                chat_chunk = self._try_build_function(request_id, chunk)
+                chat_chunk_function = self._try_build_function(request_id, chunk)
                 self._index = 0
-                if chat_chunk:
-                    return chat_chunk
+                if chat_chunk_function:
+                    return chat_chunk_function
 
         return None
 
