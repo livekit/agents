@@ -536,7 +536,7 @@ def _dict_to_voices_list(data: dict[str, Any]):
 
 
 def _strip_nones(data: dict[str, Any]):
-    return {k: v for k, v in data.items() if is_given(v)}
+    return {k: v for k, v in data.items() if is_given(v) and v is not None}
 
 
 def _synthesize_url(opts: _TTSOptions) -> str:
