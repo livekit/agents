@@ -77,7 +77,7 @@ class TTS(tts.TTS):
             speech_region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
-        """
+        """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,

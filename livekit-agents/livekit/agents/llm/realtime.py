@@ -48,6 +48,7 @@ class ErrorEvent:
 class RealtimeCapabilities:
     message_truncation: bool
     turn_detection: bool
+    user_transcription: bool
 
 
 class RealtimeError(Exception):
@@ -129,6 +130,10 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
+
+    # commit the input audio buffer to the server
+    @abstractmethod
+    def commit_audio(self) -> None: ...
 
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod

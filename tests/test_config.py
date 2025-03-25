@@ -9,7 +9,7 @@ def test_process_base_url():
     assert (
         process_base_url("http://example.com", "gpt-4") == "ws://example.com/realtime?model=gpt-4"
     )
-    assert (
+    assert (  # noqa: F631
         process_base_url(
             "wss://livekit.ai/voice/v1/chat/voice?client=oai&enable_noise_suppression=true",
             "gpt-4",

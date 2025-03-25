@@ -82,7 +82,7 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Deepgram         | livekit-plugins-deepgram   | ✅        | [deepgram.STT()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.STT)       |
 | OpenAI (Whisper) | livekit-plugins-openai     |           | [openai.STT()](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.STT)             |
 | Google           | livekit-plugins-google     | ✅        | [google.STT()](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.STT)             |
-| AssemblyAI       | livekit-plugins-assemblyai |           | [assemblyai.STT()](https://docs.livekit.io/python/livekit/plugins/assemblyai/index.html#livekit.plugins.assemblyai.STT) |
+| AssemblyAI       | livekit-plugins-assemblyai | ✅         | [assemblyai.STT()](https://docs.livekit.io/python/livekit/plugins/assemblyai/index.html#livekit.plugins.assemblyai.STT) |
 | Groq (Whisper)   | livekit-plugins-openai     |           | [openai.STT.with_groq()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.STT.with_groq)   |
 | FAL (Whizper)    | livekit-plugins-fal        |           | [fal.STT()](https://docs.livekit.io/python/livekit/plugins/fal/index.html#livekit.plugins.fal.STT)                      |
 
@@ -98,6 +98,8 @@ We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framewo
 | Deepgram     | livekit-plugins-deepgram   | ✅        |               | [deepgram.TTS()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.TTS)       |
 | Play.ai      | livekit-plugins-playai     | ✅        | ✅            | [playai.TTS()](https://docs.livekit.io/python/livekit/plugins/playai/index.html#livekit.plugins.playai.TTS)             |
 | Rime         | livekit-plugins-rime       | ✅        |               | [rime.TTS()](https://docs.livekit.io/python/livekit/plugins/rime/index.html#livekit.plugins.rime.TTS)                   |
+| Neuphonic    | livekit-plugins-neuphonic  | ✅        | ✅            | neuphonic.TTS()                                                                                                         |
+| AWS Polly    | livekit-plugins-aws        | ✅        |               | [aws.TTS()](https://docs.livekit.io/python/livekit/plugins/aws/index.html#livekit.plugins.aws.TTS)                      |
 
 ### Other plugins
 

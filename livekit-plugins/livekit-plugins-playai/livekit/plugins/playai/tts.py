@@ -37,7 +37,7 @@ class TTS(tts.TTS):
         language: str = "english",
         sample_rate: int = 24000,
         model: TTSModel | str = "Play3.0-mini",
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
             ignore_punctuation=False
         ),
         **kwargs,
@@ -54,7 +54,7 @@ class TTS(tts.TTS):
             sample_rate (int): sample rate (Hz), A number greater than or equal to 8000, and must be less than or equal to 48000
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             **kwargs: Additional options.
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -69,7 +69,7 @@ class TTS(tts.TTS):
 
         if not api_key or not user_id:
             raise ValueError(
-                "PlayHT API key and user ID are required. Set environment variables PLAYHT_API_KEY and PLAYHT_USER_ID or pass them explicitly."
+                "PlayHT API key and user ID are required. Set environment variables PLAYHT_API_KEY and PLAYHT_USER_ID or pass them explicitly."  # noqa: E501
             )
         _validate_kwargs(kwargs)
         self._config = TTSOptions(

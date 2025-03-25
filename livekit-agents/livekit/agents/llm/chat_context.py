@@ -24,6 +24,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.misc import is_given
 
 from .. import utils
+from ..log import logger
 
 
 class ImageContent(BaseModel):
@@ -55,6 +56,11 @@ class ImageContent(BaseModel):
     # With an external URL
     chat_image = ImageContent(image="https://example.com/image.jpg")
     ```
+    """  # noqa: E501
+
+    id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
+    """
+    Unique identifier for the image
     """
 
     type: Literal["image_content"] = Field(default="image_content")
@@ -76,6 +82,10 @@ class ImageContent(BaseModel):
     Detail parameter for LLM provider, if supported.
 
     Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
+    """
+    mime_type: str | None = None
+    """
+    MIME type of the image
     """
     _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
 
@@ -169,7 +179,10 @@ class ChatContext:
     ) -> dict:
         items = []
         for item in self.items:
-            if exclude_function_call and item.type in ["function_call", "function_call_output"]:
+            if exclude_function_call and item.type in [
+                "function_call",
+                "function_call_output",
+            ]:
                 continue
 
             if item.type == "message":
@@ -191,17 +204,22 @@ class ChatContext:
         items = item_adapter.validate_python(data["items"])
         return cls(items)
 
+    @property
+    def readonly(self) -> bool:
+        return False
+
 
 class _ReadOnlyChatContext(ChatContext):
     """A read-only wrapper for ChatContext that prevents modifications."""
 
     error_msg = (
-        "This is a read-only reference to the chat context. "
-        "Please use .copy() method to make a mutable copy."
+        "trying to modify a read-only chat context, "
+        "please use .copy() and agent.update_chat_ctx() to modify the chat context"
     )
 
     class _ImmutableList(list):
         def _raise_error(self, *args, **kwargs):
+            logger.error(_ReadOnlyChatContext.error_msg)
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
         # override all mutating methods to raise errors
@@ -213,3 +231,7 @@ class _ReadOnlyChatContext(ChatContext):
 
     def __init__(self, items: list[ChatItem]):
         self._items = self._ImmutableList(items)
+
+    @property
+    def readonly(self) -> bool:
+        return True

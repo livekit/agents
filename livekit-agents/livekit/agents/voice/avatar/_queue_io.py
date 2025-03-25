@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 class QueueAudioOutput(
-    AudioOutput, AudioReceiver, rtc.EventEmitter[Literal["playback_finished", "clear_buffer"]]
+    AudioOutput,
+    AudioReceiver,
+    rtc.EventEmitter[Literal["playback_finished", "clear_buffer"]],
 ):
     """
     AudioOutput implementation that sends audio frames through a queue.

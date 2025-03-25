@@ -57,7 +57,7 @@ class STT(stt.STT):
         segmentation_silence_timeout_ms: int | None = None,
         segmentation_max_time_ms: int | None = None,
         segmentation_strategy: str | None = None,
-        # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.
+        # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
         languages: list[str] = None,
         # for compatibility with other STT plugins
         language: str | None = None,
@@ -84,7 +84,7 @@ class STT(stt.STT):
             speech_host or (speech_key and speech_region) or (speech_auth_token and speech_region)
         ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
             )
 
         if language:

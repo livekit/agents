@@ -80,7 +80,9 @@ class AudioWaveGenerator(VideoGenerator):
                 break
         self._reset_audio_buffer()
 
-    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
+    def __aiter__(
+        self,
+    ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         return self._stream_impl()
 
     async def _stream_impl(

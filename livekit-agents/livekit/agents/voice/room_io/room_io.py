@@ -127,10 +127,14 @@ class RoomIO:
         ) -> _ParallelTextOutput:
             return _ParallelTextOutput(
                 _ParticipantLegacyTranscriptionOutput(
-                    room=self._room, is_delta_stream=is_delta_stream, participant=participant
+                    room=self._room,
+                    is_delta_stream=is_delta_stream,
+                    participant=participant,
                 ),
                 _ParticipantTranscriptionOutput(
-                    room=self._room, is_delta_stream=is_delta_stream, participant=participant
+                    room=self._room,
+                    is_delta_stream=is_delta_stream,
+                    participant=participant,
                 ),
             )
 
@@ -355,6 +359,10 @@ class RoomIO:
 
         for sink in self._user_tr_output._sinks:
             assert isinstance(
-                sink, (_ParticipantLegacyTranscriptionOutput, _ParticipantTranscriptionOutput)
+                sink,
+                (
+                    _ParticipantLegacyTranscriptionOutput,
+                    _ParticipantTranscriptionOutput,
+                ),
             )
             sink.set_participant(participant_identity)

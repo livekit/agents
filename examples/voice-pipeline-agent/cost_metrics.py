@@ -2,7 +2,15 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli, llm, metrics
+from livekit.agents import (
+    AutoSubscribe,
+    JobContext,
+    JobProcess,
+    WorkerOptions,
+    cli,
+    llm,
+    metrics,
+)
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
@@ -25,8 +33,8 @@ async def entrypoint(ctx: JobContext):
     initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
-            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
-            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."
+            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "  # noqa: E501
+            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation."  # noqa: E501
         ),
     )
 
@@ -60,7 +68,7 @@ async def entrypoint(ctx: JobContext):
         total_cost = llm_cost + tts_cost + stt_cost
 
         logger.info(
-            f"Total cost: ${total_cost:.4f} (LLM: ${llm_cost:.4f}, TTS: ${tts_cost:.4f}, STT: ${stt_cost:.4f})"
+            f"Total cost: ${total_cost:.4f} (LLM: ${llm_cost:.4f}, TTS: ${tts_cost:.4f}, STT: ${stt_cost:.4f})"  # noqa: E501
         )
 
     ctx.add_shutdown_callback(log_session_cost)

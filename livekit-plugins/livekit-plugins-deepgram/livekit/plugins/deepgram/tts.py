@@ -42,7 +42,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         base_url: str = BASE_URL,
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
             ignore_punctuation=False
         ),
         http_session: aiohttp.ClientSession | None = None,
@@ -59,7 +59,7 @@ class TTS(tts.TTS):
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
 
-        """
+        """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,

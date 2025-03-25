@@ -8,7 +8,7 @@ TTSEncoding = Literal[
     # "pcm_alaw",
 ]
 
-TTSModels = Literal["sonic-english", "sonic-multilingual"]
+TTSModels = Literal["sonic", "sonic-2", "sonic-lite", "sonic-preview", "sonic-turbo"]
 TTSLanguages = Literal["en", "es", "fr", "de", "pt", "zh", "ja"]
 TTSDefaultVoiceId = "794f9389-aac1-45b6-b726-9d9369183238"
 TTSVoiceSpeed = Literal["fastest", "fast", "normal", "slow", "slowest"]

@@ -109,7 +109,7 @@ if __name__ == "__main__":
     sys.argv = sys.argv[:1] + remaining_args
 
     # WorkerType.ROOM is the default worker type which will create an agent for every room.
-    # You can also use WorkerType.PUBLISHER to create a single agent for all participants that publish a track.
+    # You can also use WorkerType.PUBLISHER to create a single agent for all participants that publish a track.  # noqa: E501
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=partial(entrypoint, avatar_dispatcher_url=args.avatar_url),

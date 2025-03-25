@@ -175,4 +175,4 @@ class Chan(Generic[T]):
         try:
             return await self.recv()
         except ChanClosed:
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904

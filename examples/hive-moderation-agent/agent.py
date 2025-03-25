@@ -138,7 +138,7 @@ async def entrypoint(ctx: agents.JobContext):
                             # TODO: should also include "general_nsfw" class
                             if mod_class.score >= CONFIDENCE_THRESHOLD:
                                 class_name = mod_class.class_[4:]
-                                message = f'FOUND {class_name} for participant "{participant.identity}" (confidence score: {mod_class.score:0.3f})'
+                                message = f'FOUND {class_name} for participant "{participant.identity}" (confidence score: {mod_class.score:0.3f})'  # noqa: E501
                                 logger.info(message)
                                 await chat.send_message(message)
 

@@ -80,7 +80,7 @@ class LLM(llm.LLM):
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
-        """
+        """  # noqa: E501
         super().__init__()
         self._api_key, self._api_secret, self._region = get_aws_credentials(
             api_key, api_secret, region
@@ -89,7 +89,7 @@ class LLM(llm.LLM):
         model = model or os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
         if not is_given(model):
             raise ValueError(
-                "model or inference profile arn must be set using the argument or by setting the BEDROCK_INFERENCE_PROFILE_ARN environment variable."
+                "model or inference profile arn must be set using the argument or by setting the BEDROCK_INFERENCE_PROFILE_ARN environment variable."  # noqa: E501
             )
         self._opts = _LLMOptions(
             model=model,

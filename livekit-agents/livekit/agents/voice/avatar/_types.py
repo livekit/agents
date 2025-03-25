@@ -36,5 +36,7 @@ class VideoGenerator(ABC):
         """Clear the audio buffer, stopping audio playback immediately"""
 
     @abstractmethod
-    def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
-        """Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends"""
+    def __aiter__(
+        self,
+    ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
+        """Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends"""  # noqa: E501

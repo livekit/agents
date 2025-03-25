@@ -47,16 +47,16 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        transcription_config: TranscriptionConfig = TranscriptionConfig(
+        transcription_config: TranscriptionConfig = TranscriptionConfig(  # noqa: B008
             language="en",
             operating_point="enhanced",
             enable_partials=True,
             max_delay=0.7,
         ),
-        connection_settings: ConnectionSettings = ConnectionSettings(
+        connection_settings: ConnectionSettings = ConnectionSettings(  # noqa: B008
             url="wss://eu2.rt.speechmatics.com/v2",
         ),
-        audio_settings: AudioSettings = AudioSettings(),
+        audio_settings: AudioSettings = AudioSettings(),  # noqa: B008
         http_session: aiohttp.ClientSession | None = None,
         extra_headers: dict | None = None,
     ):

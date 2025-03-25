@@ -206,11 +206,11 @@ def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
         if console:
             # reset the line before each log message
             colored_formatter = ColoredFormatter(
-                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"
+                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
             )
         else:
             colored_formatter = ColoredFormatter(
-                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"
+                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
             )
 
         handler.setFormatter(colored_formatter)

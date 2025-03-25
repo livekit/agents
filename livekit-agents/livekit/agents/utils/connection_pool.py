@@ -32,7 +32,7 @@ class ConnectionPool(Generic[T]):
             mark_refreshed_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
             connect_cb: Optional async callback to create new connections
             close_cb: Optional async callback to close connections
-        """
+        """  # noqa: E501
         self._max_session_duration = max_session_duration
         self._mark_refreshed_on_get = mark_refreshed_on_get
         self._connect_cb = connect_cb

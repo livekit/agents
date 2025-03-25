@@ -7,7 +7,14 @@ from typing import Union
 import aiofiles
 from dotenv import load_dotenv
 
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, multimodal, utils
+from livekit.agents import (
+    AutoSubscribe,
+    JobContext,
+    WorkerOptions,
+    cli,
+    multimodal,
+    utils,
+)
 from livekit.agents.llm import ChatMessage
 from livekit.agents.multimodal.multimodal_agent import EventTypes
 from livekit.plugins import openai
@@ -51,7 +58,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
             events (arr): list of all events
             log_q (asyncio.Queue): a queue of EventLog and TranscriptionLog
 
-        """
+        """  # noqa: E501
         super().__init__()
 
         self._model = model

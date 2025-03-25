@@ -86,7 +86,7 @@ class TTS(
 
     def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         raise NotImplementedError(
-            "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
+            "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"  # noqa: E501
         )
 
     def prewarm(self) -> None:
@@ -192,7 +192,7 @@ class ChunkedStream(ABC):
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
-                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
                     logger.warning(
@@ -220,7 +220,7 @@ class ChunkedStream(ABC):
             if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 
@@ -272,7 +272,7 @@ class SynthesizeStream(ABC):
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
-                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
                     logger.warning(
@@ -398,7 +398,7 @@ class SynthesizeStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 
