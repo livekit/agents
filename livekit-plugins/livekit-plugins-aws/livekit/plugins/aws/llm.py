@@ -179,7 +179,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
         self._text: str = ""
-        self._index: int | None = None
+        self._index: int = 0
 
         retryable = True
 
@@ -286,11 +286,11 @@ class LLMStream(llm.LLMStream):
                     ),
                 )
                 self._text = ""
-                self._index = None
+                self._index = 0
                 return chat_chunk
             elif self._tool_call_id:
                 chat_chunk = self._try_build_function(request_id, chunk)
-                self._index = None
+                self._index = 0
                 return chat_chunk
 
         return None
