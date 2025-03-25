@@ -804,6 +804,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         user_input: str | None = None,
         instructions: str | None = None,
+        _tools_messages: list[llm.ChatItem] | None = None,
     ) -> None:
         from .agent import ModelSettings
 
@@ -903,6 +904,10 @@ class AgentActivity(RecognitionHooks):
             if not speech_handle.interrupted:
                 self._session._update_agent_state(AgentState.LISTENING)
 
+        # add the tools messages that triggers this reply to the chat context
+        if _tools_messages:
+            self._agent._chat_ctx.items.extend(_tools_messages)
+
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks, exe_task)
 
@@ -1000,6 +1005,7 @@ class AgentActivity(RecognitionHooks):
                         model_settings=ModelSettings(
                             tool_choice=model_settings.tool_choice if not draining else "none",
                         ),
+                        _tools_messages=[*new_calls, *new_fnc_outputs],
                     ),
                     owned_speech_handle=handle,
                     name="AgentActivity.pipeline_reply",
