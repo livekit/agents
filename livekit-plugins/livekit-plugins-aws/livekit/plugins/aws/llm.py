@@ -282,7 +282,8 @@ class LLMStream(llm.LLMStream):
                     usage=llm.CompletionUsage(
                         completion_tokens=metadata["usage"]["outputTokens"],
                         prompt_tokens=metadata["usage"]["inputTokens"],
-                        total_tokens=metadata["usage"]["totalTokens"])
+                        total_tokens=metadata["usage"]["totalTokens"],
+                    ),
                 )
                 self._text = ""
                 self._index = None
@@ -335,7 +336,8 @@ class LLMStream(llm.LLMStream):
             usage=llm.CompletionUsage(
                 completion_tokens=metadata["usage"]["outputTokens"],
                 prompt_tokens=metadata["usage"]["inputTokens"],
-                total_tokens=metadata["usage"]["totalTokens"])
+                total_tokens=metadata["usage"]["totalTokens"],
+            ),
         )
 
 
