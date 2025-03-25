@@ -134,8 +134,8 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key if is_given(api_key) else os.environ.get("NEUPHONIC_API_TOKEN")
-        if not api_key:
+        neuphonic_api_key = api_key if is_given(api_key) else os.environ.get("NEUPHONIC_API_TOKEN")
+        if not neuphonic_api_key:
             raise ValueError("API key must be provided or set in NEUPHONIC_API_TOKEN")
 
         self._opts = _TTSOptions(
@@ -145,7 +145,7 @@ class TTS(tts.TTS):
             encoding=encoding,
             speed=speed,
             sampling_rate=sample_rate,
-            api_key=api_key,
+            api_key=neuphonic_api_key,
             base_url=base_url,
         )
 
@@ -182,12 +182,12 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: TTSModels | str = None,
-        voice_id: str | None = None,
-        lang_code: TTSLangCodes | str | None = None,
-        encoding: TTSEncodings | str | None = None,
-        speed: float | None = None,
-        sample_rate: int | None = None,
+        model: NotGivenOr[TTSModels] = NOT_GIVEN,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
+        lang_code: NotGivenOr[TTSLangCodes] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncodings] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -204,12 +204,18 @@ class TTS(tts.TTS):
             speed (float, optional): The audio playback speed.
             sample_rate (int, optional): The audio sample rate in Hz.
         """  # noqa: E501
-        self._opts.model = model or self._opts.model
-        self._opts.voice_id = voice_id or self._opts.voice_id
-        self._opts.lang_code = lang_code or self._opts.lang_code
-        self._opts.encoding = encoding or self._opts.encoding
-        self._opts.speed = speed or self._opts.speed
-        self._opts.sampling_rate = sample_rate or self._opts.sampling_rate
+        if is_given(model):
+            self._opts.model = model
+        if is_given(voice_id):
+            self._opts.voice_id = voice_id
+        if is_given(lang_code):
+            self._opts.lang_code = lang_code
+        if is_given(encoding):
+            self._opts.encoding = encoding
+        if is_given(speed):
+            self._opts.speed = speed
+        if is_given(sample_rate):
+            self._opts.sampling_rate = sample_rate
         self._pool.invalidate()
 
     def synthesize(

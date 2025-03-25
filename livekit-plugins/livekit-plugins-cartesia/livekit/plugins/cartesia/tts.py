@@ -126,7 +126,7 @@ class TTS(tts.TTS):
             voice=voice,
             speed=speed,
             emotion=emotion,
-            api_key=api_key,
+            api_key=cartesia_api_key,
             base_url=base_url,
         )
         self._session = http_session

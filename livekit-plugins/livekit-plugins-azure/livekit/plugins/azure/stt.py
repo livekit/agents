@@ -78,13 +78,9 @@ class STT(stt.STT):
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
         """
 
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
-
         if not is_given(languages):
             languages = ["en-US"]
-
-        if is_given(language) and not is_given(languages):
-            languages = [language]
+        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
         if not is_given(speech_host):
             speech_host = os.environ.get("AZURE_SPEECH_HOST")
@@ -103,6 +99,9 @@ class STT(stt.STT):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
             )
+
+        if language:
+            languages = [language]
 
         self._config = STTOptions(
             speech_key=speech_key,
@@ -131,6 +130,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
+        languages: NotGivenOr[list[str]] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
