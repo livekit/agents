@@ -1,5 +1,13 @@
 # livekit-plugins-openai
 
+## 0.12.1
+
+### Patch Changes
+
+- expose turn_detection options with openai STT - [#1726](https://github.com/livekit/agents/pull/1726) ([@davidzhao](https://github.com/davidzhao))
+
+- feat(OpenAI STT): add support for semantic_vad - [#1707](https://github.com/livekit/agents/pull/1707) ([@chasemcdo](https://github.com/chasemcdo))
+
 ## 0.12.0
 
 ### Minor Changes
