@@ -179,6 +179,8 @@ class LLMStream(llm.LLMStream):
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
         self._text: str = ""
+        self._index: int | None = None
+
         retryable = True
 
         try:
@@ -265,20 +267,30 @@ class LLMStream(llm.LLMStream):
             elif "text" in delta:
                 self._text += delta["text"]
         elif "contentBlockStop" in chunk:
+            self._index = chunk["contentBlockStop"]["contentBlockIndex"]
+        elif "metadata" in chunk:
+            metadata = chunk["metadata"]
             if self._text:
                 chat_chunk = llm.ChatChunk(
                     request_id=request_id,
                     choices=[
                         llm.Choice(
                             delta=llm.ChoiceDelta(content=self._text, role="assistant"),
-                            index=chunk["contentBlockStop"]["contentBlockIndex"],
+                            index=self._index,
                         )
                     ],
+                    usage=llm.CompletionUsage(
+                        completion_tokens=metadata["usage"]["outputTokens"],
+                        prompt_tokens=metadata["usage"]["inputTokens"],
+                        total_tokens=metadata["usage"]["totalTokens"])
                 )
                 self._text = ""
+                self._index = None
                 return chat_chunk
             elif self._tool_call_id:
-                return self._try_build_function(request_id, chunk)
+                chat_chunk =  self._try_build_function(request_id, chunk)
+                self._index = None
+                return chat_chunk
 
         return None
 
@@ -308,6 +320,7 @@ class LLMStream(llm.LLMStream):
         self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
         self._function_calls_info.append(fnc_info)
 
+        metadata = chunk["metadata"]
         return llm.ChatChunk(
             request_id=request_id,
             choices=[
@@ -316,9 +329,13 @@ class LLMStream(llm.LLMStream):
                         role="assistant",
                         tool_calls=[fnc_info],
                     ),
-                    index=chunk["contentBlockStop"]["contentBlockIndex"],
+                    index=self._index,
                 )
             ],
+            usage=llm.CompletionUsage(
+                completion_tokens=metadata["usage"]["outputTokens"],
+                prompt_tokens=metadata["usage"]["inputTokens"],
+                total_tokens=metadata["usage"]["totalTokens"])
         )
 
 
