@@ -17,6 +17,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from amazon_transcribe.auth import StaticCredentialResolver
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import Result, TranscriptEvent
 from livekit import rtc
@@ -69,22 +70,11 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
         )
 
-        # Set credentials in environment variables if provided
-        if api_key and api_secret:
-            os.environ["AWS_ACCESS_KEY_ID"] = api_key
-            os.environ["AWS_SECRET_ACCESS_KEY"] = api_secret
-        else:
-            # Get credentials from boto3 session
-            session = _get_aws_async_session(
-                api_key=api_key,
-                api_secret=api_secret,
-                region=speech_region,
-            )
-            credentials = session.get_credentials()
-            os.environ["AWS_ACCESS_KEY_ID"] = credentials.access_key
-            os.environ["AWS_SECRET_ACCESS_KEY"] = credentials.secret_key
-            if credentials.token:
-                os.environ["AWS_SESSION_TOKEN"] = credentials.token
+        self._session = _get_aws_async_session(
+            api_key=api_key,
+            api_secret=api_secret,
+            region=speech_region,
+        )
 
         self._config = STTOptions(
             speech_region=speech_region,
@@ -128,7 +118,15 @@ class STT(stt.STT):
 
     def _get_client(self) -> TranscribeStreamingClient:
         """Get a new TranscribeStreamingClient instance."""
-        return TranscribeStreamingClient(region=self._config.speech_region)
+        credentials = self._session.get_credentials()
+        self.cred_resolver = StaticCredentialResolver(
+            access_key_id=credentials.access_key,
+            secret_access_key=credentials.secret_key,
+            session_token=credentials.token,
+        )
+        return TranscribeStreamingClient(
+            region=self._config.speech_region, credentials_resolver=self.cred_resolver
+        )
 
 
 class SpeechStream(stt.SpeechStream):
