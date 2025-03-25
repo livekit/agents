@@ -14,8 +14,8 @@ from livekit import rtc
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import STTMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from ..utils import AudioBuffer, aio
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
 
@@ -89,7 +89,7 @@ class STT(
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> SpeechEvent: ...
 
@@ -97,7 +97,7 @@ class STT(
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         for i in range(conn_options.max_retry + 1):
@@ -145,7 +145,7 @@ class STT(
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         raise NotImplementedError(
@@ -179,7 +179,7 @@ class RecognizeStream(ABC):
         *,
         stt: STT,
         conn_options: APIConnectOptions,
-        sample_rate: int | None = None,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ):
         """
         Args:
@@ -202,7 +202,7 @@ class RecognizeStream(ABC):
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
-        self._needed_sr = sample_rate
+        self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 

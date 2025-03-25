@@ -266,7 +266,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: DeepgramLanguages | str | None = None,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = self._sanitize_options(language=language)

@@ -63,9 +63,9 @@ class STT(stt.STT):
         segmentation_max_time_ms: NotGivenOr[int] = NOT_GIVEN,
         segmentation_strategy: NotGivenOr[str] = NOT_GIVEN,
         # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
-        languages: list[str] = None,
+        languages: NotGivenOr[list[str]] = NOT_GIVEN,
         # for compatibility with other STT plugins
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
     ):
         """
@@ -78,9 +78,13 @@ class STT(stt.STT):
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
         """
 
+        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+
         if not is_given(languages):
             languages = ["en-US"]
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+
+        if is_given(language) and not is_given(languages):
+            languages = [language]
 
         if not is_given(speech_host):
             speech_host = os.environ.get("AZURE_SPEECH_HOST")
@@ -99,9 +103,6 @@ class STT(stt.STT):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
             )
-
-        if language:
-            languages = [language]
 
         self._config = STTOptions(
             speech_key=speech_key,
@@ -130,7 +131,6 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        languages: NotGivenOr[list[str]] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
@@ -304,11 +304,11 @@ def _create_speech_recognizer(
 ) -> speechsdk.SpeechRecognizer:
     # let the SpeechConfig constructor to validate the arguments
     speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key,
-        region=config.speech_region,
-        endpoint=config.speech_endpoint,
-        host=config.speech_host,
-        auth_token=config.speech_auth_token,
+        subscription=config.speech_key if is_given(config.speech_key) else None,
+        region=config.speech_region if is_given(config.speech_region) else None,
+        endpoint=config.speech_endpoint if is_given(config.speech_endpoint) else None,
+        host=config.speech_host if is_given(config.speech_host) else None,
+        auth_token=config.speech_auth_token if is_given(config.speech_auth_token) else None,
     )
 
     if config.segmentation_silence_timeout_ms:
@@ -326,7 +326,7 @@ def _create_speech_recognizer(
             speechsdk.enums.PropertyId.Speech_SegmentationStrategy,
             str(config.segmentation_strategy),
         )
-    if config.profanity is not None:
+    if is_given(config.profanity):
         speech_config.set_profanity(config.profanity)
 
     auto_detect_source_language_config = None

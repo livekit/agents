@@ -151,7 +151,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "SampleRate": str(self._opts.sample_rate),
                     "LanguageCode": self._opts.language,
                 }
-                response = await client.synthesize_speech(**_strip_nones(params))
+                response = await client.synthesize_speech(**utils._strip_nones(params))
                 if "AudioStream" in response:
                     decoder = utils.codecs.AudioStreamDecoder(
                         sample_rate=self._opts.sample_rate,
@@ -195,7 +195,3 @@ class ChunkedStream(tts.ChunkedStream):
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
-
-
-def _strip_nones(d: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in d.items() if v is not None}

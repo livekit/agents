@@ -43,6 +43,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 from .log import logger
 
 ENGLISH = "en"
+DEFAULT_ENCODING = "pcm_s16le"
 
 # Define bytes per frame for different encoding types
 bytes_per_frame = {
@@ -228,7 +229,7 @@ class SpeechStream(stt.SpeechStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
 
-            if self._opts.end_utterance_silence_threshold:
+            if is_given(self._opts.end_utterance_silence_threshold):
                 await ws.send_str(
                     json.dumps(
                         {
@@ -327,9 +328,9 @@ class SpeechStream(stt.SpeechStream):
         live_config = {
             "sample_rate": self._opts.sample_rate,
             "word_boost": json.dumps(self._opts.word_boost)
-            if self._opts.word_boost is not None
+            if is_given(self._opts.word_boost)
             else None,
-            "encoding": self._opts.encoding,
+            "encoding": self._opts.encoding if is_given(self._opts.encoding) else DEFAULT_ENCODING,
             "disable_partial_transcripts": self._opts.disable_partial_transcripts,
             "enable_extra_session_information": self._opts.enable_extra_session_information,
         }

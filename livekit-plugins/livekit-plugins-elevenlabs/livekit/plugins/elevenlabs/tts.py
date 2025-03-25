@@ -259,7 +259,7 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice.settings))
-            if self._opts.voice.settings
+            if is_given(self._opts.voice.settings)
             else None
         )
         data = {
@@ -399,7 +399,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         init_pkt = {
             "text": " ",
             "voice_settings": _strip_nones(dataclasses.asdict(self._opts.voice.settings))
-            if self._opts.voice.settings
+            if is_given(self._opts.voice.settings)
             else None,
             "generation_config": {"chunk_length_schedule": self._opts.chunk_length_schedule},
         }
@@ -536,7 +536,7 @@ def _dict_to_voices_list(data: dict[str, Any]):
 
 
 def _strip_nones(data: dict[str, Any]):
-    return {k: v for k, v in data.items() if v is not None}
+    return {k: v for k, v in data.items() if is_given(v)}
 
 
 def _synthesize_url(opts: _TTSOptions) -> str:
