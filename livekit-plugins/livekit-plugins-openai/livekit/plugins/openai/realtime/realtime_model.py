@@ -186,7 +186,7 @@ class RealtimeSessionOptions:
     input_audio_format: api_proto.AudioFormat
     output_audio_format: api_proto.AudioFormat
     input_audio_transcription: InputTranscriptionOptions | None
-    turn_detection: ServerVadOptions | SemanticVadOptions | None
+    turn_detection: Union[ServerVadOptions, SemanticVadOptions, None]
     tool_choice: api_proto.ToolChoice
     temperature: float
     max_response_output_tokens: int | Literal["inf"]
@@ -484,7 +484,7 @@ class RealtimeModel:
             InputTranscriptionOptions | None
         ] = NOT_GIVEN,
         turn_detection: NotGivenOr[
-            ServerVadOptions | SemanticVadOptions | None
+            Union[ServerVadOptions, SemanticVadOptions, None]
         ] = NOT_GIVEN,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
@@ -952,7 +952,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             InputTranscriptionOptions | None
         ] = NOT_GIVEN,
         turn_detection: NotGivenOr[
-            ServerVadOptions | SemanticVadOptions | None
+            Union[ServerVadOptions, SemanticVadOptions, None]
         ] = NOT_GIVEN,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
@@ -989,7 +989,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 function_data["type"] = "function"
                 tools.append(function_data)
 
-        server_vad_opts: api_proto.ServerVad | api_proto.SemanticVad | None = None
+        server_vad_opts: Union[api_proto.ServerVad, api_proto.SemanticVad, None] = None
         if self._opts.turn_detection is not None:
             if isinstance(self._opts.turn_detection, ServerVadOptions):
                 server_vad_opts = {
@@ -1330,7 +1330,7 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             turn_detection = None
         else:
             turn_detection_type = session["turn_detection"].get("type")
-            if turn_detection_type == "server_vaddd":
+            if turn_detection_type == "server_vad":
                 turn_detection = ServerVadOptions(
                     threshold=session["turn_detection"]["threshold"],
                     prefix_padding_ms=session["turn_detection"]["prefix_padding_ms"],

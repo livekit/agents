@@ -198,7 +198,7 @@ class Resource:
         input_audio_format: AudioFormat
         output_audio_format: AudioFormat
         input_audio_transcription: InputAudioTranscription | None
-        turn_detection: ServerVad | SemanticVad | None
+        turn_detection: Union[ServerVad, SemanticVad, None]
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
@@ -227,7 +227,7 @@ class ClientEvent:
         input_audio_format: AudioFormat
         output_audio_format: AudioFormat
         input_audio_transcription: InputAudioTranscription | None
-        turn_detection: ServerVad | SemanticVad | None
+        turn_detection: Union[ServerVad, SemanticVad, None]
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
