@@ -3,15 +3,16 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+import time
+import uuid
 from typing import Any, AsyncIterable, Awaitable, Callable, Union
 
 from app_config import AppConfig
 from livekit import rtc
 
-from .. import llm, tokenize
+from .. import llm, tokenize, utils
 from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
-from .. import utils
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
@@ -177,9 +178,19 @@ class AgentOutput:
             speech_id=speech_id,
         )
 
+        synthesize_task_id = f"Synthesize-{str(uuid.uuid4())}"
+        logger.info(f"Starting task: {synthesize_task_id}")
+        pending_tasks = AppConfig().get_call_metadata().get("pending_livekit_tasks", {})
+        pending_tasks[synthesize_task_id] = time.time()
         task = asyncio.create_task(self._synthesize_task(handle))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.remove)
+
+        def _post_task_callback(_) -> None:
+            logger.info(f"Task completed: {synthesize_task_id}")
+            pending_tasks.pop(synthesize_task_id, None)
+
+        task.add_done_callback(_post_task_callback)
         return handle
 
     @utils.log_exceptions(logger=logger)
@@ -210,8 +221,19 @@ class AgentOutput:
             tts_stream = tts_source
         co = self._stream_synthesis_task(tts_stream, transcript_source, handle)
 
+        stream_synthesis_task_id = f"StreamSynthesis-{str(uuid.uuid4())}"
+        logger.info(f"Starting task: {stream_synthesis_task_id}")
+        pending_tasks = AppConfig().get_call_metadata().get("pending_livekit_tasks", {})
+        pending_tasks[stream_synthesis_task_id] = time.time()
         synth = asyncio.create_task(co)
         synth.add_done_callback(lambda _: handle._buf_ch.close())
+
+        def _post_task_callback(_) -> None:
+            logger.info(f"Task completed: {stream_synthesis_task_id}")
+            pending_tasks.pop(stream_synthesis_task_id, None)
+
+        synth.add_done_callback(_post_task_callback)
+
         try:
             _ = await asyncio.wait(
                 [synth, handle._interrupt_fut], return_when=asyncio.FIRST_COMPLETED
@@ -273,12 +295,38 @@ class AgentOutput:
                 if tts_stream is None:
                     logger.info("creating new tts stream")
                     tts_stream = handle._tts.stream()
+                    read_tts_atask_id = f"ReadTTS-{str(uuid.uuid4())}"
+                    logger.info(f"Starting task: {read_tts_atask_id}")
+                    pending_tasks = (
+                        AppConfig().get_call_metadata().get("pending_livekit_tasks", {})
+                    )
+                    pending_tasks[read_tts_atask_id] = time.time()
                     read_tts_atask = asyncio.create_task(
                         _read_generated_audio_task(tts_stream)
                     )
+
+                    def _post_task_callback(_) -> None:
+                        logger.info(f"Task completed: {read_tts_atask_id}")
+                        pending_tasks.pop(read_tts_atask_id, None)
+
+                    read_tts_atask.add_done_callback(_post_task_callback)
+
+                    read_transcript_atask_id = f"ReadTranscript-{str(uuid.uuid4())}"
+                    logger.info(f"Starting task: {read_transcript_atask_id}")
+                    pending_tasks = (
+                        AppConfig().get_call_metadata().get("pending_livekit_tasks", {})
+                    )
+                    pending_tasks[read_transcript_atask_id] = time.time()
+
                     read_transcript_atask = asyncio.create_task(
                         self._read_transcript_task(transcript_source, handle)
                     )
+
+                    def _post_task_callback(_) -> None:
+                        logger.info(f"Task completed: {read_transcript_atask_id}")
+                        pending_tasks.pop(read_transcript_atask_id, None)
+
+                    read_transcript_atask.add_done_callback(_post_task_callback)
 
                 logger.info(f"pushing text: {seg}")
                 tts_stream.push_text(seg)
