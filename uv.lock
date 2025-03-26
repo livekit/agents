@@ -1152,6 +1152,7 @@ source = { editable = "livekit-agents" }
 dependencies = [
     { name = "aiohttp" },
     { name = "click" },
+    { name = "colorama" },
     { name = "docstring-parser" },
     { name = "eval-type-backport" },
     { name = "livekit" },
@@ -1181,6 +1182,7 @@ requires-dist = [
     { name = "aiohttp", specifier = "~=3.10" },
     { name = "av", marker = "extra == 'codecs'", specifier = ">=12.0.0" },
     { name = "click", specifier = "~=8.1" },
+    { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
     { name = "livekit", specifier = ">=0.21.1" },
