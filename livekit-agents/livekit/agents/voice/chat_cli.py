@@ -47,6 +47,7 @@ class _AudioInput(io.AudioInput):
 
 class _TextOutput(io.TextOutput):
     def __init__(self, cli: ChatCLI) -> None:
+        super().__init__(next_in_chain=None)
         self._cli = cli
         self._capturing = False
 
