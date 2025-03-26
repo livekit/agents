@@ -135,7 +135,7 @@ class LLMStream(ABC):
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
 
-        llm_stream_task_id = str(uuid.uuid4())
+        llm_stream_task_id = f"LLMStream-{str(uuid.uuid4())}"
         pending_tasks = (
             AppConfig().get_call_metadata().setdefault("pending_livekit_tasks", {})
         )

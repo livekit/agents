@@ -720,7 +720,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             user_question=self._transcribed_text,
         )
 
-        agent_reply_task_id = str(uuid.uuid4())
+        agent_reply_task_id = f"AgentReply-{str(uuid.uuid4())}"
         pending_tasks = (
             AppConfig().get_call_metadata().setdefault("pending_livekit_tasks", {})
         )
