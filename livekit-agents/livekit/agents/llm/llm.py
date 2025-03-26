@@ -137,9 +137,8 @@ class LLMStream(ABC):
         )
 
         llm_stream_task_id = f"LLMStream-{str(uuid.uuid4())}"
-        pending_tasks = (
-            AppConfig().get_call_metadata().setdefault("pending_livekit_tasks", {})
-        )
+        logger.info(f"Starting task: {llm_stream_task_id}")
+        pending_tasks = AppConfig().get_call_metadata().get("pending_livekit_tasks", {})
         pending_tasks[llm_stream_task_id] = time.time()
         self._task = asyncio.create_task(self._main_task())
 
