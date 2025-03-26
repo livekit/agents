@@ -136,18 +136,18 @@ class _EUORunnerMultilingual(_EUORunnerBase):
 class EOUModel:
     def __init__(
         self,
-        english_only: bool = False,  # "en" or "multilingual"
+        multilingual: bool = False,  # default to smaller, english-only model
         inference_executor: InferenceExecutor | None = None,
         unlikely_threshold: float = 0.0289,
     ) -> None:
-        self._english_only = english_only
+        self._multilingual = multilingual
         self._executor = (
             inference_executor or get_current_job_context().inference_executor
         )
 
-        if not self._english_only:
+        if self._multilingual:
             self._inference_method = _EUORunnerMultilingual.INFERENCE_METHOD
-            self._languages = _load_languages(self._model_revision)
+            self._languages = _load_languages(MODEL_REVISIONS["multilingual"])
         else:
             self._inference_method = _EUORunnerEn.INFERENCE_METHOD
             self._languages = {"en": {"threshold": unlikely_threshold}}
@@ -162,6 +162,7 @@ class EOUModel:
             parts = lang.split("-")
             if parts[0] in self._languages:
                 return self._languages[parts[0]]["threshold"]
+        logger.warning(f"Language {language} not supported by EOU model")
         return None
 
     def supports_language(self, language: str | None) -> bool:
@@ -258,7 +259,7 @@ def _load_languages(model_revision: str) -> dict:
         languages = {k.lower(): v for k, v in json.load(f).items()}
 
     # we add language names to the languages dict bc openai STT returns language names
-    codes = languages.keys()
+    codes = list(languages.keys())
     for code in codes:
         conf = languages[code]
         if code in lang_names:
@@ -269,4 +270,5 @@ def _load_languages(model_revision: str) -> dict:
             # Add first word if multiple words
             languages[lang_name.split()[0]] = conf
             languages[lang_name.split()[0].lower()] = conf
+    print(list(languages.keys()))
     return languages

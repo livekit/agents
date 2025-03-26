@@ -46,7 +46,7 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=openai.TTS(),
         chat_ctx=initial_ctx,
-        turn_detector=turn_detector.EOUModel(english_only=True),
+        turn_detector=turn_detector.EOUModel(multilingual=True),
     )
 
     agent.start(ctx.room, participant)
