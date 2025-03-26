@@ -135,15 +135,17 @@ class LLMStream(ABC):
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
 
-        llm_stream_task_id = uuid.uuid4()
+        llm_stream_task_id = str(uuid.uuid4())
         pending_tasks = (
-            AppConfig().get_call_metadata().setdefault("pending_livekit_tasks", [])
+            AppConfig().get_call_metadata().setdefault("pending_livekit_tasks", {})
         )
-        pending_tasks.append(llm_stream_task_id)
+        pending_tasks[llm_stream_task_id] = time.time()
         self._task = asyncio.create_task(self._main_task())
 
         self._task.add_done_callback(lambda _: self._event_ch.close())
-        self._task.add_done_callback(lambda _: pending_tasks.remove(llm_stream_task_id))
+        self._task.add_done_callback(
+            lambda _: pending_tasks.pop(llm_stream_task_id, None)
+        )
 
         self._function_calls_info: list[function_context.FunctionCallInfo] = []
         self._function_tasks = set[asyncio.Task[Any]]()

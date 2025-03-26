@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import time
+import uuid
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -719,11 +720,19 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             user_question=self._transcribed_text,
         )
 
+        agent_reply_task_id = str(uuid.uuid4())
+        pending_tasks = (
+            AppConfig().get_call_metadata().setdefault("pending_livekit_tasks", {})
+        )
+        pending_tasks[agent_reply_task_id] = time.time()
         self._agent_reply_task = asyncio.create_task(
             self._synthesize_answer_task(self._agent_reply_task, new_handle)
         )
         self._agent_reply_task.add_done_callback(
             lambda t: new_handle.cancel() if t.cancelled() else None
+        )
+        self._agent_reply_task.add_done_callback(
+            lambda _: pending_tasks.pop(agent_reply_task_id, None)
         )
 
     @utils.log_exceptions(logger=logger)
@@ -1095,9 +1104,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             assert isinstance(speech_handle.source, LLMStream)
-            assert not user_question or speech_handle.user_committed, (
-                "user speech should have been committed before using tools"
-            )
+            assert (
+                not user_question or speech_handle.user_committed
+            ), "user speech should have been committed before using tools"
 
             llm_stream = speech_handle.source
 
@@ -1223,9 +1232,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
-        assert self._agent_output is not None, (
-            "agent output should be initialized when ready"
-        )
+        assert (
+            self._agent_output is not None
+        ), "agent output should be initialized when ready"
 
         tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
