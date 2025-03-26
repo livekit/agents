@@ -37,6 +37,7 @@ dependencies = [
     "sounddevice>=0.5",
     "docstring_parser>=0.16",
     "eval-type-backport",
+    "scipy>=1.13.1",
 ]
 
 [project.optional-dependencies]
