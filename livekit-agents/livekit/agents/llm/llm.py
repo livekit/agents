@@ -143,9 +143,12 @@ class LLMStream(ABC):
         self._task = asyncio.create_task(self._main_task())
 
         self._task.add_done_callback(lambda _: self._event_ch.close())
-        self._task.add_done_callback(
-            lambda _: pending_tasks.pop(llm_stream_task_id, None)
-        )
+
+        def _post_task_callback() -> None:
+            logger.info(f"Task completed: {llm_stream_task_id}")
+            pending_tasks.pop(llm_stream_task_id, None)
+
+        self._task.add_done_callback(_post_task_callback)
 
         self._function_calls_info: list[function_context.FunctionCallInfo] = []
         self._function_tasks = set[asyncio.Task[Any]]()
