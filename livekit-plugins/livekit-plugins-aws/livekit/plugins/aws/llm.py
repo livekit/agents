@@ -258,12 +258,14 @@ class LLMStream(llm.LLMStream):
             self._tool_call_id = tool_use["toolUseId"]
             self._fnc_name = tool_use["name"]
             self._fnc_raw_arguments = ""
+
         elif "contentBlockDelta" in chunk:
             delta = chunk["contentBlockDelta"]["delta"]
             if "toolUse" in delta:
                 self._fnc_raw_arguments += delta["toolUse"]["input"]
             elif "text" in delta:
                 self._text += delta["text"]
+
         elif "contentBlockStop" in chunk:
             if self._text:
                 chat_chunk = llm.ChatChunk(
@@ -279,6 +281,7 @@ class LLMStream(llm.LLMStream):
                 return chat_chunk
             elif self._tool_call_id:
                 return self._try_build_function(request_id, chunk)
+
         elif "metadata" in chunk:
             metadata = chunk["metadata"]
             return llm.ChatChunk(
