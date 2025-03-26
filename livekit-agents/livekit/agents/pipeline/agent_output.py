@@ -305,11 +305,11 @@ class AgentOutput:
                         _read_generated_audio_task(tts_stream)
                     )
 
-                    def _post_task_callback(_) -> None:
+                    def _post_task_callback_1(_) -> None:
                         logger.info(f"Task completed: {read_tts_atask_id}")
                         pending_tasks.pop(read_tts_atask_id, None)
 
-                    read_tts_atask.add_done_callback(_post_task_callback)
+                    read_tts_atask.add_done_callback(_post_task_callback_1)
 
                     read_transcript_atask_id = f"ReadTranscript-{str(uuid.uuid4())}"
                     logger.info(f"Starting task: {read_transcript_atask_id}")
@@ -322,11 +322,11 @@ class AgentOutput:
                         self._read_transcript_task(transcript_source, handle)
                     )
 
-                    def _post_task_callback(_) -> None:
+                    def _post_task_callback_2(_) -> None:
                         logger.info(f"Task completed: {read_transcript_atask_id}")
                         pending_tasks.pop(read_transcript_atask_id, None)
 
-                    read_transcript_atask.add_done_callback(_post_task_callback)
+                    read_transcript_atask.add_done_callback(_post_task_callback_2)
 
                 logger.info(f"pushing text: {seg}")
                 tts_stream.push_text(seg)
