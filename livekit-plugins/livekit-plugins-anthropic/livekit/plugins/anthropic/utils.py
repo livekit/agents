@@ -100,7 +100,8 @@ def to_chat_ctx(
         messages.insert(
             0,
             anthropic.types.MessageParam(
-                role="user", content=[anthropic.types.TextBlockParam(text="(empty)", type="text")]
+                role="user",
+                content=[anthropic.types.TextBlockParam(text="(empty)", type="text")],
             ),
         )
 

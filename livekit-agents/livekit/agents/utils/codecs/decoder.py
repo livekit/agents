@@ -99,8 +99,8 @@ class AudioStreamDecoder:
         try:
             import av  # noqa
         except ImportError:
-            raise ImportError(
-                "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"
+            raise ImportError(  # noqa: B904
+                "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"  # noqa: E501
             )
 
         self._sample_rate = sample_rate
@@ -167,7 +167,7 @@ class AudioStreamDecoder:
         try:
             return await self._output_ch.recv()
         except aio.ChanClosed:
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
     async def aclose(self):
         if self._closed:

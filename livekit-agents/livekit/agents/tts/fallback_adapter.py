@@ -75,7 +75,7 @@ class FallbackAdapter(
         Raises:
             ValueError: If less than one TTS instance is provided.
             ValueError: If TTS instances have different numbers of channels.
-        """
+        """  # noqa: E501
 
         if len(tts) < 1:
             raise ValueError("at least one TTS instance must be provided.")
@@ -302,14 +302,14 @@ class FallbackChunkedStream(ChunkedStream):
                     if self._tts._no_fallback_after_audio_duration is not None:
                         if audio_duration >= self._tts._no_fallback_after_audio_duration:
                             logger.warning(
-                                f"{tts.label} already synthesized {audio_duration}s of audio, ignoring fallback"
+                                f"{tts.label} already synthesized {audio_duration}s of audio, ignoring fallback"  # noqa: E501
                             )
                             return
 
             self._try_recovery(tts)
 
         raise APIConnectionError(
-            f"all TTSs failed ({[tts.label for tts in self._tts._tts_instances]}) after {time.time() - start_time} seconds"
+            f"all TTSs failed ({[tts.label for tts in self._tts._tts_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
         )
 
 
@@ -550,14 +550,14 @@ class FallbackSynthesizeStream(SynthesizeStream):
                                 and self._pending_segments_chunks
                             ):
                                 logger.warning(
-                                    f"{tts.label} already synthesized {audio_duration}s of audio, ignoring the current segment for the tts fallback"
+                                    f"{tts.label} already synthesized {audio_duration}s of audio, ignoring the current segment for the tts fallback"  # noqa: E501
                                 )
                                 return
 
                 self._try_recovery(tts)
 
             raise APIConnectionError(
-                f"all TTSs failed ({[tts.label for tts in self._fallback_adapter._tts_instances]}) after {time.time() - start_time} seconds"
+                f"all TTSs failed ({[tts.label for tts in self._fallback_adapter._tts_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
             )
         finally:
             await utils.aio.cancel_and_wait(input_task)

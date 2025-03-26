@@ -173,7 +173,7 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
     await asyncio.sleep(start_args.entrypoint_simulate_work_time)
 
     job_ctx.shutdown(
-        "calling shutdown inside the test to avoid a warning when neither shutdown nor connect is called."
+        "calling shutdown inside the test to avoid a warning when neither shutdown nor connect is called."  # noqa: E501
     )
 
     with start_args.update_ev:
@@ -255,7 +255,7 @@ async def test_proc_pool():
 
     await _wait_for_elements(close_q, num_idle_processes + jobs_to_start)
 
-    # the way we check that a process doesn't exist anymore isn't technically reliable (pid recycle could happen)
+    # the way we check that a process doesn't exist anymore isn't technically reliable (pid recycle could happen)  # noqa: E501
     for pid in pids:
         assert not psutil.pid_exists(pid)
 

@@ -131,7 +131,8 @@ async def test_json_def_recursive():
     assert json_schema == expected_schema
 
     with pytest.raises(
-        ValueError, match=r"Recursive `\$ref`s in JSON Schema are not supported by Gemini"
+        ValueError,
+        match=r"Recursive `\$ref`s in JSON Schema are not supported by Gemini",
     ):
         utils._GeminiJsonSchema(json_schema).simplify()
 

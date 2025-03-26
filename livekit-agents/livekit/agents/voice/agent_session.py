@@ -4,7 +4,7 @@ import asyncio
 import copy
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -32,12 +32,27 @@ class VoiceOptions:
 
 Userdata_T = TypeVar("Userdata_T")
 
+TurnDetectionMode = Union[Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector]
+"""
+The mode of turn detection to use.
+
+- "stt": use speech-to-text result to detect the end of the user's turn
+- "vad": use VAD to detect the start and end of the user's turn
+- "realtime_llm": use server-side turn detection provided by the realtime LLM
+- "manual": manually manage the turn detection
+- _TurnDetector: use the default mode with the provided turn detector
+
+(default) If not provided, automatically choose the best mode based on
+    available models (realtime_llm -> vad -> stt -> manual)
+If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
+"""
+
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        turn_detector: NotGivenOr[_TurnDetector] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
@@ -61,7 +76,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_tool_steps=max_tool_steps,
         )
         self._started = False
-        self._turn_detector = turn_detector or None
+        self._turn_detection = turn_detection or None
         self._stt = stt or None
         self._vad = vad or None
         self._llm = llm or None
@@ -102,8 +117,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._userdata = value
 
     @property
-    def turn_detector(self) -> _TurnDetector | None:
-        return self._turn_detector
+    def turn_detection(self) -> TurnDetectionMode | None:
+        return self._turn_detection
 
     @property
     def stt(self) -> stt.STT | None:
@@ -182,7 +197,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     or self.output.transcription is not None
                 ):
                     logger.warning(
-                        "agent started with the console subcommand, but input.audio or output.audio "
+                        "agent started with the console subcommand, but input.audio or output.audio "  # noqa: E501
                         "or output.transcription is already set, overriding.."
                     )
 
@@ -219,7 +234,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and room_output_options.transcription_enabled
                 ):
                     logger.warning(
-                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."
+                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
                     )
                     room_output_options.transcription_enabled = False
 
@@ -234,7 +249,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else:
                 if not self.output.audio and not self.output.transcription:
                     logger.warning(
-                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"
+                        "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
 
             # it is ok to await it directly, there is no previous task to drain
@@ -302,6 +317,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         user_input: NotGivenOr[str] = NOT_GIVEN,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
         if self._activity is None:
@@ -314,12 +330,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return self._next_activity.generate_reply(
                 user_input=user_input,
                 instructions=instructions,
+                tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
             )
 
         return self._activity.generate_reply(
             user_input=user_input,
             instructions=instructions,
+            tool_choice=tool_choice,
             allow_interruptions=allow_interruptions,
         )
 

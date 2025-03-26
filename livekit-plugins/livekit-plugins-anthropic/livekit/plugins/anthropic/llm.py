@@ -82,7 +82,7 @@ class LLM(llm.LLM):
         parallel_tool_calls (bool | None): Whether to parallelize tool calls. Defaults to None.
         tool_choice (Union[ToolChoice, Literal["auto", "required", "none"]] | None): The tool choice for the Anthropic API. Defaults to "auto".
         caching (Literal["ephemeral"] | None): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
-        """
+        """  # noqa: E501
 
         super().__init__()
 
@@ -96,13 +96,13 @@ class LLM(llm.LLM):
             top_k=top_k,
             max_tokens=max_tokens,
         )
-        api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not is_given(api_key):
+        anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
+        if not anthropic_api_key:
             raise ValueError("Anthropic API key is required")
 
         self._client = anthropic.AsyncClient(
-            api_key=api_key or None,
-            base_url=base_url or None,
+            api_key=anthropic_api_key,
+            base_url=base_url if is_given(base_url) else None,
             http_client=httpx.AsyncClient(
                 timeout=5.0,
                 follow_redirects=True,

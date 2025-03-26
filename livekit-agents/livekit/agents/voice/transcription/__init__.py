@@ -1,8 +1,7 @@
 from ._utils import find_micro_track_id
-from .synchronizer import TextSynchronizer, TextSyncOptions
+from .synchronizer import TranscriptSynchronizer
 
 __all__ = [
-    "TextSynchronizer",
-    "TextSyncOptions",
+    "TranscriptSynchronizer",
     "find_micro_track_id",
 ]

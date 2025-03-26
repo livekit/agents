@@ -10,7 +10,7 @@ from . import utils
 EventTypes = Literal["plugin_registered",]
 
 
-class Plugin(ABC):
+class Plugin(ABC):  # noqa: B024
     registered_plugins: list[Plugin] = []
     emitter: utils.EventEmitter[EventTypes] = utils.EventEmitter()
 
@@ -36,7 +36,7 @@ class Plugin(ABC):
         cls.emitter.emit("plugin_registered", plugin)
 
     # plugin can implement an optional download_files method
-    def download_files(self) -> None: ...
+    def download_files(self) -> None: ...  # noqa: B027
 
     @property
     def package(self) -> str:

@@ -7,7 +7,7 @@ import json
 import os
 import weakref
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal, Union
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -15,7 +15,7 @@ import aiohttp
 from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
-from livekit.agents import llm, utils, io
+from livekit.agents import io, llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from openai.types.beta.realtime import (
     ConversationItem,
@@ -29,12 +29,12 @@ from openai.types.beta.realtime import (
     ConversationItemTruncateEvent,
     ErrorEvent,
     InputAudioBufferAppendEvent,
+    InputAudioBufferCommitEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
     RealtimeClientEvent,
     ResponseAudioDeltaEvent,
     ResponseAudioDoneEvent,
-    ResponseAudioTranscriptDeltaEvent,
     ResponseAudioTranscriptDoneEvent,
     ResponseCancelEvent,
     ResponseCreatedEvent,
@@ -75,7 +75,18 @@ class _InputAudioTranscription:
     model: Literal["whisper-1"] = "whisper-1"
 
 
+@dataclass
+class _TurnDetection:
+    type: Literal["server_vad"] = "server_vad"
+    create_response: bool | None = True
+    interrupt_response: bool | None = True
+    prefix_padding_ms: int | None = 300
+    silence_duration_ms: int | None = 500
+    threshold: float | None = 0.65
+
+
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = _InputAudioTranscription()
+DEFAULT_TURN_DETECTION = _TurnDetection()
 
 
 @dataclass
@@ -83,6 +94,7 @@ class _RealtimeOptions:
     model: str
     voice: str
     input_audio_transcription: _InputAudioTranscription | None
+    turn_detection: _TurnDetection | None
     api_key: str
     base_url: str
 
@@ -111,19 +123,23 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: _InputAudioTranscription
         | None = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+        turn_detection: _TurnDetection | None = DEFAULT_TURN_DETECTION,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
-            # TODO(theomonnom): add a way to disable turn detection (And use VAD on the VoiceAgent)
-            capabilities=llm.RealtimeCapabilities(message_truncation=True, turn_detection=True)
+            capabilities=llm.RealtimeCapabilities(
+                message_truncation=True,
+                turn_detection=turn_detection is not None,
+                user_transcription=input_audio_transcription is not None,
+            )
         )
 
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
 
         if api_key is None:
             raise ValueError(
-                "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+                "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"  # noqa: E501
             )
 
         base_url = base_url or OPENAI_BASE_URL
@@ -131,6 +147,7 @@ class RealtimeModel(llm.RealtimeModel):
             model=model,
             voice=voice,
             input_audio_transcription=input_audio_transcription,
+            turn_detection=turn_detection,
             api_key=api_key,
             base_url=base_url,
         )
@@ -216,6 +233,7 @@ class RealtimeSession(
             NUM_CHANNELS,
             samples_per_channel=SAMPLE_RATE // 10,  # 100ms
         )
+        self._pushed_duration_s = 0  # duration of audio pushed to the OpenAI Realtime API
 
     def send_event(self, event: RealtimeClientEvent | dict) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
@@ -249,7 +267,7 @@ class RealtimeSession(
                 try:
                     if isinstance(msg, BaseModel):
                         msg = msg.model_dump(
-                            by_alias=True, exclude_unset=True, exclude_defaults=True
+                            by_alias=True, exclude_unset=True, exclude_defaults=False
                         )
 
                     self.emit("openai_client_event_queued", msg)
@@ -282,7 +300,7 @@ class RealtimeSession(
                 event = json.loads(msg.data)
 
                 # emit the raw json dictionary instead of the BaseModel because different
-                # providers can have different event types that are not part of the OpenAI Realtime API
+                # providers can have different event types that are not part of the OpenAI Realtime API  # noqa: E501
                 self.emit("openai_server_event_received", event)
 
                 try:
@@ -352,11 +370,17 @@ class RealtimeSession(
                 model=self._realtime_model._opts.input_audio_transcription.model,
             )
 
+        turn_detection: session_update_event.SessionTurnDetection | None = None
+        if self._realtime_model._opts.turn_detection:
+            turn_detection = session_update_event.SessionTurnDetection.model_validate(
+                asdict(self._realtime_model._opts.turn_detection)
+            )
+
         # initial session update
         self.send_event(
             SessionUpdateEvent(
                 type="session.update",
-                # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.
+                # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
                 # Other providers support different voices, so we need to accommodate that.
                 session=session_update_event.Session.model_construct(
                     model=self._realtime_model._opts.model,
@@ -364,14 +388,7 @@ class RealtimeSession(
                     input_audio_format="pcm16",
                     output_audio_format="pcm16",
                     modalities=["text", "audio"],
-                    turn_detection=session_update_event.SessionTurnDetection(
-                        type="server_vad",
-                        create_response=True,
-                        interrupt_response=True,
-                        prefix_padding_ms=300,
-                        silence_duration_ms=500,
-                        threshold=0.65,
-                    ),
+                    turn_detection=turn_detection,
                     input_audio_transcription=input_audio_transcription,
                 ),
                 event_id=utils.shortuuid("session_update_"),
@@ -512,13 +529,19 @@ class RealtimeSession(
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
-            for f in self._bstream.write(f.data.tobytes()):
+            for f in self._bstream.write(f.data.tobytes()):  # noqa: B020
                 self.send_event(
                     InputAudioBufferAppendEvent(
                         type="input_audio_buffer.append",
                         audio=base64.b64encode(f.data).decode("utf-8"),
                     )
                 )
+                self._pushed_duration_s += f.duration
+
+    def commit_audio(self) -> None:
+        if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
+            self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))
+            self._pushed_duration_s = 0
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
@@ -749,7 +772,7 @@ class RealtimeSession(
 
     def _handle_response_done(self, _: ResponseDoneEvent) -> None:
         if self._current_generation is None:
-            return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)
+            return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)  # noqa: E501
 
         assert self._current_generation is not None, "current_generation is None"
         for generation in self._current_generation.messages.values():

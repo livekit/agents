@@ -16,7 +16,7 @@ load_dotenv()
 class MyTask(Agent):
     def __init__(self):
         super().__init__(
-            instructions="You are a helpful assistant that can answer questions and help with tasks.",
+            instructions="You are a helpful assistant that can answer questions and help with tasks.",  # noqa: E501
         )
 
     @function_tool()

@@ -6,7 +6,11 @@ from livekit import rtc
 
 from ... import utils
 from ...log import logger
-from ...types import ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TOPIC_CHAT
+from ...types import (
+    ATTRIBUTE_TRANSCRIPTION_FINAL,
+    ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+    TOPIC_CHAT,
+)
 from .. import io
 from ..transcription import find_micro_track_id
 
@@ -19,16 +23,18 @@ class _ParticipantAudioOutput(io.AudioOutput):
         sample_rate: int,
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
-        queue_size_ms: int = 100_000,  # TODO(long): move buffer to python
+        queue_size_ms: int = 300_000,  # TODO(long): move buffer to python
     ) -> None:
-        super().__init__(sample_rate=sample_rate)
+        super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._room = room
         self._lock = asyncio.Lock()
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
+
         self._republish_task: asyncio.Task | None = None  # used to republish track on reconnection
         self._flush_task: asyncio.Task | None = None
+        self._interrupted_event = asyncio.Event()
 
         self._pushed_duration: float = 0.0
         self._interrupted: bool = False
@@ -72,25 +78,35 @@ class _ParticipantAudioOutput(io.AudioOutput):
             logger.error("flush called while playback is in progress")
             self._flush_task.cancel()
 
-        def _playback_finished(task: asyncio.Task[None]) -> None:
-            pushed_duration, interrupted = self._pushed_duration, self._interrupted
-            self._pushed_duration = 0
-            self._interrupted = False
-            self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
-
-        self._flush_task = asyncio.create_task(self._audio_source.wait_for_playout())
-        self._flush_task.add_done_callback(_playback_finished)
+        self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
         super().clear_buffer()
-
         if not self._pushed_duration:
             return
+        self._interrupted_event.set()
 
-        queued_duration = self._audio_source.queued_duration
-        self._pushed_duration = max(self._pushed_duration - queued_duration, 0)
-        self._interrupted = True
-        self._audio_source.clear_queue()
+    async def _wait_for_playout(self) -> None:
+        wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
+        wait_for_playout = asyncio.create_task(self._audio_source.wait_for_playout())
+        await asyncio.wait(
+            [wait_for_playout, wait_for_interruption],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        interrupted = wait_for_interruption.done()
+        pushed_duration = self._pushed_duration
+
+        if interrupted:
+            pushed_duration = max(pushed_duration - self._audio_source.queued_duration, 0)
+            self._audio_source.clear_queue()
+            wait_for_playout.cancel()
+        else:
+            wait_for_interruption.cancel()
+
+        self._pushed_duration = 0
+        self._interrupted_event.clear()
+        self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
 
 class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
@@ -101,7 +117,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
     ):
-        super().__init__()
+        super().__init__(next_in_chain=None)
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
@@ -219,7 +235,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
     ):
-        super().__init__()
+        super().__init__(next_in_chain=None)
         self._room, self._is_delta_stream = room, is_delta_stream
         self._track_id: str | None = None
         self._participant_identity: str | None = None
@@ -349,7 +365,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
 
 # Keep this utility private for now
 class _ParallelTextOutput(io.TextOutput):
-    def __init__(self, *sinks: io.TextOutput) -> None:
+    def __init__(
+        self, sinks: list[io.TextOutput], *, next_in_chain: io.TextOutput | None = None
+    ) -> None:
+        super().__init__(next_in_chain=next_in_chain)
         self._sinks = sinks
 
     async def capture_text(self, text: str) -> None:

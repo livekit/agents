@@ -12,7 +12,13 @@ from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
 from .channel import Message, arecv_message, asend_message, recv_message, send_message
 from .log_queue import LogQueueHandler
-from .proto import IPC_MESSAGES, InitializeRequest, InitializeResponse, PingRequest, PongResponse
+from .proto import (
+    IPC_MESSAGES,
+    InitializeRequest,
+    InitializeResponse,
+    PingRequest,
+    PongResponse,
+)
 
 
 class _ProcClient:
@@ -51,8 +57,13 @@ class _ProcClient:
             )
 
             self._init_req = first_req
-            self._initialize_fnc(self._init_req, self)
-            send_message(cch, InitializeResponse())
+            try:
+                self._initialize_fnc(self._init_req, self)
+                send_message(cch, InitializeResponse())
+            except Exception as e:
+                send_message(cch, InitializeResponse(error=str(e)))
+                raise
+
             self._initialized = True
             cch.detach()
         except aio.duplex_unix.DuplexClosed as e:
@@ -74,7 +85,7 @@ class _ProcClient:
                 try:
                     loop.run_until_complete(self._task)
                 except KeyboardInterrupt:
-                    # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
+                    # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process  # noqa: E501
                     # (See proto.ShutdownRequest)
                     pass
         except KeyboardInterrupt:

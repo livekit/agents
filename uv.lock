@@ -21,8 +21,10 @@ members = [
     "livekit-plugins-elevenlabs",
     "livekit-plugins-fal",
     "livekit-plugins-google",
+    "livekit-plugins-groq",
     "livekit-plugins-llama-index",
     "livekit-plugins-minimal",
+    "livekit-plugins-neuphonic",
     "livekit-plugins-nltk",
     "livekit-plugins-openai",
     "livekit-plugins-playai",
@@ -1352,6 +1354,24 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-groq"
+source = { editable = "livekit-plugins/livekit-plugins-groq" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit" },
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "livekit-plugins-openai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp" },
+    { name = "livekit" },
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "livekit-plugins-openai", editable = "livekit-plugins/livekit-plugins-openai" },
+]
+
+[[package]]
 name = "livekit-plugins-llama-index"
 source = { editable = "livekit-plugins/livekit-plugins-llama-index" }
 dependencies = [
@@ -1364,6 +1384,16 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 [[package]]
 name = "livekit-plugins-minimal"
 source = { editable = "livekit-plugins/livekit-plugins-minimal" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-neuphonic"
+source = { editable = "livekit-plugins/livekit-plugins-neuphonic" }
 dependencies = [
     { name = "livekit-agents" },
 ]

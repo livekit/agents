@@ -142,7 +142,7 @@ class RealtimeModel(llm.RealtimeModel):
         if vertexai:
             if not self._project or not self._location:
                 raise ValueError(
-                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"
+                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"  # noqa: E501
                 )
             self._api_key = None  # VertexAI does not require an API key
 
@@ -151,7 +151,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._location = None
             if not self._api_key:
                 raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
         instructions_content = Content(parts=[Part(text=instructions)]) if instructions else None

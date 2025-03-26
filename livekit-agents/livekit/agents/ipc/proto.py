@@ -13,7 +13,7 @@ from . import channel
 
 @dataclass
 class InitializeRequest:
-    """sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc"""
+    """sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc"""  # noqa: E501
 
     MSG_ID: ClassVar[int] = 0
 
@@ -42,6 +42,13 @@ class InitializeResponse:
     """mark the process as initialized"""
 
     MSG_ID: ClassVar[int] = 1
+    error: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.error)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.error = channel.read_string(b)
 
 
 @dataclass
@@ -78,7 +85,7 @@ class PongResponse:
 @dataclass
 class StartJobRequest:
     """sent by the main process to the subprocess to start a job, the subprocess will only
-    receive this message if the process is fully initialized (after sending a InitializeResponse)."""
+    receive this message if the process is fully initialized (after sending a InitializeResponse)."""  # noqa: E501
 
     MSG_ID: ClassVar[int] = 4
     running_job: RunningJobInfo = field(init=False)
