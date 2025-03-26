@@ -4,7 +4,6 @@ import asyncio
 from dataclasses import dataclass
 
 import numpy as np
-from scipy import signal
 
 from livekit import rtc
 from livekit.agents import utils
@@ -182,6 +181,24 @@ class SpeakingRateStream:
 
         return self._spectral_flux(audio, sample_rate)
 
+    def _stft(self, audio: np.ndarray, frame_length: int, hop_length: int) -> np.ndarray:
+        num_frames = (len(audio) - frame_length) // hop_length + 1
+        result = np.zeros((frame_length // 2 + 1, num_frames), dtype=complex)
+
+        window = np.hanning(frame_length)
+        scale_factor = 1.0 / np.sqrt(np.sum(window**2))
+        for i in range(num_frames):
+            start = i * hop_length
+            end = start + frame_length
+            frame = audio[start:end]
+            windowed = frame * window
+
+            # perform fft and scale
+            fft_result = np.fft.rfft(windowed)
+            result[:, i] = fft_result * scale_factor
+
+        return result
+
     def _spectral_flux(self, audio: np.ndarray, sample_rate: int) -> float:
         """
         Calculate speaking rate based on spectral flux.
@@ -191,10 +208,7 @@ class SpeakingRateStream:
         frame_length = int(sample_rate * 0.025)  # 25ms
         hop_length = frame_length // 2  # 50% overlap
 
-        # calculate stft
-        _, _, Zxx = signal.stft(
-            audio, fs=sample_rate, nperseg=frame_length, noverlap=hop_length, boundary=None
-        )
+        Zxx = self._stft(audio, frame_length, hop_length)
 
         # calculate spectral flux (sum of spectral magnitude changes between frames)
         spectral_magnitudes = np.abs(Zxx)
