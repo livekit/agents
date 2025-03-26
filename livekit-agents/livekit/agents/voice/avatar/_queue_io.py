@@ -23,7 +23,7 @@ class QueueAudioOutput(
     """
 
     def __init__(self, *, sample_rate: int | None = None):
-        super().__init__(sample_rate=sample_rate)
+        super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
         self._capturing = False
 
