@@ -732,7 +732,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             lambda t: new_handle.cancel() if t.cancelled() else None
         )
 
-        def _post_task_callback() -> None:
+        def _post_task_callback(_) -> None:
             logger.info(f"Task completed: {agent_reply_task_id}")
             pending_tasks.pop(agent_reply_task_id, None)
 

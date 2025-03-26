@@ -93,8 +93,9 @@ class LLM(
         temperature: float | None = None,
         n: int | None = None,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: (
+            Union[ToolChoice, Literal["auto", "required", "none"]] | None
+        ) = None,
     ) -> "LLMStream": ...
 
     @property
@@ -144,7 +145,7 @@ class LLMStream(ABC):
 
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
-        def _post_task_callback() -> None:
+        def _post_task_callback(_) -> None:
             logger.info(f"Task completed: {llm_stream_task_id}")
             pending_tasks.pop(llm_stream_task_id, None)
 
