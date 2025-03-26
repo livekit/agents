@@ -315,6 +315,10 @@ class AgentActivity(RecognitionHooks):
                     self.turn_detection if not isinstance(self.turn_detection, str) else None
                 ),
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
+                max_endpointing_delay=self._session.options.max_endpointing_delay,
+            )
+            self._audio_recognition.on(
+                "metrics_collected", lambda ev: self._session.emit("metrics_collected", ev)
             )
             self._audio_recognition.start()
             self._started = True

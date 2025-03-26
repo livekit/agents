@@ -27,6 +27,7 @@ class VoiceOptions:
     allow_interruptions: bool
     min_interruption_duration: float
     min_endpointing_delay: float
+    max_endpointing_delay: float
     max_tool_steps: int
 
 
@@ -61,6 +62,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
+        max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -73,6 +75,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions=allow_interruptions,
             min_interruption_duration=min_interruption_duration,
             min_endpointing_delay=min_endpointing_delay,
+            max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
         )
         self._started = False
