@@ -122,7 +122,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         await self._main_task
 
     def start(self) -> None:
-        # Listens for emitted VoiceAgent events
+        # Listens for emitted events
         self._main_task = asyncio.create_task(self._main_atask())
 
         @self.session.on("user_started_speaking")
@@ -145,12 +145,22 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
                 )
                 self._log_q.put_nowait(transcription)
 
-        # @self.session.on("agent_state_changed")
-        # def _agent_state_changed(ev: AgentStateChangedEvent):
-        #     """ The state is either "initializing", "listening", or "speaking" """
-        #     name = "agent_state_changed: " + ev.state.value
-        #     event = EventLog(name)
-        #     self._log_q.put_nowait(event)
+        @self.session.on("conversation_item_added")
+        def _conversation_item_added(ev: AgentEvent):
+            if ev.message.role == "assistant":
+                transcription = TranscriptionLog(
+                    role="assistant", transcription=ev.message.content
+                )
+                self._log_q.put_nowait(transcription)
+            event = EventLog(eventname=ev.type)
+            self._log_q.put_nowait(event)
+
+        @self.session.on("agent_state_changed")
+        def _agent_state_changed(ev: AgentEvent):
+            """The state is either "initializing", "listening", or "speaking" """
+            name = "agent_state_changed: " + ev.state.value
+            event = EventLog(name)
+            self._log_q.put_nowait(event)
 
         @self.session.on("agent_started_speaking")
         def _agent_started_speaking(ev: AgentEvent):
@@ -160,6 +170,12 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         @self.session.on("agent_stopped_speaking")
         def _agent_stopped_speaking(ev: AgentEvent):
             event = EventLog(eventname=ev.type)
+            self._log_q.put_nowait(event)
+
+        @self.session.on("speech_created")
+        def _speech_created(ev: AgentEvent):
+            name = ev.type + " " + ev.source
+            event = EventLog(eventname=name)
             self._log_q.put_nowait(event)
 
 
