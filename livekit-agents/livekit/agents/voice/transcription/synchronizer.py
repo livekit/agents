@@ -102,7 +102,6 @@ class _SegmentSynchronizerImpl:
             end_time = text.end_time or None
 
         seg = _TextSegment(text=text, start_time=start_time, end_time=end_time)
-        print(seg)
         self._text_segments.append(seg)
         self._text_ch.send_nowait(seg)
 
