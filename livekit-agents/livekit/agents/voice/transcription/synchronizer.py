@@ -183,14 +183,16 @@ class _SegmentSynchronizerImpl:
             logger.warning("_SegmentSynchronizerImpl.push_text called after close")
             return
 
-        self._text_data.sentence_stream.push_text(text)
-        self._text_data.pushed_text += text
         start_time, end_time = None, None
         if isinstance(text, io.TimedString):
             start_time = text.start_time or None
             end_time = text.end_time or None
             if not self._audio_data.sr_data_annotated:
                 self._audio_data.sr_data_annotated = _SpeakingRateData()
+
+            if start_time is not None or end_time is not None:
+                # flush if we have time annotations
+                self._text_data.sentence_stream.flush()
 
             # accumulate the actual hyphens if time annotations are present
             self._audio_data.sr_data_annotated.add_by_annotation(
@@ -200,8 +202,11 @@ class _SegmentSynchronizerImpl:
                 text_to_hyphens=self._calc_hyphens,
             )
 
-            if start_time is not None or end_time is not None:
-                self._text_data.sentence_stream.flush()
+        self._text_data.sentence_stream.push_text(text)
+        self._text_data.pushed_text += text
+
+        if start_time is not None or end_time is not None:
+            self._text_data.sentence_stream.flush()
 
     def end_text_input(self) -> None:
         if self.closed:
