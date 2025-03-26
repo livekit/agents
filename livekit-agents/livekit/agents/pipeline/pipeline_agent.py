@@ -721,9 +721,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         )
 
         agent_reply_task_id = f"AgentReply-{str(uuid.uuid4())}"
-        pending_tasks = (
-            AppConfig().get_call_metadata().setdefault("pending_livekit_tasks", {})
-        )
+        logger.info(f"Starting task: {agent_reply_task_id}")
+        pending_tasks = AppConfig().get_call_metadata().get("pending_livekit_tasks", {})
         pending_tasks[agent_reply_task_id] = time.time()
         self._agent_reply_task = asyncio.create_task(
             self._synthesize_answer_task(self._agent_reply_task, new_handle)
@@ -1107,9 +1106,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             assert isinstance(speech_handle.source, LLMStream)
-            assert (
-                not user_question or speech_handle.user_committed
-            ), "user speech should have been committed before using tools"
+            assert not user_question or speech_handle.user_committed, (
+                "user speech should have been committed before using tools"
+            )
 
             llm_stream = speech_handle.source
 
@@ -1235,9 +1234,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         speech_id: str,
         source: str | LLMStream | AsyncIterable[str],
     ) -> SynthesisHandle:
-        assert (
-            self._agent_output is not None
-        ), "agent output should be initialized when ready"
+        assert self._agent_output is not None, (
+            "agent output should be initialized when ready"
+        )
 
         tk = SpeechDataContextVar.set(SpeechData(speech_id))
 
