@@ -37,6 +37,7 @@ dependencies = [
     "sounddevice>=0.5",
     "docstring_parser>=0.16",
     "eval-type-backport",
+    "colorama>=0.4.6",
 ]
 
 [project.optional-dependencies]
