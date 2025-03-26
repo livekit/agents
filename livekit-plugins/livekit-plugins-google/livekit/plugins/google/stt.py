@@ -38,7 +38,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
