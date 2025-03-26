@@ -15,7 +15,7 @@
 from livekit.agents import Plugin
 from livekit.agents.inference_runner import _InferenceRunner
 
-from .eou import EOUModel, _EUORunner
+from .eou import EOUModel, _EUORunnerEn, _EUORunnerMultilingual
 from .log import logger
 from .version import __version__
 
@@ -29,16 +29,20 @@ class EOUPlugin(Plugin):
     def download_files(self) -> None:
         from transformers import AutoTokenizer
 
-        from .eou import HG_MODEL, MODEL_REVISION, ONNX_FILENAME, _download_from_hf_hub
+        from .eou import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, _download_from_hf_hub
 
-        AutoTokenizer.from_pretrained(HG_MODEL, revision=MODEL_REVISION)
-        _download_from_hf_hub(
-            HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=MODEL_REVISION
-        )
-        _download_from_hf_hub(
-            HG_MODEL, "languages.json", revision=MODEL_REVISION
-        )
+        for model_type, revision in MODEL_REVISIONS.items():
+            AutoTokenizer.from_pretrained(HG_MODEL, revision=revision)
+            _download_from_hf_hub(
+                HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=revision
+            )
+
+            if model_type == "multilingual":
+                _download_from_hf_hub(
+                    HG_MODEL, "languages.json", subfolder="languages", revision=revision
+                )
 
 
 Plugin.register_plugin(EOUPlugin())
-_InferenceRunner.register_runner(_EUORunner)
+_InferenceRunner.register_runner(_EUORunnerEn)
+_InferenceRunner.register_runner(_EUORunnerMultilingual)
