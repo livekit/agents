@@ -731,9 +731,12 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         self._agent_reply_task.add_done_callback(
             lambda t: new_handle.cancel() if t.cancelled() else None
         )
-        self._agent_reply_task.add_done_callback(
-            lambda _: pending_tasks.pop(agent_reply_task_id, None)
-        )
+
+        def _post_task_callback() -> None:
+            logger.info(f"Task completed: {agent_reply_task_id}")
+            pending_tasks.pop(agent_reply_task_id, None)
+
+        self._agent_reply_task.add_done_callback(_post_task_callback)
 
     @utils.log_exceptions(logger=logger)
     async def _synthesize_answer_task(
