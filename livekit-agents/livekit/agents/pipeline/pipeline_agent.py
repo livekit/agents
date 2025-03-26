@@ -792,6 +792,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     self._transcribed_text = self._transcribed_text[
                         len(handle.user_question) :
                     ]
+                logger.info(
+                    "Cancelling handle due to user not wanting to synthesize an answer"
+                )
                 handle.cancel()
                 return
 
@@ -800,6 +803,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 llm_stream = _default_before_llm_cb(self, chat_ctx=copied_ctx)
 
             if handle.interrupted:
+                logger.info("Returning early due to handle.interrupted")
                 return
 
             synthesis_handle = self._synthesize_agent_speech(handle.id, llm_stream)
@@ -1349,8 +1353,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
         # due to timing, we could end up with two pushed agent replies inside the speech queue.
         # so make sure we directly interrupt every reply when validating a new one
-        if self._should_interrupt():
-            self.interrupt()
+        # if self._should_interrupt():
+        #     self.interrupt()
 
         logger.debug(
             "validated agent reply",
