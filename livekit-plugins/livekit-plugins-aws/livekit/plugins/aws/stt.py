@@ -115,13 +115,14 @@ class STT(stt.STT):
             opts=self._config,
         )
 
-    def _get_client(self) -> TranscribeStreamingClient:
+    async def _get_client(self) -> TranscribeStreamingClient:
         """Get a new TranscribeStreamingClient instance."""
-        credentials = self._session.get_credentials()
+        credentials = await self._session.get_credentials()
+        frozen_credentials = await credentials.get_frozen_credentials()
         self.cred_resolver = StaticCredentialResolver(
-            access_key_id=credentials.access_key,
-            secret_access_key=credentials.secret_key,
-            session_token=credentials.token,
+            access_key_id=frozen_credentials.access_key,
+            secret_access_key=frozen_credentials.secret_key,
+            session_token=frozen_credentials.token,
         )
         return TranscribeStreamingClient(
             region=self._config.speech_region, credential_resolver=self.cred_resolver
