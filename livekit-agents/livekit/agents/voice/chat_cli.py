@@ -186,7 +186,6 @@ class ChatCLI:
                     ch = await self._loop.run_in_executor(None, msvcrt.getch)
 
                     if ch == b"\x03":  # Ctrl+C on Windows
-                        stdin_ch.close()
                         break
 
                     try:
