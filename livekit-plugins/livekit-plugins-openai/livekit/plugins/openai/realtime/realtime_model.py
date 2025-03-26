@@ -1331,9 +1331,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     ):
         session = session_updated["session"]
         session_turn_detection = session["turn_detection"]
-        if session_turn_detection is None:
-            turn_detection = None
-        else:
+        turn_detection: Union[ServerVadOptions, SemanticVadOptions, None] = None
+        if session_turn_detection is not None:
             turn_detection_type = session_turn_detection.get("type")
             if turn_detection_type == "server_vad":
                 session_turn_detection_opts = cast(
@@ -1348,19 +1347,23 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                     create_response=session_turn_detection_opts["create_response"],
                 )
             elif turn_detection_type == "semantic_vad":
-                session_turn_detection_opts = cast(
+                session_turn_detection_semantic = cast(
                     api_proto.SemanticVad, session_turn_detection
                 )
+                eagerness_value = session_turn_detection_semantic.get(
+                    "eagerness", "auto"
+                )
+                create_response_value = session_turn_detection_semantic.get(
+                    "create_response", True
+                )
+                interrupt_response_value = session_turn_detection_semantic.get(
+                    "interrupt_response", True
+                )
+
                 turn_detection = SemanticVadOptions(
-                    eagerness=SemanticVadEagerness(
-                        session_turn_detection_opts.get("eagerness", "auto")
-                    ),
-                    create_response=session_turn_detection_opts.get(
-                        "create_response", True
-                    ),
-                    interrupt_response=session_turn_detection_opts.get(
-                        "interrupt_response", True
-                    ),
+                    eagerness=SemanticVadEagerness(eagerness_value),
+                    create_response=bool(create_response_value),
+                    interrupt_response=bool(interrupt_response_value),
                 )
             else:
                 turn_detection = None
