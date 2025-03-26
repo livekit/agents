@@ -142,10 +142,14 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._stt = stt
         self._client = None
+        self._last_credential_time = 0
 
     async def _initialize_client(self):
-        if self._client is None:
+        # Check if we need to refresh credentials (every 10 minutes or if client is None)
+        current_time = asyncio.get_event_loop().time()
+        if self._client is None or (current_time - self._last_credential_time > 600):
             self._client = await self._stt._get_client()
+            self._last_credential_time = current_time
         return self._client
 
     async def _run(self) -> None:
