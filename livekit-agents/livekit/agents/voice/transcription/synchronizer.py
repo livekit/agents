@@ -283,6 +283,9 @@ class _SegmentSynchronizerImpl:
             sentence = text_seg.token
             text_cursor = 0
             for word, _, end_pos in self._opts.split_words(sentence):
+                if self.closed and not self._playback_completed:
+                    return
+
                 if self._playback_completed:
                     self._out_ch.send_nowait(sentence[text_cursor:end_pos])
                     text_cursor = end_pos
