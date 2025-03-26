@@ -84,6 +84,7 @@ class LLM(llm.LLM):
         store: bool | None = None,
         metadata: dict[str, str] | None = None,
         max_tokens: int | None = None,
+        timeout: httpx.Timeout | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -113,7 +114,9 @@ class LLM(llm.LLM):
             base_url=base_url,
             max_retries=0,
             http_client=httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                timeout=timeout
+                if timeout
+                else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=50,
@@ -141,6 +144,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        timeout: httpx.Timeout | None = None,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -163,6 +167,9 @@ class LLM(llm.LLM):
             organization=organization,
             project=project,
             base_url=base_url,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
         return LLM(

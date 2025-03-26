@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.7.2
+
+### Patch Changes
+
+- Added optional parameter to opt out from deepgrams model improvement plan - [#1713](https://github.com/livekit/agents/pull/1713) ([@MatthiasGruba](https://github.com/MatthiasGruba))
+
 ## 0.7.1
 
 ### Patch Changes

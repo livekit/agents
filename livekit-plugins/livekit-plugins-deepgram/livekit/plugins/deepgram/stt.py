@@ -108,6 +108,7 @@ class STTOptions:
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
     numerals: bool = False
+    mip_opt_out: bool = False
 
 
 class STT(stt.STT):
@@ -133,6 +134,7 @@ class STT(stt.STT):
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
         numerals: bool = False,
+        mip_opt_out: bool = False,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -159,6 +161,7 @@ class STT(stt.STT):
             energy_filter: Audio energy filter configuration for voice activity detection.
                          Can be a boolean or AudioEnergyFilter instance. Defaults to False.
             numerals: Whether to include numerals in the transcription. Defaults to False.
+            mip_opt_out: Whether to take part in the model improvement program
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -200,6 +203,7 @@ class STT(stt.STT):
             profanity_filter=profanity_filter,
             energy_filter=energy_filter,
             numerals=numerals,
+            mip_opt_out=mip_opt_out,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -296,6 +300,7 @@ class STT(stt.STT):
         keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
         numerals: bool | None = None,
+        mip_opt_out: bool | None = None,
     ):
         if language is not None:
             self._opts.language = language
@@ -321,6 +326,8 @@ class STT(stt.STT):
             self._opts.keyterms = keyterms
         if profanity_filter is not None:
             self._opts.profanity_filter = profanity_filter
+        if mip_opt_out is not None:
+            self._opts.mip_opt_out = mip_opt_out
 
         for stream in self._streams:
             stream.update_options(
@@ -337,6 +344,7 @@ class STT(stt.STT):
                 keyterms=keyterms,
                 profanity_filter=profanity_filter,
                 numerals=numerals,
+                mip_opt_out=mip_opt_out,
             )
 
     def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
@@ -388,7 +396,6 @@ class SpeechStream(stt.SpeechStream):
             else:
                 self._audio_energy_filter = AudioEnergyFilter()
 
-        self._pushed_audio_duration = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
@@ -408,6 +415,7 @@ class SpeechStream(stt.SpeechStream):
         keyterms: list[str] | None = None,
         profanity_filter: bool | None = None,
         numerals: bool | None = None,
+        mip_opt_out: bool | None = None,
     ):
         if language is not None:
             self._opts.language = language
@@ -435,6 +443,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.profanity_filter = profanity_filter
         if numerals is not None:
             self._opts.numerals = numerals
+        if mip_opt_out is not None:
+            self._opts.mip_opt_out = mip_opt_out
 
         self._reconnect_event.set()
 
@@ -482,14 +492,14 @@ class SpeechStream(stt.SpeechStream):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif state == AudioEnergyFilter.State.END:
                         # no need to buffer as we have cooldown period
-                        frames = audio_bstream.flush()
+                        frames.extend(audio_bstream.flush())
                         has_ended = True
                     elif state == AudioEnergyFilter.State.SILENCE:
                         # buffer the last silence frame, since it could contain beginning of speech
                         # TODO: improve accuracy by using a ring buffer with longer window
                         last_frame = data
                 elif isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
+                    frames.extend(audio_bstream.flush())
                     has_ended = True
 
                 for frame in frames:
@@ -581,6 +591,7 @@ class SpeechStream(stt.SpeechStream):
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
             "numerals": self._opts.numerals,
+            "mip_opt_out": self._opts.mip_opt_out,
         }
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords

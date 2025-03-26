@@ -1,5 +1,25 @@
 # livekit-plugins-openai
 
+## 0.12.1
+
+### Patch Changes
+
+- expose turn_detection options with openai STT - [#1726](https://github.com/livekit/agents/pull/1726) ([@davidzhao](https://github.com/davidzhao))
+
+- feat(OpenAI STT): add support for semantic_vad - [#1707](https://github.com/livekit/agents/pull/1707) ([@chasemcdo](https://github.com/chasemcdo))
+
+## 0.12.0
+
+### Minor Changes
+
+- support for streaming STT, new STT/TTS models - [#1701](https://github.com/livekit/agents/pull/1701) ([@davidzhao](https://github.com/davidzhao))
+
+### Patch Changes
+
+- openai new STT model and voices - [#1691](https://github.com/livekit/agents/pull/1691) ([@lundin](https://github.com/lundin))
+
+- Make azure and openai take a timeout optionally. Also update the default timeout for Azure OpenAI to 5s from 10 minutes. - [#1674](https://github.com/livekit/agents/pull/1674) ([@martin-purplefish](https://github.com/martin-purplefish))
+
 ## 0.11.3
 
 ### Patch Changes

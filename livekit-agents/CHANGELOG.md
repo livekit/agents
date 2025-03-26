@@ -1,5 +1,13 @@
 # livekit-agents
 
+## 0.12.18
+
+### Patch Changes
+
+- Remove unnecessary version pins - [#1682](https://github.com/livekit/agents/pull/1682) ([@hauntsaninja](https://github.com/hauntsaninja))
+
+- reduced retry interval to 2s - [#1701](https://github.com/livekit/agents/pull/1701) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.12.17
 
 ### Patch Changes
