@@ -145,7 +145,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _initialize_client(self):
         if self._client is None:
-            self._client = self._stt._get_client()
+            self._client = await self._stt._get_client()
         return self._client
 
     async def _run(self) -> None:
