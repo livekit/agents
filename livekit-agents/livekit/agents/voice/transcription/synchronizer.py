@@ -95,7 +95,12 @@ class _SpeakingRateData:
 
         # fill the tail assuming the speaking rate is constant
         dt = timestamp - self.timestamps[idx - 1]
-        integral_t += self.speaking_rate[idx - 1] * dt
+        rate = (
+            self.speaking_rate[idx]
+            if idx < len(self.speaking_rate)
+            else self.speaking_rate[idx - 1]
+        )
+        integral_t += rate * dt
 
         if idx < len(self.timestamps):
             # if there is a next timestamp, make sure the integral does not exceed the next
