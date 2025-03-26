@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from google import genai
 from google.genai._api_client import HttpOptions
@@ -29,6 +28,7 @@ from google.genai.types import (
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from ...log import logger
 from ...utils import _build_gemini_fnc, get_tool_results_for_realtime, to_chat_ctx
@@ -50,18 +50,18 @@ class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
-    response_modalities: list[Modality] | None
+    response_modalities: NotGivenOr[list[Modality]]
     vertexai: bool
     project: str | None
     location: str | None
     candidate_count: int
-    temperature: float | None
-    max_output_tokens: int | None
-    top_p: float | None
-    top_k: int | None
-    presence_penalty: float | None
-    frequency_penalty: float | None
-    instructions: Content | None
+    temperature: NotGivenOr[float]
+    max_output_tokens: NotGivenOr[int]
+    top_p: NotGivenOr[float]
+    top_k: NotGivenOr[int]
+    presence_penalty: NotGivenOr[float]
+    frequency_penalty: NotGivenOr[float]
+    instructions: NotGivenOr[str]
 
 
 @dataclass
@@ -83,22 +83,21 @@ class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
-        instructions: str | None = None,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = None,
+        modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
         vertexai: bool = False,
-        project: str | None = None,
-        location: str | None = None,
+        project: NotGivenOr[str] = NOT_GIVEN,
+        location: NotGivenOr[str] = NOT_GIVEN,
         candidate_count: int = 1,
-        temperature: float | None = None,
-        max_output_tokens: int | None = None,
-        top_p: float | None = None,
-        top_k: int | None = None,
-        presence_penalty: float | None = None,
-        frequency_penalty: float | None = None,
-        loop: asyncio.AbstractEventLoop | None = None,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        top_k: NotGivenOr[int] = NOT_GIVEN,
+        presence_penalty: NotGivenOr[float] = NOT_GIVEN,
+        frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -112,57 +111,55 @@ class RealtimeModel(llm.RealtimeModel):
 
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
-            api_key (str or None, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
+            api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
+            model (str, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
-                project (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
-                location (str or None, optional): The location to use for the API. Defaults to None. (for vertexai)
+                project (str, optional): The project id to use for the API. Defaults to None. (for vertexai)
+                location (str, optional): The location to use for the API. Defaults to None. (for vertexai)
             candidate_count (int, optional): The number of candidate responses to generate. Defaults to 1.
             top_p (float, optional): The top-p value for response generation
             top_k (int, optional): The top-k value for response generation
             presence_penalty (float, optional): The presence penalty for response generation
             frequency_penalty (float, optional): The frequency penalty for response generation
-            loop (asyncio.AbstractEventLoop or None, optional): Event loop to use for async operations. If None, the current event loop is used.
 
         Raises:
             ValueError: If the API key is required but not found.
-        """
-        if modalities is None:
-            modalities = ["AUDIO"]
+        """  # noqa: E501
         super().__init__(
-            capabilities=llm.RealtimeCapabilities(message_truncation=False, turn_detection=True)
+            capabilities=llm.RealtimeCapabilities(
+                message_truncation=False, turn_detection=True, user_transcription=False
+            )
         )
-        self._loop = loop or asyncio.get_event_loop()
-        self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
-        self._project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
-        self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION")
+
+        gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
+        gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+        gcp_location = location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION")
         if vertexai:
-            if not self._project or not self._location:
+            if not gcp_project or not gcp_location:
                 raise ValueError(
                     "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"  # noqa: E501
                 )
-            self._api_key = None  # VertexAI does not require an API key
+            gemini_api_key = None  # VertexAI does not require an API key
 
         else:
-            self._project = None
-            self._location = None
-            if not self._api_key:
+            gcp_project = None
+            gcp_location = None
+            if not gemini_api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
-        instructions_content = Content(parts=[Part(text=instructions)]) if instructions else None
         self._opts = _RealtimeOptions(
             model=model,
-            api_key=self._api_key,
+            api_key=gemini_api_key,
             voice=voice,
             response_modalities=modalities,
             vertexai=vertexai,
-            project=self._project,
-            location=self._location,
+            project=gcp_project,
+            location=gcp_location,
             candidate_count=candidate_count,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
@@ -170,7 +167,7 @@ class RealtimeModel(llm.RealtimeModel):
             top_k=top_k,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
-            instructions=instructions_content,
+            instructions=instructions,
         )
 
     def session(self) -> RealtimeSession:
@@ -196,7 +193,7 @@ class RealtimeSession(llm.RealtimeSession):
         )
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
 
-        self._current_generation: Optional[_ResponseGeneration] = None
+        self._current_generation: _ResponseGeneration | None = None
 
         self._is_interrupted = False
         self._active_response_id = None
@@ -205,6 +202,15 @@ class RealtimeSession(llm.RealtimeSession):
         self._update_fnc_ctx_lock = asyncio.Lock()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_event_id = None
+
+    def update_options(
+        self,
+        *,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        # No-op for Gemini
+        pass
 
     async def update_instructions(self, instructions: str) -> None:
         # No-op for Gemini
@@ -256,7 +262,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._response_created_futures[event_id] = fut
         self._pending_generation_event_id = event_id
 
-        ctx = [Content(parts=[Part(text=instructions or ".")])]
+        instructions_content = instructions if is_given(instructions) else "."
+
+        ctx = [Content(parts=[Part(text=instructions_content)])]
         self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
 
         # Add timeout handling to prevent hanging futures
@@ -279,8 +287,6 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def aclose(self) -> None:
         self._msg_ch.close()
-        if self._session:
-            await self._session.close()
 
         for fut in self._response_created_futures.values():
             if not fut.done():
@@ -292,17 +298,27 @@ class RealtimeSession(llm.RealtimeSession):
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
         config = LiveConnectConfig(
-            response_modalities=self._opts.response_modalities,
+            response_modalities=self._opts.response_modalities
+            if is_given(self._opts.response_modalities)
+            else [Modality.AUDIO],
             generation_config=GenerationConfig(
                 candidate_count=self._opts.candidate_count,
-                temperature=self._opts.temperature,
-                max_output_tokens=self._opts.max_output_tokens,
-                top_p=self._opts.top_p,
-                top_k=self._opts.top_k,
-                presence_penalty=self._opts.presence_penalty,
-                frequency_penalty=self._opts.frequency_penalty,
+                temperature=self._opts.temperature if is_given(self._opts.temperature) else None,
+                max_output_tokens=self._opts.max_output_tokens
+                if is_given(self._opts.max_output_tokens)
+                else None,
+                top_p=self._opts.top_p if is_given(self._opts.top_p) else None,
+                top_k=self._opts.top_k if is_given(self._opts.top_k) else None,
+                presence_penalty=self._opts.presence_penalty
+                if is_given(self._opts.presence_penalty)
+                else None,
+                frequency_penalty=self._opts.frequency_penalty
+                if is_given(self._opts.frequency_penalty)
+                else None,
             ),
-            system_instruction=self._opts.instructions,
+            system_instruction=Content(parts=[Part(text=self._opts.instructions)])
+            if is_given(self._opts.instructions)
+            else None,
             speech_config=SpeechConfig(
                 voice_config=VoiceConfig(
                     prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
@@ -312,11 +328,11 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
         async with self._client.aio.live.connect(model=self._opts.model, config=config) as session:
-            self._session = session
 
             @utils.log_exceptions(logger=logger)
             async def _send_task():
                 async for msg in self._msg_ch:
+                    print(msg)
                     await session.send(input=msg)
 
                 await session.send(input=".", end_of_turn=True)
@@ -325,6 +341,7 @@ class RealtimeSession(llm.RealtimeSession):
             async def _recv_task():
                 while True:
                     async for response in session.receive():
+                        print(response)
                         if self._active_response_id is None:
                             self._start_new_generation()
 
@@ -451,7 +468,7 @@ class RealtimeSession(llm.RealtimeSession):
         )
         self.emit("function_calls_cancelled", tool_call_cancellation.ids)
 
-    def commit_audio_buffer(self) -> None:
+    def commit_audio(self) -> None:
         raise NotImplementedError("commit_audio_buffer is not supported yet")
 
     def server_vad_enabled(self) -> bool:
