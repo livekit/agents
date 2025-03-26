@@ -123,7 +123,6 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
-            region_name=self._region,
             max_output_tokens=self._opts.max_output_tokens,
             top_p=self._opts.top_p,
             additional_request_fields=self._opts.additional_request_fields,
@@ -141,7 +140,6 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         model: str | TEXT_MODEL,
-        region_name: str,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
         fnc_ctx: llm.FunctionContext | None,
