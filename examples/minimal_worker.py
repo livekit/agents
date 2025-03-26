@@ -35,6 +35,7 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
+        unrecoverable_error_callback=lambda error_info: "end_session",
     )
     await session.start(agent=MyTask(), room=ctx.room)
 
