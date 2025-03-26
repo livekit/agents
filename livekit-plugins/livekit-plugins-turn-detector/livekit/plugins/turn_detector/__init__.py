@@ -38,9 +38,7 @@ class EOUPlugin(Plugin):
             )
 
             if model_type == "multilingual":
-                _download_from_hf_hub(
-                    HG_MODEL, "languages.json", revision=revision
-                )
+                _download_from_hf_hub(HG_MODEL, "languages.json", revision=revision)
 
 
 Plugin.register_plugin(EOUPlugin())
