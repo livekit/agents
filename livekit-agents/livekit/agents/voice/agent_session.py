@@ -18,7 +18,13 @@ from . import io, room_io
 from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
-from .events import AgentEvent, AgentStateChangedEvent, EventTypes
+from .events import (
+    AgentEvent,
+    AgentStateChangedEvent,
+    EventTypes,
+    AgentStartedSpeakingEvent,
+    AgentStoppedSpeakingEvent,
+)
 from .speech_handle import SpeechHandle
 
 
