@@ -45,6 +45,7 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
         min_endpointing_delay: float,
         max_endpointing_delay: float,
     ) -> None:
+        super().__init__()
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._stt_atask: asyncio.Task[None] | None = None
@@ -176,7 +177,8 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             self._hooks.on_end_of_speech(ev)
             self._speaking = False
-            self._last_speaking_time = time.time() - ev.raw_accumulated_silence
+            # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
+            self._last_speaking_time = time.time() - ev.silence_duration
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)
@@ -215,8 +217,9 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             eou_metrics = metrics.EOUMetrics(
                 timestamp=time.time(),
                 end_of_utterance_delay=time.time() - self._last_speaking_time,
-                transcription_delay=time.time() - self._last_final_transcript_time,
-                # TODO: need to add speech_id
+                transcription_delay=max(
+                    self._last_final_transcript_time - self._last_speaking_time, 0
+                ),
             )
             self.emit("metrics_collected", eou_metrics)
             await self._hooks.on_end_of_turn(self._audio_transcript)

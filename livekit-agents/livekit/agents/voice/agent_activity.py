@@ -322,9 +322,7 @@ class AgentActivity(RecognitionHooks):
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
             )
-            self._audio_recognition.on(
-                "metrics_collected", lambda ev: self._session.emit("metrics_collected", ev)
-            )
+            self._audio_recognition.on("metrics_collected", self._on_metrics_collected)
             self._audio_recognition.start()
             self._started = True
 
@@ -541,7 +539,7 @@ class AgentActivity(RecognitionHooks):
     def _on_metrics_collected(self, ev: AgentMetrics) -> None:
         if speech_handle := _SpeechHandleContextVar.get(None):
             ev.speech_id = speech_handle.id
-            self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
+        self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
