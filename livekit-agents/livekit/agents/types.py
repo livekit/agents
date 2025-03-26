@@ -27,6 +27,7 @@ const { state, ... } = useVoiceAssistant();
 """
 
 TOPIC_CHAT = "lk.chat"
+TOPIC_TRANSCRIPTION = "lk.transcription"
 
 
 _T = TypeVar("_T")
