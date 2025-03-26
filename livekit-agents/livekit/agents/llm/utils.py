@@ -110,10 +110,10 @@ def is_context_type(ty: type) -> bool:
 
 @dataclass
 class SerializedImage:
+    inference_detail: str
+    media_type: str | None
     data_bytes: bytes | None = None
     external_url: str | None = None
-    media_type: str | None
-    inference_detail: str
 
 
 def serialize_image(image: llm.ImageContent) -> SerializedImage:
