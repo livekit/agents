@@ -505,7 +505,9 @@ class RealtimeModel:
         if utils.is_given(input_audio_transcription):
             opts.input_audio_transcription = input_audio_transcription
         if utils.is_given(turn_detection):
-            opts.turn_detection = turn_detection
+            opts.turn_detection = cast(
+                Union[ServerVadOptions, SemanticVadOptions, None], turn_detection
+            )
         if temperature is not None:
             opts.temperature = temperature
         if max_response_output_tokens is not None:
@@ -972,7 +974,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         if utils.is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
         if utils.is_given(turn_detection):
-            self._opts.turn_detection = turn_detection
+            self._opts.turn_detection = cast(
+                Union[ServerVadOptions, SemanticVadOptions, None], turn_detection
+            )
         if tool_choice is not None:
             self._opts.tool_choice = tool_choice
         if temperature is not None:
@@ -1326,26 +1330,37 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self, session_updated: api_proto.ServerEvent.SessionUpdated
     ):
         session = session_updated["session"]
-        if session["turn_detection"] is None:
+        session_turn_detection = session["turn_detection"]
+        if session_turn_detection is None:
             turn_detection = None
         else:
-            turn_detection_type = session["turn_detection"].get("type")
+            turn_detection_type = session_turn_detection.get("type")
             if turn_detection_type == "server_vad":
+                session_turn_detection_opts = cast(
+                    api_proto.ServerVad, session_turn_detection
+                )
                 turn_detection = ServerVadOptions(
-                    threshold=session["turn_detection"]["threshold"],
-                    prefix_padding_ms=session["turn_detection"]["prefix_padding_ms"],
-                    silence_duration_ms=session["turn_detection"][
+                    threshold=session_turn_detection_opts["threshold"],
+                    prefix_padding_ms=session_turn_detection_opts["prefix_padding_ms"],
+                    silence_duration_ms=session_turn_detection_opts[
                         "silence_duration_ms"
                     ],
-                    create_response=session["turn_detection"]["create_response"],
+                    create_response=session_turn_detection_opts["create_response"],
                 )
             elif turn_detection_type == "semantic_vad":
+                session_turn_detection_opts = cast(
+                    api_proto.SemanticVad, session_turn_detection
+                )
                 turn_detection = SemanticVadOptions(
                     eagerness=SemanticVadEagerness(
-                        session["turn_detection"].get("eagerness", "auto")
+                        session_turn_detection_opts.get("eagerness", "auto")
                     ),
-                    create_response=session["turn_detection"]["create_response"],
-                    interrupt_response=session["turn_detection"]["interrupt_response"],
+                    create_response=session_turn_detection_opts.get(
+                        "create_response", True
+                    ),
+                    interrupt_response=session_turn_detection_opts.get(
+                        "interrupt_response", True
+                    ),
                 )
             else:
                 turn_detection = None
