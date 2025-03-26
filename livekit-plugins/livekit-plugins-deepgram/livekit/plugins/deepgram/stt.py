@@ -37,7 +37,11 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import AudioBuffer, is_given
 
 from ._utils import PeriodicCollector
 from .log import logger
@@ -91,7 +95,7 @@ class AudioEnergyFilter:
 
 @dataclass
 class STTOptions:
-    language: DeepgramLanguages | str | None
+    language: DeepgramLanguages | str
     detect_language: bool
     interim_results: bool
     punctuate: bool
@@ -124,10 +128,10 @@ class STT(stt.STT):
         endpointing_ms: int = 25,
         # enable filler words by default to improve turn detector accuracy
         filler_words: bool = True,
-        keywords: list[tuple[str, float]] | None = None,
-        keyterms: list[str] | None = None,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: bool = False,
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
@@ -172,13 +176,11 @@ class STT(stt.STT):
         )
         self._base_url = base_url
 
-        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
-        if api_key is None:
+        self._api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
+        if not self._api_key:
             raise ValueError("Deepgram API key is required")
 
         model = _validate_model(model, language)
-
-        self._api_key = api_key
 
         self._opts = STTOptions(
             language=language,
@@ -192,8 +194,8 @@ class STT(stt.STT):
             filler_words=filler_words,
             sample_rate=sample_rate,
             num_channels=1,
-            keywords=keywords or [],
-            keyterms=keyterms or [],
+            keywords=keywords if is_given(keywords) else [],
+            keyterms=keyterms if is_given(keyterms) else [],
             profanity_filter=profanity_filter,
             energy_filter=energy_filter,
             numerals=numerals,
@@ -211,8 +213,8 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: DeepgramLanguages | str | None,
-        conn_options: APIConnectOptions,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
@@ -262,7 +264,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: DeepgramLanguages | str | None = None,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = self._sanitize_options(language=language)
@@ -280,44 +282,46 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        language: DeepgramLanguages | str | None = None,
-        model: DeepgramModels | str | None = None,
-        interim_results: bool | None = None,
-        punctuate: bool | None = None,
-        smart_format: bool | None = None,
-        sample_rate: int | None = None,
-        no_delay: bool | None = None,
-        endpointing_ms: int | None = None,
-        filler_words: bool | None = None,
-        keywords: list[tuple[str, float]] | None = None,
-        keyterms: list[str] | None = None,
-        profanity_filter: bool | None = None,
-        numerals: bool | None = None,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
+        model: NotGivenOr[DeepgramModels | str] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        punctuate: NotGivenOr[bool] = NOT_GIVEN,
+        smart_format: NotGivenOr[bool] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        no_delay: NotGivenOr[bool] = NOT_GIVEN,
+        endpointing_ms: NotGivenOr[int] = NOT_GIVEN,
+        filler_words: NotGivenOr[bool] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        numerals: NotGivenOr[bool] = NOT_GIVEN,
     ):
-        if language is not None:
+        if is_given(language):
             self._opts.language = language
-        if model is not None:
+        if is_given(model):
             self._opts.model = _validate_model(model, language)
-        if interim_results is not None:
+        if is_given(interim_results):
             self._opts.interim_results = interim_results
-        if punctuate is not None:
+        if is_given(punctuate):
             self._opts.punctuate = punctuate
-        if smart_format is not None:
+        if is_given(smart_format):
             self._opts.smart_format = smart_format
-        if sample_rate is not None:
+        if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
-        if no_delay is not None:
+        if is_given(no_delay):
             self._opts.no_delay = no_delay
-        if endpointing_ms is not None:
+        if is_given(endpointing_ms):
             self._opts.endpointing_ms = endpointing_ms
-        if filler_words is not None:
+        if is_given(filler_words):
             self._opts.filler_words = filler_words
-        if keywords is not None:
+        if is_given(keywords):
             self._opts.keywords = keywords
-        if keyterms is not None:
+        if is_given(keyterms):
             self._opts.keyterms = keyterms
-        if profanity_filter is not None:
+        if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
+        if is_given(numerals):
+            self._opts.numerals = numerals
 
         for stream in self._streams:
             stream.update_options(
@@ -336,9 +340,12 @@ class STT(stt.STT):
                 numerals=numerals,
             )
 
-    def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
+    def _sanitize_options(
+        self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
+    ) -> STTOptions:
         config = dataclasses.replace(self._opts)
-        config.language = language or config.language
+        if is_given(language):
+            config.language = language
 
         if config.detect_language:
             config.language = None
@@ -389,45 +396,45 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        language: DeepgramLanguages | str | None = None,
-        model: DeepgramModels | str | None = None,
-        interim_results: bool | None = None,
-        punctuate: bool | None = None,
-        smart_format: bool | None = None,
-        sample_rate: int | None = None,
-        no_delay: bool | None = None,
-        endpointing_ms: int | None = None,
-        filler_words: bool | None = None,
-        keywords: list[tuple[str, float]] | None = None,
-        keyterms: list[str] | None = None,
-        profanity_filter: bool | None = None,
-        numerals: bool | None = None,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
+        model: NotGivenOr[DeepgramModels | str] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        punctuate: NotGivenOr[bool] = NOT_GIVEN,
+        smart_format: NotGivenOr[bool] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        no_delay: NotGivenOr[bool] = NOT_GIVEN,
+        endpointing_ms: NotGivenOr[int] = NOT_GIVEN,
+        filler_words: NotGivenOr[bool] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        numerals: NotGivenOr[bool] = NOT_GIVEN,
     ):
-        if language is not None:
+        if is_given(language):
             self._opts.language = language
-        if model is not None:
+        if is_given(model):
             self._opts.model = _validate_model(model, language)
-        if interim_results is not None:
+        if is_given(interim_results):
             self._opts.interim_results = interim_results
-        if punctuate is not None:
+        if is_given(punctuate):
             self._opts.punctuate = punctuate
-        if smart_format is not None:
+        if is_given(smart_format):
             self._opts.smart_format = smart_format
-        if sample_rate is not None:
+        if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
-        if no_delay is not None:
+        if is_given(no_delay):
             self._opts.no_delay = no_delay
-        if endpointing_ms is not None:
+        if is_given(endpointing_ms):
             self._opts.endpointing_ms = endpointing_ms
-        if filler_words is not None:
+        if is_given(filler_words):
             self._opts.filler_words = filler_words
-        if keywords is not None:
+        if is_given(keywords):
             self._opts.keywords = keywords
-        if keyterms is not None:
+        if is_given(keyterms):
             self._opts.keyterms = keyterms
-        if profanity_filter is not None:
+        if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
-        if numerals is not None:
+        if is_given(numerals):
             self._opts.numerals = numerals
 
         self._reconnect_event.set()
@@ -732,7 +739,7 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
 
 
 def _validate_model(
-    model: DeepgramModels | str, language: DeepgramLanguages | str | None
+    model: DeepgramModels | str, language: NotGivenOr[DeepgramLanguages | str]
 ) -> DeepgramModels | str:
     en_only_models = {
         "nova-2-meeting",
@@ -748,7 +755,7 @@ def _validate_model(
         "nova-3",
         "nova-3-general",
     }
-    if language not in ("en-US", "en") and model in en_only_models:
+    if is_given(language) and language not in ("en-US", "en") and model in en_only_models:
         logger.warning(
             f"{model} does not support language {language}, falling back to nova-2-general"
         )

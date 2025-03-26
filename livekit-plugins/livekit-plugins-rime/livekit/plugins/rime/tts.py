@@ -28,6 +28,12 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSModels
@@ -61,7 +67,7 @@ class TTS(tts.TTS):
         reduce_latency: bool = False,
         pause_between_brackets: bool = False,
         phonemize_between_brackets: bool = False,
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -71,7 +77,7 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
-        self._api_key = api_key or os.environ.get("RIME_API_KEY")
+        self._api_key = api_key if is_given(api_key) else os.environ.get("RIME_API_KEY")
         if not self._api_key:
             raise ValueError(
                 "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
@@ -98,8 +104,8 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
-        segment_id: str | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        segment_id: NotGivenOr[str] = NOT_GIVEN,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -107,18 +113,20 @@ class TTS(tts.TTS):
             conn_options=conn_options,
             opts=self._opts,
             session=self._ensure_session(),
-            segment_id=segment_id,
+            segment_id=segment_id if is_given(segment_id) else None,
             api_key=self._api_key,
         )
 
     def update_options(
         self,
         *,
-        model: TTSModels | str | None,
-        speaker: str | None,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        speaker: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        self._opts.model = model or self._opts.model
-        self._opts.speaker = speaker or self._opts.speaker
+        if is_given(model):
+            self._opts.model = model
+        if is_given(speaker):
+            self._opts.speaker = speaker
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -129,15 +137,15 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _TTSOptions,
+        api_key: str,
         session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions | None = None,
-        segment_id: str | None = None,
-        api_key: str | None = None,
+        conn_options: APIConnectOptions,
+        segment_id: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
         self._session = session
-        self._segment_id = segment_id or utils.shortuuid()
+        self._segment_id = segment_id if is_given(segment_id) else utils.shortuuid()
         self._api_key = api_key
 
     async def _run(self) -> None:

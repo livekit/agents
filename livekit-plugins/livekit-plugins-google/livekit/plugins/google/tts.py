@@ -27,8 +27,12 @@ from livekit.agents import (
     tts,
     utils,
 )
-
-from .models import Gender, SpeechLanguages
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 
 @dataclass
@@ -41,15 +45,13 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        language: SpeechLanguages | str = "en-US",
-        gender: Gender | str = "neutral",
-        voice_name: str = "",  # Not required
+        voice: NotGivenOr[texttospeech.VoiceSelectionParams] = NOT_GIVEN,
         sample_rate: int = 24000,
         pitch: int = 0,
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
-        credentials_info: dict | None = None,
-        credentials_file: str | None = None,
+        credentials_info: NotGivenOr[dict] = NOT_GIVEN,
+        credentials_file: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -59,9 +61,7 @@ class TTS(tts.TTS):
         environmental variable.
 
         Args:
-            language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
-            gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
-            voice_name (str, optional): Specific voice name. Default is an empty string.
+            voice (texttospeech.VoiceSelectionParams, optional): Voice selection parameters.
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
             effects_profile_id (str): Optional identifier for selecting audio effects profiles to apply to the synthesized speech.
@@ -82,11 +82,12 @@ class TTS(tts.TTS):
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
 
-        voice = texttospeech.VoiceSelectionParams(
-            name=voice_name,
-            language_code=language,
-            ssml_gender=_gender_from_str(gender),
-        )
+        if not is_given(voice):
+            voice = texttospeech.VoiceSelectionParams(
+                name="",
+                language_code="en-US",
+                ssml_gender=SsmlVoiceGender.NEUTRAL,
+            )
 
         self._opts = _TTSOptions(
             voice=voice,
@@ -102,26 +103,20 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        language: SpeechLanguages | str = "en-US",
-        gender: Gender | str = "neutral",
-        voice_name: str = "",  # Not required
-        speaking_rate: float = 1.0,
+        voice: NotGivenOr[texttospeech.VoiceSelectionParams] = NOT_GIVEN,
+        speaking_rate: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
 
         Args:
-            language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
-            gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
-            voice_name (str, optional): Specific voice name. Default is an empty string.
-            speaking_rate (float, optional): Speed of speech. Default is 1.0.
+            voice (texttospeech.VoiceSelectionParams, optional): Voice selection parameters.
+            speaking_rate (float, optional): Speed of speech.
         """  # noqa: E501
-        self._opts.voice = texttospeech.VoiceSelectionParams(
-            name=voice_name,
-            language_code=language,
-            ssml_gender=_gender_from_str(gender),
-        )
-        self._opts.audio_config.speaking_rate = speaking_rate
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(speaking_rate):
+            self._opts.audio_config.speaking_rate = speaking_rate
 
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
         if self._client is None:
@@ -144,7 +139,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -163,7 +158,7 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         opts: _TTSOptions,
         client: texttospeech.TextToSpeechAsyncClient,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client

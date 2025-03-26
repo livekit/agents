@@ -26,6 +26,11 @@ import onnxruntime  # type: ignore
 
 from livekit import agents, rtc
 from livekit.agents import utils
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from . import onnx_model
 from .log import logger
@@ -62,7 +67,7 @@ class VAD(agents.vad.VAD):
         sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
         # deprecated
-        padding_duration: float | None = None,
+        padding_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> VAD:
         """
         Load and initialize the Silero VAD model.
@@ -109,7 +114,7 @@ class VAD(agents.vad.VAD):
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
 
-        if padding_duration is not None:
+        if is_given(padding_duration):
             logger.warning(
                 "padding_duration is deprecated and will be removed in 1.5.0, use prefix_padding_duration instead",  # noqa: E501
             )
@@ -157,11 +162,11 @@ class VAD(agents.vad.VAD):
     def update_options(
         self,
         *,
-        min_speech_duration: float | None = None,
-        min_silence_duration: float | None = None,
-        prefix_padding_duration: float | None = None,
-        max_buffered_speech: float | None = None,
-        activation_threshold: float | None = None,
+        min_speech_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_silence_duration: NotGivenOr[float] = NOT_GIVEN,
+        prefix_padding_duration: NotGivenOr[float] = NOT_GIVEN,
+        max_buffered_speech: NotGivenOr[float] = NOT_GIVEN,
+        activation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the VAD options.
@@ -175,14 +180,17 @@ class VAD(agents.vad.VAD):
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
         """  # noqa: E501
-        self._opts = _VADOptions(
-            min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
-            min_silence_duration=min_silence_duration or self._opts.min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration or self._opts.prefix_padding_duration,
-            max_buffered_speech=max_buffered_speech or self._opts.max_buffered_speech,
-            activation_threshold=activation_threshold or self._opts.activation_threshold,
-            sample_rate=self._opts.sample_rate,
-        )
+        if is_given(min_speech_duration):
+            self._opts.min_speech_duration = min_speech_duration
+        if is_given(min_silence_duration):
+            self._opts.min_silence_duration = min_silence_duration
+        if is_given(prefix_padding_duration):
+            self._opts.prefix_padding_duration = prefix_padding_duration
+        if is_given(max_buffered_speech):
+            self._opts.max_buffered_speech = max_buffered_speech
+        if is_given(activation_threshold):
+            self._opts.activation_threshold = activation_threshold
+
         for stream in self._streams:
             stream.update_options(
                 min_speech_duration=min_speech_duration,
@@ -211,11 +219,11 @@ class VADStream(agents.vad.VADStream):
     def update_options(
         self,
         *,
-        min_speech_duration: float | None = None,
-        min_silence_duration: float | None = None,
-        prefix_padding_duration: float | None = None,
-        max_buffered_speech: float | None = None,
-        activation_threshold: float | None = None,
+        min_speech_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_silence_duration: NotGivenOr[float] = NOT_GIVEN,
+        prefix_padding_duration: NotGivenOr[float] = NOT_GIVEN,
+        max_buffered_speech: NotGivenOr[float] = NOT_GIVEN,
+        activation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the VAD options.
@@ -231,14 +239,16 @@ class VADStream(agents.vad.VADStream):
         """  # noqa: E501
         old_max_buffered_speech = self._opts.max_buffered_speech
 
-        self._opts = _VADOptions(
-            min_speech_duration=min_speech_duration or self._opts.min_speech_duration,
-            min_silence_duration=min_silence_duration or self._opts.min_silence_duration,
-            prefix_padding_duration=prefix_padding_duration or self._opts.prefix_padding_duration,
-            max_buffered_speech=max_buffered_speech or self._opts.max_buffered_speech,
-            activation_threshold=activation_threshold or self._opts.activation_threshold,
-            sample_rate=self._opts.sample_rate,
-        )
+        if is_given(min_speech_duration):
+            self._opts.min_speech_duration = min_speech_duration
+        if is_given(min_silence_duration):
+            self._opts.min_silence_duration = min_silence_duration
+        if is_given(prefix_padding_duration):
+            self._opts.prefix_padding_duration = prefix_padding_duration
+        if is_given(max_buffered_speech):
+            self._opts.max_buffered_speech = max_buffered_speech
+        if is_given(activation_threshold):
+            self._opts.activation_threshold = activation_threshold
 
         if self._input_sample_rate:
             assert self._speech_buffer is not None

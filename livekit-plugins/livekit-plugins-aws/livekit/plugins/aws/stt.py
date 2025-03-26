@@ -20,6 +20,8 @@ from amazon_transcribe.model import Result, TranscriptEvent
 
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .utils import get_aws_credentials
@@ -31,16 +33,16 @@ class STTOptions:
     sample_rate: int
     language: str
     encoding: str
-    vocabulary_name: str | None
-    session_id: str | None
-    vocab_filter_method: str | None
-    vocab_filter_name: str | None
-    show_speaker_label: bool | None
-    enable_channel_identification: bool | None
-    number_of_channels: int | None
-    enable_partial_results_stabilization: bool | None
-    partial_results_stability: str | None
-    language_model_name: str | None
+    vocabulary_name: NotGivenOr[str]
+    session_id: NotGivenOr[str]
+    vocab_filter_method: NotGivenOr[str]
+    vocab_filter_name: NotGivenOr[str]
+    show_speaker_label: NotGivenOr[bool]
+    enable_channel_identification: NotGivenOr[bool]
+    number_of_channels: NotGivenOr[int]
+    enable_partial_results_stabilization: NotGivenOr[bool]
+    partial_results_stability: NotGivenOr[str]
+    language_model_name: NotGivenOr[str]
 
 
 class STT(stt.STT):
@@ -48,21 +50,21 @@ class STT(stt.STT):
         self,
         *,
         speech_region: str = "us-east-1",
-        api_key: str | None = None,
-        api_secret: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 48000,
         language: str = "en-US",
         encoding: str = "pcm",
-        vocabulary_name: str | None = None,
-        session_id: str | None = None,
-        vocab_filter_method: str | None = None,
-        vocab_filter_name: str | None = None,
-        show_speaker_label: bool | None = None,
-        enable_channel_identification: bool | None = None,
-        number_of_channels: int | None = None,
-        enable_partial_results_stabilization: bool | None = None,
-        partial_results_stability: str | None = None,
-        language_model_name: str | None = None,
+        vocabulary_name: NotGivenOr[str] = NOT_GIVEN,
+        session_id: NotGivenOr[str] = NOT_GIVEN,
+        vocab_filter_method: NotGivenOr[str] = NOT_GIVEN,
+        vocab_filter_name: NotGivenOr[str] = NOT_GIVEN,
+        show_speaker_label: NotGivenOr[bool] = NOT_GIVEN,
+        enable_channel_identification: NotGivenOr[bool] = NOT_GIVEN,
+        number_of_channels: NotGivenOr[int] = NOT_GIVEN,
+        enable_partial_results_stabilization: NotGivenOr[bool] = NOT_GIVEN,
+        partial_results_stability: NotGivenOr[str] = NOT_GIVEN,
+        language_model_name: NotGivenOr[str] = NOT_GIVEN,
     ):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
@@ -90,7 +92,7 @@ class STT(stt.STT):
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Amazon Transcribe does not support single frame recognition")
@@ -98,7 +100,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         return SpeechStream(
@@ -120,21 +122,23 @@ class SpeechStream(stt.SpeechStream):
         self._client = TranscribeStreamingClient(region=self._opts.speech_region)
 
     async def _run(self) -> None:
-        stream = await self._client.start_stream_transcription(
-            language_code=self._opts.language,
-            media_sample_rate_hz=self._opts.sample_rate,
-            media_encoding=self._opts.encoding,
-            vocabulary_name=self._opts.vocabulary_name,
-            session_id=self._opts.session_id,
-            vocab_filter_method=self._opts.vocab_filter_method,
-            vocab_filter_name=self._opts.vocab_filter_name,
-            show_speaker_label=self._opts.show_speaker_label,
-            enable_channel_identification=self._opts.enable_channel_identification,
-            number_of_channels=self._opts.number_of_channels,
-            enable_partial_results_stabilization=self._opts.enable_partial_results_stabilization,
-            partial_results_stability=self._opts.partial_results_stability,
-            language_model_name=self._opts.language_model_name,
-        )
+        live_config = {
+            "language_code": self._opts.language,
+            "media_sample_rate_hz": self._opts.sample_rate,
+            "media_encoding": self._opts.encoding,
+            "vocabulary_name": self._opts.vocabulary_name,
+            "session_id": self._opts.session_id,
+            "vocab_filter_method": self._opts.vocab_filter_method,
+            "vocab_filter_name": self._opts.vocab_filter_name,
+            "show_speaker_label": self._opts.show_speaker_label,
+            "enable_channel_identification": self._opts.enable_channel_identification,
+            "number_of_channels": self._opts.number_of_channels,
+            "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,
+            "partial_results_stability": self._opts.partial_results_stability,
+            "language_model_name": self._opts.language_model_name,
+        }
+        filtered_config = {k: v for k, v in live_config.items() if is_given(v)}
+        stream = await self._client.start_stream_transcription(**filtered_config)
 
         @utils.log_exceptions(logger=logger)
         async def input_generator():
