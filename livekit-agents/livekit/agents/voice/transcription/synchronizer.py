@@ -28,16 +28,22 @@ class _TextSyncOptions:
     split_words: Callable[[str], list[tuple[str, int, int]]]
     sentence_tokenizer: tokenize.SentenceTokenizer
     speaking_rate_detector: SpeakingRateDetector
+    new_sentence_delay: float = 0.4
+    silence_to_new_sentence_delay_factor: float = 0.6
 
 
 @dataclass
 class _SpeakingRateData:
     timestamps: list[float] = field(default_factory=list)
     """timestamps of the speaking rate"""
+
     speaking_rate: list[float] = field(default_factory=list)
     """speed at the timestamp"""
+
     speak_integrals: list[float] = field(default_factory=list)
-    """accumulated syllables up to the timestamp"""
+    """accumulated speaking units up to the timestamp"""
+
+    _speaking_duration: list[float] = field(default_factory=list)
     _text_buffer: list[str] = field(default_factory=list)
 
     def add_by_rate(self, *, timestamp: float, speaking_rate: float) -> None:
@@ -45,9 +51,14 @@ class _SpeakingRateData:
         dt = timestamp - self.pushed_duration
         integral += speaking_rate * dt
 
+        speaking_duration = self._speaking_duration[-1] if self._speaking_duration else 0
+        if speaking_rate > 0:
+            speaking_duration += dt
+
         self.timestamps.append(timestamp)
         self.speaking_rate.append(speaking_rate)
         self.speak_integrals.append(integral)
+        self._speaking_duration.append(speaking_duration)
 
     def add_by_annotation(
         self,
@@ -62,13 +73,15 @@ class _SpeakingRateData:
             integral = self.speak_integrals[-1] if self.timestamps else 0
 
             dt = start_time - self.pushed_duration
-            d_hyphens = len(text_to_hyphens("".join(self._text_buffer)))
+            full_text = "".join(self._text_buffer)
+            d_hyphens = len(text_to_hyphens(full_text))
             integral += d_hyphens
             rate = d_hyphens / dt if dt > 0 else 0
 
             self.timestamps.append(start_time)
             self.speaking_rate.append(rate)
             self.speak_integrals.append(integral)
+            self._speaking_duration.append(start_time)
             self._text_buffer.clear()
 
         self._text_buffer.append(text)
@@ -99,6 +112,18 @@ class _SpeakingRateData:
 
         return integral_t
 
+    def get_speaking_duration(self, timestamp: float) -> float:
+        idx = np.searchsorted(self.timestamps, timestamp, side="right")
+        if idx == 0:
+            return 0
+
+        speaking_duration = self._speaking_duration[idx - 1]
+        if idx < len(self.timestamps):
+            dt = timestamp - self.timestamps[idx - 1]
+            speaking_duration += dt
+
+        return speaking_duration
+
     @property
     def pushed_duration(self) -> float:
         return self.timestamps[-1] if self.timestamps else 0
@@ -119,6 +144,7 @@ class _TextData:
     pushed_text: str = ""
     done: bool = False
     forwarded_hyphens: int = 0
+    new_sentence_delayed: float = 0.0
 
 
 class _SegmentSynchronizerImpl:
@@ -187,9 +213,6 @@ class _SegmentSynchronizerImpl:
             end_time = text.end_time or None
             if not self._audio_data.sr_data_annotated:
                 self._audio_data.sr_data_annotated = _SpeakingRateData()
-
-            if start_time is not None:
-                self._text_data.sentence_stream.flush()
 
             # accumulate the actual hyphens if time annotations are present
             self._audio_data.sr_data_annotated.add_by_annotation(
@@ -278,20 +301,16 @@ class _SegmentSynchronizerImpl:
                 elapsed = time.time() - self._start_wall_time
 
                 target_hyphens: float | None = None
-                if (
-                    self._audio_data.sr_data_annotated
-                    and self._audio_data.sr_data_annotated.pushed_duration >= elapsed
-                ):
+                if self._audio_data.sr_data_annotated:
                     # use the actual speaking rate
                     target_hyphens = self._audio_data.sr_data_annotated.accumulate_to(elapsed)
-
                 elif self._speed_on_speaking_unit:
                     # use the estimated speed from speaking rate
                     target_speaking_units = self._audio_data.sr_data_est.accumulate_to(elapsed)
-                    target_hyphens = np.ceil(target_speaking_units * self._speed_on_speaking_unit)
+                    target_hyphens = target_speaking_units * self._speed_on_speaking_unit
 
                 if target_hyphens is not None:
-                    dt = target_hyphens - self._text_data.forwarded_hyphens
+                    dt = np.ceil(target_hyphens) - self._text_data.forwarded_hyphens
                     delay = max(0.0, word_hyphens - dt) / self._speed
                 else:
                     delay = word_hyphens / self._speed
@@ -310,6 +329,22 @@ class _SegmentSynchronizerImpl:
             if text_cursor < len(sentence):
                 # send the remaining text (e.g. new line or spaces)
                 self._out_ch.send_nowait(sentence[text_cursor:])
+
+            # wait for the new sentence delay
+            if self._speed_on_speaking_unit is None or self._audio_data.sr_data_annotated:
+                # use a dynamic delay based on the silence duration
+                speaking_duration = self._audio_data.sr_data_est.get_speaking_duration(elapsed)
+                silent_duration = elapsed - speaking_duration
+                new_sentence_delay = max(
+                    0.0,
+                    silent_duration * self._opts.silence_to_new_sentence_delay_factor
+                    - self._text_data.new_sentence_delayed,
+                )
+            else:
+                new_sentence_delay = self._opts.new_sentence_delay
+
+            self._text_data.new_sentence_delayed += new_sentence_delay
+            await self._sleep_if_not_closed(new_sentence_delay)
 
     def _calc_hyphens(self, text: str) -> list[str]:
         """Calculate hyphens for text."""
