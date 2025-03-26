@@ -4,6 +4,11 @@ from typing import Literal, Union
 import openai
 
 from livekit.agents.llm import ToolChoice
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 from livekit.plugins.openai import LLM as OpenAILLM, STT as OpenAISTT
 
 from .models import LLMModels, STTModels
@@ -14,12 +19,12 @@ class LLM(OpenAILLM):
         self,
         *,
         model: str | LLMModels = "llama-3.3-70b-versatile",
-        api_key: str | None = None,
-        user: str | None = None,
-        temperature: float | None = None,
-        parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-        max_tokens: int | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
         base_url: str | None = "https://api.groq.com/openai/v1",
         client: openai.AsyncClient | None = None,
     ):
@@ -47,11 +52,11 @@ class STT(OpenAISTT):
         self,
         *,
         model: STTModels | str = "whisper-large-v3-turbo",
-        api_key: str | None = None,
-        base_url: str | None = "https://api.groq.com/openai/v1",
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: str = "https://api.groq.com/openai/v1",
         client: openai.AsyncClient | None = None,
         language: str = "en",
-        prompt: str | None = None,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
         detect_language: bool = False,
     ):
         """
@@ -71,10 +76,10 @@ class STT(OpenAISTT):
         )
 
 
-def _get_api_key(key: str | None) -> str:
-    key = key or os.environ.get("GROQ_API_KEY")
-    if not key:
+def _get_api_key(key: NotGivenOr[str]) -> str:
+    groq_api_key = key if is_given(key) else os.environ.get("GROQ_API_KEY")
+    if not groq_api_key:
         raise ValueError(
             "GROQ_API_KEY is required, either as argument or set GROQ_API_KEY environmental variable"  # noqa: E501
         )
-    return key
+    return groq_api_key

@@ -13,6 +13,12 @@ from pyht.client import (
 )
 
 from livekit.agents import APIConnectionError, APIConnectOptions, tokenize, tts, utils
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSModel
@@ -31,8 +37,8 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        user_id: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        user_id: NotGivenOr[str] = NOT_GIVEN,
         voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
         language: str = "english",
         sample_rate: int = 24000,
@@ -64,10 +70,10 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        api_key = api_key or os.environ.get("PLAYHT_API_KEY")
-        user_id = user_id or os.environ.get("PLAYHT_USER_ID")
+        pyht_api_key = api_key if is_given(api_key) else os.environ.get("PLAYHT_API_KEY")
+        pyht_user_id = user_id if is_given(user_id) else os.environ.get("PLAYHT_USER_ID")
 
-        if not api_key or not user_id:
+        if not pyht_api_key or not pyht_user_id:
             raise ValueError(
                 "PlayHT API key and user ID are required. Set environment variables PLAYHT_API_KEY and PLAYHT_USER_ID or pass them explicitly."  # noqa: E501
             )
@@ -87,8 +93,8 @@ class TTS(tts.TTS):
         )
 
         self._client = PlayHTAsyncClient(
-            user_id=user_id,
-            api_key=api_key,
+            user_id=pyht_user_id,
+            api_key=pyht_api_key,
         )
 
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -96,18 +102,18 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: str | None = None,
-        model: TTSModel | str | None = None,
-        language: str | None = None,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModel | str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         **kwargs,
     ) -> None:
         """
         Update the TTS options.
         """
         updates = {}
-        if voice is not None:
+        if is_given(voice):
             updates["voice"] = voice
-        if language is not None:
+        if is_given(language):
             updates["language"] = Language(language)
         updates.update(kwargs)
 
@@ -117,14 +123,14 @@ class TTS(tts.TTS):
             if value is not None:
                 setattr(self._config, key, value)
 
-        if model is not None:
+        if is_given(model):
             self._opts.model = model
 
     def synthesize(
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -133,7 +139,11 @@ class TTS(tts.TTS):
             opts=self._opts,
         )
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
+    def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -150,7 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _Options,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._client = tts._client
@@ -205,7 +215,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         opts: _Options,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._client = tts._client

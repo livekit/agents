@@ -30,7 +30,11 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 from .types import (
@@ -47,18 +51,11 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        transcription_config: TranscriptionConfig = TranscriptionConfig(  # noqa: B008
-            language="en",
-            operating_point="enhanced",
-            enable_partials=True,
-            max_delay=0.7,
-        ),
-        connection_settings: ConnectionSettings = ConnectionSettings(  # noqa: B008
-            url="wss://eu2.rt.speechmatics.com/v2",
-        ),
-        audio_settings: AudioSettings = AudioSettings(),  # noqa: B008
+        transcription_config: NotGivenOr[TranscriptionConfig] = NOT_GIVEN,
+        connection_settings: NotGivenOr[ConnectionSettings] = NOT_GIVEN,
+        audio_settings: NotGivenOr[AudioSettings] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: NotGivenOr[dict] = NOT_GIVEN,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -66,6 +63,20 @@ class STT(stt.STT):
                 interim_results=True,
             ),
         )
+        if not is_given(transcription_config):
+            transcription_config = TranscriptionConfig(  # noqa: B008
+                language="en",
+                operating_point="enhanced",
+                enable_partials=True,
+                max_delay=0.7,
+            )
+        if not is_given(connection_settings):
+            connection_settings = ConnectionSettings(  # noqa: B008
+                url="wss://eu2.rt.speechmatics.com/v2",
+            )
+        if not is_given(audio_settings):
+            audio_settings = AudioSettings()  # noqa: B008
+
         self._transcription_config = transcription_config
         self._audio_settings = audio_settings
         self._connection_settings = connection_settings
@@ -83,18 +94,20 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None,
-        conn_options: APIConnectOptions,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Not implemented")
 
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._audio_settings)
+        if is_given(language):
+            config.language = language
         stream = SpeechStream(
             stt=self,
             transcription_config=self._transcription_config,
@@ -118,14 +131,14 @@ class SpeechStream(stt.SpeechStream):
         connection_settings: ConnectionSettings,
         conn_options: APIConnectOptions,
         http_session: aiohttp.ClientSession,
-        extra_headers: dict | None = None,
+        extra_headers: dict,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=audio_settings.sample_rate)
         self._transcription_config = transcription_config
         self._audio_settings = audio_settings
         self._connection_settings = connection_settings
         self._session = http_session
-        self._extra_headers = extra_headers or {}
+        self._extra_headers = extra_headers
         self._speech_duration: float = 0
 
         self._reconnect_event = asyncio.Event()

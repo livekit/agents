@@ -22,46 +22,51 @@ from dataclasses import dataclass
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 
 @dataclass
 class STTOptions:
-    speech_key: str | None
-    speech_region: str | None
+    speech_key: NotGivenOr[str]
+    speech_region: NotGivenOr[str]
     # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-stt?tabs=container#use-the-container
-    speech_host: str | None
+    speech_host: NotGivenOr[str]
     # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
-    speech_auth_token: str | None
+    speech_auth_token: NotGivenOr[str]
     sample_rate: int
     num_channels: int
-    segmentation_silence_timeout_ms: int | None
-    segmentation_max_time_ms: int | None
-    segmentation_strategy: str | None
+    segmentation_silence_timeout_ms: NotGivenOr[int]
+    segmentation_max_time_ms: NotGivenOr[int]
+    segmentation_strategy: NotGivenOr[str]
     languages: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
-    speech_endpoint: str | None = None
-    profanity: speechsdk.enums.ProfanityOption | None = None
+    speech_endpoint: NotGivenOr[str] = NOT_GIVEN
+    profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
 
 
 class STT(stt.STT):
     def __init__(
         self,
         *,
-        speech_key: str | None = None,
-        speech_region: str | None = None,
-        speech_host: str | None = None,
-        speech_auth_token: str | None = None,
+        speech_key: NotGivenOr[str] = NOT_GIVEN,
+        speech_region: NotGivenOr[str] = NOT_GIVEN,
+        speech_host: NotGivenOr[str] = NOT_GIVEN,
+        speech_auth_token: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 16000,
         num_channels: int = 1,
-        segmentation_silence_timeout_ms: int | None = None,
-        segmentation_max_time_ms: int | None = None,
-        segmentation_strategy: str | None = None,
+        segmentation_silence_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        segmentation_max_time_ms: NotGivenOr[int] = NOT_GIVEN,
+        segmentation_strategy: NotGivenOr[str] = NOT_GIVEN,
         # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
-        languages: list[str] = None,
+        languages: NotGivenOr[list[str]] = NOT_GIVEN,
         # for compatibility with other STT plugins
-        language: str | None = None,
-        profanity: speechsdk.enums.ProfanityOption | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
     ):
         """
         Create a new instance of Azure STT.
@@ -73,22 +78,31 @@ class STT(stt.STT):
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
         """
 
-        if languages is None:
-            languages = ["en-US"]
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
-        speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
-        speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
-        speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
+
+        if not is_given(languages):
+            languages = ["en-US"]
+
+        if is_given(language) and not is_given(languages):
+            languages = [language]
+
+        if not is_given(speech_host):
+            speech_host = os.environ.get("AZURE_SPEECH_HOST")
+
+        if not is_given(speech_key):
+            speech_key = os.environ.get("AZURE_SPEECH_KEY")
+
+        if not is_given(speech_region):
+            speech_region = os.environ.get("AZURE_SPEECH_REGION")
 
         if not (
-            speech_host or (speech_key and speech_region) or (speech_auth_token and speech_region)
+            is_given(speech_host)
+            or (is_given(speech_key) and is_given(speech_region))
+            or (is_given(speech_auth_token) and is_given(speech_region))
         ):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
             )
-
-        if language:
-            languages = [language]
 
         self._config = STTOptions(
             speech_key=speech_key,
@@ -109,7 +123,7 @@ class STT(stt.STT):
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Azure STT does not support single frame recognition")
@@ -117,23 +131,25 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        languages: list[str] | None = None,
-        language: str | None = None,
+        languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = deepcopy(self._config)
-        if language and not languages:
+        if is_given(language) and not is_given(languages):
             languages = [language]
-        if languages:
+        if is_given(languages):
             config.languages = languages
         stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
-    def update_options(self, *, language: str | None = None, languages: list[str] | None = None):
-        if language and not languages:
+    def update_options(
+        self, *, language: NotGivenOr[str] = NOT_GIVEN, languages: NotGivenOr[list[str]] = NOT_GIVEN
+    ):
+        if is_given(language) and not is_given(languages):
             languages = [language]
-        if languages is not None:
+        if is_given(languages):
             self._config.languages = languages
             for stream in self._streams:
                 stream.update_options(languages=languages)
@@ -151,12 +167,9 @@ class SpeechStream(stt.SpeechStream):
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, *, language: str | None = None, languages: list[str] | None = None):
-        if language and not languages:
-            languages = [language]
-        if languages:
-            self._opts.languages = languages
-            self._reconnect_event.set()
+    def update_options(self, *, languages: list[str]):
+        self._opts.languages = languages
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         while True:
@@ -292,11 +305,11 @@ def _create_speech_recognizer(
 ) -> speechsdk.SpeechRecognizer:
     # let the SpeechConfig constructor to validate the arguments
     speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key,
-        region=config.speech_region,
-        endpoint=config.speech_endpoint,
-        host=config.speech_host,
-        auth_token=config.speech_auth_token,
+        subscription=config.speech_key if is_given(config.speech_key) else None,
+        region=config.speech_region if is_given(config.speech_region) else None,
+        endpoint=config.speech_endpoint if is_given(config.speech_endpoint) else None,
+        host=config.speech_host if is_given(config.speech_host) else None,
+        auth_token=config.speech_auth_token if is_given(config.speech_auth_token) else None,
     )
 
     if config.segmentation_silence_timeout_ms:
@@ -314,7 +327,7 @@ def _create_speech_recognizer(
             speechsdk.enums.PropertyId.Speech_SegmentationStrategy,
             str(config.segmentation_strategy),
         )
-    if config.profanity is not None:
+    if is_given(config.profanity):
         speech_config.set_profanity(config.profanity)
 
     auto_detect_source_language_config = None
