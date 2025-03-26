@@ -140,10 +140,18 @@ class SpeechStream(stt.SpeechStream):
             stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
         )
         self._opts = opts
-        self._client = stt._get_client()
+        self._stt = stt
+        self._client = None
+
+    async def _initialize_client(self):
+        if self._client is None:
+            self._client = self._stt._get_client()
+        return self._client
 
     async def _run(self) -> None:
-        stream = await self._client.start_stream_transcription(
+        client = await self._initialize_client()
+
+        stream = await client.start_stream_transcription(
             language_code=self._opts.language,
             media_sample_rate_hz=self._opts.sample_rate,
             media_encoding=self._opts.encoding,
