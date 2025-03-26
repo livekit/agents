@@ -67,7 +67,7 @@ class _TextOutput(io.TextOutput):
 
 class _AudioOutput(io.AudioOutput):
     def __init__(self, cli: ChatCLI) -> None:
-        super().__init__(sample_rate=24000)
+        super().__init__(next_in_chain=None, sample_rate=24000)
         self._cli = cli
         self._capturing = False
         self._pushed_duration: float = 0.0
