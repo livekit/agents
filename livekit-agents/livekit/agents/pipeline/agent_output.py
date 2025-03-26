@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, AsyncIterable, Awaitable, Callable, Union
 import re
+from typing import Any, AsyncIterable, Awaitable, Callable, Union
 
 from app_config import AppConfig
 from livekit import rtc
 
-from .. import llm, tokenize, utils
+from .. import llm, tokenize
 from .. import transcription as agent_transcription
 from .. import tts as text_to_speech
+from .. import utils
 from .agent_playout import AgentPlayout, PlayoutHandle
 from .log import logger
 
@@ -147,6 +148,7 @@ class AgentOutput:
         logger.info("sentence_tokenizer: %s", sentence_tokenizer)
         logger.info("word_tokenizer: %s", word_tokenizer)
         logger.info("hyphenate_word: %s", hyphenate_word)
+
         def _before_forward(
             fwd: agent_transcription.TTSSegmentsForwarder,
             rtc_transcription: rtc.Transcription,
@@ -199,6 +201,7 @@ class AgentOutput:
         if isinstance(tts_source, str):
             # wrap in async iterator
             logger.info(f"wrapping tts_source in async iterator: {tts_source}")
+
             async def string_to_stream(text: str):
                 yield text
 
@@ -279,13 +282,20 @@ class AgentOutput:
 
                 logger.info(f"pushing text: {seg}")
                 tts_stream.push_text(seg)
-                
+
                 buffer += seg
-                
-                #Don't flush if we have decimal point at the end of $XXXX
-                potential_incomplete_currency = re.search(r'\$[\d,]+\.?$|\$\d*$', buffer)
-                
-                if re.search(r'[.!?](?!\d)', buffer) and not potential_incomplete_currency:
+
+                # Inside your loop where you decide to flush:
+                skip_flush_pattern = re.compile(
+                    r"(?:\$[\d,]+\.?\d*%?$|\d+\.\d*%?$)"  # optional dollar sign + decimal + optional % OR just decimal + optional %
+                )
+
+                potential_incomplete_number = skip_flush_pattern.search(buffer)
+
+                if (
+                    re.search(r"[.!?](?!\d)", buffer)
+                    and not potential_incomplete_number
+                ):
                     logger.info(f"flushing tts stream with buffer: {buffer}")
                     tts_stream.flush()
                     buffer = ""
