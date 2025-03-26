@@ -440,21 +440,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                         continue
 
-                    if "Por favor diga español" in input:
-                        logger.info("Language switch consent phrase detected")
-                        self._tts.update_options(language="es", voice=Voice(
-                            id="rSN2pfww1n99eCOaf6XX",
-                            name="Ana",
-                            category="cloned",
-                            settings=VoiceSettings(
-                                stability=0.8,
-                                similarity_boost=0.8,
-                                style=0.0,
-                                use_speaker_boost=True,
-                                speed=1.05,
-                            ),
-                        ))
-
                     if not input.strip():
                         continue
 
