@@ -350,7 +350,11 @@ class _SyncedAudioOutput(io.AudioOutput):
         super().flush()
         self._next_in_chain.flush()
 
-        if not self._synchronizer.enabled or not self._capturing:
+        if not self._synchronizer.enabled:
+            return
+
+        if not self._capturing:
+            self._synchronizer.rotate_segment()
             return
 
         self._capturing = False
@@ -358,6 +362,10 @@ class _SyncedAudioOutput(io.AudioOutput):
 
     def clear_buffer(self) -> None:
         super().clear_buffer()
+
+        if not self._capturing:
+            self._synchronizer.rotate_segment()
+
         self._next_in_chain.clear_buffer()
         self._capturing = False
 
