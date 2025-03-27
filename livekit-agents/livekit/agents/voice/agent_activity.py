@@ -17,14 +17,14 @@ from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks
 from .events import (
+    AgentStartedSpeakingEvent,
+    AgentStoppedSpeakingEvent,
     ConversationItemAddedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStartedSpeakingEvent,
     UserStoppedSpeakingEvent,
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
 )
 from .generation import (
     _AudioOutput,

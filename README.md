@@ -11,128 +11,199 @@
 <br /><br />
 Looking for the JS/TS library? Check out [AgentsJS](https://github.com/livekit/agents-js)
 
-## ✨ NEW ✨
+## ✨ 1.0 release ✨
 
-### In-house phrase endpointing model
-
-We’ve trained a new, open weights phrase endpointing model that significantly improves end-of-turn detection and conversational flow between voice agents and users by reducing agent interruptions. Optimized to run on CPUs, it’s available via [livekit-plugins-turn-detector](https://pypi.org/project/livekit-plugins-turn-detector/) package.
+This README reflects the upcoming 1.0 release. For documentation on the current 0.x release, see the [0.x branch](https://github.com/livekit/agents/tree/0.x)
 
 ## What is Agents?
 
 <!--BEGIN_DESCRIPTION-->
 
-The **Agents framework** enables you to build AI-driven server programs that can see, hear, and speak in realtime. It offers a fully open-source platform for creating realtime, agentic applications.
+The **Agents framework** enables you to build voice AI agents that can see, hear, and speak in realtime. It provides a fully open-source platform for creating server-side agentic applications.
 
 <!--END_DESCRIPTION-->
 
 ## Features
 
-- **Flexible integrations**: A comprehensive ecosystem to mix and match the right models for each use case.
-- **AI voice agents**: `VoicePipelineAgent` and `MultimodalAgent` help orchestrate the conversation flow using LLMs and other AI models.
+- **Flexible integrations**: A comprehensive ecosystem to mix and match the right STT, LLM, TTS, and Realtime API to suit your use case.
 - **Integrated job scheduling**: Built-in task scheduling and distribution with [dispatch APIs](https://docs.livekit.io/agents/build/dispatch/) to connect end users to agents.
-- **Realtime media transport**: Stream audio, video, and data over WebRTC and SIP with client SDKs for most platforms.
+- **Extensive WebRTC clients**: Build client applications using LiveKit's open-source SDK ecosystem, supporting nearly all major platforms.
 - **Telephony integration**: Works seamlessly with LiveKit's [telephony stack](https://docs.livekit.io/sip/), allowing your agent to make calls to or receive calls from phones.
 - **Exchange data with clients**: Use [RPCs](https://docs.livekit.io/home/client/data/rpc/) and other [Data APIs](https://docs.livekit.io/home/client/data/) to seamlessly exchange data with clients.
 - **Open-source**: Fully open-source, allowing you to run the entire stack on your own servers, including [LiveKit server](https://github.com/livekit/livekit), one of the most widely used WebRTC media servers.
 
 ## Installation
 
-To install the core Agents library:
+To install the core Agents library, along with plugins for popular model providers:
 
 ```bash
-pip install livekit-agents
+pip install livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0rc
 ```
 
-## Integrations
+## Docs and guides
 
-The framework includes a variety of plugins that make it easy to process streaming input or generate output. For example, there are plugins for converting text-to-speech or running inference with popular LLMs. Here's how you can install a plugin:
+Documentation on the framework and how to use it can be found [here](https://docs.livekit.io/agents/v1/)
 
-```bash
-pip install livekit-plugins-openai
+## Core concepts
+
+- Agent: An LLM-based application with defined instructions.
+- AgentSession: A container for agents that manages interactions with end users.
+- entrypoint: The starting point for an interactive session, similar to a request handler in a web server.
+
+## Usage examples
+
+### Simple voice agent
+
+---
+
+```python
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    RunContext,
+    WorkerOptions,
+    cli,
+    function_tool,
+)
+from livekit.plugins import deepgram, openai, silero
+
+@function_tool
+async def lookup_weather(
+    context: RunContext,
+    location: str,
+):
+    """Used to look up weather information."""
+
+    return {"weather": "sunny", "temperature": 70}
+
+
+async def entrypoint(ctx: JobContext):
+    await ctx.connect()
+
+    agent = Agent(
+        instructions="You are a friendly voice assistant built by LiveKit.",
+        tools=[lookup_weather],
+    )
+    session = AgentSession(
+        vad=silero.VAD.load(),
+        # any combination of STT, LLM, TTS, or realtime API can be used
+        stt=deepgram.STT(model="nova-3"),
+        llm=openai.LLM(model="gpt-4o-mini"),
+        tts=openai.TTS(voice="ash"),
+    )
+
+    await session.start(agent=agent, room=ctx.room)
+    await session.generate_reply(instructions="greet the user and ask about their day")
+
+
+if __name__ == "__main__":
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
 ```
 
-### Realtime API
+You'll need the following environment variables for this example:
 
-We've partnered with OpenAI on a new `MultimodalAgent` API in the Agents framework. This class completely wraps OpenAI’s Realtime API, abstracts away the raw wire protocol, and provide an ultra-low latency WebRTC transport between GPT-4o and your users’ devices. This same stack powers Advanced Voice in the ChatGPT app.
+- LIVEKIT_URL
+- LIVEKIT_API_KEY
+- LIVEKIT_API_SECRET
+- DEEPGRAM_API_KEY
+- OPENAI_API_KEY
 
-- Try the Realtime API in our [playground](https://playground.livekit.io/) [[code](https://github.com/livekit-examples/realtime-playground)]
-- Check out our [guide](https://docs.livekit.io/agents/openai) to building your first app with this new API
+### Multi-agent handoff
 
-### LLM
+---
 
-| Provider        | Package                   | Usage                                                                                                                             |
-| --------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| OpenAI          | livekit-plugins-openai    | [openai.LLM()](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.LLM)                       |
-| Azure OpenAI    | livekit-plugins-openai    | [openai.LLM.with_azure()](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.LLM.with_azure) |
-| Anthropic       | livekit-plugins-anthropic | [anthropic.LLM()](https://docs.livekit.io/python/livekit/plugins/anthropic/index.html#livekit.plugins.anthropic.LLM)              |
-| Google (Gemini) | livekit-plugins-openai    | [openai.LLM.with_vertex()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_vertex)         |
-| Cerebras        | livekit-plugins-openai    | [openai.LLM.with_cerebras()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_cerebras)     |
-| DeepSeek        | livekit-plugins-openai    | [openai.LLM.with_deepseek()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_deepseek)     |
-| Groq            | livekit-plugins-openai    | [openai.LLM.with_groq()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_groq)             |
-| Ollama          | livekit-plugins-openai    | [openai.LLM.with_ollama()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_ollama)         |
-| Perplexity      | livekit-plugins-openai    | [openai.LLM.with_perplexity()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_perplexity) |
-| Together.ai     | livekit-plugins-openai    | [openai.LLM.with_together()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_together)     |
-| X.ai (Grok)     | livekit-plugins-openai    | [openai.LLM.with_x_ai()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.LLM.with_x_ai)             |
+This code snippet is abbreviated. For the full example, see [multi-agent.py](examples/voice-agents/multi-agent.py)
 
-### STT
+```python
+...
+class IntroAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions=f"You are a story teller. Your goal is to gather a few pieces of information from the user to make the story personalized and engaging."
+            "Ask the user for their name and where they are from"
+        )
 
-| Provider         | Package                    | Streaming | Usage                                                                                                                   |
-| ---------------- | -------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Azure            | livekit-plugins-azure      | ✅        | [azure.STT()](https://docs.livekit.io/python/livekit/plugins/azure/index.html#livekit.plugins.azure.STT)                |
-| Deepgram         | livekit-plugins-deepgram   | ✅        | [deepgram.STT()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.STT)       |
-| OpenAI (Whisper) | livekit-plugins-openai     |           | [openai.STT()](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.STT)             |
-| Google           | livekit-plugins-google     | ✅        | [google.STT()](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.STT)             |
-| AssemblyAI       | livekit-plugins-assemblyai | ✅         | [assemblyai.STT()](https://docs.livekit.io/python/livekit/plugins/assemblyai/index.html#livekit.plugins.assemblyai.STT) |
-| Groq (Whisper)   | livekit-plugins-openai     |           | [openai.STT.with_groq()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.STT.with_groq)   |
-| FAL (Whizper)    | livekit-plugins-fal        |           | [fal.STT()](https://docs.livekit.io/python/livekit/plugins/fal/index.html#livekit.plugins.fal.STT)                      |
+    async def on_enter(self):
+        self.session.generate_reply(instructions="greet the user and gather information")
 
-### TTS
+    @function_tool
+    async def information_gathered(
+        self,
+        context: RunContext,
+        name: str,
+        location: str,
+    ):
+        """Called when the user has provided the information needed to make the story personalized and engaging.
 
-| Provider     | Package                    | Streaming | Voice Cloning | Usage                                                                                                                   |
-| ------------ | -------------------------- | --------- | ------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Cartesia     | livekit-plugins-cartesia   | ✅        | ✅            | [cartesia.TTS()](https://docs.livekit.io/python/livekit/plugins/cartesia/index.html#livekit.plugins.cartesia.TTS)       |
-| ElevenLabs   | livekit-plugins-elevenlabs | ✅        | ✅            | [elevenlabs.TTS()](https://docs.livekit.io/python/livekit/plugins/elevenlabs/index.html#livekit.plugins.elevenlabs.TTS) |
-| OpenAI       | livekit-plugins-openai     |           |               | [openai.TTS()](https://docs.livekit.io/python/livekit/plugins/openai/index.html#livekit.plugins.openai.TTS)             |
-| Azure OpenAI | livekit-plugins-openai     |           |               | [openai.TTS.with_azure()](https://docs.livekit.io/python/livekit/plugins/openai/#livekit.plugins.openai.TTS.with_azure) |
-| Google       | livekit-plugins-google     | ✅        | ✅            | [google.TTS()](https://docs.livekit.io/python/livekit/plugins/google/index.html#livekit.plugins.google.TTS)             |
-| Deepgram     | livekit-plugins-deepgram   | ✅        |               | [deepgram.TTS()](https://docs.livekit.io/python/livekit/plugins/deepgram/index.html#livekit.plugins.deepgram.TTS)       |
-| Play.ai      | livekit-plugins-playai     | ✅        | ✅            | [playai.TTS()](https://docs.livekit.io/python/livekit/plugins/playai/index.html#livekit.plugins.playai.TTS)             |
-| Rime         | livekit-plugins-rime       | ✅        |               | [rime.TTS()](https://docs.livekit.io/python/livekit/plugins/rime/index.html#livekit.plugins.rime.TTS)                   |
-| Neuphonic    | livekit-plugins-neuphonic  | ✅        | ✅            | neuphonic.TTS()                                                                                                         |
-| AWS Polly    | livekit-plugins-aws        | ✅        |               | [aws.TTS()](https://docs.livekit.io/python/livekit/plugins/aws/index.html#livekit.plugins.aws.TTS)                      |
+        Args:
+            name: The name of the user
+            location: The location of the user
+        """
 
-### Other plugins
+        context.userdata.name = name
+        context.userdata.location = location
 
-| Plugin                        | Description                         |
-| ----------------------------- | ----------------------------------- |
-| livekit-plugins-rag           | Annoy based simple RAG              |
-| livekit-plugins-llama-index   | RAG with LlamaIndex                 |
-| livekit-plugins-nltk          | Utilities for working with text     |
-| livekit-plugins-vad           | Voice activity detection            |
-| livekit-plugins-turn-detector | Conversational turn detection model |
+        story_agent = StoryAgent(name, location)
+        return story_agent, "Let's start the story!"
 
-## Documentation and guides
 
-Documentation on the framework and how to use it can be found [here](https://docs.livekit.io/agents)
+class StoryAgent(Agent):
+    def __init__(self, name: str, location: str) -> None:
+        super().__init__(
+            instructions=f"You are a storyteller. Use the user's information in order to make the story personalized."
+            f"The user's name is {name}, from {location}"
+            # override the default model, switching to Realtime API from standard LLMs
+            llm=openai.realtime.RealtimeModel(voice="echo"),
+            chat_ctx=chat_ctx,
+        )
 
-## Example agents
+    async def on_enter(self):
+        self.session.generate_reply()
 
-| Description                                                           | Demo Link                                      | Code Link                                                                                                     |
-| --------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| A basic voice agent using a pipeline of STT, LLM, and TTS             | [demo](https://kitt.livekit.io)                | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/minimal_assistant.py)        |
-| Voice agent using the new OpenAI Realtime API                         | [demo](https://playground.livekit.io)          | [code](https://github.com/livekit-examples/realtime-playground)                                               |
-| Super fast voice agent using Cerebras hosted Llama 3.1                | [demo](https://cerebras.vercel.app)            | [code](https://github.com/dsa/fast-voice-assistant/)                                                          |
-| Voice agent using Cartesia's Sonic model                              | [demo](https://cartesia-assistant.vercel.app/) | [code](https://github.com/livekit-examples/cartesia-voice-agent)                                              |
-| Agent that looks up the current weather via function call             | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/function_calling_weather.py) |
-| Voice Agent using Gemini 2.0 Flash                                    | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/gemini_voice_agent.py)       |
-| Voice agent with custom turn-detection model                          | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/voice-pipeline-agent/turn_detector.py)            |
-| Voice agent that performs a RAG-based lookup                          | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/voice-pipeline-agent/simple-rag)                  |
-| Simple agent that echos back the last utterance                       | N/A                                            | [code](https://github.com/livekit/agents/blob/main/examples/echo-agent.py)                                    |
-| Video agent that publishes a stream of RGB frames                     | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/simple-color)                                     |
-| Transcription agent that generates text captions from a user's speech | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/speech-to-text)                                   |
-| A chat agent you can text who will respond back with generated speech | N/A                                            | [code](https://github.com/livekit/agents/tree/main/examples/text-to-speech)                                   |
-| Localhost multi-agent conference call                                 | N/A                                            | [code](https://github.com/dsa/multi-agent-meeting)                                                            |
-| Moderation agent that uses Hive to detect spam/abusive video          | N/A                                            | [code](https://github.com/dsa/livekit-agents/tree/main/hive-moderation-agent)                                 |
+
+async def entrypoint(ctx: JobContext):
+    await ctx.connect()
+
+    userdata = StoryData()
+    session = AgentSession[StoryData](
+        vad=silero.VAD.load(),
+        stt=deepgram.STT(model="nova-3"),
+        llm=openai.LLM(model="gpt-4o-mini"),
+        tts=openai.TTS(voice="echo"),
+        userdata=userdata,
+    )
+
+    await session.start(
+        agent=IntroAgent(),
+        room=ctx.room,
+    )
+...
+```
+
+### Additional examples
+
+---
+
+We've built additional [examples](examples/) including:
+
+- [multi-user agent with push to talk](examples/voice_agents/push_to_talk.py)
+- [using parallel function calls](examples/voice_agents/parallel_function_calls.py)
+- [restaurant ordering and reservations](examples/full_examples/restaurant_agent/)
+- [avatar integration](examples/avatar/)
+- [simple video publisher](examples/other/simple-color/)
+
+## Running your agent
+
+```shell
+python myagent.py dev
+```
+
+This starts the agent server, and your agent will wait for user connections.
+Each process can efficiently host multiple concurrent agents.
+
+You can connect to your agent using any app built with LiveKit's client SDKs or telephony integration.
+Alternatively, use the [Agents Playground](https://agents-playground.livekit.io/) to test your agents.
 
 ## Contributing
 

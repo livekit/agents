@@ -18,17 +18,19 @@ from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero, turn_detector
 
-# uncomment to enable Krisp background voice/noise cancellation, currently supported on Linux and MacOS
+# uncomment to enable Krisp background voice/noise cancellation
+# currently supported on Linux and MacOS
 # from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")
 
 load_dotenv()
 
+
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions=f"Your name is Jenna. You would interact with users via voice."
+            instructions="Your name is Jenna. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
             "You are curious and friendly, and have a sense of humor.",
         )
@@ -38,15 +40,19 @@ class MyAgent(Agent):
         # according to its instructions
         self.session.generate_reply(instructions="greet the user and ask about their day")
 
-    # all functions annotated with @function_tool will be passed to the LLM when this agent is active
+    # all functions annotated with @function_tool will be passed to the LLM when this
+    # agent is active
     @function_tool
-    async def lookup_weather(self, context: RunContext,
-                                   location: str,
-                                   latitude: str,
-                                   longitude: str,
-                                   ):
+    async def lookup_weather(
+        self,
+        context: RunContext,
+        location: str,
+        latitude: str,
+        longitude: str,
+    ):
         """Called when the user asks for weather related information.
-        When given a location, please estimate the latitude and longitude of the location and do not ask the user for them.
+        When given a location, please estimate the latitude and longitude of the location and
+        do not ask the user for them.
 
         Args:
             location: The location they are asking for
@@ -61,6 +67,7 @@ class MyAgent(Agent):
             "temperature": 70,
             "location": location,
         }
+
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -95,7 +102,7 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(log_usage)
 
     # wait for a participant to join the room
-    participant = await ctx.wait_for_participant()
+    await ctx.wait_for_participant()
 
     await session.start(
         agent=MyAgent(),

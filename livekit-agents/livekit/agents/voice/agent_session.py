@@ -22,8 +22,6 @@ from .events import (
     AgentEvent,
     AgentStateChangedEvent,
     EventTypes,
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
 )
 from .speech_handle import SpeechHandle
 
