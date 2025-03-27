@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.12.2
+
+### Patch Changes
+
+- fix: openai stt error when using detect language - [#1755](https://github.com/livekit/agents/pull/1755) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.12.1
 
 ### Patch Changes
