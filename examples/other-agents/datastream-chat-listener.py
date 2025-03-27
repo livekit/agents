@@ -142,7 +142,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 2:
-        print("Usage: python ds_chat_test.py <room-name>")
+        print("Usage: python datastream-chat-listener.py <room-name>")
         sys.exit(1)
 
     room_name = sys.argv[1]
