@@ -935,7 +935,7 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.items.extend(_tools_messages)
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*tasks, exe_task)
+            await utils.aio.cancel_and_wait(*tasks)
 
             # if the audio playout was enabled, clear the buffer
             if audio_output is not None:
@@ -960,6 +960,8 @@ class AgentActivity(RecognitionHooks):
                     "conversation_item_added", ConversationItemAddedEvent(message=msg)
                 )
 
+            speech_handle._mark_playout_done()
+            await utils.aio.cancel_and_wait(exe_task)
             return
 
         if text_out.text:
@@ -1059,6 +1061,10 @@ class AgentActivity(RecognitionHooks):
         _SpeechHandleContextVar.set(speech_handle)  # not needed, but here for completeness
 
         assert self._rt_session is not None, "rt_session is not available"
+
+        await speech_handle.wait_if_not_interrupted(
+            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
+        )
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
@@ -1180,7 +1186,7 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state(AgentState.LISTENING)
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*tasks, exe_task)
+            await utils.aio.cancel_and_wait(*tasks)
 
             if audio_output is not None:
                 audio_output.clear_buffer()
@@ -1192,6 +1198,9 @@ class AgentActivity(RecognitionHooks):
                     speech_id=speech_handle.id,
                 )
                 self._session._update_agent_state(AgentState.LISTENING)
+
+            speech_handle._mark_playout_done()
+            await utils.aio.cancel_and_wait(exe_task)
 
             # TODO(theomonnom): truncate message (+ OAI serverside mesage)
 
