@@ -221,7 +221,6 @@ class STT(stt.STT):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         prompt = self._opts.prompt if is_given(self._opts.prompt) else ""
-        language = self._opts.language if is_given(self._opts.language) else ""
         realtime_config: dict[str, Any] = {
             "type": "transcription_session.update",
             "session": {
@@ -229,16 +228,19 @@ class STT(stt.STT):
                 "input_audio_transcription": {
                     "model": self._opts.model,
                     "prompt": prompt,
-                    "language": language,
                 },
                 "turn_detection": self._opts.turn_detection,
             },
         }
+        if self._opts.language:
+            realtime_config["session"]["input_audio_transcription"]["language"] = (
+                self._opts.language
+            )
 
         if self._opts.noise_reduction_type:
-            realtime_config["session"]["input_audio_transcription"]["noise_reduction_type"] = (
-                self._opts.noise_reduction_type
-            )
+            realtime_config["session"]["input_audio_noise_reduction"] = {
+                "type": self._opts.noise_reduction_type
+            }
 
         query_params: dict[str, str] = {
             "intent": "transcription",
