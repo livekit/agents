@@ -4,8 +4,6 @@ from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import AgentTask, RunContext, VoiceAgent
-from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("parallel-functions")
@@ -34,21 +32,17 @@ class MyAgent(Agent):
         return "The weather is rainy tomorrow."
 
 
-
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     agent = AgentSession(
-        agent=MyAgent(),
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=cartesia.TTS(),
     )
 
     await ctx.wait_for_participant()
-    await agent.start(
-        room=ctx.room,
-    )
+    await agent.start(agent=MyAgent(), room=ctx.room)
 
 
 if __name__ == "__main__":

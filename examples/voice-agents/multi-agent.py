@@ -1,18 +1,20 @@
 import logging
 from dataclasses import dataclass
-from dotenv import load_dotenv
 from typing import Optional
+
+from dotenv import load_dotenv
+
 from livekit import api
 from livekit.agents import (
     Agent,
     AgentSession,
+    ChatContext,
     JobContext,
     JobProcess,
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
     WorkerOptions,
-    ChatContext,
     cli,
     metrics,
 )
@@ -32,15 +34,20 @@ logger = logging.getLogger("multi-agent")
 
 load_dotenv()
 
-common_instructions = "Your name is Echo. You are a story teller that interacts with the user via voice."
+common_instructions = (
+    "Your name is Echo. You are a story teller that interacts with the user via voice."
+)
 "You are curious and friendly, with a sense of humor."
+
 
 @dataclass
 class StoryData:
     """Shared data that's used by the storyteller agent. This structure is passed between agents in function calls' RunContext."""
+
     name: Optional[str] = None
     location: Optional[str] = None
     fun_activity: Optional[str] = None
+
 
 class IntroAgent(Agent):
     def __init__(self) -> None:
@@ -56,11 +63,13 @@ class IntroAgent(Agent):
         self.session.generate_reply()
 
     @function_tool
-    async def information_gathered(self, context: RunContext[StoryData],
-                                   name: str,
-                                   location: str,
-                                   fun_activity: str,
-                                   ):
+    async def information_gathered(
+        self,
+        context: RunContext[StoryData],
+        name: str,
+        location: str,
+        fun_activity: str,
+    ):
         """Called when the user has provided the information needed to make the story personalized and engaging.
 
         Args:
@@ -106,7 +115,9 @@ class StoryAgent(Agent):
 
         # generate a goodbye message and hang up
         # awaiting it will ensure the message is played out before returning
-        await self.session.generate_reply(instructions=f"say goodbye to {context.userdata.name}", allow_interruptions=False)
+        await self.session.generate_reply(
+            instructions=f"say goodbye to {context.userdata.name}", allow_interruptions=False
+        )
 
         job_ctx = get_current_job_context()
         lkapi = job_ctx.api
@@ -120,12 +131,14 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
+    userdata = StoryData()
     session = AgentSession[StoryData](
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(model="nova-3"),
         tts=openai.TTS(voice="echo"),
+        userdata=userdata,
     )
 
     # log metrics as they are emitted, and total usage after session is over

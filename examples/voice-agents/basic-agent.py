@@ -1,8 +1,7 @@
 import logging
-from dataclasses import dataclass
+
 from dotenv import load_dotenv
-from typing import Optional
-from livekit import api
+
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -15,10 +14,9 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit.agents.job import get_current_job_context
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import cartesia, deepgram, openai, silero, turn_detector
+from livekit.plugins import deepgram, openai, silero, turn_detector
 
 # uncomment to enable Krisp background voice/noise cancellation, currently supported on Linux and MacOS
 # from livekit.plugins import noise_cancellation
