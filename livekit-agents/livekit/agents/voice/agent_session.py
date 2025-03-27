@@ -4,7 +4,7 @@ import asyncio
 import copy
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar, Union, Any, Callable, Optional
+from typing import Generic, Literal, TypeVar, Union, Any, Callable
 
 from livekit import rtc
 
@@ -55,9 +55,8 @@ class UnrecoverableErrorInfo:
     component: str  # "llm", "stt", "tts", "vad", etc.
     component_instance: Any  # The actual instance that failed
     error: Exception  # The original exception
-    status_code: Optional[int] = None  # Status code if available
-    retries_attempted: int = 0  # How many retries were attempted
-    request_id: Optional[str] = None  # Request ID if available
+    status_code: int | None = None  # Status code if available
+    request_id: str | None = None  # Request ID if available
     recoverable: bool = False  # Whether the error was considered recoverable
     
     @property
@@ -457,44 +456,35 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     
     def _setup_error_handlers(self) -> None:
         """Set up error handlers for components."""
-        # Set up LLM error handling
+
         if self._llm is not None:
-            # Check if it's a fallback adapter with availability events
-            if hasattr(self._llm, "on") and hasattr(self._llm, "emit"):
-                # Listen for availability changed events if available
-                @self._llm.on("llm_availability_changed")
-                def _on_llm_availability_changed(event):
-                    if not event.available:
-                        # The LLM became unavailable, potentially after retries
-                        self._handle_component_error(
-                            component="llm",
-                            component_instance=event.llm,
-                            error=Exception("LLM became unavailable"),
-                            retries_attempted=0  # We don't know how many retries in this case
-                        )
+            @self._llm.on("custom_error")
+            def _on_llm_availability_changed(event):
+                logger.info(" +++++++ LLM error event received")
+                self._handle_component_error(
+                    component="llm",
+                    component_instance=event.llm,
+                    error=event.exception
+                )
         
-        # Similar for STT
-        if self._stt is not None and hasattr(self._stt, "on") and hasattr(self._stt, "emit"):
+        if self._stt is not None:
             @self._stt.on("stt_availability_changed")
             def _on_stt_availability_changed(event):
                 if not event.available:
                     self._handle_component_error(
                         component="stt",
                         component_instance=event.stt,
-                        error=Exception("STT became unavailable"),
-                        retries_attempted=0
+                        error=Exception("STT became unavailable")
                     )
-        
-        # Similar for TTS
-        if self._tts is not None and hasattr(self._tts, "on") and hasattr(self._tts, "emit"):
+
+        if self._tts is not None:
             @self._tts.on("tts_availability_changed")
             def _on_tts_availability_changed(event):
                 if not event.available:
                     self._handle_component_error(
                         component="tts",
                         component_instance=event.tts,
-                        error=Exception("TTS became unavailable"),
-                        retries_attempted=0
+                        error=Exception("TTS became unavailable")
                     )
     
     def _handle_component_error(
@@ -502,29 +492,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         component: str,
         component_instance: Any,
         error: Exception,
-        retries_attempted: int = 0,
-        status_code: Optional[int] = None,
-        request_id: Optional[str] = None,
+        status_code: int | None = None,
+        request_id: str | None = None,
         recoverable: bool = False
     ) -> None:
-        """Handle an unrecoverable error from a component.
-        
-        Args:
-            component: Component type (e.g., "llm", "stt", "tts")
-            component_instance: The actual instance that failed
-            error: The exception that caused the failure
-            retries_attempted: Number of retries attempted
-            status_code: HTTP status code if applicable
-            request_id: Request ID if applicable
-            recoverable: Whether this error was technically recoverable
-        """
-        # Create the error info object
+
         error_info = UnrecoverableErrorInfo(
             component=component,
             component_instance=component_instance,
             error=error,
             status_code=status_code,
-            retries_attempted=retries_attempted,
             request_id=request_id,
             recoverable=recoverable
         )
@@ -536,17 +513,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._error_callback is not None:
             try:
                 result = self._error_callback(error_info)
-                
-                # Take action based on the callback result
                 if result == "end_session":
                     logger.info(f"Ending session due to unrecoverable error in {component}")
-                    self.end()
+                    asyncio.create_task(self.aclose())
                 else:
                     logger.info(f"Continuing session despite unrecoverable error in {component}")
             except Exception as e:
                 logger.exception(f"Error in unrecoverable error callback: {e}")
                 # If the callback raises an exception, end the session as a precaution
-                self.end()
+                asyncio.create_task(self.aclose())
     
     def _emit_error_metrics(self, component: str, error: Exception, recoverable: bool) -> None:
         """Emit metrics about an error that occurred."""
@@ -572,8 +547,3 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # Emit TTS error metrics
             pass
     
-    def end(self) -> None:
-        """End the session."""
-        # Implement session termination logic here
-        if hasattr(self, "_activity") and self._activity is not None:
-            asyncio.create_task(self._activity.cleanup())

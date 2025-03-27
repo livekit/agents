@@ -29,13 +29,18 @@ class MyTask(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
+    def unrecoverable_error_callback(error_info):
+        logger.info(f"++++++ Unrecoverable error: {error_info.message}")
+        ## do 
+        return "end_session"
+
     session = AgentSession(
         # llm=openai.realtime.RealtimeModel(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
-        unrecoverable_error_callback=lambda error_info: "end_session",
+        unrecoverable_error_callback=unrecoverable_error_callback,
     )
     await session.start(agent=MyTask(), room=ctx.room)
 

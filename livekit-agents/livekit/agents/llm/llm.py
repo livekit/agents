@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
@@ -54,6 +55,14 @@ class ChatChunk(BaseModel):
 
 
 TEvent = TypeVar("TEvent")
+
+
+
+
+@dataclass
+class Bust:
+    llm: LLM
+    exception: Exception
 
 
 class LLM(
@@ -129,9 +138,11 @@ class LLMStream(ABC):
                 if self._conn_options.max_retry == 0 or not e.retryable:
                     raise
                 elif i == self._conn_options.max_retry:
+                    self._llm.emit("custom_error", Bust(self._llm, e))
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
+                    
                 else:
                     logger.warning(
                         f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
