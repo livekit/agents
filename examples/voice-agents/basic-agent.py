@@ -25,10 +25,11 @@ logger = logging.getLogger("basic-agent")
 
 load_dotenv()
 
+
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions=f"Your name is Jenna. You would interact with users via voice."
+            instructions="Your name is Jenna. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
             "You are curious and friendly, and have a sense of humor.",
         )
@@ -40,11 +41,13 @@ class MyAgent(Agent):
 
     # all functions annotated with @function_tool will be passed to the LLM when this agent is active
     @function_tool
-    async def lookup_weather(self, context: RunContext,
-                                   location: str,
-                                   latitude: str,
-                                   longitude: str,
-                                   ):
+    async def lookup_weather(
+        self,
+        context: RunContext,
+        location: str,
+        latitude: str,
+        longitude: str,
+    ):
         """Called when the user asks for weather related information.
         When given a location, please estimate the latitude and longitude of the location and do not ask the user for them.
 
@@ -61,6 +64,7 @@ class MyAgent(Agent):
             "temperature": 70,
             "location": location,
         }
+
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
