@@ -36,9 +36,7 @@ class EOUPlugin(Plugin):
             _download_from_hf_hub(
                 HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=revision
             )
-
-            if model_type == "multilingual":
-                _download_from_hf_hub(HG_MODEL, "languages.json", revision=revision)
+            _download_from_hf_hub(HG_MODEL, "languages.json", revision=revision)
 
 
 Plugin.register_plugin(EOUPlugin())

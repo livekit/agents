@@ -13,7 +13,7 @@ from .log import logger
 
 HG_MODEL = "livekit/turn-detector"
 ONNX_FILENAME = "model_q8.onnx"
-MODEL_REVISIONS = {"en": "v1.2.1", "multilingual": "v0.1.0-intl"}
+MODEL_REVISIONS = {"en": "v1.2.2-en", "multilingual": "v0.1.0-intl"}
 MAX_HISTORY_TOKENS = 512
 MAX_HISTORY_TURNS = 6
 
@@ -136,21 +136,24 @@ class _EUORunnerMultilingual(_EUORunnerBase):
 class EOUModel:
     def __init__(
         self,
-        multilingual: bool = False,  # default to smaller, english-only model
+        model_type: str = "en",  # default to smaller, english-only model
         inference_executor: InferenceExecutor | None = None,
-        unlikely_threshold: float = 0.0289,
     ) -> None:
-        self._multilingual = multilingual
+        self._model_type = model_type
         self._executor = (
             inference_executor or get_current_job_context().inference_executor
         )
 
-        if self._multilingual:
-            self._inference_method = _EUORunnerMultilingual.INFERENCE_METHOD
-            self._languages = _load_languages(MODEL_REVISIONS["multilingual"])
-        else:
-            self._inference_method = _EUORunnerEn.INFERENCE_METHOD
-            self._languages = {"en": {"threshold": unlikely_threshold}}
+        self._inference_method = _EUORunnerMultilingual.INFERENCE_METHOD
+        config_fname = _download_from_hf_hub(
+            HG_MODEL,
+            "languages.json",
+            revision=MODEL_REVISIONS[self._model_type],
+            local_files_only=True,
+        )
+        with open(config_fname, "r") as f:
+            self._languages = json.load(f)
+            print(list(self._languages.keys()))
 
     def unlikely_threshold(self, language: str | None) -> float | None:
         if language is None:
@@ -159,23 +162,14 @@ class EOUModel:
         if lang in self._languages:
             return self._languages[lang]["threshold"]
         if "-" in lang:
-            parts = lang.split("-")
-            if parts[0] in self._languages:
-                return self._languages[parts[0]]["threshold"]
+            part = lang.split("-")[0]
+            if part in self._languages:
+                return self._languages[part]["threshold"]
         logger.warning(f"Language {language} not supported by EOU model")
         return None
 
     def supports_language(self, language: str | None) -> bool:
-        if language is None:
-            return False
-        lang = language.lower()
-        if lang in self._languages:
-            return True
-        if "-" in lang:
-            parts = lang.split("-")
-            if parts[0] in self._languages:
-                return True
-        return False
+        return self.unlikely_threshold(language) is not None
 
     async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
         return await self.predict_end_of_turn(chat_ctx)
@@ -227,48 +221,3 @@ class EOUModel:
             extra=result_json,
         )
         return result_json["eou_probability"]
-
-
-def _load_languages(model_revision: str) -> dict:
-    lang_names = {
-        "fr": "French",
-        "id": "Indonesian",
-        "ru": "Russian",
-        "tr": "Turkish",
-        "nl": "Dutch",
-        "pt-br": "Portuguese (Brazil)",
-        "pt-pt": "Portuguese (Portugal)",
-        "es": "Spanish",
-        "de": "German",
-        "it": "Italian",
-        "ko": "Korean",
-        "en-us": "English (United States)",
-        "en": "English",
-        "ja": "Japanese",
-        "zh-hant": "Chinese (Traditional)",
-        "zh-hans": "Chinese (Simplified)",
-    }
-
-    fname = _download_from_hf_hub(
-        HG_MODEL,
-        "languages.json",
-        revision=model_revision,
-        local_files_only=True,
-    )
-    with open(fname, "r") as f:
-        languages = {k.lower(): v for k, v in json.load(f).items()}
-
-    # we add language names to the languages dict bc openai STT returns language names
-    codes = list(languages.keys())
-    for code in codes:
-        conf = languages[code]
-        if code in lang_names:
-            lang_name = lang_names[code]
-            # Add title case, lower case
-            languages[lang_name] = conf
-            languages[lang_name.lower()] = conf
-            # Add first word if multiple words
-            languages[lang_name.split()[0]] = conf
-            languages[lang_name.split()[0].lower()] = conf
-    print(list(languages.keys()))
-    return languages

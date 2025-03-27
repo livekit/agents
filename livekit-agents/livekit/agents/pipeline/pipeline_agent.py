@@ -1358,15 +1358,10 @@ class _DeferredReplyValidation:
     def _run(self, delay: float) -> None:
         @utils.log_exceptions(logger=logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
-            use_turn_detector = (
-                self._last_final_transcript
-                and not self._speaking
-                and self._turn_detector is not None
-            )
+            use_turn_detector = self._last_final_transcript and not self._speaking
 
-            if use_turn_detector:
-                if self._turn_detector.supports_language(self._last_language):
-                    # log if unsupported language is detected
+            if use_turn_detector and self._turn_detector is not None:
+                if not self._turn_detector.supports_language(self._last_language):
                     logger.debug(
                         "turn detector does not support language",
                         extra={"language": self._last_language},
