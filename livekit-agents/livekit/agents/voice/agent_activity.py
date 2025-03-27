@@ -17,14 +17,13 @@ from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks
 from .events import (
-    ConversationItemAddedEvent,
+    AgentStartedSpeakingEvent,
+    AgentStoppedSpeakingEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStartedSpeakingEvent,
     UserStoppedSpeakingEvent,
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
 )
 from .generation import (
     _AudioOutput,
@@ -569,11 +568,8 @@ class AgentActivity(RecognitionHooks):
             "user_input_transcribed",
             UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
         )
-        self._session.emit(
-            "conversation_item_added",
-            ConversationItemAddedEvent(
-                message=llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
-            ),
+        self._session._conversation_item_added(
+            llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
         )
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
@@ -812,7 +808,7 @@ class AgentActivity(RecognitionHooks):
             msg = self._agent._chat_ctx.add_message(
                 role="assistant", content=text_out.text, interrupted=speech_handle.interrupted
             )
-            self._session.emit("conversation_item_added", ConversationItemAddedEvent(message=msg))
+            self._session._conversation_item_added(msg)
 
         self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
 
@@ -850,9 +846,7 @@ class AgentActivity(RecognitionHooks):
         if user_input is not None:
             user_msg = chat_ctx.add_message(role="user", content=user_input)
             self._agent._chat_ctx.items.append(user_msg)
-            self._session.emit(
-                "conversation_item_added", ConversationItemAddedEvent(message=user_msg)
-            )
+            self._session._conversation_item_added(user_msg)
 
         if instructions is not None:
             try:
@@ -956,9 +950,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._agent._chat_ctx.items.append(msg)
                 self._session._update_agent_state(AgentState.LISTENING)
-                self._session.emit(
-                    "conversation_item_added", ConversationItemAddedEvent(message=msg)
-                )
+                self._session._conversation_item_added(msg)
 
             speech_handle._mark_playout_done()
             await utils.aio.cancel_and_wait(exe_task)
@@ -969,7 +961,7 @@ class AgentActivity(RecognitionHooks):
                 role="assistant", content=text_out.text, id=llm_gen_data.id, interrupted=False
             )
             self._agent._chat_ctx.items.append(msg)
-            self._session.emit("conversation_item_added", ConversationItemAddedEvent(message=msg))
+            self._session._conversation_item_added(msg)
 
         self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
         log_event("playout completed", speech_id=speech_handle.id)
@@ -1070,7 +1062,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
             await self._rt_session.update_chat_ctx(chat_ctx)
-            self._session.emit("conversation_item_added", ConversationItemAddedEvent(message=msg))
+            self._session._conversation_item_added(msg)
 
         self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
@@ -1211,9 +1203,7 @@ class AgentActivity(RecognitionHooks):
                     id=msg_id,
                     interrupted=True,
                 )
-                self._session.emit(
-                    "conversation_item_added", ConversationItemAddedEvent(message=msg)
-                )
+                self._session._conversation_item_added(msg)
             return
 
         self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
@@ -1226,7 +1216,7 @@ class AgentActivity(RecognitionHooks):
                 id=msg_id,
                 interrupted=False,
             )
-            self._session.emit("conversation_item_added", ConversationItemAddedEvent(message=msg))
+            self._session._conversation_item_added(msg)
 
         await exe_task
 
