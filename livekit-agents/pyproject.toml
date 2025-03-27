@@ -38,6 +38,8 @@ dependencies = [
     "docstring_parser>=0.16",
     "eval-type-backport",
     "colorama>=0.4.6",
+    "av>=12.0.0",
+    "numpy>=1.26.0",
 ]
 
 [project.optional-dependencies]

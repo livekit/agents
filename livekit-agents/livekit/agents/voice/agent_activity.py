@@ -1019,6 +1019,7 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             if len(new_fnc_outputs) > 0:
+                self._session._update_agent_state(AgentState.THINKING)
                 chat_ctx.items.extend(new_calls)
                 chat_ctx.items.extend(new_fnc_outputs)
 
@@ -1258,6 +1259,8 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             if len(new_fnc_outputs) > 0:
+                self._session._update_agent_state(AgentState.THINKING)
+
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(new_fnc_outputs)
                 try:
