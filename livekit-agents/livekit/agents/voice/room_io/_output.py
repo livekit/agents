@@ -200,7 +200,8 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
             ],
         )
         try:
-            await self._room.local_participant.publish_transcription(transcription)
+            if self._room.isconnected():
+                await self._room.local_participant.publish_transcription(transcription)
         except Exception as e:
             logger.warning("failed to publish transcription", exc_info=e)
 
