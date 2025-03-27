@@ -21,6 +21,9 @@ livekit-plugins-rime = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
+livekit-plugins-neuphonic = { workspace = true }
+livekit-plugins-playai = { workspace = true }
+livekit-plugins-groq = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]

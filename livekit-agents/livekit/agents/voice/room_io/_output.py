@@ -9,7 +9,7 @@ from ...log import logger
 from ...types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
-    TOPIC_CHAT,
+    TOPIC_TRANSCRIPTION,
 )
 from .. import io
 from ..transcription import find_micro_track_id
@@ -286,7 +286,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
 
         return await self._room.local_participant.stream_text(
-            topic=TOPIC_CHAT,
+            topic=TOPIC_TRANSCRIPTION,
             stream_id=self._current_id,
             sender_identity=self._participant_identity,
             attributes=attributes,

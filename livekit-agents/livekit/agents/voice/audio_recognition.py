@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterable
-from typing import Protocol
+from typing import Literal, Protocol
 
 from livekit import rtc
 
-from .. import llm, stt, utils, vad
+from .. import llm, metrics, stt, utils, vad
 from ..debug import tracing
 from ..log import logger
 from ..utils import aio
@@ -34,9 +34,7 @@ class RecognitionHooks(Protocol):
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
-class AudioRecognition:
-    UNLIKELY_END_OF_TURN_EXTRA_DELAY = 6.0
-
+class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(
         self,
         *,
@@ -45,19 +43,23 @@ class AudioRecognition:
         vad: vad.VAD | None,
         turn_detector: _TurnDetector | None,
         min_endpointing_delay: float,
+        max_endpointing_delay: float,
     ) -> None:
+        super().__init__()
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._stt_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
         self._min_endpointing_delay = min_endpointing_delay
+        self._max_endpointing_delay = max_endpointing_delay
         self._turn_detector = turn_detector
         self._stt = stt
         self._vad = vad
 
         self._speaking = False
         self._last_speaking_time: float = 0
+        self._last_final_transcript_time: float = 0
         self._audio_transcript = ""
         self._last_language: str | None = None
         self._vad_graph = tracing.Tracing.add_graph(
@@ -142,12 +144,17 @@ class AudioRecognition:
                 },
             )
 
+            self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
 
             if not self._speaking:
                 if not self._vad:
                     # vad disabled, use stt timestamp
+                    # TODO: this would screw up transcription latency metrics
+                    # but we'll live with it for now.
+                    # the correct way is to ensure STT fires SpeechEventType.END_OF_SPEECH
+                    # and using that timestamp for _last_speaking_time
                     self._last_speaking_time = time.time()
 
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
@@ -170,7 +177,8 @@ class AudioRecognition:
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             self._hooks.on_end_of_speech(ev)
             self._speaking = False
-            self._last_speaking_time = time.time()
+            # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
+            self._last_speaking_time = time.time() - ev.silence_duration
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(chat_ctx)
@@ -186,8 +194,7 @@ class AudioRecognition:
 
         @utils.log_exceptions(logger=logger)
         async def _bounce_eou_task() -> None:
-            delay = max(self._last_speaking_time + self._min_endpointing_delay - time.time(), 0)
-            await asyncio.sleep(delay)
+            endpointing_delay = self._min_endpointing_delay
 
             if turn_detector is not None and turn_detector.supports_language(self._last_language):
                 end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
@@ -197,15 +204,24 @@ class AudioRecognition:
                 )
                 unlikely_threshold = turn_detector.unlikely_threshold()
                 if end_of_turn_probability < unlikely_threshold:
-                    delay = max(
-                        self._last_speaking_time
-                        + self.UNLIKELY_END_OF_TURN_EXTRA_DELAY
-                        - time.time(),
-                        0,
-                    )
-                    await asyncio.sleep(delay)
+                    endpointing_delay = self._max_endpointing_delay
+
+            await asyncio.sleep(
+                max(
+                    self._last_speaking_time + endpointing_delay - time.time(),
+                    0,
+                )
+            )
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
+            eou_metrics = metrics.EOUMetrics(
+                timestamp=time.time(),
+                end_of_utterance_delay=time.time() - self._last_speaking_time,
+                transcription_delay=max(
+                    self._last_final_transcript_time - self._last_speaking_time, 0
+                ),
+            )
+            self.emit("metrics_collected", eou_metrics)
             await self._hooks.on_end_of_turn(self._audio_transcript)
             self._audio_transcript = ""
 

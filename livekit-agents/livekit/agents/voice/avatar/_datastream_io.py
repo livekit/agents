@@ -26,7 +26,7 @@ class DataStreamAudioOutput(AudioOutput):
     """  # noqa: E501
 
     def __init__(self, room: rtc.Room, *, destination_identity: str):
-        super().__init__()
+        super().__init__(next_in_chain=None)
         self._room = room
         self._destination_identity = destination_identity
         self._stream_writer: rtc.ByteStreamWriter | None = None

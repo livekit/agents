@@ -3,34 +3,34 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.agents.voice import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli
 from livekit.plugins import openai
 
-# from livekit.plugins import noise_cancellation
-
-logger = logging.getLogger("roomio-example")
+logger = logging.getLogger("toggle-io")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
 
+## This example demonstrates a more complex application that allows the user to
+## toggle audio and text input/output on the fly.
+## The example makes use of LiveKit's RPC system to exchange messages between the
+## client and the server.
 
-class AlloyAgent(Agent):
+
+class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are Alloy.",
-            llm=openai.realtime.RealtimeModel(voice="alloy"),
+            instructions="You are a helpful assistant that interfaces with the user via voice.",
         )
 
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    session = AgentSession()
-    await session.start(agent=AlloyAgent(), room=ctx.room)
-
-    room_io = session._room_io
-    assert room_io is not None
+    session = AgentSession(llm=openai.realtime.RealtimeModel())
+    room_io = RoomIO(session, room=ctx.room)
+    await room_io.start()
+    await session.start(agent=MyAgent())
 
     @ctx.room.local_participant.register_rpc_method("set_participant")
     async def on_set_participant(data: rtc.RpcInvocationData) -> None:
