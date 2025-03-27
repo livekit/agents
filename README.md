@@ -37,7 +37,7 @@ The **Agents framework** enables you to build voice AI agents that can see, hear
 To install the core Agents library, along with plugins for popular model providers:
 
 ```bash
-pip install livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0rc
+pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.0rc"
 ```
 
 ## Docs and guides

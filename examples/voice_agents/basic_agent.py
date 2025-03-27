@@ -60,7 +60,7 @@ class MyAgent(Agent):
             longitude: The longitude of the location
         """
 
-        logger.info(f"Looking up weather for {location} at {latitude}, {longitude}")
+        logger.info(f"Looking up weather for {location}")
 
         return {
             "weather": "sunny",
