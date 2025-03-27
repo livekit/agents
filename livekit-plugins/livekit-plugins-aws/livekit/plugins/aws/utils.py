@@ -11,7 +11,11 @@ from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
 from livekit.agents.types import NotGivenOr
 from livekit.agents.utils import is_given
 
+from .log import logger
+
 __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
+
+DEFAULT_REGION = "us-east-1"
 
 
 def get_aws_credentials(
@@ -21,9 +25,8 @@ def get_aws_credentials(
 ):
     aws_region = region if is_given(region) else os.environ.get("AWS_DEFAULT_REGION")
     if not aws_region:
-        raise ValueError(
-            "AWS_DEFAULT_REGION must be set via argument or the AWS_DEFAULT_REGION environment variable."  # noqa: E501
-        )
+        logger.warning("AWS_DEFAULT_REGION is not set, using %s", DEFAULT_REGION)
+        aws_region = DEFAULT_REGION
 
     if is_given(api_key) and is_given(api_secret):
         session = boto3.Session(
