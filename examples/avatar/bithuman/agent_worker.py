@@ -1,16 +1,16 @@
 import logging
 import os
-from typing import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 
 import cv2
 import numpy as np
-from bithuman_runtime import AsyncBithumanRuntime
+from bithuman import AsyncBithuman
 from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, utils
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession, CallContext
+from livekit.agents.voice import Agent, AgentSession, RunContext
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -31,11 +31,11 @@ load_dotenv()
 
 class BithumanGenerator(VideoGenerator):
     def __init__(self, avatar_model: str, token: str):
-        self._runtime = AsyncBithumanRuntime(token=token)
+        self._runtime = AsyncBithuman(token=token)
         self._avatar_model = avatar_model
 
     async def start(self) -> None:
-        await self._runtime.set_avatar_model(self._avatar_model)
+        await self._runtime.set_model(self._avatar_model)
         await self._runtime.start()
 
     @property
@@ -111,7 +111,7 @@ class EchoAgent(Agent):
         )
 
     @function_tool()
-    async def talk_to_alloy(self, context: CallContext):
+    async def talk_to_alloy(self, context: RunContext):
         return AlloyAgent(), "Transferring you to Alloy."
 
 
@@ -123,7 +123,7 @@ class AlloyAgent(Agent):
         )
 
     @function_tool()
-    async def talk_to_echo(self, context: CallContext):
+    async def talk_to_echo(self, context: RunContext):
         return EchoAgent(), "Transferring you to Echo."
 
 
