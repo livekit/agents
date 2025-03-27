@@ -47,6 +47,7 @@ class _AudioInput(io.AudioInput):
 
 class _TextOutput(io.TextOutput):
     def __init__(self, cli: ChatCLI) -> None:
+        super().__init__(next_in_chain=None)
         self._cli = cli
         self._capturing = False
 
@@ -67,7 +68,7 @@ class _TextOutput(io.TextOutput):
 
 class _AudioOutput(io.AudioOutput):
     def __init__(self, cli: ChatCLI) -> None:
-        super().__init__(sample_rate=24000)
+        super().__init__(next_in_chain=None, sample_rate=24000)
         self._cli = cli
         self._capturing = False
         self._pushed_duration: float = 0.0
@@ -183,6 +184,10 @@ class ChatCLI:
             async def win_reader():
                 while True:
                     ch = await self._loop.run_in_executor(None, msvcrt.getch)
+
+                    if ch == b"\x03":  # Ctrl+C on Windows
+                        break
+
                     try:
                         ch = ch.decode("utf-8")
                     except Exception:
@@ -362,6 +367,7 @@ class ChatCLI:
                     text = "".join(self._text_input_buf)
                     if text:
                         self._text_input_buf = []
+                        self._agent.interrupt()
                         self._agent.generate_reply(user_input=text)
                         click.echo("\n", nl=False)
                 elif char == "\x7f":  # Backspace
@@ -392,7 +398,7 @@ class ChatCLI:
         color_code = 31 if amplitude_db > 0.75 else 33 if amplitude_db > 0.5 else 32
         bar = "#" * nb_bar + "-" * (MAX_AUDIO_BAR - nb_bar)
         sys.stdout.write(
-            f"\r[Audio] {self._input_device_name[-20:]} [{self._micro_db:6.2f} dBFS] {_esc(color_code)}[{bar}]{_esc(0)}"
+            f"\r[Audio] {self._input_device_name[-20:]} [{self._micro_db:6.2f} dBFS] {_esc(color_code)}[{bar}]{_esc(0)}"  # noqa: E501
         )
         sys.stdout.flush()
 

@@ -33,7 +33,9 @@ class SpeechHandle:
 
     @staticmethod
     def create(
-        allow_interruptions: bool = True, step_index: int = 0, parent: SpeechHandle | None = None
+        allow_interruptions: bool = True,
+        step_index: int = 0,
+        parent: SpeechHandle | None = None,
     ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
@@ -63,7 +65,7 @@ class SpeechHandle:
         """
         The parent handle that initiated the creation of the current speech handle.
         This happens when a tool call is made, a new SpeechHandle will be created for the tool response.
-        """
+        """  # noqa: E501
         return self._parent
 
     def done(self) -> bool:
@@ -76,7 +78,8 @@ class SpeechHandle:
         if self.done():
             return
 
-        self._interrupt_fut.set_result(None)
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._interrupt_fut.set_result(None)
 
     async def wait_for_playout(self) -> None:
         await asyncio.shield(self._playout_done_fut)

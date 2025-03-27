@@ -5,10 +5,9 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
-from typing import Any, Generic, Literal, TypedDict, TypeVar, Union
+from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, Field
-from typing_extensions import Required
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
@@ -16,10 +15,15 @@ from livekit.agents._exceptions import APIConnectionError, APIError
 from .. import utils
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .tool_context import FunctionTool
+from .tool_context import FunctionTool, ToolChoice
 
 
 class CompletionUsage(BaseModel):
@@ -49,16 +53,6 @@ class ChatChunk(BaseModel):
     usage: CompletionUsage | None = None
 
 
-# Used by ToolChoice
-class Function(TypedDict, total=False):
-    name: Required[str]
-
-
-class ToolChoice(TypedDict, total=False):
-    type: Required[Literal["function"]]
-    function: Required[Function]
-
-
 TEvent = TypeVar("TEvent")
 
 
@@ -83,7 +77,7 @@ class LLM(
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream: ...
 
@@ -136,11 +130,11 @@ class LLMStream(ABC):
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
-                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",
+                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
                         extra={
                             "llm": self._llm._label,
@@ -200,7 +194,7 @@ class LLMStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 

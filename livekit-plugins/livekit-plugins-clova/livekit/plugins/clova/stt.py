@@ -23,9 +23,20 @@ import wave
 
 import aiohttp
 
-from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, stt, utils
+from livekit.agents import (
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+)
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.utils import AudioBuffer, merge_frames
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import AudioBuffer, is_given, merge_frames
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
 
 from .common import resample_audio
@@ -37,9 +48,9 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: ClovaSttLanguages = "en-US",
-        secret: str | None = None,
-        invoke_url: str | None = None,
+        language: ClovaSttLanguages | str = "en-US",
+        secret: NotGivenOr[str] = NOT_GIVEN,
+        invoke_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         threshold: float = 0.5,
     ):
@@ -51,8 +62,10 @@ class STT(stt.STT):
         """
 
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
-        self._secret = secret or os.environ.get("CLOVA_STT_SECRET_KEY")
-        self._invoke_url = invoke_url or os.environ.get("CLOVA_STT_INVOKE_URL")
+        self._secret = secret if is_given(secret) else os.environ.get("CLOVA_STT_SECRET_KEY")
+        self._invoke_url = (
+            invoke_url if is_given(invoke_url) else os.environ.get("CLOVA_STT_INVOKE_URL")
+        )
         self._language = clova_languages_mapping.get(language, language)
         self._session = http_session
         if self._secret is None:
@@ -61,8 +74,9 @@ class STT(stt.STT):
             )
         self.threshold = threshold
 
-    def update_options(self, *, language: str | None = None) -> None:
-        self._language = clova_languages_mapping.get(language, language) or self._language
+    def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
+        if is_given(language):
+            self._language = clova_languages_mapping.get(language, language)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -76,11 +90,13 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: ClovaSttLanguages | str | None,
-        conn_options: APIConnectOptions,
+        language: NotGivenOr[ClovaSttLanguages | str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         try:
             url = self.url_builder()
+            if is_given(language):
+                self._language = clova_languages_mapping.get(language, language)
             payload = json.dumps({"language": self._language, "completion": "sync"})
 
             buffer = merge_frames(buffer)
@@ -136,8 +152,8 @@ class STT(stt.STT):
 
     def _transcription_to_speech_event(
         self,
+        text: str,
         event_type: SpeechEventType = stt.SpeechEventType.INTERIM_TRANSCRIPT,
-        text: str | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=event_type,

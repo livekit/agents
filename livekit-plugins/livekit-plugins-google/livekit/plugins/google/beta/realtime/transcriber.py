@@ -30,7 +30,7 @@ You are an **Audio Transcriber**. Your task is to convert audio content into acc
 - Do not add explanations, comments, or extra information.
 - Do not include timestamps, speaker labels, or annotations unless specified.
 - Audio Language: {DEFAULT_LANGUAGE}
-"""
+"""  # noqa: E501
 
 
 @dataclass
@@ -53,7 +53,7 @@ class TranscriberSession(utils.EventEmitter[EventTypes]):
 
         system_instructions = types.Content(parts=[types.Part(text=SYSTEM_INSTRUCTIONS)])
         self._config = types.LiveConnectConfig(
-            response_modalities=["TEXT"],
+            response_modalities=[types.Modality.TEXT],
             system_instruction=system_instructions,
             generation_config=types.GenerationConfig(temperature=0.0),
         )

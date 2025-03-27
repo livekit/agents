@@ -1,5 +1,0 @@
-livekit
-livekit-agents
-python-dotenv
-Pillow
-aiohttp

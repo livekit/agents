@@ -25,7 +25,7 @@ from google.auth._default_async import default_async
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import AIFunction, ToolChoice
+from livekit.agents.llm import FunctionTool, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -94,30 +94,30 @@ class LLM(llm.LLM):
             presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
-        """
+        """  # noqa: E501
         super().__init__()
-        self._project_id = project or os.environ.get("GOOGLE_CLOUD_PROJECT", None)
-        self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-        self._api_key = api_key or os.environ.get("GOOGLE_API_KEY", None)
+        gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+        gcp_location = location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION")
+        gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if _gac is None:
             logger.warning(
-                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."
+                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."  # noqa: E501
             )
 
-        if vertexai:
-            if not self._project_id:
-                _, self._project_id = default_async(
+        if is_given(vertexai) and vertexai:
+            if not gcp_project:
+                _, gcp_project = default_async(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
-            self._api_key = None  # VertexAI does not require an API key
+            gemini_api_key = None  # VertexAI does not require an API key
 
         else:
-            self._project_id = None
-            self._location = None
-            if not self._api_key:
+            gcp_project = None
+            gcp_location = None
+            if not gemini_api_key:
                 raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
         self._opts = _LLMOptions(
@@ -134,17 +134,17 @@ class LLM(llm.LLM):
             frequency_penalty=frequency_penalty,
         )
         self._client = genai.Client(
-            api_key=self._api_key,
-            vertexai=vertexai,
-            project=self._project_id,
-            location=self._location,
+            api_key=gemini_api_key,
+            vertexai=is_given(vertexai) and vertexai,
+            project=gcp_project,
+            location=gcp_location,
         )
 
     def chat(
         self,
         *,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
@@ -170,7 +170,7 @@ class LLM(llm.LLM):
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode="ANY",
-                        allowed_function_names=[fnc.name for fnc in fnc_ctx.ai_functions.values()],
+                        allowed_function_names=[fnc.name for fnc in tools],
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice
@@ -207,7 +207,7 @@ class LLM(llm.LLM):
             client=self._client,
             model=self._opts.model,
             chat_ctx=chat_ctx,
-            fnc_ctx=fnc_ctx,
+            tools=tools,
             conn_options=conn_options,
             extra_kwargs=extra,
         )
@@ -222,10 +222,10 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        fnc_ctx: llm.FunctionContext | None,
+        tools: list[FunctionTool] | None,
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm
@@ -239,7 +239,7 @@ class LLMStream(llm.LLMStream):
             turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm))
 
             self._extra_kwargs["tools"] = [
-                types.Tool(function_declarations=to_fnc_ctx(self._fnc_ctx))
+                types.Tool(function_declarations=to_fnc_ctx(self._tools))
             ]
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
@@ -273,7 +273,7 @@ class LLMStream(llm.LLMStream):
 
                 if len(response.candidates) > 1:
                     logger.warning(
-                        "gemini llm: there are multiple candidates in the response, returning response from the first one."
+                        "gemini llm: there are multiple candidates in the response, returning response from the first one."  # noqa: E501
                     )
 
                 for part in response.candidates[0].content.parts:

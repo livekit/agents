@@ -16,9 +16,22 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, Union, runtime_checkable
 
-from typing_extensions import TypeGuard
+from typing_extensions import Required, TypedDict, TypeGuard
+
+
+# Used by ToolChoice
+class Function(TypedDict, total=False):
+    name: Required[str]
+
+
+class NamedToolChoice(TypedDict, total=False):
+    type: Required[Literal["function"]]
+    function: Required[Function]
+
+
+ToolChoice = Union[NamedToolChoice, Literal["auto", "required", "none"]]
 
 
 class ToolError(Exception):
@@ -106,8 +119,8 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool]:
 class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, ai_functions: list[FunctionTool]) -> None:
-        self.update_tools(ai_functions)
+    def __init__(self, tools: list[FunctionTool]) -> None:
+        self.update_tools(tools)
 
     @classmethod
     def empty(cls) -> ToolContext:
@@ -115,21 +128,21 @@ class ToolContext:
 
     @property
     def function_tools(self) -> dict[str, FunctionTool]:
-        return self._ai_functions_map.copy()
+        return self._tools_map.copy()
 
     def update_tools(self, tools: list[FunctionTool]) -> None:
-        self._ai_functions = tools
+        self._tools = tools
 
         for method in find_function_tools(self):
             tools.append(method)
 
-        self._ai_functions_map = {}
-        for fnc in tools:
-            info = get_function_info(fnc)
-            if info.name in self._ai_functions_map:
+        self._tools_map = {}
+        for tool in tools:
+            info = get_function_info(tool)
+            if info.name in self._tools_map:
                 raise ValueError(f"duplicate function name: {info.name}")
 
-            self._ai_functions_map[info.name] = fnc
+            self._tools_map[info.name] = tool
 
     def copy(self) -> ToolContext:
-        return ToolContext(self._ai_functions.copy())
+        return ToolContext(self._tools.copy())

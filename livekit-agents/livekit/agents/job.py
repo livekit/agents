@@ -222,7 +222,7 @@ class JobContext:
             e2ee: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
-        """
+        """  # noqa: E501
         room_options = rtc.RoomOptions(
             e2ee=e2ee,
             auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
@@ -249,7 +249,7 @@ class JobContext:
         """Adds an entrypoint function to be run when a participant joins the room. In cases where
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
         added and they will each be run in parallel for each participant.
-        """
+        """  # noqa: E501
 
         if entrypoint_fnc in [e for (e, _) in self._participant_entrypoints]:
             raise ValueError("entrypoints cannot be added more than once")
@@ -267,12 +267,12 @@ class JobContext:
 
             if (p.identity, coro) in self._participant_tasks:
                 logger.warning(
-                    f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"
+                    f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"  # noqa: E501
                 )
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
-            task.add_done_callback(lambda _: self._participant_tasks.pop((p.identity, coro)))
+            task.add_done_callback(lambda _: self._participant_tasks.pop((p.identity, coro)))  # noqa: B023
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
@@ -362,7 +362,7 @@ class JobRequest:
         metadata: str = "",
         attributes: dict[str, str] | None = None,
     ) -> None:
-        """Accept the job request, and start the job if the LiveKit SFU assigns the job to our worker."""
+        """Accept the job request, and start the job if the LiveKit SFU assigns the job to our worker."""  # noqa: E501
         if not identity:
             identity = "agent-" + self.id
 

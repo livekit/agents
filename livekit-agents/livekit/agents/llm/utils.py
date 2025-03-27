@@ -3,7 +3,15 @@ from __future__ import annotations
 import base64
 import inspect
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, Callable, get_args, get_origin, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Callable,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, create_model
 from pydantic.fields import Field, FieldInfo
@@ -17,7 +25,7 @@ from .chat_context import ChatContext
 from .tool_context import FunctionTool, get_function_info
 
 if TYPE_CHECKING:
-    from ..voice.events import CallContext
+    from ..voice.events import RunContext
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -91,10 +99,10 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
 
 def is_context_type(ty: type) -> bool:
-    from ..voice.events import CallContext
+    from ..voice.events import RunContext
 
     origin = get_origin(ty)
-    is_call_context = ty is CallContext or origin is CallContext
+    is_call_context = ty is RunContext or origin is RunContext
 
     return is_call_context
 
@@ -141,12 +149,12 @@ def serialize_image(image: llm.ImageContent) -> SerializedImage:
 
 
 def build_legacy_openai_schema(
-    ai_function: FunctionTool, *, internally_tagged: bool = False
+    function_tool: FunctionTool, *, internally_tagged: bool = False
 ) -> dict[str, Any]:
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
-    model = function_arguments_to_pydantic_model(ai_function)
-    info = get_function_info(ai_function)
+    model = function_arguments_to_pydantic_model(function_tool)
+    info = get_function_info(function_tool)
     schema = model.model_json_schema()
 
     if internally_tagged:
@@ -168,11 +176,11 @@ def build_legacy_openai_schema(
 
 
 def build_strict_openai_schema(
-    ai_function: FunctionTool,
+    function_tool: FunctionTool,
 ) -> dict[str, Any]:
     """strict mode tool description"""
-    model = function_arguments_to_pydantic_model(ai_function)
-    info = get_function_info(ai_function)
+    model = function_arguments_to_pydantic_model(function_tool)
+    info = get_function_info(function_tool)
     schema = _strict.to_strict_json_schema(model)
 
     return {
@@ -234,16 +242,16 @@ def function_arguments_to_pydantic_model(func: Callable) -> type[BaseModel]:
 
 def pydantic_model_to_function_arguments(
     *,
-    ai_function: Callable,
+    function_tool: Callable,
     model: BaseModel,
-    call_ctx: CallContext | None = None,
+    call_ctx: RunContext | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     """
     Convert a model’s fields into function args/kwargs.
     Raises TypeError if required params are missing
     """
-    signature = inspect.signature(ai_function)
-    type_hints = get_type_hints(ai_function, include_extras=True)
+    signature = inspect.signature(function_tool)
+    type_hints = get_type_hints(function_tool, include_extras=True)
 
     context_dict = {}
     for param_name, _ in signature.parameters.items():

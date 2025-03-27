@@ -94,7 +94,7 @@ LLMS: list[Callable[[], llm.LLM]] = [
 async def test_chat(llm_factory: Callable[[], llm.LLM]):
     input_llm = llm_factory()
     chat_ctx = ChatContext().append(
-        text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.'
+        text='You are an assistant at a drive-thru restaurant "Live-Burger". Ask the customer what they would like to order.',  # noqa: E501
     )
 
     # Anthropic and vertex requires at least one message (system messages don't count)
@@ -210,7 +210,8 @@ async def test_cancelled_calls(llm_factory: Callable[[], llm.LLM]):
     calls = stream.execute_functions()
     await asyncio.sleep(0.2)  # wait for the loop executor to start the task
 
-    # don't wait for gather_function_results and directly close (this should cancel the ongoing calls)
+    # don't wait for gather_function_results and directly close (this should cancel the
+    # ongoing calls)
     await stream.aclose()
 
     assert len(calls) == 1
@@ -226,7 +227,7 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
 
     stream = await _request_fnc_call(
         input_llm,
-        "Can you select all currencies in Europe at once from given choices using function call `select_currencies`?",
+        "Can you select all currencies in Europe at once from given choices using function call `select_currencies`?",  # noqa: E501
         fnc_ctx,
         temperature=0.2,
     )
@@ -375,7 +376,7 @@ async def _request_fnc_call(
     stream = model.chat(
         chat_ctx=ChatContext()
         .append(
-            text="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",
+            text="You are an helpful assistant. Follow the instructions provided by the user. You can use multiple tool calls at once.",  # noqa: E501
             role="system",
         )
         .append(text=request, role="user"),

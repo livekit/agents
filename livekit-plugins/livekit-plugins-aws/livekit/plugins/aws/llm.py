@@ -22,7 +22,7 @@ from typing import Any, Literal
 import boto3
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
-from livekit.agents.llm import AIFunction, ChatContext, FunctionToolCall, ToolChoice
+from livekit.agents.llm import ChatContext, FunctionTool, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -80,16 +80,16 @@ class LLM(llm.LLM):
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
-        """
+        """  # noqa: E501
         super().__init__()
         self._api_key, self._api_secret, self._region = get_aws_credentials(
             api_key, api_secret, region
         )
 
-        model = model or os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
-        if not is_given(model):
+        model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
+        if not model:
             raise ValueError(
-                "model or inference profile arn must be set using the argument or by setting the BEDROCK_INFERENCE_PROFILE_ARN environment variable."
+                "model or inference profile arn must be set using the argument or by setting the BEDROCK_INFERENCE_PROFILE_ARN environment variable."  # noqa: E501
             )
         self._opts = _LLMOptions(
             model=model,
@@ -104,7 +104,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: list[AIFunction] | None = None,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
@@ -117,11 +117,10 @@ class LLM(llm.LLM):
         def _get_tool_config() -> dict[str, Any] | None:
             nonlocal tool_choice
 
-            if not fnc_ctx:
+            if not tools:
                 return None
 
-            tools = to_fnc_ctx(fnc_ctx)
-            tool_config: dict[str, Any] = {"tools": tools}
+            tool_config: dict[str, Any] = {"tools": to_fnc_ctx(tools)}
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 if isinstance(tool_choice, ToolChoice):
@@ -162,7 +161,7 @@ class LLM(llm.LLM):
             aws_secret_access_key=self._api_secret,
             region_name=self._region,
             chat_ctx=chat_ctx,
-            fnc_ctx=fnc_ctx,
+            tools=tools,
             conn_options=conn_options,
             extra_kwargs=opts,
         )
@@ -178,10 +177,10 @@ class LLMStream(llm.LLMStream):
         region_name: str,
         chat_ctx: ChatContext,
         conn_options: APIConnectOptions,
-        fnc_ctx: list[AIFunction] | None,
+        tools: list[FunctionTool] | None,
         extra_kwargs: dict[str, Any],
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = boto3.client(
             "bedrock-runtime",
             region_name=region_name,

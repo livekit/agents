@@ -14,14 +14,16 @@ logger = logging.getLogger(__name__)
 
 
 class QueueAudioOutput(
-    AudioOutput, AudioReceiver, rtc.EventEmitter[Literal["playback_finished", "clear_buffer"]]
+    AudioOutput,
+    AudioReceiver,
+    rtc.EventEmitter[Literal["playback_finished", "clear_buffer"]],
 ):
     """
     AudioOutput implementation that sends audio frames through a queue.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *, sample_rate: int | None = None):
+        super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
         self._capturing = False
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import os
 from dataclasses import dataclass
 
@@ -9,66 +8,49 @@ import fal_client
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, stt
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import AudioBuffer, is_given
 
 
 @dataclass
 class _STTOptions:
-    language: str
-    task: str
-    chunk_level: str
-    version: str
+    language: str = "en"
+    task: str = "transcribe"
+    chunk_level: str = "segment"
+    version: str = "3"
 
 
 class WizperSTT(stt.STT):
     def __init__(
         self,
         *,
-        language: str | None = "en",
-        task: str | None = "transcribe",
-        chunk_level: str | None = "segment",
-        version: str | None = "3",
+        language: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
     ):
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
-        self._api_key = os.getenv("FAL_KEY")
-        self._opts = _STTOptions(
-            language=language or "en",
-            task=task or "transcribe",
-            chunk_level=chunk_level or "segment",
-            version=version or "3",
-        )
-        self._fal_client = fal_client.AsyncClient()
-
+        self._api_key = api_key if is_given(api_key) else os.getenv("FAL_KEY")
         if not self._api_key:
             raise ValueError("fal AI API key is required. It should be set with env FAL_KEY")
+        self._opts = _STTOptions(language=language)
+        self._fal_client = fal_client.AsyncClient(key=self._api_key)
 
-    def update_options(self, *, language: str | None = None) -> None:
-        self._opts.language = language or self._opts.language
-
-    def _sanitize_options(
-        self,
-        *,
-        language: str | None = None,
-        task: str | None = None,
-        chunk_level: str | None = None,
-        version: str | None = None,
-    ) -> _STTOptions:
-        config = dataclasses.replace(self._opts)
-        config.language = language or config.language
-        config.task = task or config.task
-        config.chunk_level = chunk_level or config.chunk_level
-        config.version = version or config.version
-        return config
+    def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
+        if is_given(language):
+            self._opts.language = language
 
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
-            config = self._sanitize_options(language=language)
+            if is_given(language):
+                self._opts.language = language
             data_uri = fal_client.encode(
                 rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav"
             )
@@ -76,10 +58,10 @@ class WizperSTT(stt.STT):
                 "fal-ai/wizper",
                 arguments={
                     "audio_url": data_uri,
-                    "task": config.task,
-                    "language": config.language,
-                    "chunk_level": config.chunk_level,
-                    "version": config.version,
+                    "task": self._opts.task,
+                    "language": self._opts.language,
+                    "chunk_level": self._opts.chunk_level,
+                    "version": self._opts.version,
                 },
                 timeout=conn_options.timeout,
             )
@@ -88,11 +70,9 @@ class WizperSTT(stt.STT):
         except fal_client.client.FalClientError as e:
             raise APIConnectionError() from e
 
-    def _transcription_to_speech_event(
-        self, event_type=SpeechEventType.FINAL_TRANSCRIPT, text=None
-    ) -> stt.SpeechEvent:
+    def _transcription_to_speech_event(self, text: str) -> stt.SpeechEvent:
         return stt.SpeechEvent(
-            type=event_type,
+            type=SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[stt.SpeechData(text=text, language=self._opts.language)],
         )
 

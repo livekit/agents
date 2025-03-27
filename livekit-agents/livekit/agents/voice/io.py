@@ -10,29 +10,47 @@ from livekit import rtc
 
 from .. import llm, stt
 from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from .agent import ModelSettings
 
 # TODO(theomonnom): can those types be simplified?
 STTNode = Callable[
-    [AsyncIterable[rtc.AudioFrame]],
+    [AsyncIterable[rtc.AudioFrame], ModelSettings],
     Union[
         Optional[Union[AsyncIterable[stt.SpeechEvent], AsyncIterable[str]]],
         Awaitable[Optional[Union[AsyncIterable[stt.SpeechEvent], AsyncIterable[str]]]],
     ],
 ]
 LLMNode = Callable[
-    [llm.ChatContext, list[llm.FunctionTool]],
+    [llm.ChatContext, list[llm.FunctionTool], ModelSettings],
     Union[
         Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]],
         Awaitable[Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]]],
     ],
 ]
 TTSNode = Callable[
-    [AsyncIterable[str]],
+    [AsyncIterable[str], ModelSettings],
     Union[
         Optional[AsyncIterable[rtc.AudioFrame]],
         Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
     ],
 ]
+
+
+class TimedString(str):
+    start_time: NotGivenOr[float]
+    end_time: NotGivenOr[float]
+
+    def __new__(
+        cls,
+        text: str,
+        start_time: NotGivenOr[float] = NOT_GIVEN,
+        end_time: NotGivenOr[float] = NOT_GIVEN,
+    ) -> TimedString:
+        obj = super().__new__(cls, text)
+        obj.start_time = start_time
+        obj.end_time = end_time
+        return obj
 
 
 class AudioInput:
@@ -66,12 +84,15 @@ class PlaybackFinishedEvent:
 
 
 class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
-    def __init__(self, *, sample_rate: int | None = None) -> None:
+    def __init__(
+        self, *, next_in_chain: AudioOutput | None, sample_rate: int | None = None
+    ) -> None:
         """
         Args:
             sample_rate: The sample rate required by the audio sink, if None, any sample rate is accepted
-        """
+        """  # noqa: E501
         super().__init__()
+        self._next_in_chain = next_in_chain
         self._sample_rate = sample_rate
         self.__capturing = False
         self.__playback_finished_event = asyncio.Event()
@@ -81,6 +102,15 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         self.__last_playback_ev: PlaybackFinishedEvent = PlaybackFinishedEvent(
             playback_position=0, interrupted=False
         )
+
+        if self._next_in_chain:
+            self._next_in_chain.on(
+                "playback_finished",
+                lambda ev: self.on_playback_finished(
+                    interrupted=ev.interrupted,
+                    playback_position=ev.playback_position,
+                ),
+            )
 
     def on_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
         """
@@ -138,38 +168,54 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def clear_buffer(self) -> None:
         """Clear the buffer, stopping playback immediately"""
 
-    def on_attached(self) -> None: ...
+    def on_attached(self) -> None:
+        if self._next_in_chain:
+            self._next_in_chain.on_attached()
 
-    def on_detached(self) -> None: ...
+    def on_detached(self) -> None:
+        if self._next_in_chain:
+            self._next_in_chain.on_detached()
 
 
 class TextOutput(ABC):
+    def __init__(self, *, next_in_chain: TextOutput | None) -> None:
+        self._next_in_chain = next_in_chain
+
     @abstractmethod
     async def capture_text(self, text: str) -> None:
         """Capture a text segment (Used by the output of LLM nodes)"""
-        ...
 
     @abstractmethod
     def flush(self) -> None:
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
-        ...
 
-    def on_attached(self) -> None: ...
+    def on_attached(self) -> None:
+        if self._next_in_chain:
+            self._next_in_chain.on_attached()
 
-    def on_detached(self) -> None: ...
+    def on_detached(self) -> None:
+        if self._next_in_chain:
+            self._next_in_chain.on_detached()
 
 
 # TODO(theomonnom): Add documentation to VideoSink
 class VideoOutput(ABC):
+    def __init__(self, *, next_in_chain: VideoOutput | None) -> None:
+        self._next_in_chain = next_in_chain
+
     @abstractmethod
     async def capture_frame(self, text: rtc.VideoFrame) -> None: ...
 
     @abstractmethod
     def flush(self) -> None: ...
 
-    def on_attached(self) -> None: ...
+    def on_attached(self) -> None:
+        if self._next_in_chain:
+            self._next_in_chain.on_attached()
 
-    def on_detached(self) -> None: ...
+    def on_detached(self) -> None:
+        if self._next_in_chain:
+            self._next_in_chain.on_detached()
 
 
 class AgentInput:
@@ -240,7 +286,10 @@ class AgentInput:
 
 class AgentOutput:
     def __init__(
-        self, video_changed: Callable, audio_changed: Callable, transcription_changed: Callable
+        self,
+        video_changed: Callable,
+        audio_changed: Callable,
+        transcription_changed: Callable,
     ) -> None:
         self._video_sink: VideoOutput | None = None
         self._audio_sink: AudioOutput | None = None

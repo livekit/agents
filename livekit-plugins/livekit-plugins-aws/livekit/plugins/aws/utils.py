@@ -7,26 +7,32 @@ from typing import Any, cast
 import boto3
 
 from livekit.agents import llm
-from livekit.agents.llm import AIFunction, ChatContext, ImageContent, utils
+from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
+from livekit.agents.types import NotGivenOr
+from livekit.agents.utils import is_given
 
 __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
 
 
-def get_aws_credentials(api_key: str | None, api_secret: str | None, region: str | None):
-    region = region or os.environ.get("AWS_DEFAULT_REGION")
-    if not region:
+def get_aws_credentials(
+    api_key: NotGivenOr[str],
+    api_secret: NotGivenOr[str],
+    region: NotGivenOr[str],
+):
+    aws_region = region if is_given(region) else os.environ.get("AWS_DEFAULT_REGION")
+    if not aws_region:
         raise ValueError(
-            "AWS_DEFAULT_REGION must be set via argument or the AWS_DEFAULT_REGION environment variable."
+            "AWS_DEFAULT_REGION must be set via argument or the AWS_DEFAULT_REGION environment variable."  # noqa: E501
         )
 
-    if api_key and api_secret:
+    if is_given(api_key) and is_given(api_secret):
         session = boto3.Session(
             aws_access_key_id=api_key,
             aws_secret_access_key=api_secret,
-            region_name=region,
+            region_name=aws_region,
         )
     else:
-        session = boto3.Session(region_name=region)
+        session = boto3.Session(region_name=aws_region)
 
     credentials = session.get_credentials()
     if not credentials or not credentials.access_key or not credentials.secret_key:
@@ -34,7 +40,7 @@ def get_aws_credentials(api_key: str | None, api_secret: str | None, region: str
     return cast(tuple[str, str, str], (credentials.access_key, credentials.secret_key, region))
 
 
-def to_fnc_ctx(fncs: list[AIFunction]) -> list[dict]:
+def to_fnc_ctx(fncs: list[FunctionTool]) -> list[dict]:
     return [_build_tool_spec(fnc) for fnc in fncs]
 
 
@@ -77,7 +83,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
                     "toolUse": {
                         "toolUseId": msg.call_id,
                         "name": msg.name,
-                        "input": json.loads(msg.arguments),
+                        "input": json.loads(msg.arguments or "{}"),
                     }
                 }
             )
@@ -106,7 +112,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
     return messages, system_message
 
 
-def _build_tool_spec(fnc: AIFunction) -> dict:
+def _build_tool_spec(fnc: FunctionTool) -> dict:
     fnc = llm.utils.build_legacy_openai_schema(fnc, internally_tagged=True)
     return {
         "toolSpec": _strip_nones(

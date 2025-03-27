@@ -296,7 +296,7 @@ async def test_timeout():
             input_task = asyncio.create_task(_input_task2(stream))
 
             try:
-                async for ev in stream:
+                async for _ in stream:
                     pass
             finally:
                 await input_task

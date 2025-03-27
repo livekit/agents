@@ -19,7 +19,15 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
-from livekit.agents import APIConnectionError, APIConnectOptions, APITimeoutError, tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APITimeoutError,
+    tts,
+    utils,
+)
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from .log import logger
 
@@ -43,7 +51,7 @@ class ProsodyConfig:
         rate: Speaking rate. Can be one of "x-slow", "slow", "medium", "fast", "x-fast", or a float. A float value of 1.0 represents normal speed.
         volume: Speaking volume. Can be one of "silent", "x-soft", "soft", "medium", "loud", "x-loud", or a float. A float value of 100 (x-loud) represents the highest volume and it's the default pitch.
         pitch: Speaking pitch. Can be one of "x-low", "low", "medium", "high", "x-high". The default pitch is "medium".
-    """
+    """  # noqa: E501
 
     rate: Literal["x-slow", "slow", "medium", "fast", "x-fast"] | float | None = None
     volume: Literal["silent", "x-soft", "soft", "medium", "loud", "x-loud"] | float | None = None
@@ -75,7 +83,7 @@ class ProsodyConfig:
                 "x-loud",
             ]:
                 raise ValueError(
-                    "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"
+                    "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"  # noqa: E501
                 )
 
         if self.pitch and self.pitch not in [
@@ -117,30 +125,30 @@ class StyleConfig:
 @dataclass
 class _TTSOptions:
     sample_rate: int
-    speech_key: str | None = None
-    speech_region: str | None = None
+    speech_key: NotGivenOr[str] = NOT_GIVEN
+    speech_region: NotGivenOr[str] = NOT_GIVEN
     # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-ntts?tabs=container#use-the-container
-    speech_host: str | None = None
+    speech_host: NotGivenOr[str] = NOT_GIVEN
     # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts
-    voice: str | None = None
+    voice: NotGivenOr[str] = NOT_GIVEN
     # for using custom voices (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python#use-a-custom-endpoint)
-    endpoint_id: str | None = None
+    endpoint_id: NotGivenOr[str] = NOT_GIVEN
     # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
-    speech_auth_token: str | None = None
+    speech_auth_token: NotGivenOr[str] = NOT_GIVEN
     # Useful to specify the language with multi-language voices
-    language: str | None = None
+    language: NotGivenOr[str] = NOT_GIVEN
     # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#adjust-prosody
-    prosody: ProsodyConfig | None = None
-    speech_endpoint: str | None = None
-    style: StyleConfig | None = None
+    prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN
+    speech_endpoint: NotGivenOr[str] = NOT_GIVEN
+    style: NotGivenOr[StyleConfig] = NOT_GIVEN
     # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python
-    on_bookmark_reached_event: Callable | None = None
-    on_synthesis_canceled_event: Callable | None = None
-    on_synthesis_completed_event: Callable | None = None
-    on_synthesis_started_event: Callable | None = None
-    on_synthesizing_event: Callable | None = None
-    on_viseme_event: Callable | None = None
-    on_word_boundary_event: Callable | None = None
+    on_bookmark_reached_event: NotGivenOr[Callable] = NOT_GIVEN
+    on_synthesis_canceled_event: NotGivenOr[Callable] = NOT_GIVEN
+    on_synthesis_completed_event: NotGivenOr[Callable] = NOT_GIVEN
+    on_synthesis_started_event: NotGivenOr[Callable] = NOT_GIVEN
+    on_synthesizing_event: NotGivenOr[Callable] = NOT_GIVEN
+    on_viseme_event: NotGivenOr[Callable] = NOT_GIVEN
+    on_word_boundary_event: NotGivenOr[Callable] = NOT_GIVEN
 
 
 class TTS(tts.TTS):
@@ -148,22 +156,22 @@ class TTS(tts.TTS):
         self,
         *,
         sample_rate: int = 24000,
-        voice: str | None = None,
-        language: str | None = None,
-        prosody: ProsodyConfig | None = None,
-        speech_key: str | None = None,
-        speech_region: str | None = None,
-        speech_host: str | None = None,
-        speech_auth_token: str | None = None,
-        endpoint_id: str | None = None,
-        style: StyleConfig | None = None,
-        on_bookmark_reached_event: Callable | None = None,
-        on_synthesis_canceled_event: Callable | None = None,
-        on_synthesis_completed_event: Callable | None = None,
-        on_synthesis_started_event: Callable | None = None,
-        on_synthesizing_event: Callable | None = None,
-        on_viseme_event: Callable | None = None,
-        on_word_boundary_event: Callable | None = None,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
+        speech_key: NotGivenOr[str] = NOT_GIVEN,
+        speech_region: NotGivenOr[str] = NOT_GIVEN,
+        speech_host: NotGivenOr[str] = NOT_GIVEN,
+        speech_auth_token: NotGivenOr[str] = NOT_GIVEN,
+        endpoint_id: NotGivenOr[str] = NOT_GIVEN,
+        style: NotGivenOr[StyleConfig] = NOT_GIVEN,
+        on_bookmark_reached_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_synthesis_canceled_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_synthesis_completed_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_synthesis_started_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_synthesizing_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_viseme_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_word_boundary_event: NotGivenOr[Callable] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Azure TTS.
@@ -177,7 +185,7 @@ class TTS(tts.TTS):
 
         if sample_rate not in SUPPORTED_SAMPLE_RATE:
             raise ValueError(
-                f"Unsupported sample rate {sample_rate}. Supported sample rates: {list(SUPPORTED_SAMPLE_RATE.keys())}"
+                f"Unsupported sample rate {sample_rate}. Supported sample rates: {list(SUPPORTED_SAMPLE_RATE.keys())}"  # noqa: E501
             )
 
         super().__init__(
@@ -188,21 +196,28 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
-        speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
-        speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
+        if not is_given(speech_host):
+            speech_host = os.environ.get("AZURE_SPEECH_HOST")
+
+        if not is_given(speech_key):
+            speech_key = os.environ.get("AZURE_SPEECH_KEY")
+
+        if not is_given(speech_region):
+            speech_region = os.environ.get("AZURE_SPEECH_REGION")
 
         if not (
-            speech_host or (speech_key and speech_region) or (speech_auth_token and speech_region)
+            is_given(speech_host)
+            or (is_given(speech_key) and is_given(speech_region))
+            or (is_given(speech_auth_token) and is_given(speech_region))
         ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
             )
 
-        if prosody:
+        if is_given(prosody):
             prosody.validate()
 
-        if style:
+        if is_given(style):
             style.validate()
 
         self._opts = _TTSOptions(
@@ -228,21 +243,47 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: str | None = None,
-        language: str | None = None,
-        prosody: ProsodyConfig | None = None,
-        style: StyleConfig | None = None,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
+        style: NotGivenOr[StyleConfig] = NOT_GIVEN,
+        on_bookmark_reached_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_synthesis_canceled_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_synthesis_completed_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_synthesis_started_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_synthesizing_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_viseme_event: NotGivenOr[Callable] = NOT_GIVEN,
+        on_word_boundary_event: NotGivenOr[Callable] = NOT_GIVEN,
     ) -> None:
-        self._opts.voice = voice or self._opts.voice
-        self._opts.language = language or self._opts.language
-        self._opts.prosody = prosody or self._opts.prosody
-        self._opts.style = style or self._opts.style
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(language):
+            self._opts.language = language
+        if is_given(prosody):
+            self._opts.prosody = prosody
+        if is_given(style):
+            self._opts.style = style
+
+        if is_given(on_bookmark_reached_event):
+            self._opts.on_bookmark_reached_event = on_bookmark_reached_event
+        if is_given(on_synthesis_canceled_event):
+            self._opts.on_synthesis_canceled_event = on_synthesis_canceled_event
+        if is_given(on_synthesis_completed_event):
+            self._opts.on_synthesis_completed_event = on_synthesis_completed_event
+        if is_given(on_synthesis_started_event):
+            self._opts.on_synthesis_started_event = on_synthesis_started_event
+        if is_given(on_synthesizing_event):
+            self._opts.on_synthesizing_event = on_synthesizing_event
+        if is_given(on_viseme_event):
+            self._opts.on_viseme_event = on_viseme_event
+        if is_given(on_word_boundary_event):
+            self._opts.on_word_boundary_event = on_word_boundary_event
 
     def synthesize(
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options, opts=self._opts)
 
@@ -254,14 +295,16 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _TTSOptions,
-        conn_options: APIConnectOptions | None = None,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
 
     async def _run(self):
         stream_callback = speechsdk.audio.PushAudioOutputStream(
-            _PushAudioOutputStreamCallback(self._opts, asyncio.get_running_loop(), self._event_ch)
+            _PushAudioOutputStreamCallback(
+                self._opts.sample_rate, asyncio.get_running_loop(), self._event_ch
+            )
         )
         synthesizer = _create_speech_synthesizer(
             config=self._opts,
@@ -344,17 +387,16 @@ class ChunkedStream(tts.ChunkedStream):
 class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallback):
     def __init__(
         self,
-        opts: _TTSOptions,
+        sample_rate: int,
         loop: asyncio.AbstractEventLoop,
         event_ch: utils.aio.ChanSender[tts.SynthesizedAudio],
     ):
         super().__init__()
         self._event_ch = event_ch
-        self._opts = opts
         self._loop = loop
         self._request_id = utils.shortuuid()
 
-        self._bstream = utils.audio.AudioByteStream(sample_rate=opts.sample_rate, num_channels=1)
+        self._bstream = utils.audio.AudioByteStream(sample_rate=sample_rate, num_channels=1)
 
     def write(self, audio_buffer: memoryview) -> int:
         for frame in self._bstream.write(audio_buffer.tobytes()):
@@ -382,38 +424,38 @@ def _create_speech_synthesizer(
 ) -> speechsdk.SpeechSynthesizer:
     # let the SpeechConfig constructor to validate the arguments
     speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key,
-        region=config.speech_region,
-        endpoint=config.speech_endpoint,
-        host=config.speech_host,
-        auth_token=config.speech_auth_token,
-        speech_recognition_language=config.language or "en-US",
+        subscription=config.speech_key if is_given(config.speech_key) else None,
+        region=config.speech_region if is_given(config.speech_region) else None,
+        endpoint=config.speech_endpoint if is_given(config.speech_endpoint) else None,
+        host=config.speech_host if is_given(config.speech_host) else None,
+        auth_token=config.speech_auth_token if is_given(config.speech_auth_token) else None,
+        speech_recognition_language=config.language if is_given(config.language) else "en-US",
     )
 
     speech_config.set_speech_synthesis_output_format(SUPPORTED_SAMPLE_RATE[config.sample_rate])
     stream_config = speechsdk.audio.AudioOutputConfig(stream=stream)
-    if config.voice is not None:
+    if is_given(config.voice):
         speech_config.speech_synthesis_voice_name = config.voice
-        if config.endpoint_id is not None:
+        if is_given(config.endpoint_id):
             speech_config.endpoint_id = config.endpoint_id
 
     synthesizer = speechsdk.SpeechSynthesizer(
         speech_config=speech_config, audio_config=stream_config
     )
 
-    if config.on_bookmark_reached_event:
+    if is_given(config.on_bookmark_reached_event):
         synthesizer.bookmark_reached.connect(config.on_bookmark_reached_event)
-    if config.on_synthesis_canceled_event:
+    if is_given(config.on_synthesis_canceled_event):
         synthesizer.synthesis_canceled.connect(config.on_synthesis_canceled_event)
-    if config.on_synthesis_completed_event:
+    if is_given(config.on_synthesis_completed_event):
         synthesizer.synthesis_completed.connect(config.on_synthesis_completed_event)
-    if config.on_synthesis_started_event:
+    if is_given(config.on_synthesis_started_event):
         synthesizer.synthesis_started.connect(config.on_synthesis_started_event)
-    if config.on_synthesizing_event:
+    if is_given(config.on_synthesizing_event):
         synthesizer.synthesizing.connect(config.on_synthesizing_event)
-    if config.on_viseme_event:
+    if is_given(config.on_viseme_event):
         synthesizer.viseme_received.connect(config.on_viseme_event)
-    if config.on_word_boundary_event:
+    if is_given(config.on_word_boundary_event):
         synthesizer.synthesis_word_boundary.connect(config.on_word_boundary_event)
 
     return synthesizer

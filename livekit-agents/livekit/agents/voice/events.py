@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..llm import ChatMessage, FunctionCall
+from ..llm import ChatMessage, FunctionCall, FunctionCallOutput
 from ..metrics import AgentMetrics
 from ..types import AgentState
 from .speech_handle import SpeechHandle
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 Userdata_T = TypeVar("Userdata_T")
 
 
-class CallContext(Generic[Userdata_T]):
+class RunContext(Generic[Userdata_T]):
     # private ctor
     def __init__(
         self,
@@ -54,6 +54,7 @@ EventTypes = Literal[
     "agent_stopped_speaking",
     "agent_state_changed",
     "conversation_item_added",
+    "function_tools_executed",
     "metrics_collected",
     "speech_created",
 ]
@@ -94,6 +95,12 @@ class MetricsCollectedEvent(BaseModel):
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
     message: ChatMessage
+
+
+class FunctionToolsExecutedEvent(BaseModel):
+    type: Literal["function_tools_executed"] = "function_tools_executed"
+    function_calls: list[FunctionCall]
+    function_call_outputs: list[FunctionCallOutput]
 
 
 class SpeechCreatedEvent(BaseModel):

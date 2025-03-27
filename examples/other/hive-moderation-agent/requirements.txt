@@ -1,0 +1,5 @@
+livekit
+livekit-agents<1.0.0
+python-dotenv
+Pillow
+aiohttp

@@ -27,6 +27,7 @@ const { state, ... } = useVoiceAssistant();
 """
 
 TOPIC_CHAT = "lk.chat"
+TOPIC_TRANSCRIPTION = "lk.transcription"
 
 
 _T = TypeVar("_T")
@@ -51,7 +52,7 @@ class APIConnectOptions:
     Maximum number of retries to connect to the API.
     """
 
-    retry_interval: float = 5.0
+    retry_interval: float = 2.0
     """
     Interval between retries to connect to the API in seconds.
     """
