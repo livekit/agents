@@ -139,7 +139,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
 
-        # Set up component error handlers
         self._setup_error_handlers()
 
     @property
