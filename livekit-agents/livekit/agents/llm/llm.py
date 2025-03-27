@@ -57,9 +57,6 @@ class ChatChunk(BaseModel):
 class LLMFatalErrorEvent:
     llm: LLM
     exception: Exception
-    status_code: int
-    request_id: str | None = None
-    recoverable: bool = False
 
 TEvent = TypeVar("TEvent")
 class LLM(
@@ -133,9 +130,11 @@ class LLMStream(ABC):
                 return await self._run()
             except APIError as e:
                 if self._conn_options.max_retry == 0 or not e.retryable:
+                    logger.error(f"++++ SENDING LLM FATAL ERROR EVENT")
                     self._llm.emit("llm_fatal_error", LLMFatalErrorEvent(self._llm, e))
                     raise
                 elif i == self._conn_options.max_retry:
+                    logger.error(f"++++ SENDING LLM FATAL ERROR EVENT")
                     self._llm.emit("llm_fatal_error", LLMFatalErrorEvent(self._llm, e))
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501

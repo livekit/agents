@@ -62,7 +62,6 @@ class UnrecoverableErrorInfo:
     component: str
     component_instance: Any
     error: Exception
-    retryable: bool
     
     @property
     def message(self) -> str:
@@ -471,11 +470,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._llm is not None:
             @self._llm.on("llm_fatal_error")
             def _on_llm_fatal_error(event: llm.LLMFatalErrorEvent):
+                logger.error(f"++++ RECEIVED LLM FATAL ERROR EVENT")
                 self._handle_component_error(
                     component="llm",
                     component_instance=event.llm,
                     error=event.exception,
-                    recoverable=event.recoverable
                 )
         
         if self._stt is not None:
@@ -490,16 +489,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         component: str,
         component_instance: Any,
         error: Exception,
-        retryable: bool = False
     ) -> None:
 
         error_info = UnrecoverableErrorInfo(
             component=component,
             component_instance=component_instance,
             error=error,
-            retryable=retryable
         )
-        self._emit_error_metrics(component, error, retryable)
+        self._emit_error_metrics(component, error)
         
         if self._error_callback is not None:
             try:

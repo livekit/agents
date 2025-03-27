@@ -24,7 +24,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     def unrecoverable_error_callback(error_info: UnrecoverableErrorInfo) -> ErrorCallbackResult:
-        logger.info(f"++++++ Unrecoverable error: {error_info.message}")
+        logger.info(f"++++++ CALLBACK TRIGGERED")
         ## do something with the error
         return ErrorCallbackResult.END_SESSION
 
