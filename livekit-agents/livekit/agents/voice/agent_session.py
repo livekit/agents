@@ -4,6 +4,7 @@ import asyncio
 import copy
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Generic, Literal, TypeVar, Union, Any, Callable
 
 from livekit import rtc
@@ -12,6 +13,7 @@ from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..llm import ChatContext
 from ..log import logger
+from ..metrics import LLMFatalErrorMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
@@ -52,12 +54,10 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 @dataclass
 class UnrecoverableErrorInfo:
     """Information about an unrecoverable error that occurred in a component."""
-    component: str  # "llm", "stt", "tts", "vad", etc.
-    component_instance: Any  # The actual instance that failed
-    error: Exception  # The original exception
-    status_code: int | None = None  # Status code if available
-    request_id: str | None = None  # Request ID if available
-    recoverable: bool = False  # Whether the error was considered recoverable
+    component: str
+    component_instance: Any
+    error: Exception
+    retryable: bool
     
     @property
     def message(self) -> str:
@@ -65,8 +65,10 @@ class UnrecoverableErrorInfo:
         return str(self.error)
 
 
-# Define the callback type
-ErrorCallbackResult = Literal["end_session", "continue"]
+class ErrorCallbackResult(Enum):
+    END_SESSION = "end_session"
+    CONTINUE = "continue"
+
 UnrecoverableErrorCallback = Callable[[UnrecoverableErrorInfo], ErrorCallbackResult]
 
 
@@ -458,92 +460,63 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """Set up error handlers for components."""
 
         if self._llm is not None:
-            @self._llm.on("custom_error")
-            def _on_llm_availability_changed(event):
-                logger.info(" +++++++ LLM error event received")
+            @self._llm.on("llm_fatal_error")
+            def _on_llm_fatal_error(event: llm.LLMFatalErrorEvent):
                 self._handle_component_error(
                     component="llm",
                     component_instance=event.llm,
-                    error=event.exception
+                    error=event.exception,
+                    recoverable=event.recoverable
                 )
         
         if self._stt is not None:
-            @self._stt.on("stt_availability_changed")
-            def _on_stt_availability_changed(event):
-                if not event.available:
-                    self._handle_component_error(
-                        component="stt",
-                        component_instance=event.stt,
-                        error=Exception("STT became unavailable")
-                    )
-
+            # TODO(shubhra) handle sst error callback
+            pass
         if self._tts is not None:
-            @self._tts.on("tts_availability_changed")
-            def _on_tts_availability_changed(event):
-                if not event.available:
-                    self._handle_component_error(
-                        component="tts",
-                        component_instance=event.tts,
-                        error=Exception("TTS became unavailable")
-                    )
+            # TODO(shubhra) handle sst error callback
+            pass
     
     def _handle_component_error(
         self, 
         component: str,
         component_instance: Any,
         error: Exception,
-        status_code: int | None = None,
-        request_id: str | None = None,
-        recoverable: bool = False
+        retryable: bool = False
     ) -> None:
 
         error_info = UnrecoverableErrorInfo(
             component=component,
             component_instance=component_instance,
             error=error,
-            status_code=status_code,
-            request_id=request_id,
-            recoverable=recoverable
+            retryable=retryable
         )
+        self._emit_error_metrics(component, error, retryable)
         
-        # Emit metrics about the error
-        self._emit_error_metrics(component, error, recoverable)
-        
-        # If there's a callback registered, call it and get the result
         if self._error_callback is not None:
             try:
                 result = self._error_callback(error_info)
-                if result == "end_session":
+                if result == ErrorCallbackResult.END_SESSION:
                     logger.info(f"Ending session due to unrecoverable error in {component}")
                     asyncio.create_task(self.aclose())
-                else:
+                elif result == ErrorCallbackResult.CONTINUE:
                     logger.info(f"Continuing session despite unrecoverable error in {component}")
+                else:
+                    logger.warning(f"Unknown error callback result: {result}")
+                    asyncio.create_task(self.aclose())
             except Exception as e:
                 logger.exception(f"Error in unrecoverable error callback: {e}")
                 # If the callback raises an exception, end the session as a precaution
                 asyncio.create_task(self.aclose())
     
-    def _emit_error_metrics(self, component: str, error: Exception, recoverable: bool) -> None:
+    def _emit_error_metrics(self, component: str, error: Exception) -> None:
         """Emit metrics about an error that occurred."""
         # This implementation would depend on your metrics system
         if component == "llm":
-            # Emit LLM error metrics
-            pass
-        elif component == "stt":
-            # Emit STT error metrics
-            from ..metrics import Error, STTMetrics
-            error_obj = Error(message=str(error), recoverable=recoverable)
-            metrics = STTMetrics(
-                request_id=getattr(error, "request_id", "unknown"),
-                timestamp=time.time(),
-                duration=0.0,  # Unknown duration
-                label=getattr(component_instance, "_label", f"{component}"),
-                audio_duration=0.0,  # Unknown audio duration
-                streamed=False,
-                error=error_obj,
+            # Emit LLM error metrics 
+            metrics = LLMFatalErrorMetrics(
+                error=str(error) #TODO(shubhra) add error reason, code, message
             )
             self.emit("metrics_collected", metrics)
-        elif component == "tts":
-            # Emit TTS error metrics
+        else:
             pass
     

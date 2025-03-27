@@ -5,6 +5,7 @@ from .base import (
     STTMetrics,
     TTSMetrics,
     VADMetrics,
+    LLMFatalErrorMetrics,
 )
 from .usage_collector import UsageCollector, UsageSummary
 from .utils import log_metrics
@@ -16,6 +17,7 @@ __all__ = [
     "EOUMetrics",
     "STTMetrics",
     "TTSMetrics",
+    "LLMFatalErrorMetrics",
     "UsageSummary",
     "UsageCollector",
     "log_metrics",

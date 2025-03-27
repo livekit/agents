@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.agent_session import ErrorCallbackResult, UnrecoverableErrorInfo
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -12,30 +13,22 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-
 class MyTask(Agent):
     def __init__(self):
         super().__init__(
             instructions="You are a helpful assistant that can answer questions and help with tasks.",  # noqa: E501
         )
 
-    @function_tool()
-    async def open_door(self):
-        await self.agent.say("Opening the door...")
-
-        print("Door opened")
-
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    def unrecoverable_error_callback(error_info):
+    def unrecoverable_error_callback(error_info: UnrecoverableErrorInfo) -> ErrorCallbackResult:
         logger.info(f"++++++ Unrecoverable error: {error_info.message}")
-        ## do 
-        return "end_session"
+        ## do something with the error
+        return ErrorCallbackResult.END_SESSION
 
     session = AgentSession(
-        # llm=openai.realtime.RealtimeModel(),
         stt=deepgram.STT(),
         llm=openai.LLM(),
         tts=cartesia.TTS(),

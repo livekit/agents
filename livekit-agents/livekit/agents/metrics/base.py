@@ -75,6 +75,10 @@ class EOUMetrics(BaseModel):
     speech_id: str | None = None
     error: Error | None = None
 
+class LLMFatalErrorMetrics(BaseModel):
+    type: Literal["llm_fatal_error"] = "llm_fatal_error"
+    error: str
+
 
 AgentMetrics = Union[
     STTMetrics,
