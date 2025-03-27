@@ -461,6 +461,7 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._next_in_chain = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
         self._capturing = False
+        self._pushed_duration: float = 0.0
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         # using barrier() on capture should be sufficient, flush() must not be called if
@@ -470,6 +471,7 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._capturing = True
         await super().capture_frame(frame)
         await self._next_in_chain.capture_frame(frame)  # passthrough audio
+        self._pushed_duration += frame.duration
 
         if not self._synchronizer.enabled:
             return
@@ -483,7 +485,8 @@ class _SyncedAudioOutput(io.AudioOutput):
         if not self._synchronizer.enabled:
             return
 
-        if not self._capturing:
+        if not self._pushed_duration:
+            # in case there is no audio after text was pushed, rotate the segment
             self._synchronizer.rotate_segment()
             return
 
@@ -492,9 +495,6 @@ class _SyncedAudioOutput(io.AudioOutput):
 
     def clear_buffer(self) -> None:
         super().clear_buffer()
-
-        if not self._capturing:
-            self._synchronizer.rotate_segment()
 
         self._next_in_chain.clear_buffer()
         self._capturing = False
@@ -510,6 +510,7 @@ class _SyncedAudioOutput(io.AudioOutput):
             playback_position=playback_position, interrupted=interrupted
         )
         self._synchronizer.rotate_segment()
+        self._pushed_duration = 0.0
 
     def on_attached(self) -> None:
         super().on_attached()
