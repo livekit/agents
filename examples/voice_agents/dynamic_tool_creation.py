@@ -1,13 +1,13 @@
 import logging
 import random
+from enum import Enum
+from typing import Literal
+
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
 from livekit.plugins import openai
-from typing import Literal
-from enum import Enum
-from pydantic import BaseModel
-
 
 logger = logging.getLogger("grok-agent")
 logger.setLevel(logging.INFO)
