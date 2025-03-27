@@ -224,16 +224,19 @@ class STT(stt.STT):
                 "input_audio_transcription": {
                     "model": self._opts.model,
                     "prompt": self._opts.prompt or "",
-                    "language": self._opts.language or "",
                 },
                 "turn_detection": self._opts.turn_detection,
             },
         }
+        if self._opts.language:
+            realtime_config["session"]["input_audio_transcription"]["language"] = (
+                self._opts.language
+            )
 
         if self._opts.noise_reduction_type:
-            realtime_config["session"]["input_audio_transcription"][
-                "noise_reduction_type"
-            ] = self._opts.noise_reduction_type
+            realtime_config["session"]["input_audio_noise_reduction"] = {
+                "type": self._opts.noise_reduction_type
+            }
 
         query_params: dict[str, str] = {
             "intent": "transcription",
