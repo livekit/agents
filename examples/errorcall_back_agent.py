@@ -3,7 +3,6 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.agent_session import ErrorCallbackResult, UnrecoverableErrorInfo
 from livekit.plugins import cartesia, deepgram, openai, silero
@@ -12,6 +11,7 @@ logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
 
 class MyTask(Agent):
     def __init__(self):
@@ -24,7 +24,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     def unrecoverable_error_callback(error_info: UnrecoverableErrorInfo) -> ErrorCallbackResult:
-        logger.info(f"++++++ CALLBACK TRIGGERED")
+        logger.info("++++++ CALLBACK TRIGGERED")
         ## do something with the error
         return ErrorCallbackResult.END_SESSION
 

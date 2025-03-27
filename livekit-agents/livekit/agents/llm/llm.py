@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
 
@@ -53,15 +53,19 @@ class ChatChunk(BaseModel):
     delta: ChoiceDelta | None = None
     usage: CompletionUsage | None = None
 
+
 @dataclass
 class LLMFatalErrorEvent:
     llm: LLM
     exception: Exception
 
+
 TEvent = TypeVar("TEvent")
+
+
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"],Literal["llm_fatal_error"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected"], Literal["llm_fatal_error"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
@@ -130,16 +134,16 @@ class LLMStream(ABC):
                 return await self._run()
             except APIError as e:
                 if self._conn_options.max_retry == 0 or not e.retryable:
-                    logger.error(f"++++ SENDING LLM FATAL ERROR EVENT")
+                    logger.error("++++ SENDING LLM FATAL ERROR EVENT")
                     self._llm.emit("llm_fatal_error", LLMFatalErrorEvent(self._llm, e))
                     raise
                 elif i == self._conn_options.max_retry:
-                    logger.error(f"++++ SENDING LLM FATAL ERROR EVENT")
+                    logger.error("++++ SENDING LLM FATAL ERROR EVENT")
                     self._llm.emit("llm_fatal_error", LLMFatalErrorEvent(self._llm, e))
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
-                    
+
                 else:
                     logger.warning(
                         f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501

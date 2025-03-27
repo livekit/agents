@@ -5,7 +5,7 @@ import copy
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Generic, Literal, TypeVar, Union, Any, Callable
+from typing import Any, Callable, Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -59,10 +59,11 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 @dataclass
 class UnrecoverableErrorInfo:
     """Information about an unrecoverable error that occurred in a component."""
+
     component: str
     component_instance: Any
     error: Exception
-    
+
     @property
     def message(self) -> str:
         """Human-readable error message."""
@@ -72,6 +73,7 @@ class UnrecoverableErrorInfo:
 class ErrorCallbackResult(Enum):
     END_SESSION = "end_session"
     CONTINUE = "continue"
+
 
 UnrecoverableErrorCallback = Callable[[UnrecoverableErrorInfo], ErrorCallbackResult]
 
@@ -114,7 +116,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts = tts or None
 
         # Store the error callback
-        self._error_callback = unrecoverable_error_callback if is_given(unrecoverable_error_callback) else None
+        self._error_callback = (
+            unrecoverable_error_callback if is_given(unrecoverable_error_callback) else None
+        )
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -454,49 +458,49 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def set_unrecoverable_error_callback(self, callback: UnrecoverableErrorCallback) -> None:
         """Set a callback to be called when an unrecoverable error occurs.
-        
+
         The callback will receive detailed information about the error and can return
         'end_session' to terminate the session or 'continue' to try to continue despite the error.
-        
+
         Args:
             callback: The callback function to call when an unrecoverable error occurs
         """
         self._error_callback = callback
-    
+
     def _setup_error_handlers(self) -> None:
         """Set up error handlers for components."""
 
         if self._llm is not None:
+
             @self._llm.on("llm_fatal_error")
             def _on_llm_fatal_error(event: llm.LLMFatalErrorEvent):
-                logger.error(f"++++ RECEIVED LLM FATAL ERROR EVENT")
+                logger.error("++++ RECEIVED LLM FATAL ERROR EVENT")
                 self._handle_component_error(
                     component="llm",
                     component_instance=event.llm,
                     error=event.exception,
                 )
-        
+
         if self._stt is not None:
             # TODO(shubhra) handle sst error callback
             pass
         if self._tts is not None:
             # TODO(shubhra) handle sst error callback
             pass
-    
+
     def _handle_component_error(
-        self, 
+        self,
         component: str,
         component_instance: Any,
         error: Exception,
     ) -> None:
-
         error_info = UnrecoverableErrorInfo(
             component=component,
             component_instance=component_instance,
             error=error,
         )
         self._emit_error_metrics(component, error)
-        
+
         if self._error_callback is not None:
             try:
                 result = self._error_callback(error_info)
@@ -512,15 +516,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 logger.exception(f"Error in unrecoverable error callback: {e}")
                 # If the callback raises an exception, end the session as a precaution
                 asyncio.create_task(self.aclose())
-    
+
     def _emit_error_metrics(self, component: str, error: Exception) -> None:
         """Emit metrics about an error that occurred."""
         if component == "llm":
-            # Emit LLM error metrics 
+            # Emit LLM error metrics
             metrics = LLMFatalErrorMetrics(
-                error=str(error) #TODO(shubhra) add error reason, code, message
+                error=str(error)  # TODO(shubhra) add error reason, code, message
             )
             self.emit("metrics_collected", metrics)
         else:
             pass
-    

@@ -1,11 +1,11 @@
 from .base import (
     AgentMetrics,
     EOUMetrics,
+    LLMFatalErrorMetrics,
     LLMMetrics,
     STTMetrics,
     TTSMetrics,
     VADMetrics,
-    LLMFatalErrorMetrics,
 )
 from .usage_collector import UsageCollector, UsageSummary
 from .utils import log_metrics
