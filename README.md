@@ -113,7 +113,7 @@ You'll need the following environment variables for this example:
 
 ---
 
-This code snippet is abbreviated. For the full example, see [multi-agent.py](examples/voice-agents/multi-agent.py)
+This code snippet is abbreviated. For the full example, see [multi_agent.py](examples/voice_agents/multi_agent.py)
 
 ```python
 ...
