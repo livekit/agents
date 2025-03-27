@@ -19,6 +19,7 @@ from .audio_recognition import AudioRecognition, RecognitionHooks
 from .events import (
     AgentStartedSpeakingEvent,
     AgentStoppedSpeakingEvent,
+    FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -969,7 +970,7 @@ class AgentActivity(RecognitionHooks):
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         await exe_task
 
-        # important: no agent ouput should be used after this point
+        # important: no agent output should be used after this point
 
         if len(fnc_outputs) > 0:
             if speech_handle.step_index >= self._session.options.max_tool_steps:
@@ -987,6 +988,10 @@ class AgentActivity(RecognitionHooks):
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             new_agent_task: Agent | None = None
             ignore_task_switch = False
+            fnc_executed_ev = FunctionToolsExecutedEvent(
+                function_calls=[],
+                function_call_outputs=[],
+            )
             for py_out in fnc_outputs:
                 sanitized_out = py_out.sanitize()
 
@@ -994,13 +999,19 @@ class AgentActivity(RecognitionHooks):
                     new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
+                # add the function call and output to the event, including the None outputs
+                fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
+                fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
+
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
                         "expected to receive only one AgentTask from the tool executions",
                     )
                     ignore_task_switch = True
+                    # TODO(long): should we mark the function call as failed to notify the LLM?
 
                 new_agent_task = sanitized_out.agent_task
+            self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.draining
             if not ignore_task_switch and new_agent_task is not None:
