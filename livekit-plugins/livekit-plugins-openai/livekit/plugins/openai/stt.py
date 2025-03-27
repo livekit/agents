@@ -104,8 +104,14 @@ class STT(stt.STT):
                 streaming=use_realtime, interim_results=use_realtime
             )
         )
-        if detect_language:
-            language = ""
+        if detect_language and use_realtime:
+            raise ValueError(
+                "openai stt: detect_language is not supported when using realtime transcription"
+            )
+        if use_realtime and not language:
+            raise ValueError(
+                "openai stt: language is required when using realtime transcription"
+            )
 
         if turn_detection is None:
             turn_detection = {
@@ -224,16 +230,16 @@ class STT(stt.STT):
                 "input_audio_transcription": {
                     "model": self._opts.model,
                     "prompt": self._opts.prompt or "",
-                    "language": self._opts.language or "",
+                    "language": self._opts.language,
                 },
                 "turn_detection": self._opts.turn_detection,
             },
         }
 
         if self._opts.noise_reduction_type:
-            realtime_config["session"]["input_audio_transcription"][
-                "noise_reduction_type"
-            ] = self._opts.noise_reduction_type
+            realtime_config["session"]["input_audio_noise_reduction"] = {
+                "type": self._opts.noise_reduction_type
+            }
 
         query_params: dict[str, str] = {
             "intent": "transcription",
