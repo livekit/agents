@@ -18,7 +18,7 @@ from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero, turn_detector
 
-# uncomment to enable Krisp background voice/noise cancellation, currently supported on Linux and MacOS
+# uncomment to enable Krisp background voice/noise cancellation, currently supported on Linux and MacOS  # noqa: E501
 # from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")
@@ -39,7 +39,7 @@ class MyAgent(Agent):
         # according to its instructions
         self.session.generate_reply(instructions="greet the user and ask about their day")
 
-    # all functions annotated with @function_tool will be passed to the LLM when this agent is active
+    # all functions annotated with @function_tool will be passed to the LLM when this agent is active # noqa: E501
     @function_tool
     async def lookup_weather(
         self,
@@ -55,7 +55,7 @@ class MyAgent(Agent):
             location: The location they are asking for
             latitude: The latitude of the location
             longitude: The longitude of the location
-        """
+        """  # noqa: E501
 
         logger.info(f"Looking up weather for {location} at {latitude}, {longitude}")
 
@@ -99,7 +99,7 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(log_usage)
 
     # wait for a participant to join the room
-    participant = await ctx.wait_for_participant()
+    await ctx.wait_for_participant()
 
     await session.start(
         agent=MyAgent(),
