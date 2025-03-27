@@ -157,7 +157,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
-    def update_options(self, *, voice: str, temperature: float | None) -> None:
+    def update_options(self, *, voice: str, temperature: float) -> None:
         self._opts.voice = voice
         self._opts.temperature = temperature
         for sess in self._sessions:
@@ -423,7 +423,7 @@ class RealtimeSession(
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        temperature: NotGivenOr[float | None] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
