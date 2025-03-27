@@ -17,7 +17,9 @@ from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks
 from .events import (
-    ConversationItemAddedEvent,
+    AgentStartedSpeakingEvent,
+    AgentStoppedSpeakingEvent,
+    FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -567,11 +569,8 @@ class AgentActivity(RecognitionHooks):
             "user_input_transcribed",
             UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
         )
-        self._session.emit(
-            "conversation_item_added",
-            ConversationItemAddedEvent(
-                message=llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
-            ),
+        self._session._conversation_item_added(
+            llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
         )
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
@@ -761,13 +760,15 @@ class AgentActivity(RecognitionHooks):
             source=self._agent.transcription_node(text_source, model_settings),
         )
         tasks.append(forward_text)
+
+        def _on_first_frame(_: asyncio.Future) -> None:
+            self._session.emit("agent_started_speaking", AgentStartedSpeakingEvent())
+            self._session._update_agent_state(AgentState.SPEAKING)
+
         if audio_output is None:
             # update the agent state based on text if no audio output
-            text_out.first_text_fut.add_done_callback(
-                lambda _: self._session._update_agent_state(AgentState.SPEAKING)
-            )
-
-        if audio_output is not None:
+            text_out.first_text_fut.add_done_callback(_on_first_frame)
+        else:
             if audio is None:
                 # generate audio using TTS
                 tts_task, tts_gen_data = perform_tts_inference(
@@ -788,9 +789,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 tasks.append(forward_task)
 
-            audio_out.first_frame_fut.add_done_callback(
-                lambda _: self._session._update_agent_state(AgentState.SPEAKING)
-            )
+            audio_out.first_frame_fut.add_done_callback(_on_first_frame)
 
         await speech_handle.wait_if_not_interrupted([*tasks])
 
@@ -810,7 +809,9 @@ class AgentActivity(RecognitionHooks):
             msg = self._agent._chat_ctx.add_message(
                 role="assistant", content=text_out.text, interrupted=speech_handle.interrupted
             )
-            self._session.emit("conversation_item_added", ConversationItemAddedEvent(message=msg))
+            self._session._conversation_item_added(msg)
+
+        self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -846,9 +847,7 @@ class AgentActivity(RecognitionHooks):
         if user_input is not None:
             user_msg = chat_ctx.add_message(role="user", content=user_input)
             self._agent._chat_ctx.items.append(user_msg)
-            self._session.emit(
-                "conversation_item_added", ConversationItemAddedEvent(message=user_msg)
-            )
+            self._session._conversation_item_added(user_msg)
 
         if instructions is not None:
             try:
@@ -891,6 +890,10 @@ class AgentActivity(RecognitionHooks):
         )
         tasks.append(forward_task)
 
+        def _on_first_frame(_: asyncio.Future) -> None:
+            self._session.emit("agent_started_speaking", AgentStartedSpeakingEvent())
+            self._session._update_agent_state(AgentState.SPEAKING)
+
         if audio_output is not None:
             assert tts_gen_data is not None
             # TODO(theomonnom): should the audio be added to the chat_context too?
@@ -898,13 +901,10 @@ class AgentActivity(RecognitionHooks):
                 audio_output=audio_output, tts_output=tts_gen_data.audio_ch
             )
             tasks.append(forward_task)
-            audio_out.first_frame_fut.add_done_callback(
-                lambda _: self._session._update_agent_state(AgentState.SPEAKING)
-            )
+
+            audio_out.first_frame_fut.add_done_callback(_on_first_frame)
         else:
-            text_out.first_text_fut.add_done_callback(
-                lambda _: self._session._update_agent_state(AgentState.SPEAKING)
-            )
+            text_out.first_text_fut.add_done_callback(_on_first_frame)
 
         # start to execute tools (only after play())
         exe_task, fnc_outputs = perform_tool_executions(
@@ -930,7 +930,7 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.items.extend(_tools_messages)
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*tasks, exe_task)
+            await utils.aio.cancel_and_wait(*tasks)
 
             # if the audio playout was enabled, clear the buffer
             if audio_output is not None:
@@ -951,10 +951,10 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._agent._chat_ctx.items.append(msg)
                 self._session._update_agent_state(AgentState.LISTENING)
-                self._session.emit(
-                    "conversation_item_added", ConversationItemAddedEvent(message=msg)
-                )
+                self._session._conversation_item_added(msg)
 
+            speech_handle._mark_playout_done()
+            await utils.aio.cancel_and_wait(exe_task)
             return
 
         if text_out.text:
@@ -962,14 +962,15 @@ class AgentActivity(RecognitionHooks):
                 role="assistant", content=text_out.text, id=llm_gen_data.id, interrupted=False
             )
             self._agent._chat_ctx.items.append(msg)
-            self._session.emit("conversation_item_added", ConversationItemAddedEvent(message=msg))
+            self._session._conversation_item_added(msg)
 
+        self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
         log_event("playout completed", speech_id=speech_handle.id)
 
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
         await exe_task
 
-        # important: no agent ouput should be used after this point
+        # important: no agent output should be used after this point
 
         if len(fnc_outputs) > 0:
             if speech_handle.step_index >= self._session.options.max_tool_steps:
@@ -987,6 +988,10 @@ class AgentActivity(RecognitionHooks):
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             new_agent_task: Agent | None = None
             ignore_task_switch = False
+            fnc_executed_ev = FunctionToolsExecutedEvent(
+                function_calls=[],
+                function_call_outputs=[],
+            )
             for py_out in fnc_outputs:
                 sanitized_out = py_out.sanitize()
 
@@ -994,13 +999,19 @@ class AgentActivity(RecognitionHooks):
                     new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
+                # add the function call and output to the event, including the None outputs
+                fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
+                fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
+
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
                         "expected to receive only one AgentTask from the tool executions",
                     )
                     ignore_task_switch = True
+                    # TODO(long): should we mark the function call as failed to notify the LLM?
 
                 new_agent_task = sanitized_out.agent_task
+            self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.draining
             if not ignore_task_switch and new_agent_task is not None:
@@ -1054,11 +1065,15 @@ class AgentActivity(RecognitionHooks):
 
         assert self._rt_session is not None, "rt_session is not available"
 
+        await speech_handle.wait_if_not_interrupted(
+            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
+        )
+
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
             await self._rt_session.update_chat_ctx(chat_ctx)
-            self._session.emit("conversation_item_added", ConversationItemAddedEvent(message=msg))
+            self._session._conversation_item_added(msg)
 
         self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
@@ -1109,48 +1124,48 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             return  # TODO(theomonnom): remove the message from the serverside history
 
+        def _on_first_frame(_: asyncio.Future) -> None:
+            self._session.emit("agent_started_speaking", AgentStartedSpeakingEvent())
+            self._session._update_agent_state(AgentState.SPEAKING)
+
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
             outputs: list[tuple[str, _TextOutput, _AudioOutput | None]],
         ) -> None:
             forward_tasks: list[asyncio.Task] = []
-            async for msg in generation_ev.message_stream:
-                if len(forward_tasks) > 0:
-                    logger.warning(
-                        "expected to receive only one message generation from the realtime API"
-                    )
-                    break
+            try:
+                async for msg in generation_ev.message_stream:
+                    if len(forward_tasks) > 0:
+                        logger.warning(
+                            "expected to receive only one message generation from the realtime API"
+                        )
+                        break
 
-                forward_task, text_out = perform_text_forwarding(
-                    text_output=text_output,
-                    source=self._agent.transcription_node(msg.text_stream, model_settings),
-                )
-                forward_tasks.append(forward_task)
-
-                audio_out = None
-                if audio_output is not None:
-                    forward_task, audio_out = perform_audio_forwarding(
-                        audio_output=audio_output, tts_output=msg.audio_stream
+                    forward_task, text_out = perform_text_forwarding(
+                        text_output=text_output,
+                        source=self._agent.transcription_node(msg.text_stream, model_settings),
                     )
                     forward_tasks.append(forward_task)
-                    audio_out.first_frame_fut.add_done_callback(
-                        lambda _: self._session._update_agent_state(AgentState.SPEAKING)
-                    )
-                else:
-                    text_out.first_text_fut.add_done_callback(
-                        lambda _: self._session._update_agent_state(AgentState.SPEAKING)
-                    )
 
-                outputs.append((msg.message_id, text_out, audio_out))
+                    audio_out = None
+                    if audio_output is not None:
+                        forward_task, audio_out = perform_audio_forwarding(
+                            audio_output=audio_output, tts_output=msg.audio_stream
+                        )
+                        forward_tasks.append(forward_task)
+                        audio_out.first_frame_fut.add_done_callback(_on_first_frame)
+                    else:
+                        text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-            try:
+                    outputs.append((msg.message_id, text_out, audio_out))
+
                 await asyncio.gather(*forward_tasks)
             finally:
                 await utils.aio.cancel_and_wait(*forward_tasks)
 
         message_outputs: list[tuple[str, _TextOutput, _AudioOutput | None]] = []
         tasks = [
-            self._create_speech_task(
+            asyncio.create_task(
                 _read_messages(message_outputs),
                 name="AgentActivity.realtime_generation.read_messages",
             )
@@ -1174,7 +1189,7 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state(AgentState.LISTENING)
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*tasks, exe_task)
+            await utils.aio.cancel_and_wait(*tasks)
 
             if audio_output is not None:
                 audio_output.clear_buffer()
@@ -1187,6 +1202,9 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._session._update_agent_state(AgentState.LISTENING)
 
+            speech_handle._mark_playout_done()
+            await utils.aio.cancel_and_wait(exe_task)
+
             # TODO(theomonnom): truncate message (+ OAI serverside mesage)
 
             for msg_id, text_out, _ in message_outputs:
@@ -1196,11 +1214,10 @@ class AgentActivity(RecognitionHooks):
                     id=msg_id,
                     interrupted=True,
                 )
-                self._session.emit(
-                    "conversation_item_added", ConversationItemAddedEvent(message=msg)
-                )
+                self._session._conversation_item_added(msg)
             return
 
+        self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
         for msg_id, text_out, _ in message_outputs:
@@ -1210,7 +1227,7 @@ class AgentActivity(RecognitionHooks):
                 id=msg_id,
                 interrupted=False,
             )
-            self._session.emit("conversation_item_added", ConversationItemAddedEvent(message=msg))
+            self._session._conversation_item_added(msg)
 
         await exe_task
 

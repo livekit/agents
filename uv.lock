@@ -1152,6 +1152,7 @@ source = { editable = "livekit-agents" }
 dependencies = [
     { name = "aiohttp" },
     { name = "click" },
+    { name = "colorama" },
     { name = "docstring-parser" },
     { name = "eval-type-backport" },
     { name = "livekit" },
@@ -1167,13 +1168,76 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+anthropic = [
+    { name = "livekit-plugins-anthropic" },
+]
+assemblyai = [
+    { name = "livekit-plugins-assemblyai" },
+]
+aws = [
+    { name = "livekit-plugins-aws" },
+]
+azure = [
+    { name = "livekit-plugins-azure" },
+]
+cartesia = [
+    { name = "livekit-plugins-cartesia" },
+]
+clova = [
+    { name = "livekit-plugins-clova" },
+]
 codecs = [
     { name = "av" },
     { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
+deepgram = [
+    { name = "livekit-plugins-deepgram" },
+]
+elevenlabs = [
+    { name = "livekit-plugins-elevenlabs" },
+]
+fal = [
+    { name = "livekit-plugins-fal" },
+]
+google = [
+    { name = "livekit-plugins-google" },
+]
+groq = [
+    { name = "livekit-plugins-groq" },
+]
 images = [
     { name = "pillow" },
+]
+llama-index = [
+    { name = "livekit-plugins-llama-index" },
+]
+neuphonic = [
+    { name = "livekit-plugins-neuphonic" },
+]
+nltk = [
+    { name = "livekit-plugins-nltk" },
+]
+openai = [
+    { name = "livekit-plugins-openai" },
+]
+playai = [
+    { name = "livekit-plugins-playai" },
+]
+rag = [
+    { name = "livekit-plugins-rag" },
+]
+rime = [
+    { name = "livekit-plugins-rime" },
+]
+silero = [
+    { name = "livekit-plugins-silero" },
+]
+speechmatics = [
+    { name = "livekit-plugins-speechmatics" },
+]
+turn-detector = [
+    { name = "livekit-plugins-turn-detector" },
 ]
 
 [package.metadata]
@@ -1181,10 +1245,32 @@ requires-dist = [
     { name = "aiohttp", specifier = "~=3.10" },
     { name = "av", marker = "extra == 'codecs'", specifier = ">=12.0.0" },
     { name = "click", specifier = "~=8.1" },
+    { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
     { name = "livekit", specifier = ">=0.21.1" },
     { name = "livekit-api", specifier = ">=0.8.2" },
+    { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
+    { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
+    { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
+    { name = "livekit-plugins-azure", marker = "extra == 'azure'", editable = "livekit-plugins/livekit-plugins-azure" },
+    { name = "livekit-plugins-cartesia", marker = "extra == 'cartesia'", editable = "livekit-plugins/livekit-plugins-cartesia" },
+    { name = "livekit-plugins-clova", marker = "extra == 'clova'", editable = "livekit-plugins/livekit-plugins-clova" },
+    { name = "livekit-plugins-deepgram", marker = "extra == 'deepgram'", editable = "livekit-plugins/livekit-plugins-deepgram" },
+    { name = "livekit-plugins-elevenlabs", marker = "extra == 'elevenlabs'", editable = "livekit-plugins/livekit-plugins-elevenlabs" },
+    { name = "livekit-plugins-fal", marker = "extra == 'fal'", editable = "livekit-plugins/livekit-plugins-fal" },
+    { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
+    { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
+    { name = "livekit-plugins-llama-index", marker = "extra == 'llama-index'", editable = "livekit-plugins/livekit-plugins-llama-index" },
+    { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
+    { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
+    { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
+    { name = "livekit-plugins-playai", marker = "extra == 'playai'", editable = "livekit-plugins/livekit-plugins-playai" },
+    { name = "livekit-plugins-rag", marker = "extra == 'rag'", editable = "livekit-plugins/livekit-plugins-rag" },
+    { name = "livekit-plugins-rime", marker = "extra == 'rime'", editable = "livekit-plugins/livekit-plugins-rime" },
+    { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
+    { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
+    { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "livekit-protocol", specifier = ">=0.8.2" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
     { name = "pillow", marker = "extra == 'images'", specifier = ">=10.3.0" },
@@ -1196,7 +1282,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["codecs", "images"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "google", "groq", "images", "llama-index", "neuphonic", "nltk", "openai", "playai", "rag", "rime", "silero", "speechmatics", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1432,7 +1518,7 @@ vertex = [
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", extras = ["realtime"], specifier = ">=1.65" },
+    { name = "openai", extras = ["realtime"], specifier = ">=1.68.2" },
 ]
 provides-extras = ["vertex"]
 
@@ -1973,7 +2059,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "1.66.3"
+version = "1.68.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1985,9 +2071,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a3/77/5172104ca1df35ed2ed8fb26dbc787f721c39498fc51d666c4db07756a0c/openai-1.66.3.tar.gz", hash = "sha256:8dde3aebe2d081258d4159c4cb27bdc13b5bb3f7ea2201d9bd940b9a89faf0c9", size = 397244 }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/6b/6b002d5d38794645437ae3ddb42083059d556558493408d39a0fcea608bc/openai-1.68.2.tar.gz", hash = "sha256:b720f0a95a1dbe1429c0d9bb62096a0d98057bcda82516f6e8af10284bdd5b19", size = 413429 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/78/5a/e20182f7b6171642d759c548daa0ba20a1d3ac10d2bd0a13fd75704a9ac3/openai-1.66.3-py3-none-any.whl", hash = "sha256:a427c920f727711877ab17c11b95f1230b27767ba7a01e5b66102945141ceca9", size = 567400 },
+    { url = "https://files.pythonhosted.org/packages/fd/34/cebce15f64eb4a3d609a83ac3568d43005cc9a1cba9d7fde5590fd415423/openai-1.68.2-py3-none-any.whl", hash = "sha256:24484cb5c9a33b58576fdc5acf0e5f92603024a4e39d0b99793dfa1eb14c2b36", size = 606073 },
 ]
 
 [package.optional-dependencies]

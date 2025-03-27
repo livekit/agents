@@ -7,10 +7,15 @@ from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOption
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import cartesia, deepgram, openai
 
-logger = logging.getLogger("push-to-talk-example")
+logger = logging.getLogger("push-to-talk")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
+## This example demonstrates how to use the push-to-talk for multi-participant
+## conversations with a voice agent
+## It disables audio input by default, and only enables it when the client explicitly
+## triggers the `start_turn` RPC method
 
 
 class MyAgent(Agent):

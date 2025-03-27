@@ -20,7 +20,12 @@ from . import io, room_io
 from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
-from .events import AgentEvent, AgentStateChangedEvent, EventTypes
+from .events import (
+    AgentEvent,
+    AgentStateChangedEvent,
+    ConversationItemAddedEvent,
+    EventTypes,
+)
 from .speech_handle import SpeechHandle
 
 
@@ -417,6 +422,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent_state = state
         self.emit("agent_state_changed", AgentStateChangedEvent(state=state))
+
+    def _conversation_item_added(self, message: llm.ChatMessage) -> None:
+        self._chat_ctx.items.append(message)
+        self.emit("conversation_item_added", ConversationItemAddedEvent(message=message))
 
     # -- User changed input/output streams/sinks --
 

@@ -5,6 +5,11 @@ from itertools import cycle
 from typing import Optional
 
 from livekit import api, rtc
+from livekit.agents.types import (
+    ATTRIBUTE_TRANSCRIPTION_FINAL,
+    ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+    TOPIC_TRANSCRIPTION,
+)
 
 tasks = set()
 
@@ -98,14 +103,14 @@ async def main(room: rtc.Room, room_name: str):
     def on_text_received(reader: rtc.TextStreamReader, participant_identity: str):
         async def _on_text_received():
             stream_id = reader.info.stream_id
-            track_id = reader.info.attributes.get("lk.transcribed_track_id", None)
+            track_id = reader.info.attributes.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID, None)
 
             async for chunk in reader:
                 await stream_printer.queue.put(
                     StreamMessage(participant_identity, track_id, stream_id, content=chunk)
                 )
 
-            final = reader.info.attributes.get("lk.transcription_final", "null")
+            final = reader.info.attributes.get(ATTRIBUTE_TRANSCRIPTION_FINAL, "null")
             await stream_printer.queue.put(
                 StreamMessage(participant_identity, track_id, stream_id, content="", final=final)
             )
@@ -121,7 +126,7 @@ async def main(room: rtc.Room, room_name: str):
         print(f"Connected to room: {room.name}")
 
         # Register handler for text messages on lk.chat topic
-        room.register_text_stream_handler("lk.chat", on_text_received)
+        room.register_text_stream_handler(TOPIC_TRANSCRIPTION, on_text_received)
 
         print("Listening for chat messages. Press Ctrl+C to exit...")
         # Instead of running the loop forever here, we'll use an Event to keep the connection alive
@@ -142,7 +147,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 2:
-        print("Usage: python ds_chat_test.py <room-name>")
+        print("Usage: python datastream-chat-listener.py <room-name>")
         sys.exit(1)
 
     room_name = sys.argv[1]

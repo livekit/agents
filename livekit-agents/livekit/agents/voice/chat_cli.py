@@ -47,6 +47,7 @@ class _AudioInput(io.AudioInput):
 
 class _TextOutput(io.TextOutput):
     def __init__(self, cli: ChatCLI) -> None:
+        super().__init__(next_in_chain=None)
         self._cli = cli
         self._capturing = False
 
@@ -183,6 +184,10 @@ class ChatCLI:
             async def win_reader():
                 while True:
                     ch = await self._loop.run_in_executor(None, msvcrt.getch)
+
+                    if ch == b"\x03":  # Ctrl+C on Windows
+                        break
+
                     try:
                         ch = ch.decode("utf-8")
                     except Exception:
