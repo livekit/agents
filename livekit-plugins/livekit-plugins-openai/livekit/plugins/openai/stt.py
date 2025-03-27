@@ -104,10 +104,12 @@ class STT(stt.STT):
                 streaming=use_realtime, interim_results=use_realtime
             )
         )
-        if detect_language and use_realtime:
-            raise ValueError(
-                "openai stt: detect_language is not supported when using realtime transcription"
-            )
+        if detect_language:
+            language = ""
+            if use_realtime:
+                raise ValueError(
+                    "openai stt: detect_language is not supported when using realtime transcription"
+                )
         if use_realtime and not language:
             raise ValueError(
                 "openai stt: language is required when using realtime transcription"
