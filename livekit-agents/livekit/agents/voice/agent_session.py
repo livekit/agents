@@ -516,7 +516,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     
     def _emit_error_metrics(self, component: str, error: Exception) -> None:
         """Emit metrics about an error that occurred."""
-        # This implementation would depend on your metrics system
         if component == "llm":
             # Emit LLM error metrics 
             metrics = LLMFatalErrorMetrics(
