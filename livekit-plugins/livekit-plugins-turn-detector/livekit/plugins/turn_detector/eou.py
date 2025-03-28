@@ -141,26 +141,30 @@ class EOUModel:
         messages = []
 
         for msg in chat_ctx.items:
-            if msg.role not in ("user", "assistant"):
-                continue
-
-            if isinstance(msg.content, str):
-                messages.append(
-                    {
-                        "role": msg.role,
-                        "content": msg.content,
-                    }
-                )
-            elif isinstance(msg.content, list):
-                for cnt in msg.content:
-                    if isinstance(cnt, str):
+            # ignore function calls and function call outputs
+            if msg.type == "message":
+                for content in msg.content:
+                    if isinstance(content, str):
                         messages.append(
                             {
                                 "role": msg.role,
-                                "content": cnt,
+                                "content": content,
                             }
                         )
-                        break
+                    elif isinstance(content, dict):
+                        messages.append(
+                            {
+                                "role": msg.role,
+                                "content": json.dumps(content),
+                            }
+                        )
+                    elif isinstance(content, llm.ImageContent):
+                        messages.append(
+                            {
+                                "role": msg.role,
+                                "content": json.dumps(content),
+                            }
+                        )
 
         messages = messages[-MAX_HISTORY_TURNS:]
 
