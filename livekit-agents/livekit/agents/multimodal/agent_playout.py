@@ -42,7 +42,9 @@ class PlayoutHandle:
         if self._total_played_time is not None:
             return int(self._total_played_time * 24000)
 
-        return int((self._pushed_duration - self._audio_source.queued_duration) * 24000)
+        return max(
+            int((self._pushed_duration - self._audio_source.queued_duration) * 24000), 0
+        )
 
     @property
     def text_chars(self) -> int:
