@@ -70,6 +70,7 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 _log_oai_events = int(os.getenv("LOG_OAI_EVENTS", 0))
 
+
 @dataclass
 class _RealtimeOptions:
     model: str
