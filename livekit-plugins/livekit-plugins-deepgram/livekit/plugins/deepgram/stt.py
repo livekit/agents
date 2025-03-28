@@ -111,6 +111,7 @@ class STTOptions:
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
     numerals: bool = False
+    mip_opt_out: bool = False
 
 
 class STT(stt.STT):
@@ -136,6 +137,7 @@ class STT(stt.STT):
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
         numerals: bool = False,
+        mip_opt_out: bool = False,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -162,6 +164,7 @@ class STT(stt.STT):
             energy_filter: Audio energy filter configuration for voice activity detection.
                          Can be a boolean or AudioEnergyFilter instance. Defaults to False.
             numerals: Whether to include numerals in the transcription. Defaults to False.
+            mip_opt_out: Whether to take part in the model improvement program
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -199,6 +202,7 @@ class STT(stt.STT):
             profanity_filter=profanity_filter,
             energy_filter=energy_filter,
             numerals=numerals,
+            mip_opt_out=mip_opt_out,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -295,6 +299,7 @@ class STT(stt.STT):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
+        mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
     ):
         if is_given(language):
             self._opts.language = language
@@ -322,6 +327,8 @@ class STT(stt.STT):
             self._opts.profanity_filter = profanity_filter
         if is_given(numerals):
             self._opts.numerals = numerals
+        if is_given(mip_opt_out):
+            self._opts.mip_opt_out = mip_opt_out
 
         for stream in self._streams:
             stream.update_options(
@@ -338,6 +345,7 @@ class STT(stt.STT):
                 keyterms=keyterms,
                 profanity_filter=profanity_filter,
                 numerals=numerals,
+                mip_opt_out=mip_opt_out,
             )
 
     def _sanitize_options(
@@ -409,6 +417,7 @@ class SpeechStream(stt.SpeechStream):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
+        mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
     ):
         if is_given(language):
             self._opts.language = language
@@ -436,6 +445,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.profanity_filter = profanity_filter
         if is_given(numerals):
             self._opts.numerals = numerals
+        if is_given(mip_opt_out):
+            self._opts.mip_opt_out = mip_opt_out
 
         self._reconnect_event.set()
 
@@ -576,6 +587,7 @@ class SpeechStream(stt.SpeechStream):
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
             "numerals": self._opts.numerals,
+            "mip_opt_out": self._opts.mip_opt_out,
         }
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
