@@ -35,7 +35,6 @@ from .log import logger
 from .utils import get_aws_credentials, to_chat_ctx, to_fnc_ctx
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
-DEFAULT_REGION = "us-east-1"
 
 
 @dataclass
