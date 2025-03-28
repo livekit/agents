@@ -15,8 +15,9 @@ headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.
 
 def get_changed_files():
     subprocess.run(["git", "fetch", "origin", BASE_REF], check=True)
+    subprocess.run(["git", "fetch", "origin", f"pull/{PR_NUMBER}/head:pr_head"], check=True)
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"origin/{BASE_REF}"],
+        ["git", "diff", "--name-only", f"origin/{BASE_REF}", "pr_head"],
         capture_output=True, text=True, check=True
     )
     return result.stdout.strip().splitlines()
