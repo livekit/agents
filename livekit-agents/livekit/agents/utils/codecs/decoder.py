@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import asyncio
+import contextlib
 import io
 import threading
 from collections.abc import AsyncIterator
@@ -128,11 +128,7 @@ class AudioStreamDecoder:
                 raise ValueError("no audio stream found")
 
             audio_stream = container.streams.audio[0]
-            resampler = av.AudioResampler(
-                format="s16",
-                layout=self._layout,
-                rate=self._sample_rate
-            )
+            resampler = av.AudioResampler(format="s16", layout=self._layout, rate=self._sample_rate)
 
             for frame in container.decode(audio_stream):
                 if self._closed:
@@ -147,7 +143,7 @@ class AudioStreamDecoder:
                             num_channels=nchannels,
                             sample_rate=int(resampled_frame.sample_rate),
                             samples_per_channel=int(resampled_frame.samples / nchannels),
-                        )
+                        ),
                     )
 
         except Exception:
