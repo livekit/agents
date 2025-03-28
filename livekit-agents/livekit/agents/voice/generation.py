@@ -577,13 +577,17 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
     elif add_if_missing:
         # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
-            0,
-            llm.ChatMessage(
-                id=INSTRUCTIONS_MESSAGE_ID,
-                role="system",
-                content=[instructions],
-            ),
+            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions])
         )
+
+
+def remove_instructions(chat_ctx: ChatContext) -> None:
+    # loop in case there are items with the same id (shouldn't happen!)
+    while True:
+        if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
+            chat_ctx.items.remove(msg)
+        else:
+            break
 
 
 STANDARD_SPEECH_RATE = 0.5  # words per second

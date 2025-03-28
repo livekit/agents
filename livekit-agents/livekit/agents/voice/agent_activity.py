@@ -35,6 +35,7 @@ from .generation import (
     perform_text_forwarding,
     perform_tool_executions,
     perform_tts_inference,
+    remove_instructions,
     truncate_message,
     update_instructions,
 )
@@ -276,6 +277,9 @@ class AgentActivity(RecognitionHooks):
                     "input_audio_transcription_completed",
                     self._on_input_audio_transcription_completed,
                 )
+
+                remove_instructions(self._agent._chat_ctx)
+
                 try:
                     await self._rt_session.update_instructions(self._agent.instructions)
                 except llm.RealtimeError:
