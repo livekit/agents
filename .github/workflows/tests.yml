@@ -3,12 +3,10 @@ name: tests
 on:
   push:
     branches:
-      - main
-      - dev
+      - 0.x
   pull_request:
     branches:
-      - main
-      - dev
+      - 0.x
   workflow_dispatch:
 
 jobs:

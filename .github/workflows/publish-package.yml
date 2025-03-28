@@ -12,8 +12,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
-      - dev
+      - 0.x
 
 jobs:
   bump:
