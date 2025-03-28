@@ -13,6 +13,7 @@ pip install \
   "${SCRIPT_DIR}/livekit-plugins-elevenlabs" \
   "${SCRIPT_DIR}/livekit-plugins-fal" \
   "${SCRIPT_DIR}/livekit-plugins-google" \
+  "${SCRIPT_DIR}/livekit-plugins-groq" \
   "${SCRIPT_DIR}/livekit-plugins-llama-index" \
   "${SCRIPT_DIR}/livekit-plugins-nltk" \
   "${SCRIPT_DIR}/livekit-plugins-openai" \
