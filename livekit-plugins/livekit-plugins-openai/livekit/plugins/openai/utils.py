@@ -102,13 +102,21 @@ def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessagePar
 
 def _to_image_content(image: llm.ImageContent, cache_key: Any) -> ChatCompletionContentPartParam:
     img = llm.utils.serialize_image(image)
+    if img.external_url:
+        return {
+            "type": "image_url",
+            "image_url": {
+                "url": img.external_url,
+                "detail": img.inference_detail,
+            },
+        }
     if cache_key not in image._cache:
         image._cache[cache_key] = img.data_bytes
     b64_data = base64.b64encode(image._cache[cache_key]).decode("utf-8")
     return {
         "type": "image_url",
         "image_url": {
-            "url": f"data:{img.media_type};base64,{b64_data}",
+            "url": f"data:{img.mime_type};base64,{b64_data}",
             "detail": img.inference_detail,
         },
     }
