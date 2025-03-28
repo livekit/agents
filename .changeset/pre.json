@@ -1,5 +1,5 @@
 {
-  "mode": "exit",
+  "mode": "pre",
   "tag": "dev",
   "initialVersions": {
     "livekit-agents": "0.12.18",
