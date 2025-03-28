@@ -73,7 +73,8 @@ _log_oai_events = int(os.getenv("LOG_OAI_EVENTS", 0))
 @dataclass
 class _InputAudioTranscription:
     model: Literal["whisper-1"] = "whisper-1"
-
+    language: str | None = None
+    prompt: str | None = None
 
 @dataclass
 class _TurnDetection:
@@ -368,6 +369,8 @@ class RealtimeSession(
         if self._realtime_model._opts.input_audio_transcription:
             input_audio_transcription = session_update_event.SessionInputAudioTranscription(
                 model=self._realtime_model._opts.input_audio_transcription.model,
+                language=self._realtime_model._opts.input_audio_transcription.language,
+                prompt=self._realtime_model._opts.input_audio_transcription.prompt,
             )
 
         turn_detection: session_update_event.SessionTurnDetection | None = None
