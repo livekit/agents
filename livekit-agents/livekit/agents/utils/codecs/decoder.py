@@ -148,7 +148,8 @@ class AudioStreamDecoder:
                 for resampled_frame in resampler.resample(frame):
                     nchannels = len(resampled_frame.layout.channels)
                     data = resampled_frame.to_ndarray().tobytes()
-                    self._output_ch.send_nowait(
+                    self._loop.call_soon_threadsafe(
+                        self._output_ch.send_nowait,
                         rtc.AudioFrame(
                             data=data,
                             num_channels=nchannels,
@@ -161,7 +162,7 @@ class AudioStreamDecoder:
         except Exception:
             logger.exception("error decoding audio")
         finally:
-            self._output_ch.close()
+            self._loop.call_soon_threadsafe(self._output_ch.close)
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
