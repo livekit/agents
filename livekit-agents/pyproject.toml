@@ -78,9 +78,8 @@ path = "livekit/agents/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
+include = ["livekit/agents/resources/*", "livekit/agents/debug/index.html"]
+
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
-
-[tool.hatch.build.targets.wheel.shared-data]
-"livekit/agents/debug/index.html" = "livekit/agents/debug/index.html"
