@@ -27,7 +27,8 @@ from google.genai.types import (
 )
 from livekit import rtc
 from livekit.agents import llm, utils
-from livekit.agents.llm.function_context import _create_ai_function_info
+
+# from livekit.agents.llm.function_context import _create_ai_function_info
 from livekit.agents.utils import images
 
 from ...log import logger
@@ -35,8 +36,6 @@ from .api_proto import (
     ClientEvents,
     LiveAPIModels,
     Voice,
-    _build_gemini_ctx,
-    _build_tools,
 )
 from .transcriber import ModelTranscriber, TranscriberSession, TranscriptionContent
 
