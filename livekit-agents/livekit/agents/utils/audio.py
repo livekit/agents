@@ -176,12 +176,12 @@ async def audio_frames_from_file(
                 decoder.push(chunk)
 
         decoder.end_input()
-        await decoder.aclose()
 
     reader_task = asyncio.create_task(file_reader())
 
     try:
         async for frame in decoder:
             yield frame
+
     finally:
         await cancel_and_wait(reader_task)

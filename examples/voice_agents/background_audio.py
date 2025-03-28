@@ -28,11 +28,10 @@ class FakeWebSearchAgent(Agent):
         """
         Search the web for information based on the given query.
 
-        Use this function whenever the user requests a web search or seeks information
-        that may require real-time or up-to-date data from the internet.
+        Always use this function whenever the user requests a web search
 
         Args:
-            query (str): The search query to look up on the web.
+            query: The search query to look up on the web.
         """
 
         # simulate a long web search to demonstrate the background "thinking" audio

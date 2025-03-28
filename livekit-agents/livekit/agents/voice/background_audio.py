@@ -4,7 +4,7 @@ import contextlib
 import random
 from collections.abc import AsyncGenerator, AsyncIterator
 from importlib.resources import as_file, files
-from typing import List, NamedTuple, Union, cast
+from typing import NamedTuple, Union, cast
 
 import numpy as np
 
@@ -27,11 +27,11 @@ class BackgroundSound(NamedTuple):
     probability: float = 1.0
 
 
-# The queue size is set to 500ms, which determines how much audio Rust will buffer.
+# The queue size is set to 400ms, which determines how much audio Rust will buffer.
 # We intentionally keep this small within BackgroundAudio because calling
 # AudioSource.clear_queue() would abruptly cut off ambient sounds.
-# Instead, we remove the sound from the mixer, and it will get removed 500ms later.
-_AUDIO_SOURCE_BUFFER_MS = 500
+# Instead, we remove the sound from the mixer, and it will get removed 400ms later.
+_AUDIO_SOURCE_BUFFER_MS = 400
 
 _resource_stack = contextlib.ExitStack()
 atexit.register(_resource_stack.close)
@@ -42,10 +42,10 @@ class BackgroundAudio:
         self,
         *,
         ambient_sound: NotGivenOr[
-            Union[SoundSource, BackgroundSound, List[BackgroundSound], None]
+            Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
         ] = NOT_GIVEN,
         thinking_sound: NotGivenOr[
-            Union[SoundSource, BackgroundSound, List[BackgroundSound], None]
+            Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
         ] = NOT_GIVEN,
     ) -> None:
         """
@@ -74,7 +74,7 @@ class BackgroundAudio:
                 The sound to be played when the associated agent enters a “thinking” state. This can be a single
                 sound source or a list of BackgroundSound objects (with volume and probability settings). Defaults
                 to a set of keyboard typing sounds.
-        """
+        """  # noqa: E501
         default_office = files("livekit.agents.resources") / "office-ambience.ogg"
         default_keyboard = files("livekit.agents.resources") / "keyboard-typing.ogg"
         default_keyboard2 = files("livekit.agents.resources") / "keyboard-typing2.ogg"
@@ -92,8 +92,8 @@ class BackgroundAudio:
             thinking_sound
             if is_given(thinking_sound)
             else [
-                BackgroundSound(str(keyboard_path), volume=3.0, probability=0.5),
-                BackgroundSound(str(keyboard_path2), volume=3.0, probability=0.5),
+                BackgroundSound(str(keyboard_path), volume=0.8, probability=0.4),
+                BackgroundSound(str(keyboard_path2), volume=0.8, probability=0.6),
             ]
         )
 
@@ -111,7 +111,7 @@ class BackgroundAudio:
         self._thinking_handle: PlayHandle | None = None
 
     def _select_sound_from_list(
-        self, sounds: List[BackgroundSound]
+        self, sounds: list[BackgroundSound]
     ) -> Union[BackgroundSound, None]:
         """
         Selects a sound from a list of BackgroundSound based on their probabilities.
@@ -141,13 +141,13 @@ class BackgroundAudio:
         return sounds[-1]
 
     def _normalize_sound_source(
-        self, source: Union[SoundSource, BackgroundSound, List[BackgroundSound], None]
+        self, source: Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
     ) -> Union[tuple[SoundSource, float], None]:
         if source is None:
             return None
 
         if isinstance(source, list):
-            selected = self._select_sound_from_list(cast(List[BackgroundSound], source))
+            selected = self._select_sound_from_list(cast(list[BackgroundSound], source))
             if selected is None:
                 return None
             return selected.sound, selected.volume
@@ -159,7 +159,7 @@ class BackgroundAudio:
 
     def play(
         self,
-        sound: Union[SoundSource, BackgroundSound, List[BackgroundSound]],
+        sound: Union[SoundSource, BackgroundSound, list[BackgroundSound]],
         *,
         loop: bool = False,
     ) -> "PlayHandle":
@@ -184,7 +184,7 @@ class BackgroundAudio:
         Returns:
             PlayHandle: An object representing the playback handle. This can be
             awaited or stopped manually.
-        """
+        """  # noqa: E501
         if not self._mixer_atask:
             raise RuntimeError("BackgroundAudio is not started")
 
@@ -301,6 +301,9 @@ class BackgroundAudio:
 
             self._thinking_handle = self.play(self._thinking_sound)
 
+        elif self._thinking_handle:
+            self._thinking_handle.stop()
+
     @log_exceptions(logger=logger)
     async def _play_task(
         self, play_handle: "PlayHandle", sound: SoundSource, volume: float, loop: bool
@@ -315,7 +318,7 @@ class BackgroundAudio:
             async for frame in sound:
                 if volume != 1.0:
                     data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-                    data *= volume
+                    data *= 10 ** (np.log10(volume))
                     np.clip(data, -32768, 32767, out=data)
                     yield rtc.AudioFrame(
                         data=data.astype(np.int16).tobytes(),
@@ -326,7 +329,7 @@ class BackgroundAudio:
                 else:
                     yield frame
 
-            # TODO(theomonnom): the wait_for_playout() may be innaccurate by 500ms
+            # TODO(theomonnom): the wait_for_playout() may be innaccurate by 400ms
             play_handle._mark_playout_done()
 
         gen = _gen_wrapper()
@@ -335,7 +338,6 @@ class BackgroundAudio:
             await play_handle.wait_for_playout()  # wait for playout or interruption
         finally:
             if play_handle._stop_fut.done():
-                print("STOPPED PLAYING")
                 self._audio_mixer.remove_stream(gen)
                 await gen.aclose()
 

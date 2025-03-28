@@ -14,21 +14,16 @@
 
 import asyncio
 import io
+import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from livekit.agents.log import logger
-from livekit.agents.utils import aio
-
-try:
-    # preload to ensure faster startup
-    import av  # noqa
-except ImportError:
-    pass
-import threading
+import av
 
 from livekit import rtc
+from livekit.agents.log import logger
+from livekit.agents.utils import aio
 
 
 class StreamBuffer:
@@ -96,13 +91,6 @@ class AudioStreamDecoder:
     _executor: Optional[ThreadPoolExecutor] = None
 
     def __init__(self, *, sample_rate: int = 48000, num_channels: int = 1):
-        try:
-            import av  # noqa
-        except ImportError:
-            raise ImportError(  # noqa: B904
-                "You haven't included the 'codecs' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[codecs]`"  # noqa: E501
-            )
-
         self._sample_rate = sample_rate
         self._layout = "mono"
         if num_channels == 2:
