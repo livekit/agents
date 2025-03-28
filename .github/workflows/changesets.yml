@@ -4,13 +4,14 @@ permissions:
   pull-requests: write
   issues: write
 
-
 on:
   pull_request:
+    branches:
+      - main
     paths:
-      - 'livekit-agents/**'
-      - 'livekit-plugins/**'
-      - '.github/next-release/**'
+      - "livekit-agents/**"
+      - "livekit-plugins/**"
+      - ".github/next-release/**"
 
 jobs:
   check-changesets:
