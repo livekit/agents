@@ -104,12 +104,12 @@ class _EUORunner(_InferenceRunner):
         eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
-        data = {
+        data_dict = {
             "eou_probability": float(eou_probability),
             "input": text,
             "duration": round(end_time - start_time, 3),
         }
-        return json.dumps(data).encode()
+        return json.dumps(data_dict).encode()
 
 
 class EOUModel:
@@ -140,27 +140,24 @@ class EOUModel:
     ) -> float:
         messages = []
 
-        for msg in chat_ctx.items:
-            if msg.role not in ("user", "assistant"):
+        for item in chat_ctx.items:
+            if item.type != "message":
                 continue
 
-            if isinstance(msg.content, str):
-                messages.append(
-                    {
-                        "role": msg.role,
-                        "content": msg.content,
-                    }
-                )
-            elif isinstance(msg.content, list):
-                for cnt in msg.content:
-                    if isinstance(cnt, str):
-                        messages.append(
-                            {
-                                "role": msg.role,
-                                "content": cnt,
-                            }
-                        )
-                        break
+            if item.role not in ("user", "assistant"):
+                continue
+
+            for cnt in item.content:
+                if isinstance(cnt, str):
+                    messages.append(
+                        {
+                            "role": item.role,
+                            "content": cnt,
+                        }
+                    )
+                    break
+
+        print(messages)
 
         messages = messages[-MAX_HISTORY_TURNS:]
 
