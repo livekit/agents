@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import asyncio
 import io
 import threading
@@ -160,20 +161,16 @@ class AudioStreamDecoder:
         return self
 
     async def __anext__(self) -> rtc.AudioFrame:
-        try:
-            return await self._output_ch.recv()
-        except aio.ChanClosed:
-            raise StopAsyncIteration  # noqa: B904
+        return await self._output_ch.__anext__()
 
     async def aclose(self):
         if self._closed:
             return
-        self._closed = True
+
         self.end_input()
+        self._closed = True
         self._input_buf.close()
         # wait for decode loop to finish, only if anything's been pushed
-        try:
+        with contextlib.suppress(aio.ChanClosed):
             if self._started:
                 await self._output_ch.recv()
-        except aio.ChanClosed:
-            pass
