@@ -13,6 +13,8 @@ from livekit.agents.utils import is_given
 
 __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
 
+DEFAULT_REGION = "us-east-1"
+
 
 def get_aws_credentials(
     api_key: NotGivenOr[str],
@@ -21,9 +23,7 @@ def get_aws_credentials(
 ):
     aws_region = region if is_given(region) else os.environ.get("AWS_DEFAULT_REGION")
     if not aws_region:
-        raise ValueError(
-            "AWS_DEFAULT_REGION must be set via argument or the AWS_DEFAULT_REGION environment variable."  # noqa: E501
-        )
+        aws_region = DEFAULT_REGION
 
     if is_given(api_key) and is_given(api_secret):
         session = boto3.Session(
