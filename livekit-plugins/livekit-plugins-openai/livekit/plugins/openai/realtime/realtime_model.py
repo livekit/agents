@@ -46,6 +46,7 @@ from openai.types.beta.realtime import (
     session_update_event,
 )
 from openai.types.beta.realtime.response_create_event import Response
+from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
 
 from ..log import logger
 
@@ -71,31 +72,12 @@ _log_oai_events = int(os.getenv("LOG_OAI_EVENTS", 0))
 
 
 @dataclass
-class _InputAudioTranscription:
-    model: Literal["whisper-1"] = "whisper-1"
-
-
-@dataclass
-class _TurnDetection:
-    type: Literal["server_vad"] = "server_vad"
-    create_response: bool | None = True
-    interrupt_response: bool | None = True
-    prefix_padding_ms: int | None = 300
-    silence_duration_ms: int | None = 500
-    threshold: float | None = 0.65
-
-
-DEFAULT_INPUT_AUDIO_TRANSCRIPTION = _InputAudioTranscription()
-DEFAULT_TURN_DETECTION = _TurnDetection()
-
-
-@dataclass
 class _RealtimeOptions:
     model: str
     voice: str
     temperature: float | None
-    input_audio_transcription: _InputAudioTranscription | None
-    turn_detection: _TurnDetection | None
+    input_audio_transcription: InputAudioTranscription | None
+    turn_detection: TurnDetection | None
     api_key: str
     base_url: str
 
@@ -123,9 +105,8 @@ class RealtimeModel(llm.RealtimeModel):
         voice: str = "alloy",
         temperature: float | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        input_audio_transcription: _InputAudioTranscription
-        | None = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
-        turn_detection: _TurnDetection | None = DEFAULT_TURN_DETECTION,
+        input_audio_transcription: InputAudioTranscription | None = None,
+        turn_detection: TurnDetection | None = None,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -372,6 +353,8 @@ class RealtimeSession(
         if self._realtime_model._opts.input_audio_transcription:
             input_audio_transcription = session_update_event.SessionInputAudioTranscription(
                 model=self._realtime_model._opts.input_audio_transcription.model,
+                language=self._realtime_model._opts.input_audio_transcription.language,
+                prompt=self._realtime_model._opts.input_audio_transcription.prompt,
             )
 
         turn_detection: session_update_event.SessionTurnDetection | None = None
