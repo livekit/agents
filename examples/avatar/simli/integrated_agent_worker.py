@@ -6,11 +6,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession, CallContext
+from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.avatar import AvatarOptions, AvatarRunner, QueueAudioOutput
 from livekit.agents.voice.room_io import RoomOutputOptions
-from livekit.plugins import cartesia, deepgram, openai
+from livekit.plugins import openai
 
 sys.path.insert(0, str(Path(__file__).parent))
 from simli_avatar_runner import SimliVideoGenerator
@@ -23,31 +22,12 @@ logging.getLogger("aioice.ice").setLevel(logging.INFO)
 logger = logging.getLogger("avatar-example")
 
 
-class EchoAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="You are Echo.",
-            # llm=openai.realtime.RealtimeModel(voice="echo"),
-            stt=deepgram.STT(),
-            llm=openai.LLM(model="gpt-4o-mini"),
-            tts=cartesia.TTS(),
-        )
-
-    @function_tool()
-    async def talk_to_alloy(self, context: CallContext):
-        return AlloyAgent(), "Transferring you to Alloy."
-
-
 class AlloyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy.",
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
-
-    @function_tool()
-    async def talk_to_echo(self, context: CallContext):
-        return EchoAgent(), "Transferring you to Echo."
 
 
 async def entrypoint(ctx: JobContext):

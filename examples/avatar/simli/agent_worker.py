@@ -66,29 +66,27 @@ async def launch_avatar_worker(
 async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
     await ctx.connect()
 
-    agent = AgentSession(
+    agent = Agent(
+        instructions="Talk to me!",
         llm=openai.realtime.RealtimeModel(),
-        # stt=deepgram.STT(),
-        # llm=openai.LLM(model="gpt-4o-mini"),
-        # tts=cartesia.TTS(),
     )
+
+    session = AgentSession()
 
     # wait for the participant to join the room and the avatar worker to connect
     await launch_avatar_worker(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
 
     # connect the output audio to the avatar runner
-    agent.output.audio = DataStreamAudioOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
+    session.output.audio = DataStreamAudioOutput(ctx.room, destination_identity=AVATAR_IDENTITY)
 
     # start agent with room input and room text output
-    await agent.start(
-        agent=Agent(
-            instructions="Talk to me!",
-        ),
+    await session.start(
+        agent=agent,
         room=ctx.room,
         room_output_options=RoomOutputOptions(audio_enabled=False, transcription_enabled=True),
     )
 
-    @agent.output.audio.on("playback_finished")
+    @session.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
         logger.info(
             "playback_finished",

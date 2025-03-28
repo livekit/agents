@@ -9,8 +9,7 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli, utils
-from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent, AgentSession, RunContext
+from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -19,7 +18,7 @@ from livekit.agents.voice.avatar import (
     VideoGenerator,
 )
 from livekit.agents.voice.room_io import RoomOutputOptions
-from livekit.plugins import cartesia, deepgram, openai
+from livekit.plugins import openai
 
 logger = logging.getLogger("avatar-example")
 logger.setLevel(logging.INFO)
@@ -100,31 +99,12 @@ class BithumanGenerator(VideoGenerator):
         await self._runtime.stop()
 
 
-class EchoAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="You are Echo.",
-            # llm=openai.realtime.RealtimeModel(voice="echo"),
-            stt=deepgram.STT(),
-            llm=openai.LLM(model="gpt-4o-mini"),
-            tts=cartesia.TTS(),
-        )
-
-    @function_tool()
-    async def talk_to_alloy(self, context: RunContext):
-        return AlloyAgent(), "Transferring you to Alloy."
-
-
 class AlloyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy.",
             llm=openai.realtime.RealtimeModel(voice="alloy"),
         )
-
-    @function_tool()
-    async def talk_to_echo(self, context: RunContext):
-        return EchoAgent(), "Transferring you to Echo."
 
 
 async def entrypoint(ctx: JobContext):
