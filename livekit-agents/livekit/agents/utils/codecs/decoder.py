@@ -20,7 +20,6 @@ from typing import AsyncIterator, Optional
 
 import av
 import av.container
-
 from livekit import rtc
 from livekit.agents.log import logger
 from livekit.agents.utils import aio
@@ -31,8 +30,6 @@ try:
 except ImportError:
     pass
 import threading
-
-from livekit import rtc
 
 
 class StreamBuffer:
@@ -144,7 +141,9 @@ class AudioStreamDecoder:
                 raise ValueError("no audio stream found")
 
             audio_stream = container.streams.audio[0]
-            resampler = av.AudioResampler(format="s16", layout=self._layout, rate=self._sample_rate)
+            resampler = av.AudioResampler(
+                format="s16", layout=self._layout, rate=self._sample_rate
+            )
 
             for frame in container.decode(audio_stream):
                 if self._closed:
@@ -161,7 +160,7 @@ class AudioStreamDecoder:
                             samples_per_channel=int(
                                 resampled_frame.samples / nchannels
                             ),
-                        )
+                        ),
                     )
 
         except Exception:
