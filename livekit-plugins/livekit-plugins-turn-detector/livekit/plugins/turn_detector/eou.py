@@ -13,7 +13,7 @@ from .log import logger
 
 HG_MODEL = "livekit/turn-detector"
 ONNX_FILENAME = "model_q8.onnx"
-MODEL_REVISION = "v1.2.1"
+MODEL_REVISIONS = {"en": "v1.2.2-en", "multilingual": "v0.1.0-intl"}
 MAX_HISTORY_TOKENS = 512
 MAX_HISTORY_TURNS = 6
 
@@ -25,8 +25,10 @@ def _download_from_hf_hub(repo_id, filename, **kwargs):
     return local_path
 
 
-class _EUORunner(_InferenceRunner):
-    INFERENCE_METHOD = "lk_end_of_utterance"
+class _EUORunnerBase(_InferenceRunner):
+    def __init__(self, model_revision: str):
+        super().__init__()
+        self._model_revision = model_revision
 
     def _format_chat_ctx(self, chat_ctx: dict):
         new_chat_ctx = []
@@ -60,7 +62,7 @@ class _EUORunner(_InferenceRunner):
                 HG_MODEL,
                 ONNX_FILENAME,
                 subfolder="onnx",
-                revision=MODEL_REVISION,
+                revision=self._model_revision,
                 local_files_only=True,
             )
             self._session = ort.InferenceSession(
@@ -69,19 +71,20 @@ class _EUORunner(_InferenceRunner):
 
             self._tokenizer = AutoTokenizer.from_pretrained(
                 HG_MODEL,
-                revision=MODEL_REVISION,
+                revision=self._model_revision,
                 local_files_only=True,
                 truncation_side="left",
             )
+
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
                 (
-                    f"Could not find model {HG_MODEL}. Make sure you have downloaded the model before running the agent. "
+                    f"Could not find model {HG_MODEL} with revision {self._model_revision}. Make sure you have downloaded the model before running the agent. "
                     "Use `python3 your_agent.py download-files` to download the models."
                 )
             )
             raise RuntimeError(
-                f"livekit-plugins-turn-detector initialization failed. Could not find model {HG_MODEL}."
+                f"livekit-plugins-turn-detector initialization failed. Could not find model {HG_MODEL} with revision {self._model_revision}."
             ) from None
 
     def run(self, data: bytes) -> bytes | None:
@@ -116,26 +119,57 @@ class _EUORunner(_InferenceRunner):
         return json.dumps(data).encode()
 
 
+class _EUORunnerEn(_EUORunnerBase):
+    INFERENCE_METHOD = "lk_end_of_utterance_en"
+
+    def __init__(self):
+        super().__init__(MODEL_REVISIONS["en"])
+
+
+class _EUORunnerMultilingual(_EUORunnerBase):
+    INFERENCE_METHOD = "lk_end_of_utterance_multilingual"
+
+    def __init__(self):
+        super().__init__(MODEL_REVISIONS["multilingual"])
+
+
 class EOUModel:
     def __init__(
         self,
+        model_type: str = "en",  # default to smaller, english-only model
         inference_executor: InferenceExecutor | None = None,
-        unlikely_threshold: float = 0.0289,
     ) -> None:
+        self._model_type = model_type
         self._executor = (
             inference_executor or get_current_job_context().inference_executor
         )
-        self._unlikely_threshold = unlikely_threshold
 
-    def unlikely_threshold(self) -> float:
-        return self._unlikely_threshold
+        self._inference_method = _EUORunnerMultilingual.INFERENCE_METHOD
+        config_fname = _download_from_hf_hub(
+            HG_MODEL,
+            "languages.json",
+            revision=MODEL_REVISIONS[self._model_type],
+            local_files_only=True,
+        )
+        with open(config_fname, "r") as f:
+            self._languages = json.load(f)
+            print(list(self._languages.keys()))
+
+    def unlikely_threshold(self, language: str | None) -> float | None:
+        if language is None:
+            return None
+        lang = language.lower()
+        if lang in self._languages:
+            return self._languages[lang]["threshold"]
+        if "-" in lang:
+            part = lang.split("-")[0]
+            if part in self._languages:
+                return self._languages[part]["threshold"]
+        logger.warning(f"Language {language} not supported by EOU model")
+        return None
 
     def supports_language(self, language: str | None) -> bool:
-        if language is None:
-            return False
-        parts = language.lower().split("-")
-        # certain models use language codes (DG, AssemblyAI), others use full names (like OAI)
-        return parts[0] == "en" or parts[0] == "english"
+        return self.unlikely_threshold(language) is not None
 
     async def predict_eou(self, chat_ctx: llm.ChatContext) -> float:
         return await self.predict_end_of_turn(chat_ctx)
@@ -173,7 +207,7 @@ class EOUModel:
         json_data = json.dumps({"chat_ctx": messages}).encode()
 
         result = await asyncio.wait_for(
-            self._executor.do_inference(_EUORunner.INFERENCE_METHOD, json_data),
+            self._executor.do_inference(self._inference_method, json_data),
             timeout=timeout,
         )
 
