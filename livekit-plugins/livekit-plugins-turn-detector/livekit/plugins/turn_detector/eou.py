@@ -157,8 +157,6 @@ class EOUModel:
                     )
                     break
 
-        print(messages)
-
         messages = messages[-MAX_HISTORY_TURNS:]
 
         json_data = json.dumps({"chat_ctx": messages}).encode()
