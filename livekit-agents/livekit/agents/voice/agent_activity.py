@@ -1133,39 +1133,39 @@ class AgentActivity(RecognitionHooks):
             outputs: list[tuple[str, _TextOutput, _AudioOutput | None]],
         ) -> None:
             forward_tasks: list[asyncio.Task] = []
-            async for msg in generation_ev.message_stream:
-                if len(forward_tasks) > 0:
-                    logger.warning(
-                        "expected to receive only one message generation from the realtime API"
-                    )
-                    break
+            try:
+                async for msg in generation_ev.message_stream:
+                    if len(forward_tasks) > 0:
+                        logger.warning(
+                            "expected to receive only one message generation from the realtime API"
+                        )
+                        break
 
-                forward_task, text_out = perform_text_forwarding(
-                    text_output=text_output,
-                    source=self._agent.transcription_node(msg.text_stream, model_settings),
-                )
-                forward_tasks.append(forward_task)
-
-                audio_out = None
-                if audio_output is not None:
-                    forward_task, audio_out = perform_audio_forwarding(
-                        audio_output=audio_output, tts_output=msg.audio_stream
+                    forward_task, text_out = perform_text_forwarding(
+                        text_output=text_output,
+                        source=self._agent.transcription_node(msg.text_stream, model_settings),
                     )
                     forward_tasks.append(forward_task)
-                    audio_out.first_frame_fut.add_done_callback(_on_first_frame)
-                else:
-                    text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-                outputs.append((msg.message_id, text_out, audio_out))
+                    audio_out = None
+                    if audio_output is not None:
+                        forward_task, audio_out = perform_audio_forwarding(
+                            audio_output=audio_output, tts_output=msg.audio_stream
+                        )
+                        forward_tasks.append(forward_task)
+                        audio_out.first_frame_fut.add_done_callback(_on_first_frame)
+                    else:
+                        text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-            try:
+                    outputs.append((msg.message_id, text_out, audio_out))
+
                 await asyncio.gather(*forward_tasks)
             finally:
                 await utils.aio.cancel_and_wait(*forward_tasks)
 
         message_outputs: list[tuple[str, _TextOutput, _AudioOutput | None]] = []
         tasks = [
-            self._create_speech_task(
+            asyncio.create_task(
                 _read_messages(message_outputs),
                 name="AgentActivity.realtime_generation.read_messages",
             )
