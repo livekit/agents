@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import av
+import av.container
 
 from livekit import rtc
 from livekit.agents.log import logger
@@ -103,6 +104,7 @@ class AudioStreamDecoder:
         self._started = False
         self._input_buf = StreamBuffer()
         self._loop = asyncio.get_event_loop()
+
         if self.__class__._executor is None:
             # each decoder instance will submit jobs to the shared pool
             self.__class__._executor = ThreadPoolExecutor(max_workers=self.__class__._max_workers)
@@ -117,37 +119,42 @@ class AudioStreamDecoder:
         self._input_buf.end_input()
 
     def _decode_loop(self):
+        container: av.container.InputContainer | None = None
+        resampler: av.AudioResampler | None = None
         try:
-            container = av.open(self._input_buf)
-            audio_stream = next(s for s in container.streams if s.type == "audio")
+            container = av.open(self._input_buf, mode="r")
+            if len(container.streams.audio) == 0:
+                raise ValueError("no audio stream found")
+
+            audio_stream = container.streams.audio[0]
             resampler = av.AudioResampler(
-                # convert to signed 16-bit little endian
                 format="s16",
                 layout=self._layout,
-                rate=self._sample_rate,
+                rate=self._sample_rate
             )
-            # TODO: handle error where audio stream isn't found
-            if not audio_stream:
-                return
+
             for frame in container.decode(audio_stream):
                 if self._closed:
                     return
+
                 for resampled_frame in resampler.resample(frame):
                     nchannels = len(resampled_frame.layout.channels)
-                    data = resampled_frame.to_ndarray().tobytes()
                     self._loop.call_soon_threadsafe(
                         self._output_ch.send_nowait,
                         rtc.AudioFrame(
-                            data=data,
+                            data=resampled_frame.to_ndarray().tobytes(),
                             num_channels=nchannels,
                             sample_rate=int(resampled_frame.sample_rate),
                             samples_per_channel=int(resampled_frame.samples / nchannels),
-                        ),
+                        )
                     )
+
         except Exception:
             logger.exception("error decoding audio")
         finally:
             self._loop.call_soon_threadsafe(self._output_ch.close)
+            if container:
+                container.close()
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
