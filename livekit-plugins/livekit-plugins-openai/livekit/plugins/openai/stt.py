@@ -77,12 +77,12 @@ class STT(stt.STT):
         *,
         language: str = "en",
         detect_language: bool = False,
-        model: STTModels | str = "gpt-4o-transcribe",
-        prompt: str | None = None,
-        turn_detection: SessionTurnDetection | None = None,
-        noise_reduction_type: str | None = None,
-        base_url: str | None = None,
-        api_key: str | None = None,
+        model: STTModels | str = "gpt-4o-mini-transcribe",
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
         use_realtime: bool = True,
     ):
@@ -109,7 +109,7 @@ class STT(stt.STT):
         if detect_language:
             language = ""
 
-        if turn_detection is None:
+        if not is_given(turn_detection):
             turn_detection = {
                 "type": "server_vad",
                 "threshold": 0.5,
@@ -124,7 +124,7 @@ class STT(stt.STT):
             prompt=prompt,
             turn_detection=turn_detection,
         )
-        if noise_reduction_type is not None:
+        if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
 
         self._client = client or openai.AsyncClient(
@@ -203,17 +203,22 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        model: STTModels | GroqAudioModels | str | None = None,
-        language: str | None = None,
-        prompt: str | None = None,
-        turn_detection: SessionTurnDetection | None = None,
-        noise_reduction_type: str | None = None,
+        model: NotGivenOr[STTModels | GroqAudioModels | str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        self._opts.model = model or self._opts.model
-        self._opts.language = language or self._opts.language
-        self._opts.prompt = prompt or self._opts.prompt
-        self._opts.noise_reduction_type = noise_reduction_type or self._opts.noise_reduction_type
-        self._opts.turn_detection = turn_detection or self._opts.turn_detection
+        if is_given(model):
+            self._opts.model = model
+        if is_given(language):
+            self._opts.language = language
+        if is_given(prompt):
+            self._opts.prompt = prompt
+        if is_given(turn_detection):
+            self._opts.turn_detection = turn_detection
+        if is_given(noise_reduction_type):
+            self._opts.noise_reduction_type = noise_reduction_type
 
         for stream in self._streams:
             if is_given(language):

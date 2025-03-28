@@ -299,7 +299,7 @@ class STT(stt.STT):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
-        mip_opt_out: bool | None = None,
+        mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
     ):
         if is_given(language):
             self._opts.language = language
@@ -327,7 +327,7 @@ class STT(stt.STT):
             self._opts.profanity_filter = profanity_filter
         if is_given(numerals):
             self._opts.numerals = numerals
-        if mip_opt_out is not None:
+        if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
 
         for stream in self._streams:
@@ -417,7 +417,7 @@ class SpeechStream(stt.SpeechStream):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
-        mip_opt_out: bool | None = None,
+        mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
     ):
         if is_given(language):
             self._opts.language = language
@@ -445,7 +445,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.profanity_filter = profanity_filter
         if is_given(numerals):
             self._opts.numerals = numerals
-        if mip_opt_out is not None:
+        if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
 
         self._reconnect_event.set()
