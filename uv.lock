@@ -1130,20 +1130,22 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "0.22.0"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/73/4f/8caf991b2e88d8c748c214793463586eddf674a36d3dda723ceec615daf9/livekit-0.22.0.tar.gz", hash = "sha256:273fd75a164fb1be6745ddd624361fba86131be397e629597719f303f2c29730", size = 107242 }
+sdist = { url = "https://files.pythonhosted.org/packages/a5/4f/b851ea99e75c04505ff000cf2f512456271cb47e0192266442f7db3b60d0/livekit-1.0.0.tar.gz", hash = "sha256:550cbbf969c1f3985133fa9dbe899376611b0882684bd163fd4ed9d782dbc9b4", size = 110214 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/5d/8931c51c070242ac358a983c6f3ad0c17053b0a8ec9d241de6f6bc8aef86/livekit-0.22.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:0f747fabcef48390369674508ccdb809bcdaed5f835bec104101fd086891a1e9", size = 10422577 },
-    { url = "https://files.pythonhosted.org/packages/35/1c/8ea960e33b56ecc1fc05d3685120c1ce61018c5739154de18bd0bf4cfa70/livekit-0.22.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:d05ada7631c7598c309aba76d45a2e2e28d02290877724f470b558d5ca38c11a", size = 9100730 },
-    { url = "https://files.pythonhosted.org/packages/cd/02/a3b44843c38d2272a9cad2e7a3bfc9195a89e15f98d4f0e387c668c804a9/livekit-0.22.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:727efd7d895df3cb533869fbc1db5c97bac7b411cb1056b22d8949b75115d824", size = 10156999 },
-    { url = "https://files.pythonhosted.org/packages/be/16/3daaaef93a348e33d9e7b6c6c66005dba2f3b384ffa858aa04d177848e2e/livekit-0.22.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:c37da83a9f94c3f582d44d574870dfd21d477e72fe938d4a814476d600eb7bb2", size = 11656537 },
-    { url = "https://files.pythonhosted.org/packages/b3/de/7db07aaa60d5c0d04490510e8e13dfac07e2d32e7b8631cc5e8c04284bdf/livekit-0.22.0-py3-none-win_amd64.whl", hash = "sha256:c3bbc54d187363cc2a654945f7917c50591759790fcc3092d3ac7d233e9dac63", size = 11005658 },
+    { url = "https://files.pythonhosted.org/packages/be/2f/25ce6f400fd7eacdcf8fa10afa30b3aeabc17a632ddac5c3c350d8f0d0bd/livekit-1.0.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:aaec101382b3e4063298f86ec00ddcd9dd90be76f8447f546d3b09e55dbf6870", size = 10425048 },
+    { url = "https://files.pythonhosted.org/packages/e8/52/1e38d85c3f101a9c1785e3a8bda4560653c3d967207919cd0c273bce6eff/livekit-1.0.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:68d374ba0316e56a6b9ee14c4e38d9e8e4087e3b7d3e92ab3989dd5e64e12f59", size = 9103201 },
+    { url = "https://files.pythonhosted.org/packages/a0/b7/afce00128683fb0b9d2b58b32e3d18b275a16223f9ad0b506ad7bcba0cb3/livekit-1.0.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:12c3b22a8045d78c468521b128b8e09d352bcff9ed89568c9afb22203d2af9c3", size = 10159472 },
+    { url = "https://files.pythonhosted.org/packages/cb/e9/85974b9c0d56d8166e8881bc38cf45d86903f68d0e88f08828edc5cb8139/livekit-1.0.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:dcfdd567f12625200fb4b8f603af51f93712aa9b3260a5231bfd9538c72144af", size = 11659007 },
+    { url = "https://files.pythonhosted.org/packages/12/96/16180feccc50b90eff00be63fb81262b3ad4d2a5bcb093c7956a3265804c/livekit-1.0.0-py3-none-win_amd64.whl", hash = "sha256:d4391c81fae3f7b078507d01505ffe7c755378390e611adf6bd9bd7cef4b0480", size = 11008157 },
 ]
 
 [[package]]
@@ -1151,6 +1153,7 @@ name = "livekit-agents"
 source = { editable = "livekit-agents" }
 dependencies = [
     { name = "aiohttp" },
+    { name = "av" },
     { name = "click" },
     { name = "colorama" },
     { name = "docstring-parser" },
@@ -1158,6 +1161,8 @@ dependencies = [
     { name = "livekit" },
     { name = "livekit-api" },
     { name = "livekit-protocol" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "protobuf" },
     { name = "psutil" },
     { name = "pyjwt" },
@@ -1243,12 +1248,13 @@ turn-detector = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.10" },
+    { name = "av", specifier = ">=12.0.0" },
     { name = "av", marker = "extra == 'codecs'", specifier = ">=12.0.0" },
     { name = "click", specifier = "~=8.1" },
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = ">=0.21.1" },
+    { name = "livekit", specifier = ">=1.0.0" },
     { name = "livekit-api", specifier = ">=0.8.2" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
@@ -1272,6 +1278,7 @@ requires-dist = [
     { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "livekit-protocol", specifier = ">=0.8.2" },
+    { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
     { name = "pillow", marker = "extra == 'images'", specifier = ">=10.3.0" },
     { name = "protobuf", specifier = ">=3" },

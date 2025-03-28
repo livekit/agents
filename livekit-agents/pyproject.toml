@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "click~=8.1",
-    "livekit>=0.21.1",
+    "livekit>=1.0.0",
     "livekit-api>=0.8.2",
     "livekit-protocol>=0.8.2",
     "protobuf>=3",
@@ -38,6 +38,8 @@ dependencies = [
     "docstring_parser>=0.16",
     "eval-type-backport",
     "colorama>=0.4.6",
+    "av>=12.0.0",
+    "numpy>=1.26.0",
 ]
 
 [project.optional-dependencies]
@@ -76,9 +78,8 @@ path = "livekit/agents/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
+include = ["livekit/agents/resources/*", "livekit/agents/debug/index.html"]
+
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
-
-[tool.hatch.build.targets.wheel.shared-data]
-"livekit/agents/debug/index.html" = "livekit/agents/debug/index.html"

@@ -87,6 +87,9 @@ class IntroAgent(Agent):
         # chat history, pass in the chat_ctx
         # story_agent = StoryAgent(name, location, chat_ctx=context.chat_ctx)
 
+        logger.info(
+            "switching to the story agent with the provided user data: %s", context.userdata
+        )
         return story_agent, "Let's start the story!"
 
 
