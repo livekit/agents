@@ -21,35 +21,30 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
       - name: Create and activate virtual environment
         run: |
-          uv venv 
-          source .venv/bin/activate
-
-      - name: Install package and all plugins
-        run: |
-          source .venv/bin/activate
-          uv sync --active
+          python -m venv venv
+          source venv/bin/activate
 
       - name: Install pdoc and other dependencies
         run: |
-          source .venv/bin/activate
-          uv pip install pdoc3 setuptools
+          source venv/bin/activate
+          python -m pip install pdoc3 setuptools
+
+      - name: Install package
+        run: |
+          source venv/bin/activate
+          pip install ./livekit-agents
+          ./livekit-plugins/install_local.sh
 
       - name: Build Docs
         run: |
-          source .venv/bin/activate
-          uv run --active pdoc --skip-errors --html --output-dir=docs livekit
+          source venv/bin/activate
+          python -m pdoc --skip-errors --html livekit --output-dir docs
 
       - name: S3 Upload
         run: |
-          source .venv/bin/activate
+          source venv/bin/activate
           aws s3 cp docs/ s3://livekit-docs/python --recursive
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
