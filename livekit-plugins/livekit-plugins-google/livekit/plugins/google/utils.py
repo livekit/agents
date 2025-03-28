@@ -87,10 +87,7 @@ def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
         if img.mime_type:
             mime_type = img.mime_type
         else:
-            logger.warning(
-                "No media type provided for image, using default image/jpeg. "
-                "Please provide a media type for better performance."
-            )
+            logger.debug("No media type provided for image, defaulting to image/jpeg.")
             mime_type = "image/jpeg"
         return types.Part.from_uri(file_uri=img.external_url, mime_type=mime_type)
     if cache_key not in image._cache:
