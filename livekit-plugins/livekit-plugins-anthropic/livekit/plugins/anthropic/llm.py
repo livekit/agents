@@ -57,12 +57,19 @@ CACHE_CONTROL_EPHEMERAL = anthropic.types.CacheControlEphemeralParam(type="ephem
 
 
 @dataclass
+class ThinkingOptions:
+    enabled: bool = True
+    budget_tokens: int | None = 1024
+
+
+@dataclass
 class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
+    thinking: ThinkingOptions | None = None
     caching: Literal["ephemeral"] | None = None
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
@@ -79,6 +86,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
+        thinking: ThinkingOptions | None = None,
         caching: Literal["ephemeral"] | None = None,
     ) -> None:
         """
@@ -117,6 +125,7 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             caching=caching,
+            thinking=thinking,
         )
         self._client = client or anthropic.AsyncClient(
             api_key=api_key,
@@ -141,8 +150,9 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: (
+            Union[ToolChoice, Literal["auto", "required", "none"]] | None
+        ) = None,
     ) -> "LLMStream":
         if temperature is None:
             temperature = self._opts.temperature
@@ -202,13 +212,25 @@ class LLM(llm.LLM):
         )
         collaped_anthropic_ctx = _merge_messages(anthropic_ctx)
 
+        # Need to have `max_tokens` always be more than `budget_tokens` if thinking is enabled.
+        thinking_opts = self._opts.thinking
+        max_tokens = opts.get(
+            "max_tokens",
+            thinking_opts.budget_tokens + 1 if thinking_opts else 1024,
+        )
+        if max_tokens <= thinking_opts.budget_tokens:
+            raise ValueError(
+                f"max_tokens ({max_tokens}) must be greater than thinking.budget_tokens ({thinking_opts.budget_tokens}) if thinking is enabled"
+            )
+
         stream = self._client.messages.create(
-            max_tokens=opts.get("max_tokens", 1024),
+            max_tokens=max_tokens,
             messages=collaped_anthropic_ctx,
             model=self._opts.model,
             temperature=temperature or anthropic.NOT_GIVEN,
             top_k=n or anthropic.NOT_GIVEN,
             stream=True,
+            thinking=self._opts.thinking,
             **opts,
         )
 
