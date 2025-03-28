@@ -81,6 +81,13 @@ class ServerVad(TypedDict):
     create_response: NotRequired[bool]
 
 
+class SemanticVad(TypedDict):
+    type: Literal["semantic_vad"]
+    eagerness: NotRequired[Literal["low", "medium", "high", "auto"]]
+    create_response: NotRequired[bool]
+    interrupt_response: NotRequired[bool]
+
+
 class FunctionTool(TypedDict):
     type: Literal["function"]
     name: str
@@ -191,7 +198,7 @@ class Resource:
         input_audio_format: AudioFormat
         output_audio_format: AudioFormat
         input_audio_transcription: InputAudioTranscription | None
-        turn_detection: ServerVad | None
+        turn_detection: Union[ServerVad, SemanticVad, None]
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
@@ -220,7 +227,7 @@ class ClientEvent:
         input_audio_format: AudioFormat
         output_audio_format: AudioFormat
         input_audio_transcription: InputAudioTranscription | None
-        turn_detection: ServerVad | None
+        turn_detection: Union[ServerVad, SemanticVad, None]
         tools: list[FunctionTool]
         tool_choice: ToolChoice
         temperature: float
