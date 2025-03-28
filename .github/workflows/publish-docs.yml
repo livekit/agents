@@ -23,29 +23,36 @@ jobs:
 
       - name: Create and activate virtual environment
         run: |
-          python -m venv venv
-          source venv/bin/activate
+          python -m venv .venv
+          source .venv/bin/activate
 
       - name: Install pdoc and other dependencies
         run: |
-          source venv/bin/activate
+          source .venv/bin/activate
           python -m pip install pdoc3 setuptools
 
       - name: Install package
         run: |
-          source venv/bin/activate
+          source .venv/bin/activate
           pip install ./livekit-agents
           ./livekit-plugins/install_local.sh
 
       - name: Build Docs
         run: |
-          source venv/bin/activate
+          source .venv/bin/activate
           python -m pdoc --skip-errors --html livekit --output-dir docs
 
       - name: S3 Upload
         run: |
-          source venv/bin/activate
-          aws s3 cp docs/ s3://livekit-docs/python --recursive
+          source .venv/bin/activate
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          # If branch is main, upload to /v1
+          if [[ $BRANCH == "main" ]]; then
+            aws s3 cp docs/ s3://livekit-docs/python/v1 --recursive
+          # Else, upload to root, preserving the v1 directory
+          else
+            aws s3 sync docs/ s3://livekit-docs/python --exclude "v1/*" --delete
+          fi
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DOCS_DEPLOY_AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCS_DEPLOY_AWS_API_SECRET }}
