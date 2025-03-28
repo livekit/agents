@@ -93,6 +93,7 @@ DEFAULT_TURN_DETECTION = _TurnDetection()
 class _RealtimeOptions:
     model: str
     voice: str
+    temperature: float | None
     input_audio_transcription: _InputAudioTranscription | None
     turn_detection: _TurnDetection | None
     api_key: str
@@ -120,6 +121,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
+        temperature: float | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: _InputAudioTranscription
         | None = DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
@@ -146,6 +148,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._opts = _RealtimeOptions(
             model=model,
             voice=voice,
+            temperature=temperature,
             input_audio_transcription=input_audio_transcription,
             turn_detection=turn_detection,
             api_key=api_key,
@@ -154,10 +157,11 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
-    def update_options(self, *, voice: str) -> None:
+    def update_options(self, *, voice: str, temperature: float) -> None:
         self._opts.voice = voice
+        self._opts.temperature = temperature
         for sess in self._sessions:
-            sess.update_options(voice=voice)
+            sess.update_options(voice=voice, temperature=temperature)
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
@@ -385,6 +389,7 @@ class RealtimeSession(
                 session=session_update_event.Session.model_construct(
                     model=self._realtime_model._opts.model,
                     voice=self._realtime_model._opts.voice,
+                    temperature=self._realtime_model._opts.temperature,
                     input_audio_format="pcm16",
                     output_audio_format="pcm16",
                     modalities=["text", "audio"],
@@ -418,6 +423,7 @@ class RealtimeSession(
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
@@ -430,6 +436,9 @@ class RealtimeSession(
 
         if utils.is_given(voice):
             kwargs["voice"] = voice
+
+        if utils.is_given(temperature):
+            kwargs["temperature"] = temperature
 
         if kwargs:
             self.send_event(
