@@ -23,7 +23,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         sample_rate: int,
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
-        queue_size_ms: int = 300_000,  # TODO(long): move buffer to python
+        queue_size_ms: int = 100_000,  # TODO(long): move buffer to python
     ) -> None:
         super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._room = room
