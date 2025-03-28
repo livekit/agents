@@ -78,12 +78,7 @@ path = "livekit/agents/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
-include = [
-    "livekit/agents/resources/office-ambience.ogg",
-    "livekit/agents/resources/keyboard-typing.ogg",
-    "livekit/agents/resources/keyboard-typing2.ogg",
-    "livekit/agents/debug/index.html",
-]
+include = ["livekit/agents/resources/*", "livekit/agents/debug/index.html"]
 
 
 [tool.hatch.build.targets.sdist]
