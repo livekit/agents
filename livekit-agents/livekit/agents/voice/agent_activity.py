@@ -907,7 +907,7 @@ class AgentActivity(RecognitionHooks):
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
         # start to execute tools (only after play())
-        exe_task, fnc_outputs = perform_tool_executions(
+        exe_task, tool_output = perform_tool_executions(
             session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
@@ -968,11 +968,15 @@ class AgentActivity(RecognitionHooks):
         log_event("playout completed", speech_id=speech_handle.id)
 
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
+
+        tool_output.first_tool_fut.add_done_callback(
+            lambda _: self._session._update_agent_state(AgentState.THINKING)
+        )
         await exe_task
 
         # important: no agent output should be used after this point
 
-        if len(fnc_outputs) > 0:
+        if len(tool_output.output) > 0:
             if speech_handle.step_index >= self._session.options.max_tool_steps:
                 logger.warning(
                     "maximum number of function calls steps reached",
@@ -992,7 +996,7 @@ class AgentActivity(RecognitionHooks):
                 function_calls=[],
                 function_call_outputs=[],
             )
-            for py_out in fnc_outputs:
+            for py_out in tool_output.output:
                 sanitized_out = py_out.sanitize()
 
                 if sanitized_out.fnc_call_out is not None:
@@ -1019,7 +1023,6 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             if len(new_fnc_outputs) > 0:
-                self._session._update_agent_state(AgentState.THINKING)
                 chat_ctx.items.extend(new_calls)
                 chat_ctx.items.extend(new_fnc_outputs)
 
@@ -1172,7 +1175,7 @@ class AgentActivity(RecognitionHooks):
             )
         ]
 
-        exe_task, fnc_outputs = perform_tool_executions(
+        exe_task, tool_output = perform_tool_executions(
             session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
@@ -1210,10 +1213,7 @@ class AgentActivity(RecognitionHooks):
 
             for msg_id, text_out, _ in message_outputs:
                 msg = llm.ChatMessage(
-                    role="assistant",
-                    content=[text_out.text],
-                    id=msg_id,
-                    interrupted=True,
+                    role="assistant", content=[text_out.text], id=msg_id, interrupted=True
                 )
                 self._session._conversation_item_added(msg)
             return
@@ -1223,23 +1223,23 @@ class AgentActivity(RecognitionHooks):
 
         for msg_id, text_out, _ in message_outputs:
             msg = llm.ChatMessage(
-                role="assistant",
-                content=[text_out.text],
-                id=msg_id,
-                interrupted=False,
+                role="assistant", content=[text_out.text], id=msg_id, interrupted=False
             )
             self._session._conversation_item_added(msg)
 
+        tool_output.first_tool_fut.add_done_callback(
+            lambda _: self._session._update_agent_state(AgentState.THINKING)
+        )
         await exe_task
 
         # important: no agent ouput should be used after this point
 
-        if len(fnc_outputs) > 0:
+        if len(tool_output.output) > 0:
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             new_agent_task: Agent | None = None
             ignore_task_switch = False
 
-            for py_out in fnc_outputs:
+            for py_out in tool_output.output:
                 sanitized_out = py_out.sanitize()
 
                 if sanitized_out.fnc_call_out is not None:
@@ -1259,8 +1259,6 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             if len(new_fnc_outputs) > 0:
-                self._session._update_agent_state(AgentState.THINKING)
-
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(new_fnc_outputs)
                 try:

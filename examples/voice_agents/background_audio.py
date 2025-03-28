@@ -36,6 +36,7 @@ class FakeWebSearchAgent(Agent):
         """
 
         # simulate a long web search to demonstrate the background "thinking" audio
+        logger.info("FakeWebSearchAgent thinking...")
         await asyncio.sleep(5)
         return "The request failed, give the users some information based on your knowledge"
 
