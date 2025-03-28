@@ -127,8 +127,8 @@ def _to_image_content(
         "type": "image",
         "source": {
             "type": "base64",
-            "data": f"data:{img.media_type};base64,{b64_data}",
-            "media_type": img.media_type,
+            "data": f"data:{img.mime_type};base64,{b64_data}",
+            "media_type": img.mime_type,
         },
         "cache_control": cache_ctrl,
     }

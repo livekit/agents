@@ -84,8 +84,8 @@ def to_chat_ctx(
 def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
     img = llm.utils.serialize_image(image)
     if img.external_url:
-        if img.media_type:
-            mime_type = img.media_type
+        if img.mime_type:
+            mime_type = img.mime_type
         else:
             logger.warning(
                 "No media type provided for image, using default image/jpeg. "
@@ -95,7 +95,7 @@ def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
         return types.Part.from_uri(file_uri=img.external_url, mime_type=mime_type)
     if cache_key not in image._cache:
         image._cache[cache_key] = img.data_bytes
-    return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.media_type)
+    return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.mime_type)
 
 
 def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:

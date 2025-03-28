@@ -116,7 +116,7 @@ def _to_image_content(image: llm.ImageContent, cache_key: Any) -> ChatCompletion
     return {
         "type": "image_url",
         "image_url": {
-            "url": f"data:{img.media_type};base64,{b64_data}",
+            "url": f"data:{img.mime_type};base64,{b64_data}",
             "detail": img.inference_detail,
         },
     }

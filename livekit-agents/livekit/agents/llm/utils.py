@@ -111,7 +111,7 @@ def is_context_type(ty: type) -> bool:
 @dataclass
 class SerializedImage:
     inference_detail: str
-    media_type: str | None
+    mime_type: str | None
     data_bytes: bytes | None = None
     external_url: str | None = None
 
@@ -127,23 +127,23 @@ def serialize_image(image: llm.ImageContent) -> SerializedImage:
                     f"""Provided mime_type '{image.mime_type}' does not match data URL mime type
                     '{header_mime}'. Using provided mime_type."""
                 )
-                media_type = image.mime_type
+                mime_type = image.mime_type
             else:
-                media_type = header_mime
+                mime_type = header_mime
             supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-            if media_type not in supported_types:
+            if mime_type not in supported_types:
                 raise ValueError(
-                    f"Unsupported media type {media_type}. Must be jpeg, png, webp, or gif"
+                    f"Unsupported mime_type {mime_type}. Must be jpeg, png, webp, or gif"
                 )
 
             return SerializedImage(
                 data_bytes=encoded_data,
-                media_type=media_type,
+                mime_type=mime_type,
                 inference_detail=image.inference_detail,
             )
         else:
             return SerializedImage(
-                media_type=image.mime_type,
+                mime_type=image.mime_type,
                 inference_detail=image.inference_detail,
                 external_url=image.image,
             )
@@ -160,7 +160,7 @@ def serialize_image(image: llm.ImageContent) -> SerializedImage:
 
         return SerializedImage(
             data_bytes=encoded_data,
-            media_type="image/jpeg",
+            mime_type="image/jpeg",
             inference_detail=image.inference_detail,
         )
     raise ValueError("Unsupported image type")
