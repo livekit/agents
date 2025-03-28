@@ -80,7 +80,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        use_realtime: bool = True,
+        use_realtime: bool = False,
     ):
         """
         Create a new instance of OpenAI STT.
@@ -97,6 +97,7 @@ class STT(stt.STT):
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
+            use_realtime: Whether to use the realtime transcription API. (default: False)
         """
 
         super().__init__(
