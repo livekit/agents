@@ -1,5 +1,13 @@
 # livekit-agents
 
+## 0.12.19-dev.0
+
+### Patch Changes
+
+- fixed thread safety in AudioStreamDecoder - [#1782](https://github.com/livekit/agents/pull/1782) ([@github-actions](https://github.com/apps/github-actions))
+
+- cleanup AudioStreamDecoder resources - [#1782](https://github.com/livekit/agents/pull/1782) ([@github-actions](https://github.com/apps/github-actions))
+
 ## 0.12.18
 
 ### Patch Changes

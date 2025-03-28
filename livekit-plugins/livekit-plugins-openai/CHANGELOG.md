@@ -1,5 +1,11 @@
 # livekit-plugins-openai
 
+## 0.12.3-dev.0
+
+### Patch Changes
+
+- openai: default to use_realtime=False - [#1783](https://github.com/livekit/agents/pull/1783) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.12.2
 
 ### Patch Changes

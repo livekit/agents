@@ -26,5 +26,9 @@
     "livekit-plugins-speechmatics": "0.0.2",
     "livekit-plugins-turn-detector": "0.4.3"
   },
-  "changesets": []
+  "changesets": [
+    "forty-fans-greet",
+    "loud-tables-tickle",
+    "nine-pigs-sing"
+  ]
 }
