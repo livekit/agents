@@ -109,7 +109,7 @@ class STT(stt.STT):
         if detect_language:
             language = ""
 
-        if turn_detection is None:
+        if not is_given(turn_detection):
             turn_detection = {
                 "type": "server_vad",
                 "threshold": 0.5,
@@ -226,14 +226,13 @@ class STT(stt.STT):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         prompt = self._opts.prompt if is_given(self._opts.prompt) else ""
-        language = self._opts.language if is_given(self._opts.language) else ""
         realtime_config: dict[str, Any] = {
             "type": "transcription_session.update",
             "session": {
                 "input_audio_format": "pcm16",
                 "input_audio_transcription": {
                     "model": self._opts.model,
-                    "prompt": self._opts.prompt or "",
+                    "prompt": prompt,
                 },
                 "turn_detection": self._opts.turn_detection,
             },
