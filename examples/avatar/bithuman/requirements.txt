@@ -1,2 +1,2 @@
-bithuman>=0.4.2
+bithuman>=0.4.3
 opencv-python
