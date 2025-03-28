@@ -993,24 +993,34 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         "speech_id": speech_handle.id,
                     },
                 )
-                try:
-                    await called_fnc.task
-                except Exception as e:
-                    logger.exception(
-                        "error executing ai function",
-                        extra={
-                            "function": fnc.function_info.name,
-                            "speech_id": speech_handle.id,
-                        },
-                        exc_info=e,
-                    )
+                if fnc.function_info.wait_for_response:
+                    try:
+                        logger.debug(
+                            "waiting for ai function response",
+                            extra={
+                                "function": fnc.function_info.name,
+                                "speech_id": speech_handle.id,
+                            },
+                        )
+                        await called_fnc.task
+                    except Exception as e:
+                        logger.exception(
+                            "error executing ai function",
+                            extra={
+                                "function": fnc.function_info.name,
+                                "speech_id": speech_handle.id,
+                            },
+                            exc_info=e,
+                        )
 
             tool_calls_info = []
             tool_calls_results = []
 
             for called_fnc in called_fncs:
-                # ignore the function calls that returns None
-                if called_fnc.result is None and called_fnc.exception is None:
+                # ignore the function calls that returns None or the ones that we don't need to wait for
+                if not called_fnc.call_info.function_info.wait_for_response or (
+                    called_fnc.result is None and called_fnc.exception is None
+                ):
                     continue
 
                 tool_calls_info.append(called_fnc.call_info)

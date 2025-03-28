@@ -128,6 +128,19 @@ class ChatMessage:
         )
 
     @staticmethod
+    def create_tool_from_discarded_function(
+        called_function: function_context.CalledFunction,
+    ) -> "ChatMessage":
+        tool_exception: Exception | None = None
+        return ChatMessage(
+            role="tool",
+            name=called_function.call_info.function_info.name,
+            content="",
+            tool_call_id=called_function.call_info.tool_call_id,
+            tool_exception=tool_exception,
+        )
+
+    @staticmethod
     def create_tool_calls(
         called_functions: list[function_context.FunctionCallInfo],
         *,
