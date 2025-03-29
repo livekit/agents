@@ -3,21 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal
-
-from livekit import rtc
-from livekit.agents import llm, utils
-from livekit.agents.llm.function_context import _create_ai_function_info
-from livekit.agents.utils import images
+from typing import Literal
 
 from google import genai
+from google.genai._api_client import HttpOptions
 from google.genai.types import (
     Blob,
     Content,
     FunctionResponse,
     GenerationConfig,
-    HttpOptions,
     LiveClientContent,
     LiveClientRealtimeInput,
     LiveClientToolResponse,
@@ -29,6 +25,10 @@ from google.genai.types import (
     Tool,
     VoiceConfig,
 )
+from livekit import rtc
+from livekit.agents import llm, utils
+from livekit.agents.llm.function_context import _create_ai_function_info
+from livekit.agents.utils import images
 
 from ...log import logger
 from .api_proto import (
@@ -108,7 +108,7 @@ class RealtimeModel:
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
         api_key: str | None = None,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = [Modality.AUDIO],
+        modalities: list[Modality] = None,
         enable_user_audio_transcription: bool = True,
         enable_agent_audio_transcription: bool = True,
         vertexai: bool = False,
@@ -154,7 +154,9 @@ class RealtimeModel:
 
         Raises:
             ValueError: If the API key is not provided and cannot be found in environment variables.
-        """
+        """  # noqa: E501
+        if modalities is None:
+            modalities = ["AUDIO"]
         super().__init__()
         self._capabilities = Capabilities(
             supports_truncate=False,
@@ -168,7 +170,7 @@ class RealtimeModel:
         if vertexai:
             if not self._project or not self._location:
                 raise ValueError(
-                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"
+                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"  # noqa: E501
                 )
             self._api_key = None  # VertexAI does not require an API key
 
@@ -177,12 +179,10 @@ class RealtimeModel:
             self._location = None
             if not self._api_key:
                 raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
-        instructions_content = (
-            Content(parts=[Part(text=instructions)]) if instructions else None
-        )
+        instructions_content = Content(parts=[Part(text=instructions)]) if instructions else None
 
         self._rt_sessions: list[GeminiRealtimeSession] = []
         self._opts = ModelOptions(
@@ -259,8 +259,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
         self._fnc_ctx = fnc_ctx
         self._fnc_tasks = utils.aio.TaskSet()
         self._is_interrupted = False
-        self._playout_complete = asyncio.Event()
-        self._playout_complete.set()
 
         tools = []
         if self._fnc_ctx is not None:
@@ -281,9 +279,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             system_instruction=self._opts.instructions,
             speech_config=SpeechConfig(
                 voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(
-                        voice_name=self._opts.voice
-                    )
+                    prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
                 )
             ),
             tools=tools,
@@ -295,18 +291,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             project=self._opts.project,
             location=self._opts.location,
         )
-        self._main_atask = asyncio.create_task(
-            self._main_task(), name="gemini-realtime-session"
-        )
+        self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
         if self._opts.enable_user_audio_transcription:
-            self._transcriber = TranscriberSession(
-                client=self._client, model=self._opts.model
-            )
+            self._transcriber = TranscriberSession(client=self._client, model=self._opts.model)
             self._transcriber.on("input_speech_done", self._on_input_speech_done)
         if self._opts.enable_agent_audio_transcription:
-            self._agent_transcriber = ModelTranscriber(
-                client=self._client, model=self._opts.model
-            )
+            self._agent_transcriber = ModelTranscriber(client=self._client, model=self._opts.model)
             self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
         # init dummy task
         self._init_sync_task = asyncio.create_task(asyncio.sleep(0))
@@ -319,10 +309,6 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
         self._send_ch.close()
         await self._main_atask
-
-    @property
-    def playout_complete(self) -> asyncio.Event | None:
-        return self._playout_complete
 
     @property
     def fnc_ctx(self) -> llm.FunctionContext | None:
@@ -341,9 +327,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
     DEFAULT_ENCODE_OPTIONS = images.EncodeOptions(
         format="JPEG",
         quality=75,
-        resize_options=images.ResizeOptions(
-            width=1024, height=1024, strategy="scale_aspect_fit"
-        ),
+        resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
     )
 
     def push_video(
@@ -359,7 +343,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
         Notes:
         - This will be sent immediately so you should use a sampling frame rate that makes sense for your application and Gemini's constraints. 1 FPS is a good starting point.
-        """
+        """  # noqa: E501
         encoded_data = images.encode(
             frame,
             encode_options,
@@ -393,9 +377,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
 
     def create_response(
         self,
-        on_duplicate: Literal[
-            "cancel_existing", "cancel_new", "keep_both"
-        ] = "keep_both",
+        on_duplicate: Literal["cancel_existing", "cancel_new", "keep_both"] = "keep_both",
     ) -> None:
         turns, _ = _build_gemini_ctx(self._chat_ctx, id(self))
         ctx = [self._opts.instructions] + turns if self._opts.instructions else turns
@@ -425,7 +407,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             )
 
         # self._chat_ctx.append(text=content.text, role="user")
-        # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech
+        # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech  # noqa: E501
 
     def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
         if content.response_id and content.text:
@@ -481,8 +463,7 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                                         data=part.inline_data.data,
                                         sample_rate=24000,
                                         num_channels=1,
-                                        samples_per_channel=len(part.inline_data.data)
-                                        // 2,
+                                        samples_per_channel=len(part.inline_data.data) // 2,
                                     )
                                     if self._opts.enable_agent_audio_transcription:
                                         content.audio.append(frame)
@@ -525,12 +506,12 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
                         logger.warning(
                             "function call cancelled",
                             extra={
-                                "function_call_ids": response.tool_call_cancellation.ids,
+                                "function_call_ids": response.tool_call_cancellation.function_call_ids,  # noqa: E501
                             },
                         )
                         self.emit(
                             "function_calls_cancelled",
-                            response.tool_call_cancellation.ids,
+                            response.tool_call_cancellation.function_call_ids,
                         )
 
         async with self._client.aio.live.connect(

@@ -13,6 +13,12 @@ from ..worker import WorkerOptions
 
 
 @dataclass
+class SimulateJobArgs:
+    room: str = ""
+    participant_identity: str = ""
+
+
+@dataclass
 class CliArgs:
     opts: WorkerOptions
     log_level: str
@@ -20,8 +26,14 @@ class CliArgs:
     asyncio_debug: bool
     watch: bool
     drain_timeout: int
-    room: str = ""
-    participant_identity: str = ""
+
+    console: bool = False
+    # whether to run the worker in console mode (console subcommand
+
+    # register the worker to the worker pool
+    register: bool = True
+
+    simulate_job: SimulateJobArgs | None = None
 
     # amount of time this worker has been reloaded
     reload_count: int = 0

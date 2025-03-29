@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import deque
-from typing import AsyncIterator, Deque, Generic, Protocol, TypeVar
+from collections.abc import AsyncIterator
+from typing import Generic, Protocol, TypeVar
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
@@ -47,16 +48,18 @@ class ChanReceiver(Protocol[T_co]):
 
 class Chan(Generic[T]):
     def __init__(
-        self, maxsize: int = 0, loop: asyncio.AbstractEventLoop | None = None
+        self,
+        maxsize: int = 0,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._maxsize = max(maxsize, 0)
         #        self._finished_ev = asyncio.Event()
         self._close_ev = asyncio.Event()
         self._closed = False
-        self._gets: Deque[asyncio.Future[T | None]] = deque()
-        self._puts: Deque[asyncio.Future[T | None]] = deque()
-        self._queue: Deque[T] = deque()
+        self._gets: deque[asyncio.Future[T | None]] = deque()
+        self._puts: deque[asyncio.Future[T | None]] = deque()
+        self._queue: deque[T] = deque()
 
     def _wakeup_next(self, waiters: deque[asyncio.Future[T | None]]):
         while waiters:
@@ -172,4 +175,4 @@ class Chan(Generic[T]):
         try:
             return await self.recv()
         except ChanClosed:
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904

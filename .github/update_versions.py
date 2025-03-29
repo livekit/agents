@@ -5,9 +5,7 @@ import pathlib
 import re
 
 
-def update_py_version(
-    project_root: pathlib.Path, py_version_path: pathlib.Path
-) -> str | None:
+def update_py_version(project_root: pathlib.Path, py_version_path: pathlib.Path) -> str | None:
     pkg_file = project_root / "package.json"
     if not pkg_file.exists():
         return
@@ -16,7 +14,7 @@ def update_py_version(
         package = json.load(f)
         version = package["version"]
 
-    with open(py_version_path, "r") as f:
+    with open(py_version_path) as f:
         lines = f.readlines()
         for i, line in enumerate(lines):
             if line.startswith("__version__"):
@@ -34,7 +32,7 @@ def update_requirements_txt(example_dir: pathlib.Path, last_versions: dict[str, 
     requirements_files = example_dir.rglob("requirements.txt")
 
     for req_file in requirements_files:
-        with open(req_file, "r") as f:
+        with open(req_file) as f:
             lines = f.readlines()
 
         for i, line in enumerate(lines):

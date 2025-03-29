@@ -14,20 +14,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
 
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import Result, TranscriptEvent
-from livekit import rtc
-from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
-    stt,
-    utils,
-)
 
-from ._utils import _get_aws_credentials
+from livekit import rtc
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
+
 from .log import logger
+from .utils import get_aws_credentials
 
 
 @dataclass
@@ -36,16 +33,16 @@ class STTOptions:
     sample_rate: int
     language: str
     encoding: str
-    vocabulary_name: Optional[str]
-    session_id: Optional[str]
-    vocab_filter_method: Optional[str]
-    vocab_filter_name: Optional[str]
-    show_speaker_label: Optional[bool]
-    enable_channel_identification: Optional[bool]
-    number_of_channels: Optional[int]
-    enable_partial_results_stabilization: Optional[bool]
-    partial_results_stability: Optional[str]
-    language_model_name: Optional[str]
+    vocabulary_name: NotGivenOr[str]
+    session_id: NotGivenOr[str]
+    vocab_filter_method: NotGivenOr[str]
+    vocab_filter_name: NotGivenOr[str]
+    show_speaker_label: NotGivenOr[bool]
+    enable_channel_identification: NotGivenOr[bool]
+    number_of_channels: NotGivenOr[int]
+    enable_partial_results_stabilization: NotGivenOr[bool]
+    partial_results_stability: NotGivenOr[str]
+    language_model_name: NotGivenOr[str]
 
 
 class STT(stt.STT):
@@ -53,31 +50,29 @@ class STT(stt.STT):
         self,
         *,
         speech_region: str = "us-east-1",
-        api_key: str | None = None,
-        api_secret: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 48000,
         language: str = "en-US",
         encoding: str = "pcm",
-        vocabulary_name: Optional[str] = None,
-        session_id: Optional[str] = None,
-        vocab_filter_method: Optional[str] = None,
-        vocab_filter_name: Optional[str] = None,
-        show_speaker_label: Optional[bool] = None,
-        enable_channel_identification: Optional[bool] = None,
-        number_of_channels: Optional[int] = None,
-        enable_partial_results_stabilization: Optional[bool] = None,
-        partial_results_stability: Optional[str] = None,
-        language_model_name: Optional[str] = None,
+        vocabulary_name: NotGivenOr[str] = NOT_GIVEN,
+        session_id: NotGivenOr[str] = NOT_GIVEN,
+        vocab_filter_method: NotGivenOr[str] = NOT_GIVEN,
+        vocab_filter_name: NotGivenOr[str] = NOT_GIVEN,
+        show_speaker_label: NotGivenOr[bool] = NOT_GIVEN,
+        enable_channel_identification: NotGivenOr[bool] = NOT_GIVEN,
+        number_of_channels: NotGivenOr[int] = NOT_GIVEN,
+        enable_partial_results_stabilization: NotGivenOr[bool] = NOT_GIVEN,
+        partial_results_stability: NotGivenOr[str] = NOT_GIVEN,
+        language_model_name: NotGivenOr[str] = NOT_GIVEN,
     ):
-        super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
-        )
+        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
-        self._api_key, self._api_secret = _get_aws_credentials(
+        self._api_key, self._api_secret, self._speech_region = get_aws_credentials(
             api_key, api_secret, speech_region
         )
         self._config = STTOptions(
-            speech_region=speech_region,
+            speech_region=self._speech_region,
             language=language,
             sample_rate=sample_rate,
             encoding=encoding,
@@ -97,19 +92,17 @@ class STT(stt.STT):
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError(
-            "Amazon Transcribe does not support single frame recognition"
-        )
+        raise NotImplementedError("Amazon Transcribe does not support single frame recognition")
 
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         return SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -124,36 +117,34 @@ class SpeechStream(stt.SpeechStream):
         opts: STTOptions,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._client = TranscribeStreamingClient(region=self._opts.speech_region)
 
     async def _run(self) -> None:
-        stream = await self._client.start_stream_transcription(
-            language_code=self._opts.language,
-            media_sample_rate_hz=self._opts.sample_rate,
-            media_encoding=self._opts.encoding,
-            vocabulary_name=self._opts.vocabulary_name,
-            session_id=self._opts.session_id,
-            vocab_filter_method=self._opts.vocab_filter_method,
-            vocab_filter_name=self._opts.vocab_filter_name,
-            show_speaker_label=self._opts.show_speaker_label,
-            enable_channel_identification=self._opts.enable_channel_identification,
-            number_of_channels=self._opts.number_of_channels,
-            enable_partial_results_stabilization=self._opts.enable_partial_results_stabilization,
-            partial_results_stability=self._opts.partial_results_stability,
-            language_model_name=self._opts.language_model_name,
-        )
+        live_config = {
+            "language_code": self._opts.language,
+            "media_sample_rate_hz": self._opts.sample_rate,
+            "media_encoding": self._opts.encoding,
+            "vocabulary_name": self._opts.vocabulary_name,
+            "session_id": self._opts.session_id,
+            "vocab_filter_method": self._opts.vocab_filter_method,
+            "vocab_filter_name": self._opts.vocab_filter_name,
+            "show_speaker_label": self._opts.show_speaker_label,
+            "enable_channel_identification": self._opts.enable_channel_identification,
+            "number_of_channels": self._opts.number_of_channels,
+            "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,
+            "partial_results_stability": self._opts.partial_results_stability,
+            "language_model_name": self._opts.language_model_name,
+        }
+        filtered_config = {k: v for k, v in live_config.items() if is_given(v)}
+        stream = await self._client.start_stream_transcription(**filtered_config)
 
         @utils.log_exceptions(logger=logger)
         async def input_generator():
             async for frame in self._input_ch:
                 if isinstance(frame, rtc.AudioFrame):
-                    await stream.input_stream.send_audio_event(
-                        audio_chunk=frame.data.tobytes()
-                    )
+                    await stream.input_stream.send_audio_event(audio_chunk=frame.data.tobytes())
             await stream.input_stream.end_stream()
 
         @utils.log_exceptions(logger=logger)
@@ -184,9 +175,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[
-                                _streaming_recognize_response_to_speech_data(resp)
-                            ],
+                            alternatives=[_streaming_recognize_response_to_speech_data(resp)],
                         )
                     )
 
@@ -194,16 +183,12 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[
-                                _streaming_recognize_response_to_speech_data(resp)
-                            ],
+                            alternatives=[_streaming_recognize_response_to_speech_data(resp)],
                         )
                     )
 
             if not resp.is_partial:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                )
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
 
 def _streaming_recognize_response_to_speech_data(resp: Result) -> stt.SpeechData:

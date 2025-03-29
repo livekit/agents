@@ -54,11 +54,11 @@ class FakeTTS(TTS):
             self._fake_exception = fake_exception
 
     @property
-    def synthesize_ch(self) -> utils.aio.ChanReceiver["FakeChunkedStream"]:
+    def synthesize_ch(self) -> utils.aio.ChanReceiver[FakeChunkedStream]:
         return self._synthesize_ch
 
     @property
-    def stream_ch(self) -> utils.aio.ChanReceiver["FakeSynthesizeStream"]:
+    def stream_ch(self) -> utils.aio.ChanReceiver[FakeSynthesizeStream]:
         return self._stream_ch
 
     def synthesize(
@@ -66,14 +66,14 @@ class FakeTTS(TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "FakeChunkedStream":
+    ) -> FakeChunkedStream:
         stream = FakeChunkedStream(tts=self, input_text=text, conn_options=conn_options)
         self._synthesize_ch.send_nowait(stream)
         return stream
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "FakeSynthesizeStream":
+    ) -> FakeSynthesizeStream:
         stream = FakeSynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -83,9 +83,7 @@ class FakeTTS(TTS):
 
 
 class FakeChunkedStream(ChunkedStream):
-    def __init__(
-        self, *, tts: FakeTTS, input_text: str, conn_options: APIConnectOptions
-    ) -> None:
+    def __init__(self, *, tts: FakeTTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._attempt = 0
 
@@ -110,9 +108,7 @@ class FakeChunkedStream(ChunkedStream):
                 * self._tts.num_channels
             )
             while pushed_samples < max_samples:
-                num_samples = min(
-                    self._tts.sample_rate // 100, max_samples - pushed_samples
-                )
+                num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
                 self._event_ch.send_nowait(
                     SynthesizedAudio(
                         request_id=request_id,
@@ -174,9 +170,7 @@ class FakeSynthesizeStream(SynthesizeStream):
                 * self._tts.num_channels
             )
             while pushed_samples < max_samples:
-                num_samples = min(
-                    self._tts.sample_rate // 100, max_samples - pushed_samples
-                )
+                num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
                 self._event_ch.send_nowait(
                     SynthesizedAudio(
                         request_id=request_id,

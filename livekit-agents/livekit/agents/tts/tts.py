@@ -3,17 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import (
-    AsyncIterable,
-    AsyncIterator,
-    Generic,
-    Literal,
-    Optional,
-    TypeVar,
-    Union,
-)
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -58,7 +51,7 @@ class TTS(
         capabilities: TTSCapabilities,
         sample_rate: int,
         num_channels: int,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         super().__init__()
         self._capabilities = capabilities
@@ -88,14 +81,12 @@ class TTS(
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> ChunkedStream: ...
 
-    def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         raise NotImplementedError(
-            "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"
+            "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"  # noqa: E501
         )
 
     def prewarm(self) -> None:
@@ -124,7 +115,7 @@ class ChunkedStream(ABC):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions | None = None,
     ) -> None:
         self._input_text = input_text
         self._tts = tts
@@ -135,9 +126,7 @@ class ChunkedStream(ABC):
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
         )
-        self._synthesize_task = asyncio.create_task(
-            self._main_task(), name="TTS._synthesize_task"
-        )
+        self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
     @property
@@ -152,9 +141,7 @@ class ChunkedStream(ABC):
     def exception(self) -> BaseException | None:
         return self._synthesize_task.exception()
 
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[SynthesizedAudio]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
 
         start_time = time.perf_counter()
@@ -205,7 +192,7 @@ class ChunkedStream(ABC):
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
-                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
                     logger.warning(
@@ -222,7 +209,7 @@ class ChunkedStream(ABC):
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
-        await aio.gracefully_cancel(self._synthesize_task)
+        await aio.cancel_and_wait(self._synthesize_task)
         self._event_ch.close()
         await self._metrics_task
 
@@ -230,12 +217,10 @@ class ChunkedStream(ABC):
         try:
             val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
-            if not self._synthesize_task.cancelled() and (
-                exc := self._synthesize_task.exception()
-            ):
+            if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 
@@ -257,9 +242,7 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     class _FlushSentinel: ...
 
-    def __init__(
-        self, *, tts: TTS, conn_options: Optional[APIConnectOptions] = None
-    ) -> None:
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions | None = None) -> None:
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
@@ -289,7 +272,7 @@ class SynthesizeStream(ABC):
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
-                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
                     logger.warning(
@@ -309,9 +292,7 @@ class SynthesizeStream(ABC):
         if self._started_time == 0:
             self._started_time = time.perf_counter()
 
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[SynthesizedAudio]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
         audio_duration = 0.0
         ttfb = -1.0
@@ -395,7 +376,7 @@ class SynthesizeStream(ABC):
     async def aclose(self) -> None:
         """Close ths stream immediately"""
         self._input_ch.close()
-        await aio.gracefully_cancel(self._task)
+        await aio.cancel_and_wait(self._task)
 
         if self._metrics_task is not None:
             await self._metrics_task
@@ -417,7 +398,7 @@ class SynthesizeStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 
@@ -454,7 +435,7 @@ class SynthesizedAudioEmitter:
         self._request_id = request_id
         self._segment_id = segment_id
 
-    def push(self, frame: Optional[rtc.AudioFrame]):
+    def push(self, frame: rtc.AudioFrame | None):
         """Emits any buffered frame and stores the new frame for later emission.
 
         The buffered frame is emitted as not final.

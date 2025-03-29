@@ -5,7 +5,8 @@ import contextlib
 import logging
 import socket
 import sys
-from typing import Callable, Coroutine
+from collections.abc import Coroutine
+from typing import Callable
 
 from ..log import logger
 from ..utils import aio, log_exceptions, time_ms
@@ -25,10 +26,8 @@ class _ProcClient:
         self,
         mp_cch: socket.socket,
         log_cch: socket.socket | None,
-        initialize_fnc: Callable[[InitializeRequest, "_ProcClient"], None],
-        main_task_fnc: Callable[
-            [aio.ChanReceiver[Message]], Coroutine[None, None, None]
-        ],
+        initialize_fnc: Callable[[InitializeRequest, _ProcClient], None],
+        main_task_fnc: Callable[[aio.ChanReceiver[Message]], Coroutine[None, None, None]],
     ) -> None:
         self._mp_cch = mp_cch
         self._log_cch = log_cch
@@ -86,7 +85,7 @@ class _ProcClient:
                 try:
                     loop.run_until_complete(self._task)
                 except KeyboardInterrupt:
-                    # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process
+                    # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process  # noqa: E501
                     # (See proto.ShutdownRequest)
                     pass
         except KeyboardInterrupt:
@@ -122,9 +121,7 @@ class _ProcClient:
                     if isinstance(msg, PingRequest):
                         await asend_message(
                             self._acch,
-                            PongResponse(
-                                last_timestamp=msg.timestamp, timestamp=time_ms()
-                            ),
+                            PongResponse(last_timestamp=msg.timestamp, timestamp=time_ms()),
                         )
 
                     ipc_ch.send_nowait(msg)
@@ -140,9 +137,7 @@ class _ProcClient:
             read_task = asyncio.create_task(_read_ipc_task(), name="ipc_read")
             health_check_task: asyncio.Task | None = None
             if self._init_req.ping_interval > 0:
-                health_check_task = asyncio.create_task(
-                    _self_health_check(), name="health_check"
-                )
+                health_check_task = asyncio.create_task(_self_health_check(), name="health_check")
             main_task = asyncio.create_task(
                 self._main_task_fnc(ipc_ch), name="main_task_entrypoint"
             )
@@ -160,8 +155,8 @@ class _ProcClient:
             main_task.add_done_callback(_done_cb)
 
             await exit_flag.wait()
-            await aio.gracefully_cancel(read_task, main_task)
+            await aio.cancel_and_wait(read_task, main_task)
             if health_check_task is not None:
-                await aio.gracefully_cancel(health_check_task)
+                await aio.cancel_and_wait(health_check_task)
         finally:
             await self._acch.aclose()

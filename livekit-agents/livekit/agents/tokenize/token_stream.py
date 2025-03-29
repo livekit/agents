@@ -6,8 +6,8 @@ from typing import Callable, Union
 from ..utils import aio, shortuuid
 from .tokenizer import SentenceStream, TokenData, WordStream
 
-# Tokenizers can either provide us with a list of tokens or a list of tokens along with their start and end indices.
-# If the start and end indices are not available, we attempt to locate the token within the text using str.find.
+# Tokenizers can either provide us with a list of tokens or a list of tokens along with their start and end indices.  # noqa: E501
+# If the start and end indices are not available, we attempt to locate the token within the text using str.find.  # noqa: E501
 TokenizeCallable = Callable[[str], Union[list[str], list[tuple[str, int, int]]]]
 
 
@@ -18,11 +18,13 @@ class BufferedTokenStream:
         tokenize_fnc: TokenizeCallable,
         min_token_len: int,
         min_ctx_len: int,
+        retain_format: bool = False,
     ) -> None:
         self._event_ch = aio.Chan[TokenData]()
         self._tokenize_fnc = tokenize_fnc
         self._min_ctx_len = min_ctx_len
         self._min_token_len = min_token_len
+        self._retain_format = retain_format
         self._current_segment_id = shortuuid()
 
         self._buf_tokens: list[str] = []  # <= min_token_len
@@ -101,7 +103,7 @@ class BufferedTokenStream:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
-    def __aiter__(self) -> "BufferedTokenStream":
+    def __aiter__(self) -> BufferedTokenStream:
         return self
 
     async def __anext__(self) -> TokenData:

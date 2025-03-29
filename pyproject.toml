@@ -1,0 +1,84 @@
+[tool.uv]
+constraint-dependencies = ['onnxruntime<1.20.0; python_version == "3.9"']
+
+[tool.uv.sources]
+livekit-agents = { workspace = true }
+livekit-plugins-anthropic = { workspace = true }
+livekit-plugins-assemblyai = { workspace = true }
+livekit-plugins-aws = { workspace = true }
+livekit-plugins-azure = { workspace = true }
+livekit-plugins-cartesia = { workspace = true }
+livekit-plugins-clova = { workspace = true }
+livekit-plugins-deepgram = { workspace = true }
+livekit-plugins-elevenlabs = { workspace = true }
+livekit-plugins-fal = { workspace = true }
+livekit-plugins-google = { workspace = true }
+livekit-plugins-llama-index = { workspace = true }
+livekit-plugins-nltk = { workspace = true }
+livekit-plugins-openai = { workspace = true }
+livekit-plugins-rag = { workspace = true }
+livekit-plugins-rime = { workspace = true }
+livekit-plugins-silero = { workspace = true }
+livekit-plugins-speechmatics = { workspace = true }
+livekit-plugins-turn-detector = { workspace = true }
+livekit-plugins-neuphonic = { workspace = true }
+livekit-plugins-playai = { workspace = true }
+livekit-plugins-groq = { workspace = true }
+
+[tool.uv.workspace]
+members = ["livekit-plugins/*", "livekit-agents"]
+exclude = ["livekit-plugins/livekit-plugins-browser"]
+
+[dependency-groups]
+dev = [
+    "python-dotenv>=1.0.1",
+    "mypy",
+    "pytest",
+    "ruff",
+    "pytest-asyncio>=0.25.3",
+    "jiwer>=3.1.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+exclude = [".github"]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["livekit"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 120
+addopts = ["--import-mode=importlib", "--ignore=examples"]
+
+
+[tool.mypy]
+strict = true
+
+[tool.mypy-google.genai]
+follow_imports = "normal"
+follow_untyped_imports = true
+
+[tool.mypy-aiobotocore]
+follow_untyped_imports = true
+
+[tool.mypy-boto3]
+follow_untyped_imports = true

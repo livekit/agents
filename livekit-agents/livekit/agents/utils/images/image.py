@@ -60,7 +60,7 @@ class ResizeOptions:
     - scale_aspect_fit: Fit the image into the provided dimensions, preserving its original aspect ratio
     - scale_aspect_cover: Fill the provided dimensions, preserving its original aspect ratio (image will be larger than the provided dimensions)
     - skew: Precisely resize the image to the provided dimensions
-    """
+    """  # noqa: E501
 
 
 def import_pil():
@@ -68,8 +68,8 @@ def import_pil():
         if "Image" not in globals():
             globals()["Image"] = import_module("PIL.Image")
     except ImportError:
-        raise ImportError(
-            "You haven't included the 'images' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[images]`"
+        raise ImportError(  # noqa: B904
+            "You haven't included the 'images' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[images]`"  # noqa: E501
         )
 
 

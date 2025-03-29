@@ -3,16 +3,17 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import time
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import AsyncIterable, Literal, Optional, Union
+from typing import Literal
 
 from livekit.agents._exceptions import APIConnectionError, APIError
 
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .chat_context import ChatContext
-from .function_context import CalledFunction, FunctionCallInfo, FunctionContext
-from .llm import LLM, ChatChunk, LLMCapabilities, LLMStream, ToolChoice
+from .llm import LLM, ChatChunk, LLMStream, ToolChoice
+from .tool_context import ToolContext
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -46,10 +47,8 @@ class FallbackAdapter(
             raise ValueError("at least one LLM instance must be provided.")
 
         super().__init__(
-            capabilities=LLMCapabilities(
-                supports_choices_on_int=all(
-                    t.capabilities.supports_choices_on_int for t in llm
-                ),
+            capabilities=LLMCapabilities(  # noqa: F821
+                supports_choices_on_int=all(t.capabilities.supports_choices_on_int for t in llm),
                 requires_persistent_functions=all(
                     t.capabilities.requires_persistent_functions for t in llm
                 ),
@@ -62,8 +61,7 @@ class FallbackAdapter(
         self._retry_interval = retry_interval
 
         self._status = [
-            _LLMStatus(available=True, recovering_task=None)
-            for _ in self._llm_instances
+            _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
         ]
 
     def chat(
@@ -71,13 +69,12 @@ class FallbackAdapter(
         *,
         chat_ctx: ChatContext,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
-        fnc_ctx: FunctionContext | None = None,
+        fnc_ctx: ToolContext | None = None,
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
-    ) -> "LLMStream":
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] | None = None,
+    ) -> LLMStream:
         return FallbackLLMStream(
             llm=self,
             conn_options=conn_options,
@@ -97,26 +94,23 @@ class FallbackLLMStream(LLMStream):
         llm: FallbackAdapter,
         conn_options: APIConnectOptions,
         chat_ctx: ChatContext,
-        fnc_ctx: FunctionContext | None,
+        fnc_ctx: ToolContext | None,
         temperature: float | None,
         n: int | None,
         parallel_tool_calls: bool | None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
+        tool_choice: ToolChoice | Literal["auto", "required", "none"] | None = None,
     ) -> None:
-        super().__init__(
-            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
-        )
+        super().__init__(llm, chat_ctx=chat_ctx, tools=fnc_ctx, conn_options=conn_options)
         self._fallback_adapter = llm
         self._temperature = temperature
         self._n = n
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
 
-        self._current_stream: Optional[LLMStream] = None
+        self._current_stream: LLMStream | None = None
 
     @property
-    def function_calls(self) -> list[FunctionCallInfo]:
+    def function_calls(self) -> list[FunctionCallInfo]:  # noqa: F821
         if self._current_stream is None:
             return []
         return self._current_stream.function_calls
@@ -128,12 +122,12 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.chat_ctx
 
     @property
-    def fnc_ctx(self) -> FunctionContext | None:
+    def tools(self) -> ToolContext | None:
         if self._current_stream is None:
-            return self._fnc_ctx
-        return self._current_stream.fnc_ctx
+            return self._tools
+        return self._current_stream.tools
 
-    def execute_functions(self) -> list[CalledFunction]:
+    def execute_functions(self) -> list[CalledFunction]:  # noqa: F821
         # this function is unused, but putting it in place for completeness
         if self._current_stream is None:
             return []
@@ -154,7 +148,7 @@ class FallbackLLMStream(LLMStream):
         try:
             async with llm.chat(
                 chat_ctx=self._chat_ctx,
-                fnc_ctx=self._fnc_ctx,
+                tools=self._tools,
                 temperature=self._temperature,
                 n=self._n,
                 parallel_tool_calls=self._parallel_tool_calls,
@@ -233,9 +227,7 @@ class FallbackLLMStream(LLMStream):
     async def _run(self) -> None:
         start_time = time.time()
 
-        all_failed = all(
-            not llm_status.available for llm_status in self._fallback_adapter._status
-        )
+        all_failed = all(not llm_status.available for llm_status in self._fallback_adapter._status)
         if all_failed:
             logger.error("all LLMs are unavailable, retrying..")
 
@@ -244,9 +236,7 @@ class FallbackLLMStream(LLMStream):
             if llm_status.available or all_failed:
                 chunk_sent = False
                 try:
-                    async for result in self._try_generate(
-                        llm=llm, check_recovery=False
-                    ):
+                    async for result in self._try_generate(llm=llm, check_recovery=False):
                         chunk_sent = True
                         self._event_ch.send_nowait(result)
 
@@ -265,9 +255,5 @@ class FallbackLLMStream(LLMStream):
             self._try_recovery(llm)
 
         raise APIConnectionError(
-            "all LLMs failed (%s) after %s seconds"
-            % (
-                [llm.label for llm in self._fallback_adapter._llm_instances],
-                time.time() - start_time,
-            )
+            f"all LLMs failed ({[llm.label for llm in self._fallback_adapter._llm_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
         )

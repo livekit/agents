@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import AsyncIterable, overload
+from collections.abc import AsyncIterable
+from typing import overload
 
 from . import _basic_word, tokenizer
 

@@ -5,26 +5,20 @@ import aiohttp
 
 
 async def get_access_token(api_key: str) -> str:
-    mp_api_url = os.getenv(
-        "SPEECHMATICS_MANAGEMENT_PLATFORM_URL", "https://mp.speechmatics.com"
-    )
+    mp_api_url = os.getenv("SPEECHMATICS_MANAGEMENT_PLATFORM_URL", "https://mp.speechmatics.com")
     endpoint = f"{mp_api_url}/v1/api_keys"
     params = {"type": "rt", "sm-sdk": get_sdk_version()}
     json_body = {"ttl": 60}
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            endpoint, params=params, json=json_body, headers=headers
-        ) as resp:
+        async with session.post(endpoint, params=params, json=json_body, headers=headers) as resp:
             if resp.status == 201:
                 try:
                     data = await resp.json()
                     return data["key_value"]
                 except (ValueError, KeyError) as e:
-                    raise Exception(
-                        f"Failed to parse Speechmatics access token response: {e}"
-                    )
+                    raise Exception(f"Failed to parse Speechmatics access token response: {e}")  # noqa: B904
             else:
                 error_message = await resp.text()
                 raise Exception(

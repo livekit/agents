@@ -72,9 +72,7 @@ class BrowserServer:
         try:
             ipc.channel.send_message(
                 self._duplex,
-                proto.CreateBrowserResponse(
-                    page_id=self._page_id, browser_id=browser_id
-                ),
+                proto.CreateBrowserResponse(page_id=self._page_id, browser_id=browser_id),
             )
         except utils.aio.duplex_unix.DuplexClosed:
             logger.exception("failed to send CreateBrowserResponse")
@@ -99,9 +97,7 @@ class BrowserServer:
         self._view_width = frame_data.width
         self._view_height = frame_data.height
 
-        proto.copy_paint_data(
-            acq, old_width, old_height, frame_data.buffer, self._shm.buf
-        )
+        proto.copy_paint_data(acq, old_width, old_height, frame_data.buffer, self._shm.buf)
 
         try:
             ipc.channel.send_message(self._duplex, acq)
@@ -111,9 +107,7 @@ class BrowserServer:
             logger.exception("failed to send AcquirePaintData")
 
     def _closed(self) -> None:
-        ipc.channel.send_message(
-            self._duplex, proto.BrowserClosed(page_id=self._page_id)
-        )
+        ipc.channel.send_message(self._duplex, proto.BrowserClosed(page_id=self._page_id))
 
     def handle_release_paint(self, msg: proto.ReleasePaintData):
         self._release_paint_e.set()
@@ -133,9 +127,7 @@ def _manager_thread(duplex: utils.aio.duplex_unix._Duplex, browser_app):
             break
 
         if isinstance(msg, proto.CreateBrowserRequest):
-            server = BrowserServer.create(
-                duplex=duplex, create_req=msg, browser_app=browser_app
-            )
+            server = BrowserServer.create(duplex=duplex, create_req=msg, browser_app=browser_app)
             browsers[msg.page_id] = server
         elif isinstance(msg, proto.ReleasePaintData):
             server = browsers[msg.page_id]
@@ -168,9 +160,7 @@ def main(mp_cch: socket.socket):
     opts.root_cache_path = init_req.root_cache_path
     opts.initialized_callback = _context_initialized
 
-    res = (
-        importlib.resources.files("livekit.plugins.browser.resources") / "lkcef_app.app"
-    )
+    res = importlib.resources.files("livekit.plugins.browser.resources") / "lkcef_app.app"
     with importlib.resources.as_file(res) as path:
         opts.framework_path = str(
             path / "Contents" / "Frameworks" / "Chromium Embedded Framework.framework"

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 
 import pytest
+
 from livekit import rtc
 from livekit.agents import APIConnectionError, utils
 from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
@@ -33,9 +34,9 @@ class FallbackAdapterTester(FallbackAdapter):
 
         self.on("tts_availability_changed", self._on_tts_availability_changed)
 
-        self._availability_changed_ch: dict[
-            int, utils.aio.Chan[AvailabilityChangedEvent]
-        ] = {id(t): utils.aio.Chan[AvailabilityChangedEvent]() for t in tts}
+        self._availability_changed_ch: dict[int, utils.aio.Chan[AvailabilityChangedEvent]] = {
+            id(t): utils.aio.Chan[AvailabilityChangedEvent]() for t in tts
+        }
 
     def _on_tts_availability_changed(self, ev: AvailabilityChangedEvent) -> None:
         self._availability_changed_ch[id(ev.tts)].send_nowait(ev)
@@ -157,9 +158,7 @@ async def test_tts_recover() -> None:
     assert not fallback_adapter.availability_changed_ch(fake2).recv_nowait().available
 
     assert (
-        await asyncio.wait_for(
-            fallback_adapter.availability_changed_ch(fake2).recv(), 1.0
-        )
+        await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake2).recv(), 1.0)
     ).available, "fake2 should have recovered"
 
     async for _ in fallback_adapter.synthesize("hello test"):
@@ -178,9 +177,7 @@ async def test_tts_recover() -> None:
 
 
 async def test_audio_resampled() -> None:
-    fake1 = FakeTTS(
-        sample_rate=48000, fake_exception=APIConnectionError("fake1 failed")
-    )
+    fake1 = FakeTTS(sample_rate=48000, fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeTTS(fake_audio_duration=5.0, sample_rate=16000)
 
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
@@ -193,9 +190,7 @@ async def test_audio_resampled() -> None:
         assert fake1.synthesize_ch.recv_nowait()
         assert fake2.synthesize_ch.recv_nowait()
 
-        assert (
-            not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
-        )
+        assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
 
         combined_frame = rtc.combine_audio_frames(frames)
         assert combined_frame.duration == 5.0
@@ -301,7 +296,7 @@ async def test_timeout():
             input_task = asyncio.create_task(_input_task2(stream))
 
             try:
-                async for ev in stream:
+                async for _ in stream:
                     pass
             finally:
                 await input_task
