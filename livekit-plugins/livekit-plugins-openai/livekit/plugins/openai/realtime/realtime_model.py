@@ -67,6 +67,7 @@ from ..log import logger
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_TEMPERATURE = 0.8
 
 _log_oai_events = int(os.getenv("LOG_OAI_EVENTS", 0))
 
@@ -103,7 +104,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
-        temperature: float | None = None,
+        temperature: float | None = DEFAULT_TEMPERATURE,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: InputAudioTranscription | None = None,
         turn_detection: TurnDetection | None = None,
