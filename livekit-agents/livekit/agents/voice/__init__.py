@@ -29,4 +29,5 @@ __all__ = [
     "AgentStoppedSpeakingEvent",
     "MetricsCollectedEvent",
     "ConversationItemAddedEvent",
+    "UnrecoverableErrorInfo",
 ]
