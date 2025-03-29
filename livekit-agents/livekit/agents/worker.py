@@ -406,7 +406,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                         job_load = self._worker_load / len(self.active_jobs)
                         if job_load > 0.0:
                             available_load = max(load_threshold - self._worker_load, 0.0)
-                            available_job = math.ceil(available_load / job_load)
+                            available_job = min(math.ceil(available_load / job_load), default_num_idle_processes)
                             self._proc_pool.set_target_idle_processes(available_job)
                     else:
                         self._proc_pool.set_target_idle_processes(default_num_idle_processes)
