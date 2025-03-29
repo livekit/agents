@@ -9,8 +9,8 @@ from typing import NamedTuple, Union, cast
 import numpy as np
 
 from livekit import rtc
-from ..cli import cli
 
+from ..cli import cli
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given, log_exceptions
