@@ -61,7 +61,8 @@ jobs:
             types-psutil \
             types-pyOpenSSL \
             types-requests \
-            types-openpyxl
+            types-openpyxl \
+            types-botocore
 
       - name: Check Types
         run: |
