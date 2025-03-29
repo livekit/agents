@@ -179,7 +179,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         try:
             while not self._closed:
                 current_pending = self._warmed_proc_queue.qsize() + len(self._spawn_tasks)
-                to_spawn = self._target_idle_processes - current_pending
+                to_spawn = (
+                    min(self._target_idle_processes, self._default_num_idle_processes)
+                    - current_pending
+                )
 
                 for _ in range(to_spawn):
                     task = asyncio.create_task(self._proc_spawn_task())
