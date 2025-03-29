@@ -30,6 +30,7 @@ from openai.types.beta.realtime import (
     ErrorEvent,
     InputAudioBufferAppendEvent,
     InputAudioBufferCommitEvent,
+    InputAudioBufferClearEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
     RealtimeClientEvent,
@@ -534,6 +535,10 @@ class RealtimeSession(
         if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
             self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))
             self._pushed_duration_s = 0
+
+    def clear_audio(self) -> None:
+        self.send_event(InputAudioBufferClearEvent(type="input_audio_buffer.clear"))
+        self._pushed_duration_s = 0
 
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
