@@ -399,14 +399,17 @@ class Worker(utils.EventEmitter[EventTypes]):
                 default_num_idle_processes = _WorkerEnvOption.getvalue(
                     self._opts.num_idle_processes, self._devmode
                 )
-                active_jobs = len(self.active_jobs)
-                if active_jobs > 0:
-                    job_load = self._worker_load / len(self.active_jobs)
-                    available_load = max(load_threshold - self._worker_load, 0.0)
-                    available_job = math.ceil(available_load / job_load)
-                    self._proc_pool.set_target_idle_processes(available_job)
-                else:
-                    self._proc_pool.set_target_idle_processes(default_num_idle_processes)
+
+                if not math.isinf(load_threshold):
+                    active_jobs = len(self.active_jobs)
+                    if active_jobs > 0:
+                        job_load = self._worker_load / len(self.active_jobs)
+                        if job_load >= 0.0:
+                            available_load = max(load_threshold - self._worker_load, 0.0)
+                            available_job = math.ceil(available_load / job_load)
+                            self._proc_pool.set_target_idle_processes(available_job)
+                    else:
+                        self._proc_pool.set_target_idle_processes(default_num_idle_processes)
 
                 self._num_idle_target_graph.plot(time.time(), self._proc_pool.target_idle_processes)
                 self._num_idle_process_graph.plot(
