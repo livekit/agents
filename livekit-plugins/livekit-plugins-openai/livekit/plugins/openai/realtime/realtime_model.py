@@ -7,7 +7,7 @@ import json
 import os
 import weakref
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Literal, Union
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -17,6 +17,7 @@ from pydantic import BaseModel, ValidationError
 from livekit import rtc
 from livekit.agents import io, llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 from openai.types.beta.realtime import (
     ConversationItem,
     ConversationItemContent,
@@ -29,8 +30,8 @@ from openai.types.beta.realtime import (
     ConversationItemTruncateEvent,
     ErrorEvent,
     InputAudioBufferAppendEvent,
-    InputAudioBufferCommitEvent,
     InputAudioBufferClearEvent,
+    InputAudioBufferCommitEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
     RealtimeClientEvent,
@@ -76,9 +77,9 @@ _log_oai_events = int(os.getenv("LOG_OAI_EVENTS", 0))
 class _RealtimeOptions:
     model: str
     voice: str
-    temperature: NotGivenOr[float]
-    input_audio_transcription: NotGivenOr[InputAudioTranscription]
-    turn_detection: NotGivenOr[TurnDetection]
+    temperature: float
+    input_audio_transcription: InputAudioTranscription | None
+    turn_detection: TurnDetection | None
     api_key: str
     base_url: str
 
@@ -98,6 +99,21 @@ class _ResponseGeneration:
     messages: dict[str, _MessageGeneration]
 
 
+# default values got from a "default" session from their API
+DEFAULT_TEMPERATURE = 0.8
+DEFAULT_TURN_DETECTION = TurnDetection(
+    type="server_vad",
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=200,
+    create_response=True,
+    interrupt_response=True,
+)
+DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
+    model="gpt-4o-mini-transcribe",
+)
+
+
 class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
@@ -106,9 +122,9 @@ class RealtimeModel(llm.RealtimeModel):
         voice: str = "alloy",
         temperature: NotGivenOr[float] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[InputAudioTranscription] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetection] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -119,20 +135,21 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
 
-        api_key = api_key if utils.is_given(api_key) else os.environ.get("OPENAI_API_KEY")
-
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None:
             raise ValueError(
                 "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"  # noqa: E501
             )
 
-        base_url = base_url if utils.is_given(base_url) else OPENAI_BASE_URL
+        base_url = base_url if is_given(base_url) else OPENAI_BASE_URL
         self._opts = _RealtimeOptions(
             model=model,
             voice=voice,
-            temperature=temperature,
-            input_audio_transcription=input_audio_transcription,
-            turn_detection=turn_detection,
+            temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
+            input_audio_transcription=input_audio_transcription
+            if is_given(input_audio_transcription)
+            else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+            turn_detection=turn_detection if is_given(turn_detection) else DEFAULT_TURN_DETECTION,
             api_key=api_key,
             base_url=base_url,
         )
@@ -142,10 +159,10 @@ class RealtimeModel(llm.RealtimeModel):
     def update_options(
         self, *, voice: NotGivenOr[str] = NOT_GIVEN, temperature: NotGivenOr[float] = NOT_GIVEN
     ) -> None:
-        if utils.is_given(voice):
+        if is_given(voice):
             self._opts.voice = voice
 
-        if utils.is_given(temperature):
+        if is_given(temperature):
             self._opts.temperature = temperature
 
         for sess in self._sessions:
@@ -220,10 +237,9 @@ class RealtimeSession(
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
 
+        # 100ms chunks
         self._bstream = utils.audio.AudioByteStream(
-            SAMPLE_RATE,
-            NUM_CHANNELS,
-            samples_per_channel=SAMPLE_RATE // 10,  # 100ms
+            SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
         self._pushed_duration_s = 0  # duration of audio pushed to the OpenAI Realtime API
 
@@ -356,31 +372,31 @@ class RealtimeSession(
                 except Exception:
                     logger.exception("failed to handle event", extra={"event": event})
 
-        input_audio_transcription: session_update_event.SessionInputAudioTranscription | None = None
-        if utils.is_given(self._realtime_model._opts.input_audio_transcription):
-            input_audio_transcription = session_update_event.SessionInputAudioTranscription(
-                model=self._realtime_model._opts.input_audio_transcription.model,
-                language=self._realtime_model._opts.input_audio_transcription.language,
-                prompt=self._realtime_model._opts.input_audio_transcription.prompt,
+        input_audio_transcription = self._realtime_model._opts.input_audio_transcription
+        input_audio_transcription = (
+            session_update_event.SessionInputAudioTranscription.model_validate(
+                input_audio_transcription.model_dump()
+            ).model_dump(
+                by_alias=True,
+                exclude_unset=True,
+                exclude_defaults=True,
             )
-
-        turn_detection: session_update_event.SessionTurnDetection | None = None
-        if utils.is_given(self._realtime_model._opts.turn_detection):
-            turn_detection = session_update_event.SessionTurnDetection.model_validate(
-                asdict(self._realtime_model._opts.turn_detection)
-            )
-
-        session = session_update_event.Session.model_construct(
-            model=self._realtime_model._opts.model,
-            voice=self._realtime_model._opts.voice,
-            input_audio_format="pcm16",
-            output_audio_format="pcm16",
-            modalities=["text", "audio"],
-            turn_detection=turn_detection,
-            input_audio_transcription=input_audio_transcription,
+            if input_audio_transcription
+            else None
         )
-        if utils.is_given(self._realtime_model._opts.temperature):
-            session.temperature = self._realtime_model._opts.temperature
+
+        turn_detection = self._realtime_model._opts.turn_detection
+        turn_detection = (
+            session_update_event.SessionTurnDetection.model_validate(
+                turn_detection.model_dump()
+            ).model_dump(
+                by_alias=True,
+                exclude_unset=True,
+                exclude_defaults=True,
+            )
+            if turn_detection
+            else None
+        )
 
         # initial session update
         self.send_event(
@@ -388,7 +404,16 @@ class RealtimeSession(
                 type="session.update",
                 # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
                 # Other providers support different voices, so we need to accommodate that.
-                session=session,
+                session=session_update_event.Session.model_construct(
+                    model=self._realtime_model._opts.model,
+                    voice=self._realtime_model._opts.voice,
+                    input_audio_format="pcm16",
+                    output_audio_format="pcm16",
+                    modalities=["text", "audio"],
+                    turn_detection=turn_detection,
+                    input_audio_transcription=input_audio_transcription,
+                    temperature=self._realtime_model._opts.temperature,
+                ),
                 event_id=utils.shortuuid("session_update_"),
             )
         )
@@ -420,17 +445,17 @@ class RealtimeSession(
     ) -> None:
         kwargs = {}
 
-        if utils.is_given(tool_choice):
+        if is_given(tool_choice):
             oai_tool_choice = tool_choice
             if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
                 oai_tool_choice = tool_choice["function"]
 
             kwargs["tool_choice"] = oai_tool_choice
 
-        if utils.is_given(voice):
+        if is_given(voice):
             kwargs["voice"] = voice
 
-        if utils.is_given(temperature):
+        if is_given(temperature):
             kwargs["temperature"] = temperature
 
         if kwargs:
