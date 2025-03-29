@@ -375,11 +375,11 @@ class RealtimeSession(
         input_audio_transcription = self._realtime_model._opts.input_audio_transcription
         input_audio_transcription = (
             session_update_event.SessionInputAudioTranscription.model_validate(
-                input_audio_transcription.model_dump()
-            ).model_dump(
-                by_alias=True,
-                exclude_unset=True,
-                exclude_defaults=True,
+                input_audio_transcription.model_dump(
+                    by_alias=True,
+                    exclude_unset=True,
+                    exclude_defaults=True,
+                )
             )
             if input_audio_transcription
             else None
@@ -388,11 +388,11 @@ class RealtimeSession(
         turn_detection = self._realtime_model._opts.turn_detection
         turn_detection = (
             session_update_event.SessionTurnDetection.model_validate(
-                turn_detection.model_dump()
-            ).model_dump(
-                by_alias=True,
-                exclude_unset=True,
-                exclude_defaults=True,
+                turn_detection.model_dump(
+                    by_alias=True,
+                    exclude_unset=True,
+                    exclude_defaults=True,
+                )
             )
             if turn_detection
             else None
