@@ -243,7 +243,6 @@ class BackgroundAudio:
                 logger.warning(
                     "Background audio is not supported in console mode. Audio will not be played."
                 )
-                return
 
             await self._publish_track()
 
