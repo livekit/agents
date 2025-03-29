@@ -56,7 +56,7 @@ class RoomInputOptions:
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     text_input_cb: TextInputCallback = _default_text_input_cb
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
-    """True to synchronize transcription with audio output.
+    """False to disable transcription synchronization with audio output.
     Otherwise, transcription is emitted as quickly as available."""
 
 
