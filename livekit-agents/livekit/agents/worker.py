@@ -166,7 +166,7 @@ class WorkerOptions:
 
     """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
-        dev_default=0, prod_default=3
+        dev_default=0, prod_default=(os.cpu_count() or 1) * 2
     )
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
@@ -351,7 +351,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._proc_pool.on("process_started", _update_job_status)
         self._proc_pool.on("process_closed", _update_job_status)
         self._proc_pool.on("process_job_launched", _update_job_status)
-        self._proc_pool.start()
+        await self._proc_pool.start()
 
         self._api = api.LiveKitAPI(self._opts.ws_url, self._opts.api_key, self._opts.api_secret)
         self._http_session = aiohttp.ClientSession()

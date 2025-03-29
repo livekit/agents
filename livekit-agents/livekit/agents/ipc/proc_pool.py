@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable
 from multiprocessing.context import BaseContext
 from typing import Any, Callable, Literal
@@ -20,7 +21,7 @@ EventTypes = Literal[
     "process_job_launched",
 ]
 
-MAX_CONCURRENT_INITIALIZATIONS = 5
+MAX_CONCURRENT_INITIALIZATIONS = os.cpu_count() or 1
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):
@@ -58,6 +59,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._started = False
         self._closed = False
 
+        self._idle_ready = asyncio.Event()
+
     @property
     def processes(self) -> list[JobExecutor]:
         return self._executors
@@ -68,12 +71,15 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             None,
         )
 
-    def start(self) -> None:
+    async def start(self) -> None:
         if self._started:
             return
 
         self._started = True
         self._main_atask = asyncio.create_task(self._main_task())
+
+        # wait for the idle processes to be warmed up (by the main task)
+        await self._idle_ready.wait()
 
     async def aclose(self) -> None:
         if not self._started:
@@ -141,6 +147,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                     # neither be used to launch jobs
                     self.emit("process_ready", proc)
                     self._warmed_proc_queue.put_nowait(proc)
+
+                    if self._warmed_proc_queue.qsize() >= self._num_idle_processes:
+                        self._idle_ready.set()
+
                 except Exception:
                     self._proc_needed_sem.release()  # notify to warm a new process after initialization failure  # noqa: E501
 
