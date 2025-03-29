@@ -9,7 +9,7 @@ from livekit import rtc
 
 from ... import utils
 from ...log import logger
-from ...types import ATTRIBUTE_AGENT_STATE, TOPIC_CHAT
+from ...types import ATTRIBUTE_AGENT_STATE, NOT_GIVEN, TOPIC_CHAT, NotGivenOr
 from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
@@ -55,6 +55,9 @@ class RoomInputOptions:
     audio_num_channels: int = 1
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     text_input_cb: TextInputCallback = _default_text_input_cb
+    sync_transcription: NotGivenOr[bool] = NOT_GIVEN
+    """True to synchronize transcription with audio output.
+    Otherwise, transcription is emitted as quickly as available."""
 
 
 @dataclass
@@ -155,7 +158,13 @@ class RoomIO:
 
             # use the RoomIO's audio output if available, otherwise use the agent's audio output
             # (e.g the audio output isn't using RoomIO with our avatar datastream impl)
-            if audio_output := self._audio_output or self._agent_session.output.audio:
+            sync_transcription = True
+            if utils.is_given(self._input_options.sync_transcription):
+                sync_transcription = self._input_options.sync_transcription
+
+            if sync_transcription and (
+                audio_output := self._audio_output or self._agent_session.output.audio
+            ):
                 self._tr_synchronizer = TranscriptSynchronizer(
                     next_in_chain_audio=audio_output, next_in_chain_text=self._agent_tr_output
                 )
