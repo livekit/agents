@@ -10,6 +10,7 @@ from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
+from ..utils.hw.cpu import get_cpu_monitor
 from . import inference_executor, job_proc_executor, job_thread_executor
 from .job_executor import JobExecutor
 
@@ -21,7 +22,7 @@ EventTypes = Literal[
     "process_job_launched",
 ]
 
-MAX_CONCURRENT_INITIALIZATIONS = os.cpu_count() or 1
+MAX_CONCURRENT_INITIALIZATIONS = int(get_cpu_monitor().cpu_count())
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):

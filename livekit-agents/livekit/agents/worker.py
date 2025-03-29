@@ -166,7 +166,7 @@ class WorkerOptions:
 
     """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
-        dev_default=0, prod_default=(os.cpu_count() or 1)
+        dev_default=0, prod_default=int(get_cpu_monitor().cpu_count())
     )
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
