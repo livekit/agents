@@ -24,7 +24,6 @@ class LLM(OpenAILLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
-        max_tokens: NotGivenOr[int] = NOT_GIVEN,
         base_url: str | None = "https://api.groq.com/openai/v1",
         client: openai.AsyncClient | None = None,
     ):
@@ -43,7 +42,6 @@ class LLM(OpenAILLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
-            max_tokens=max_tokens,
         )
 
 
