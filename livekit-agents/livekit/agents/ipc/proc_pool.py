@@ -81,8 +81,9 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._started = True
         self._main_atask = asyncio.create_task(self._main_task())
 
-        # wait for the idle processes to be warmed up (by the main task)
-        await self._idle_ready.wait()
+        if self._default_num_idle_processes > 0:
+            # wait for the idle processes to be warmed up (by the main task)
+            await self._idle_ready.wait()
 
     async def aclose(self) -> None:
         if not self._started:
