@@ -166,7 +166,7 @@ class WorkerOptions:
 
     """Number of idle processes to keep warm."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
-        dev_default=0, prod_default=(os.cpu_count() or 1) * 2
+        dev_default=0, prod_default=(os.cpu_count() or 1)
     )
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 60.0
@@ -321,6 +321,27 @@ class Worker(utils.EventEmitter[EventTypes]):
             max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
         )
 
+        default_num_idle_processes = _WorkerEnvOption.getvalue(
+            self._opts.num_idle_processes, self._devmode
+        )
+        self._num_idle_target_graph = tracing.Tracing.add_graph(
+            title="num_idle_processes_target",
+            x_label="time",
+            y_label="target",
+            x_type="time",
+            y_range=(0, default_num_idle_processes),
+            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
+        )
+
+        self._num_idle_process_graph = tracing.Tracing.add_graph(
+            title="num_idle_processes",
+            x_label="time",
+            y_label="idle",
+            x_type="time",
+            y_range=(0, default_num_idle_processes),
+            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
+        )
+
     @property
     def worker_info(self) -> WorkerInfo:
         return WorkerInfo(http_port=self._http_server.port)
@@ -373,6 +394,24 @@ class Worker(utils.EventEmitter[EventTypes]):
                     return self._opts.load_fnc(self)  # type: ignore
 
                 self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+
+                load_threshold = _WorkerEnvOption.getvalue(self._opts.load_threshold, self._devmode)
+                default_num_idle_processes = _WorkerEnvOption.getvalue(
+                    self._opts.num_idle_processes, self._devmode
+                )
+                active_jobs = len(self.active_jobs)
+                if active_jobs > 0:
+                    job_load = self._worker_load / len(self.active_jobs)
+                    available_load = load_threshold - job_load
+                    available_job = math.ceil(available_load / job_load)
+                    self._proc_pool.set_target_idle_processes(available_job)
+                else:
+                    self._proc_pool.set_target_idle_processes(default_num_idle_processes)
+
+                self._num_idle_target_graph.plot(time.time(), self._proc_pool.target_idle_processes)
+                self._num_idle_process_graph.plot(
+                    time.time(), self._proc_pool._warmed_proc_queue.qsize()
+                )
                 self._worker_load_graph.plot(time.time(), self._worker_load)
 
         tasks = []
@@ -805,9 +844,8 @@ class Worker(utils.EventEmitter[EventTypes]):
             await self._queue_msg(msg)
             return
 
-        is_full = self._worker_load >= _WorkerEnvOption.getvalue(
-            self._opts.load_threshold, self._devmode
-        )
+        load_threshold = _WorkerEnvOption.getvalue(self._opts.load_threshold, self._devmode)
+        is_full = self._worker_load >= load_threshold
         currently_available = not is_full and not self._draining
 
         status = (
