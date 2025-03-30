@@ -68,6 +68,7 @@ class _TTSOptions:
     api_key: str
     language: str
     base_url: str
+    sent_tokenizer: tokenize.SentenceTokenizer
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -90,6 +91,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
+        sent_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
@@ -107,6 +109,7 @@ class TTS(tts.TTS):
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
+            sent_tokenizer (tokenize.SentenceTokenizer, optional): The sentence tokenizer to use for streaming. Defaults to a pattern-based tokenizer.
         """  # noqa: E501
 
         super().__init__(
@@ -128,6 +131,11 @@ class TTS(tts.TTS):
             emotion=emotion,
             api_key=cartesia_api_key,
             base_url=base_url,
+            sent_tokenizer=(
+                sent_tokenizer
+                if is_given(sent_tokenizer)
+                else tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT)
+            ),
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -295,9 +303,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     ):
         super().__init__(tts=tts)
         self._opts, self._pool = opts, pool
-        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
-            min_sentence_len=BUFFERED_WORDS_COUNT
-        ).stream()
+        self._sent_tokenizer_stream = self._opts.sent_tokenizer.stream()
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
