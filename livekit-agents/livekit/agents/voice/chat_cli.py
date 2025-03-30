@@ -169,6 +169,9 @@ class ChatCLI:
         self._render_ring_buffer = np.empty((0,), dtype=np.int16)
         self._render_ring_lock = threading.Lock()
 
+        self._output_delay = 0.0
+        self._input_delay = 0.0
+
         self._main_atask: asyncio.Task | None = None
 
     async def start(self) -> None:
