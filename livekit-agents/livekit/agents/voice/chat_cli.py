@@ -284,7 +284,9 @@ class ChatCLI:
             self._agent.output.transcription = None
             self._text_input_buf = []
 
-    def _sd_output_callback(self, outdata: np.ndarray, frames: int, *_) -> None:
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, *_) -> None:
+        self._output_delay = time.outputBufferDacTime - time.currentTime
+
         FRAME_SAMPLES = 240
         with self._audio_sink.lock:
             bytes_needed = frames * 2
@@ -315,7 +317,11 @@ class ChatCLI:
             )
             self._apm.process_reverse_stream(render_frame_for_aec)
 
-    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
+    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:
+        self._input_delay = time.currentTime - time.inputBufferAdcTime
+        total_delay = self._output_delay + self._input_delay
+        self._apm.set_stream_delay_ms(int(total_delay * 1000))
+
         FRAME_SAMPLES = 240  # 10ms at 24000 Hz
         num_frames = frame_count // FRAME_SAMPLES
 
