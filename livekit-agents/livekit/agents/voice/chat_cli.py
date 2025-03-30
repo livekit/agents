@@ -268,7 +268,7 @@ class ChatCLI:
                 channels=1,
                 device=output_device,
                 samplerate=24000,
-                blocksize=2400,  # 100ms
+                blocksize=240,  # 10ms
             )
             self._output_stream.start()
             self._agent.output.audio = self._audio_sink
@@ -284,9 +284,7 @@ class ChatCLI:
             self._agent.output.transcription = None
             self._text_input_buf = []
 
-    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, status) -> None:
-        print(time, status)
-        print(type(status))
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int) -> None:
         with self._audio_sink.lock:
             bytes_needed = frames * 2
             if len(self._audio_sink.audio_buffer) < bytes_needed:
