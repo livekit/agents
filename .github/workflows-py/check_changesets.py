@@ -10,7 +10,6 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 REPO = os.environ.get("GITHUB_REPOSITORY")
 PR_NUMBER = os.environ.get("GITHUB_PR_NUMBER")
 BASE_REF = os.environ.get("GITHUB_BASE_REF", "main")
-HEAD_REF = os.environ.get("GITHUB_HEAD_REF", "main")
 headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
 
 def get_changed_files():
@@ -36,12 +35,15 @@ def parse_changes(files):
             changeset_exists = True
     return changes, changeset_exists
 
-def get_pr_title():
+def get_pr_details():
     pr_url = f"https://api.github.com/repos/{REPO}/pulls/{PR_NUMBER}"
     r = requests.get(pr_url, headers=headers)
     r.raise_for_status()
-    title = r.json().get("title", "Your changes description here.")
-    return f"{title} (#{PR_NUMBER})"
+    pr_data = r.json()
+    title = pr_data.get("title", "Your changes description here.")
+    head_ref = pr_data["head"]["ref"]
+    head_repo = pr_data["head"]["repo"]["full_name"]
+    return title, head_ref, head_repo
 
 def generate_template(changes, description):
     lines = ["---"]
@@ -88,30 +90,37 @@ def validate_changeset_content(content):
 def validate_all_changeset_files(diff_files):
     errors, entries, descriptions = [], [], []
     for f in diff_files:
-        if os.path.isfile(f):
-            with open(f, "r") as file:
-                content = file.read()
-                is_valid, error = validate_changeset_content(content)
-                if not is_valid:
-                    errors.append(f"{f}: {error}")
-                else:
-                    lines = content.splitlines()
-                    try:
-                        second_delim_index = lines[1:].index("---") + 1
-                    except ValueError:
-                        second_delim_index = None
-                    if second_delim_index is not None:
-                        front_matter = lines[1:second_delim_index]
-                        bump_order = {"major": 0, "minor": 1, "patch": 2}
-                        for line in front_matter:
-                            m = re.match(r'^"([^"]+)":\s*(patch|minor|major)$', line.strip())
-                            if m:
-                                pkg = m.group(1)
-                                bump = m.group(2)
-                                entries.append((bump_order[bump], bump, pkg))
-                        description = "\n".join(lines[second_delim_index + 1:]).strip()
-                        if description:
-                            descriptions.append(description)
+        try:
+            # Read the file content from the pr_head branch using git show.
+            content = subprocess.run(
+                ["git", "show", f"pr_head:{f}"],
+                capture_output=True, text=True, check=True
+            ).stdout
+        except subprocess.CalledProcessError as e:
+            errors.append(f"{f}: Failed to read file from git branch 'pr_head'.")
+            continue
+
+        is_valid, error = validate_changeset_content(content)
+        if not is_valid:
+            errors.append(f"{f}: {error}")
+        else:
+            lines = content.splitlines()
+            try:
+                second_delim_index = lines[1:].index("---") + 1
+            except ValueError:
+                second_delim_index = None
+            if second_delim_index is not None:
+                front_matter = lines[1:second_delim_index]
+                bump_order = {"major": 0, "minor": 1, "patch": 2}
+                for line in front_matter:
+                    m = re.match(r'^"([^"]+)":\s*(patch|minor|major)$', line.strip())
+                    if m:
+                        pkg = m.group(1)
+                        bump = m.group(2)
+                        entries.append((bump_order[bump], bump, pkg))
+                description = "\n".join(lines[second_delim_index + 1:]).strip()
+                if description:
+                    descriptions.append(description)
     if errors:
         return False, "\n".join(errors), None, None
     entries.sort(key=lambda x: x[0])
@@ -157,10 +166,12 @@ def main():
                            f"{formatted_summary}\n\n"
                            f"**Change description:**\n{change_desc}")
         else:
-            pr_title = get_pr_title()
+            # Get PR details to construct the new file link using the head repo & branch.
+            title, head_ref, head_repo = get_pr_details()
+            pr_title = f"{title} (#{PR_NUMBER})"
             template = generate_template(changes, pr_title)
             file_name = f"changeset-{uuid.uuid4().hex[:8]}.md"
-            base_url = f"https://github.com/{REPO}/new/{HEAD_REF}"
+            base_url = f"https://github.com/{head_repo}/new/{head_ref}"
             params = {"filename": f".github/next-release/{file_name}", "value": template}
             link = base_url + "?" + urllib.parse.urlencode(params)
             message_lines = [
