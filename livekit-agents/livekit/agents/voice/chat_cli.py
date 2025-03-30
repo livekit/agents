@@ -284,7 +284,9 @@ class ChatCLI:
             self._agent.output.transcription = None
             self._text_input_buf = []
 
-    def _sd_output_callback(self, outdata: np.ndarray, frames: int, *_) -> None:
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, status) -> None:
+        print(time, status)
+        print(type(status))
         with self._audio_sink.lock:
             bytes_needed = frames * 2
             if len(self._audio_sink.audio_buffer) < bytes_needed:
