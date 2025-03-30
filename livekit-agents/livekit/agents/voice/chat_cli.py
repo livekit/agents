@@ -285,6 +285,7 @@ class ChatCLI:
             self._text_input_buf = []
 
     def _sd_output_callback(self, outdata: np.ndarray, frames: int, *_) -> None:
+        FRAME_SAMPLES = 240
         with self._audio_sink.lock:
             bytes_needed = frames * 2
             if len(self._audio_sink.audio_buffer) < bytes_needed:
@@ -294,7 +295,6 @@ class ChatCLI:
                     dtype=np.int16,
                     count=available_bytes // 2,
                 )
-
                 outdata[available_bytes // 2 :, 0] = 0
                 del self._audio_sink.audio_buffer[:available_bytes]
             else:
@@ -302,11 +302,18 @@ class ChatCLI:
                 outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
                 del self._audio_sink.audio_buffer[:bytes_needed]
 
-        with self._render_ring_lock:
-            render_chunk = outdata[:, 0].copy()
-            self._render_ring_buffer = np.concatenate((self._render_ring_buffer, render_chunk))
-            if self._render_ring_buffer.size > AEC_RING_BUFFER_SIZE:
-                self._render_ring_buffer = self._render_ring_buffer[-AEC_RING_BUFFER_SIZE:]
+        num_chunks = frames // FRAME_SAMPLES
+        for i in range(num_chunks):
+            start = i * FRAME_SAMPLES
+            end = start + FRAME_SAMPLES
+            render_chunk = outdata[start:end, 0]
+            render_frame_for_aec = rtc.AudioFrame(
+                data=render_chunk.tobytes(),
+                samples_per_channel=FRAME_SAMPLES,
+                sample_rate=24000,
+                num_channels=1,
+            )
+            self._apm.process_reverse_stream(render_frame_for_aec)
 
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
         FRAME_SAMPLES = 240  # 10ms at 24000 Hz
@@ -317,27 +324,12 @@ class ChatCLI:
             end = start + FRAME_SAMPLES
             capture_chunk = indata[start:end]
 
-            with self._render_ring_lock:
-                if self._render_ring_buffer.size >= FRAME_SAMPLES:
-                    render_chunk = self._render_ring_buffer[:FRAME_SAMPLES].copy()
-                    self._render_ring_buffer = self._render_ring_buffer[FRAME_SAMPLES:]
-                else:
-                    render_chunk = np.zeros((FRAME_SAMPLES,), dtype=np.int16)
-
             capture_frame_for_aec = rtc.AudioFrame(
                 data=capture_chunk.tobytes(),
                 samples_per_channel=FRAME_SAMPLES,
                 sample_rate=24000,
                 num_channels=1,
             )
-            render_frame_for_aec = rtc.AudioFrame(
-                data=render_chunk.tobytes(),
-                samples_per_channel=FRAME_SAMPLES,
-                sample_rate=24000,
-                num_channels=1,
-            )
-
-            self._apm.process_reverse_stream(render_frame_for_aec)
             self._apm.process_stream(capture_frame_for_aec)
 
             in_data_aec = np.frombuffer(capture_frame_for_aec.data, dtype=np.int16)
