@@ -247,7 +247,7 @@ class ChatCLI:
                 channels=1,
                 device=input_device,
                 samplerate=24000,
-                blocksize=240,
+                blocksize=2400,
             )
             self._input_stream.start()
             self._agent.input.audio = _AudioInput(self)
@@ -268,7 +268,7 @@ class ChatCLI:
                 channels=1,
                 device=output_device,
                 samplerate=24000,
-                blocksize=240,  # 10ms
+                blocksize=2400,  # 100ms
             )
             self._output_stream.start()
             self._agent.output.audio = self._audio_sink
@@ -284,7 +284,7 @@ class ChatCLI:
             self._agent.output.transcription = None
             self._text_input_buf = []
 
-    def _sd_output_callback(self, outdata: np.ndarray, frames: int) -> None:
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int, *_) -> None:
         with self._audio_sink.lock:
             bytes_needed = frames * 2
             if len(self._audio_sink.audio_buffer) < bytes_needed:
@@ -309,36 +309,43 @@ class ChatCLI:
                 self._render_ring_buffer = self._render_ring_buffer[-AEC_RING_BUFFER_SIZE:]
 
     def _sd_input_callback(self, indata: np.ndarray, frame_count: int, *_) -> None:
-        CHUNK_SAMPLES = 240
-        with self._render_ring_lock:
-            if self._render_ring_buffer.size >= CHUNK_SAMPLES:
-                render_chunk = self._render_ring_buffer[:CHUNK_SAMPLES].copy()
-                self._render_ring_buffer = self._render_ring_buffer[CHUNK_SAMPLES:]
-            else:
-                render_chunk = np.zeros((CHUNK_SAMPLES,), dtype=np.int16)
+        FRAME_SAMPLES = 240  # 10ms at 24000 Hz
+        num_frames = frame_count // FRAME_SAMPLES
 
-        capture_frame_for_aec = rtc.AudioFrame(
-            data=indata.tobytes(),
-            samples_per_channel=frame_count,
-            sample_rate=24000,
-            num_channels=1,
-        )
-        render_frame_for_aec = rtc.AudioFrame(
-            data=render_chunk.tobytes(),
-            samples_per_channel=CHUNK_SAMPLES,
-            sample_rate=24000,
-            num_channels=1,
-        )
+        for i in range(num_frames):
+            start = i * FRAME_SAMPLES
+            end = start + FRAME_SAMPLES
+            capture_chunk = indata[start:end]
 
-        self._apm.process_reverse_stream(render_frame_for_aec)
-        self._apm.process_stream(capture_frame_for_aec)
+            with self._render_ring_lock:
+                if self._render_ring_buffer.size >= FRAME_SAMPLES:
+                    render_chunk = self._render_ring_buffer[:FRAME_SAMPLES].copy()
+                    self._render_ring_buffer = self._render_ring_buffer[FRAME_SAMPLES:]
+                else:
+                    render_chunk = np.zeros((FRAME_SAMPLES,), dtype=np.int16)
 
-        in_data_aec = np.frombuffer(capture_frame_for_aec.data, dtype=np.int16)
-        rms = np.sqrt(np.mean(in_data_aec.astype(np.float32) ** 2))
-        max_int16 = np.iinfo(np.int16).max
-        self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
+            capture_frame_for_aec = rtc.AudioFrame(
+                data=capture_chunk.tobytes(),
+                samples_per_channel=FRAME_SAMPLES,
+                sample_rate=24000,
+                num_channels=1,
+            )
+            render_frame_for_aec = rtc.AudioFrame(
+                data=render_chunk.tobytes(),
+                samples_per_channel=FRAME_SAMPLES,
+                sample_rate=24000,
+                num_channels=1,
+            )
 
-        self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, capture_frame_for_aec)
+            self._apm.process_reverse_stream(render_frame_for_aec)
+            self._apm.process_stream(capture_frame_for_aec)
+
+            in_data_aec = np.frombuffer(capture_frame_for_aec.data, dtype=np.int16)
+            rms = np.sqrt(np.mean(in_data_aec.astype(np.float32) ** 2))
+            max_int16 = np.iinfo(np.int16).max
+            self._micro_db = 20.0 * np.log10(rms / max_int16 + 1e-6)
+
+            self._loop.call_soon_threadsafe(self._audio_input_ch.send_nowait, capture_frame_for_aec)
 
     @log_exceptions(logger=logger)
     async def _input_cli_task(self, in_ch: aio.Chan[str]) -> None:
