@@ -242,6 +242,12 @@ async def _audio_forwarding_task(
         audio_output.flush()
 
 
+@dataclass
+class _ToolOutput:
+    output: list[_PythonOutput]
+    first_tool_fut: asyncio.Future
+
+
 def perform_tool_executions(
     *,
     session: AgentSession,
@@ -249,11 +255,8 @@ def perform_tool_executions(
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
-) -> tuple[
-    asyncio.Task,
-    list[_PythonOutput],
-]:
-    out: list[_PythonOutput] = []
+) -> tuple[asyncio.Task, _ToolOutput]:
+    tool_output = _ToolOutput(output=[], first_tool_fut=asyncio.Future())
     task = asyncio.create_task(
         _execute_tools_task(
             session=session,
@@ -261,11 +264,11 @@ def perform_tool_executions(
             tool_ctx=tool_ctx,
             tool_choice=tool_choice,
             function_stream=function_stream,
-            out=out,
+            tool_output=tool_output,
         ),
         name="execute_tools_task",
     )
-    return task, out
+    return task, tool_output
 
 
 @utils.log_exceptions(logger=logger)
@@ -276,7 +279,7 @@ async def _execute_tools_task(
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
-    out: list[_PythonOutput],
+    tool_output: _ToolOutput,
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
@@ -324,6 +327,9 @@ async def _execute_tools_task(
                 )
                 continue
 
+            if not tool_output.first_tool_fut.done():
+                tool_output.first_tool_fut.set_result(None)
+
             logger.debug(
                 "executing tool",
                 extra={
@@ -365,11 +371,11 @@ async def _execute_tools_task(
                         exc_info=task.exception(),
                     )
                     py_out.exception = task.exception()  # noqa: B023
-                    out.append(py_out)  # noqa: B023
+                    tool_output.output.append(py_out)  # noqa: B023
                     return
 
                 py_out.output = task.result()  # noqa: B023
-                out.append(py_out)  # noqa: B023
+                tool_output.output.append(py_out)  # noqa: B023
                 tasks.remove(task)
 
             task.add_done_callback(_log_exceptions)
@@ -397,7 +403,7 @@ async def _execute_tools_task(
     finally:
         await utils.aio.cancel_and_wait(*tasks)
 
-        if len(out) > 0:
+        if len(tool_output.output) > 0:
             logger.debug(
                 "tools execution completed",
                 extra={"speech_id": speech_handle.id},
@@ -571,13 +577,17 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
     elif add_if_missing:
         # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
-            0,
-            llm.ChatMessage(
-                id=INSTRUCTIONS_MESSAGE_ID,
-                role="system",
-                content=[instructions],
-            ),
+            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions])
         )
+
+
+def remove_instructions(chat_ctx: ChatContext) -> None:
+    # loop in case there are items with the same id (shouldn't happen!)
+    while True:
+        if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
+            chat_ctx.items.remove(msg)
+        else:
+            break
 
 
 STANDARD_SPEECH_RATE = 0.5  # words per second

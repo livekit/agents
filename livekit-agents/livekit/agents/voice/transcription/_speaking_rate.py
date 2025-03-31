@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Union
 
 import numpy as np
 
@@ -56,7 +57,7 @@ class SpeakingRateStream:
         self._detector = detector
         self._opts = opts
 
-        self._input_ch = utils.aio.Chan[rtc.AudioFrame | SpeakingRateStream._FlushSentinel]()
+        self._input_ch = utils.aio.Chan[Union[rtc.AudioFrame, SpeakingRateStream._FlushSentinel]]()
         self._event_ch = utils.aio.Chan[SpeakingRateEvent]()
 
         self._task = asyncio.create_task(self._main_task())

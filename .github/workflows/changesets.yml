@@ -4,19 +4,23 @@ permissions:
   pull-requests: write
   issues: write
 
-
 on:
-  pull_request:
+  pull_request_target:
+    branches:
+      - main
     paths:
-      - 'livekit-agents/**'
-      - 'livekit-plugins/**'
-      - '.github/next-release/**'
+      - "livekit-agents/**"
+      - "livekit-plugins/**"
+      - ".github/next-release/**"
 
 jobs:
   check-changesets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.base.ref }}
+
       - name: Check Changesets
         run: python .github/workflows-py/check_changesets.py
         env:

@@ -29,7 +29,7 @@ class Agent:
         self,
         *,
         instructions: str,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.FunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -40,8 +40,8 @@ class Agent:
     ) -> None:
         tools = tools or []
         self._instructions = instructions
-        self._chat_ctx = chat_ctx or ChatContext.empty()
-        self._tools = tools + find_function_tools(self)
+        self._tools = tools.copy() + find_function_tools(self)
+        self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_detection
         self._stt = stt
         self._llm = llm
@@ -49,7 +49,6 @@ class Agent:
         self._vad = vad
         self._allow_interruptions = allow_interruptions
         self._activity: AgentActivity | None = None
-        self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
 
     @property
     def instructions(self) -> str:

@@ -9,6 +9,8 @@ from google.genai import types
 from livekit.agents import llm
 from livekit.agents.llm import FunctionTool
 
+from .log import logger
+
 __all__ = ["to_chat_ctx", "to_fnc_ctx"]
 
 
@@ -99,9 +101,16 @@ def to_chat_ctx(
 
 def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
     img = llm.utils.serialize_image(image)
+    if img.external_url:
+        if img.mime_type:
+            mime_type = img.mime_type
+        else:
+            logger.debug("No media type provided for image, defaulting to image/jpeg.")
+            mime_type = "image/jpeg"
+        return types.Part.from_uri(file_uri=img.external_url, mime_type=mime_type)
     if cache_key not in image._cache:
         image._cache[cache_key] = img.data_bytes
-    return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.media_type)
+    return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.mime_type)
 
 
 def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:

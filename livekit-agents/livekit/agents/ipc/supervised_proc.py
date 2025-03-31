@@ -140,9 +140,8 @@ class SupervisedProc(ABC):
         if not self.started:
             raise RuntimeError("process not started")
 
-        async with self._lock:
-            if self._supervise_atask:
-                await asyncio.shield(self._supervise_atask)
+        if self._supervise_atask:
+            await asyncio.shield(self._supervise_atask)
 
     async def initialize(self) -> None:
         """initialize the process, this is sending a InitializeRequest message and waiting for a
