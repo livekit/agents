@@ -145,7 +145,7 @@ class STT(
     def stream(
         self,
         *,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         raise NotImplementedError(

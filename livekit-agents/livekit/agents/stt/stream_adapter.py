@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterable
 
 from .. import utils
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..vad import VAD, VADEventType
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
@@ -27,7 +27,7 @@ class StreamAdapter(STT):
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ):
         return await self._stt.recognize(
@@ -37,7 +37,7 @@ class StreamAdapter(STT):
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return StreamAdapterWrapper(
@@ -56,7 +56,7 @@ class StreamAdapterWrapper(RecognizeStream):
         *,
         vad: VAD,
         wrapped_stt: STT,
-        language: str | None,
+        language: NotGivenOr[str | None],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options)
