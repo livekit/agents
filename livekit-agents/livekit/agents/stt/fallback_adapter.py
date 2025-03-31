@@ -177,7 +177,7 @@ class FallbackAdapter(
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: NotGivenOr[str],
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ):
         start_time = time.time()
