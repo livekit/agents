@@ -223,7 +223,7 @@ class FallbackAdapter(
     def stream(
         self,
         *,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
@@ -242,7 +242,7 @@ class FallbackRecognizeStream(RecognizeStream):
         self,
         *,
         stt: FallbackAdapter,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=None)
