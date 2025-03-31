@@ -208,7 +208,6 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._reconnect_event = asyncio.Event()
         self._session_lock = asyncio.Lock()
-        self._session_ready = asyncio.Event()
 
     def _schedule_gemini_session_close(self) -> None:
         if self._session is not None:
@@ -285,29 +284,24 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         fut = asyncio.Future()
 
-        async def _generate():
-            # Wait until a session is connected.
-            await self._session_ready.wait()
+        event_id = utils.shortuuid("gemini-response-")
+        self._response_created_futures[event_id] = fut
+        self._pending_generation_event_id = event_id
 
-            event_id = utils.shortuuid("gemini-response-")
-            self._response_created_futures[event_id] = fut
-            self._pending_generation_event_id = event_id
+        instructions_content = instructions if is_given(instructions) else "."
+        ctx = [Content(parts=[Part(text=instructions_content)], role="user")]
+        self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
 
-            instructions_content = instructions if is_given(instructions) else "."
-            ctx = [Content(parts=[Part(text=instructions_content)], role="user")]
-            self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
+        def _on_timeout() -> None:
+            if event_id in self._response_created_futures and not fut.done():
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+                self._response_created_futures.pop(event_id, None)
+                if self._pending_generation_event_id == event_id:
+                    self._pending_generation_event_id = None
 
-            def _on_timeout() -> None:
-                if event_id in self._response_created_futures and not fut.done():
-                    fut.set_exception(llm.RealtimeError("generate_reply timed out."))
-                    self._response_created_futures.pop(event_id, None)
-                    if self._pending_generation_event_id == event_id:
-                        self._pending_generation_event_id = None
+        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        fut.add_done_callback(lambda _: handle.cancel())
 
-            handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-            fut.add_done_callback(lambda _: handle.cancel())
-
-        asyncio.create_task(_generate())
         return fut
 
     def interrupt(self) -> None:
@@ -329,7 +323,6 @@ class RealtimeSession(llm.RealtimeSession):
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
         while True:
-            self._session_ready.clear()
             config = LiveConnectConfig(
                 response_modalities=self._opts.response_modalities
                 if is_given(self._opts.response_modalities)
@@ -367,7 +360,6 @@ class RealtimeSession(llm.RealtimeSession):
             ) as session:
                 async with self._session_lock:
                     self._session = session
-                    self._session_ready.set()
 
                 @utils.log_exceptions(logger=logger)
                 async def _send_task():
