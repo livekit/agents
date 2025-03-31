@@ -35,7 +35,6 @@ from .log import logger
 from .utils import get_aws_credentials, to_chat_ctx, to_fnc_ctx
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
-DEFAULT_REGION = "us-east-1"
 
 
 @dataclass
@@ -123,8 +122,8 @@ class LLM(llm.LLM):
             tool_config: dict[str, Any] = {"tools": to_fnc_ctx(tools)}
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
-                if isinstance(tool_choice, ToolChoice):
-                    tool_config["toolChoice"] = {"tool": {"name": tool_choice.name}}
+                if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+                    tool_config["toolChoice"] = {"tool": {"name": tool_choice["function"]["name"]}}
                 elif tool_choice == "required":
                     tool_config["toolChoice"] = {"any": {}}
                 elif tool_choice == "auto":
@@ -228,12 +227,24 @@ class LLMStream(llm.LLMStream):
             self._tool_call_id = tool_use["toolUseId"]
             self._fnc_name = tool_use["name"]
             self._fnc_raw_arguments = ""
+
         elif "contentBlockDelta" in chunk:
             delta = chunk["contentBlockDelta"]["delta"]
             if "toolUse" in delta:
                 self._fnc_raw_arguments += delta["toolUse"]["input"]
             elif "text" in delta:
                 self._text += delta["text"]
+
+        elif "metadata" in chunk:
+            metadata = chunk["metadata"]
+            return llm.ChatChunk(
+                request_id=request_id,
+                usage=llm.CompletionUsage(
+                    completion_tokens=metadata["usage"]["outputTokens"],
+                    prompt_tokens=metadata["usage"]["inputTokens"],
+                    total_tokens=metadata["usage"]["totalTokens"],
+                ),
+            )
         elif "contentBlockStop" in chunk:
             if self._text:
                 chat_chunk = llm.ChatChunk(

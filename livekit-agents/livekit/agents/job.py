@@ -28,6 +28,7 @@ from livekit.protocol import agent, models
 
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
+from .utils import http_context
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
@@ -113,7 +114,7 @@ class JobContext:
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
-        return api.LiveKitAPI()
+        return api.LiveKitAPI(session=http_context.http_session())
 
     @property
     def proc(self) -> JobProcess:

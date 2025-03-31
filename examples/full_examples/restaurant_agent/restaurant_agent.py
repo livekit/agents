@@ -216,12 +216,15 @@ class Reservation(BaseAgent):
         time: Annotated[str, Field(description="The reservation time")],
         context: RunContext_T,
     ) -> str:
+        """Called when the user provides their reservation time.
+        Confirm the time with the user before calling the function."""
         userdata = context.userdata
         userdata.reservation_time = time
         return f"The reservation time is updated to {time}"
 
     @function_tool()
     async def confirm_reservation(self, context: RunContext_T) -> str | tuple[Agent, str]:
+        """Called when the user confirms the reservation."""
         userdata = context.userdata
         if not userdata.customer_name or not userdata.customer_phone:
             return "Please provide your name and phone number first."
@@ -250,12 +253,14 @@ class Takeaway(BaseAgent):
         items: Annotated[list[str], Field(description="The items of the full order")],
         context: RunContext_T,
     ) -> str:
+        """Called when the user create or update their order."""
         userdata = context.userdata
         userdata.order = items
         return f"The order is updated to {items}"
 
     @function_tool()
     async def to_checkout(self, context: RunContext_T) -> str | tuple[Agent, str]:
+        """Called when the user confirms the order."""
         userdata = context.userdata
         if not userdata.order:
             return "No takeaway order found. Please make an order first."
@@ -282,6 +287,7 @@ class Checkout(BaseAgent):
         expense: Annotated[float, Field(description="The expense of the order")],
         context: RunContext_T,
     ) -> str:
+        """Called when the user confirms the expense."""
         userdata = context.userdata
         userdata.expense = expense
         return f"The expense is confirmed to be {expense}"
@@ -294,6 +300,8 @@ class Checkout(BaseAgent):
         cvv: Annotated[str, Field(description="The CVV of the credit card")],
         context: RunContext_T,
     ) -> str:
+        """Called when the user provides their credit card number, expiry date, and CVV.
+        Confirm the spelling with the user before calling the function."""
         userdata = context.userdata
         userdata.customer_credit_card = number
         userdata.customer_credit_card_expiry = expiry
@@ -302,6 +310,7 @@ class Checkout(BaseAgent):
 
     @function_tool()
     async def confirm_checkout(self, context: RunContext_T) -> str | tuple[Agent, str]:
+        """Called when the user confirms the checkout."""
         userdata = context.userdata
         if not userdata.expense:
             return "Please confirm the expense first."
@@ -318,6 +327,7 @@ class Checkout(BaseAgent):
 
     @function_tool()
     async def to_takeaway(self, context: RunContext_T) -> tuple[Agent, str]:
+        """Called when the user wants to update their order."""
         return await self._transfer_to_agent("takeaway", context)
 
 

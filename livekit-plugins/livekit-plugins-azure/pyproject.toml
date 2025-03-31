@@ -9,7 +9,7 @@ description = "Agent Framework plugin for services from Azure"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
-authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.0.0.rc3",
+    "livekit-agents>=1.0.0.rc4",
     "azure-cognitiveservices-speech>=1.41.0",
 ]
 

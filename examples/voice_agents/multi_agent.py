@@ -37,8 +37,8 @@ load_dotenv()
 
 common_instructions = (
     "Your name is Echo. You are a story teller that interacts with the user via voice."
+    "You are curious and friendly, with a sense of humor."
 )
-"You are curious and friendly, with a sense of humor."
 
 
 @dataclass
@@ -87,6 +87,9 @@ class IntroAgent(Agent):
         # chat history, pass in the chat_ctx
         # story_agent = StoryAgent(name, location, chat_ctx=context.chat_ctx)
 
+        logger.info(
+            "switching to the story agent with the provided user data: %s", context.userdata
+        )
         return story_agent, "Let's start the story!"
 
 
@@ -126,8 +129,7 @@ class StoryAgent(Agent):
         )
 
         job_ctx = get_current_job_context()
-        lkapi = job_ctx.api
-        await lkapi.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
+        await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
 
 
 def prewarm(proc: JobProcess):
