@@ -15,8 +15,19 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Protocol, Union, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Literal,
+    Protocol,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+    runtime_checkable,
+)
 
 from typing_extensions import Required, TypedDict, TypeGuard
 
@@ -77,13 +88,25 @@ class FunctionTool(Protocol):
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
+F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
+
+
+@overload
 def function_tool(
-    f: Callable | None = None,
-    *,
-    name: str | None = None,
-    description: str | None = None,
-) -> Callable[[Callable], FunctionTool]:
-    def deco(func) -> FunctionTool:
+    f: F, *, name: str | None = None, description: str | None = None
+) -> FunctionTool: ...
+
+
+@overload
+def function_tool(
+    f: None = None, *, name: str | None = None, description: str | None = None
+) -> Callable[[F], FunctionTool]: ...
+
+
+def function_tool(
+    f: F | None = None, *, name: str | None = None, description: str | None = None
+) -> FunctionTool | Callable[[F], FunctionTool]:
+    def deco(func: F) -> FunctionTool:
         from docstring_parser import parse_from_object
 
         docstring = parse_from_object(func)
@@ -92,9 +115,9 @@ def function_tool(
             description=description or docstring.description,
         )
         setattr(func, "__livekit_agents_ai_callable", info)
-        return func
+        return cast(FunctionTool, func)
 
-    if callable(f):
+    if f is not None:
         return deco(f)
 
     return deco

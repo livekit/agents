@@ -12,8 +12,11 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-## This example demonstrates how to use the push-to-talk for multi-participant conversations with voice agents
-## It disables audio input by default, and only enables it when the client explicitly triggers the `start_turn` RPC method
+## This example demonstrates how to use the push-to-talk for multi-participant
+## conversations with a voice agent
+## It disables audio input by default, and only enables it when the client explicitly
+## triggers the `start_turn` RPC method
+
 
 class MyAgent(Agent):
     def __init__(self) -> None:

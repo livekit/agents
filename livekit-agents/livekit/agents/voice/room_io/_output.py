@@ -23,7 +23,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         sample_rate: int,
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
-        queue_size_ms: int = 300_000,  # TODO(long): move buffer to python
+        queue_size_ms: int = 100_000,  # TODO(long): move buffer to python
     ) -> None:
         super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._room = room
@@ -200,7 +200,8 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
             ],
         )
         try:
-            await self._room.local_participant.publish_transcription(transcription)
+            if self._room.isconnected():
+                await self._room.local_participant.publish_transcription(transcription)
         except Exception as e:
             logger.warning("failed to publish transcription", exc_info=e)
 
@@ -306,15 +307,19 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
 
         self._latest_text = text
 
-        if self._is_delta_stream:  # reuse the existing writer
-            if self._writer is None:
-                self._writer = await self._create_text_writer()
+        try:
+            if self._room.isconnected():
+                if self._is_delta_stream:  # reuse the existing writer
+                    if self._writer is None:
+                        self._writer = await self._create_text_writer()
 
-            await self._writer.write(text)
-        else:  # always create a new writer
-            tmp_writer = await self._create_text_writer()
-            await tmp_writer.write(text)
-            await tmp_writer.aclose()
+                    await self._writer.write(text)
+                else:  # always create a new writer
+                    tmp_writer = await self._create_text_writer()
+                    await tmp_writer.write(text)
+                    await tmp_writer.aclose()
+        except Exception as e:
+            logger.warning("failed to publish transcription", exc_info=e)
 
     async def _flush_task(self, writer: rtc.TextStreamWriter | None):
         attributes = {
@@ -323,13 +328,17 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         if self._track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
 
-        if self._is_delta_stream:
-            if writer:
-                await writer.aclose(attributes=attributes)
-        else:
-            tmp_writer = await self._create_text_writer(attributes=attributes)
-            await tmp_writer.write(self._latest_text)
-            await tmp_writer.aclose()
+        try:
+            if self._room.isconnected():
+                if self._is_delta_stream:
+                    if writer:
+                        await writer.aclose(attributes=attributes)
+                else:
+                    tmp_writer = await self._create_text_writer(attributes=attributes)
+                    await tmp_writer.write(self._latest_text)
+                    await tmp_writer.aclose()
+        except Exception as e:
+            logger.warning("failed to publish transcription", exc_info=e)
 
     def flush(self) -> None:
         if self._participant_identity is None or not self._capturing:
