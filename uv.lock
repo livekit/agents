@@ -1254,8 +1254,8 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = ">=1.0.0" },
-    { name = "livekit-api", specifier = ">=0.8.2" },
+    { name = "livekit", specifier = "~=1.0" },
+    { name = "livekit-api", specifier = "~=1.0" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
@@ -1277,7 +1277,7 @@ requires-dist = [
     { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
     { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
-    { name = "livekit-protocol", specifier = ">=0.8.2" },
+    { name = "livekit-protocol", specifier = "~=1.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
     { name = "pillow", marker = "extra == 'images'", specifier = ">=10.3.0" },
@@ -1293,7 +1293,7 @@ provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova
 
 [[package]]
 name = "livekit-api"
-version = "0.8.2"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1302,9 +1302,9 @@ dependencies = [
     { name = "pyjwt" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ef/79/5af8fa53316fd924b9ac3170c20861564476551cafd4f2f221a75de299c2/livekit_api-0.8.2.tar.gz", hash = "sha256:dd334266b6c3da1214ae646b4080a5aaba7acf4c216ebf4343a72390c277dec8", size = 13141 }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/65/1e00545f4ef236f3f2ecb1c123fc2fe5ee71fdb0824ea78346bae573d8b2/livekit_api-1.0.1.tar.gz", hash = "sha256:d5a8851680696c75e612972bc2c96cb2563afdbde8538f2bb78b3aa6073f8937", size = 14752 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/04/1e/c6a0815d5abb99396af1e4a892c48fc0a4ce4ebbc4af5bbf535c786429bd/livekit_api-0.8.2-py3-none-any.whl", hash = "sha256:cafff157a4cdd8046315d16e29a1509a8a319163ffbbe604196d4e80884734f4", size = 15375 },
+    { url = "https://files.pythonhosted.org/packages/4e/a6/234e1bfa3d1ce60b72dfdb66c1f9966e1d20376cb20cf305a58d831c456d/livekit_api-1.0.1-py3-none-any.whl", hash = "sha256:7e503437a54a5cab8e84b605dab4b03dc5a5b227222df31fc94334707143e2b2", size = 17203 },
 ]
 
 [[package]]
@@ -1623,15 +1623,15 @@ requires-dist = [
 
 [[package]]
 name = "livekit-protocol"
-version = "0.9.2"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/98/f2/cb855e045125a00fadf0fe2e3db232cefb5e329038fa06bdd7b7d3b14f6f/livekit_protocol-0.9.2.tar.gz", hash = "sha256:d1f7a6f993de920f275559b63533578142c4c87c76b27f09151008b661c16760", size = 53885 }
+sdist = { url = "https://files.pythonhosted.org/packages/3a/1e/1ff940a3407dbde172c4c78431247c30a7f932abf2063aab1ef3c9234075/livekit_protocol-1.0.1.tar.gz", hash = "sha256:98619b02a09f2e27600d7639e4b3c4846f09c2b4fac3229dbfc20318d7d92bed", size = 55446 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/c3/ad00e778826d759476e525140b776aaade5271c5c4775d20c83855f90cbd/livekit_protocol-0.9.2-py3-none-any.whl", hash = "sha256:24d5d143e0da166f1b0b6df329a04159d1df580495e2b7d57d6ef40d9d1e2ba0", size = 64360 },
+    { url = "https://files.pythonhosted.org/packages/27/d6/362e267e74dd58cd3bb53877661898994bcc9bdb0bdbd0e4792bf814f338/livekit_protocol-1.0.1-py3-none-any.whl", hash = "sha256:0681c9d1be0c444345bbf0cf581c91a691a5c849ec6dbb26a29d9f6d6dd3e6b9", size = 65712 },
 ]
 
 [[package]]

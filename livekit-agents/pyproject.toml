@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-agents"
 dynamic = ["version"]
-description = "LiveKit Python Agents"
+description = "A powerful framework for building realtime voice AI agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9"
-authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -24,9 +24,9 @@ classifiers = [
 ]
 dependencies = [
     "click~=8.1",
-    "livekit>=1.0.0",
-    "livekit-api>=0.8.2",
-    "livekit-protocol>=0.8.2",
+    "livekit~=1.0",
+    "livekit-api~=1.0",
+    "livekit-protocol~=1.0",
     "protobuf>=3",
     "pyjwt>=2.0",
     "types-protobuf>=4,<5",
