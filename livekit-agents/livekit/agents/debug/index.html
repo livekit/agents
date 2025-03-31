@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>lkagents - tracing</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 8px;
+      padding: 0;
+    }
+
+    .section {
+      padding: 8px;
+      font-size: 0.9em;
+      margin-top: 8px;
+    }
+
+    .collapsible-title {
+      display: block;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .collapsible-title::before {
+      content: "▶ ";
+    }
+
+    .collapsible-title.expanded::before {
+      content: "▼ ";
+    }
+
+    .collapsible-content {
+      display: none;
+      margin-left: 20px;
+      /* optional indent for nested content */
+    }
+
+    .nested-collapsible-title {}
+
+    .nested-collapsible-content {}
+
+    .horizontal-group {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .refresh-icon {
+      font-size: 16px;
+      font-weight: bold;
+      margin-right: 4px;
+    }
+
+    canvas {
+      border: 1px solid #ccc;
+    }
+
+    .graph-title {
+      font-weight: bold;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Worker Section -->
+  <div class="section">
+    <div class="horizontal-group">
+      <h2 style="margin: 0 8px 0 0">Worker</h2>
+      <button onclick="refreshWorker()">
+        <span class="refresh-icon">⟳</span>Refresh
+      </button>
+    </div>
+    <div id="workerSection"></div>
+  </div>
+
+  <!-- Runners List -->
+  <div class="section">
+    <div class="horizontal-group">
+      <h2 style="margin: 0 8px 0 0">Runners</h2>
+      <button onclick="refreshRunners()">
+        <span class="refresh-icon">⟳</span>Refresh
+      </button>
+    </div>
+    <div id="runnersList"></div>
+  </div>
+
+  <script>
+    // Global state to remember which collapsibles are open
+    // runnerOpenState[runnerId] = { open: true/false, sub: { "Key/Value": bool, "Events": bool }, ... }
+    // We'll also store 'Worker' as a special ID => runnerOpenState["__WORKER__"] for worker KV / Events
+    const runnerOpenState = {};
+
+    const $ = (id) => document.getElementById(id);
+
+    // ------------------------------
+    // HTTP Utility
+    // ------------------------------
+    async function fetchJSON(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error("Network error");
+      return r.json();
+    }
+
+    // ------------------------------
+    // Collapsible toggle logic
+    // ------------------------------
+    function toggleCollapsible(titleEl, contentEl) {
+      const isOpen = contentEl.style.display === "block";
+      contentEl.style.display = isOpen ? "none" : "block";
+      titleEl.classList.toggle("expanded", !isOpen);
+    }
+
+    // Re-apply state if we know something should be open
+    function applyOpenState(titleEl, contentEl, open) {
+      if (open) {
+        contentEl.style.display = "block";
+        titleEl.classList.add("expanded");
+      } else {
+        contentEl.style.display = "none";
+        titleEl.classList.remove("expanded");
+      }
+    }
+
+    // ------------------------------
+    // Time label
+    // ------------------------------
+    function timeLabel(val) {
+      const d = new Date(val * 1000);
+      let hh = String(d.getHours()).padStart(2, "0");
+      let mm = String(d.getMinutes()).padStart(2, "0");
+      let ss = String(d.getSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+
+    // ------------------------------
+    // Export Utility
+    // ------------------------------
+    function exportEventsToJSON(events) {
+      const dataStr = JSON.stringify(events, null, 2);
+      const blob = new Blob([dataStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+
+      // Create a temporary link and auto-click to download
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "events.json";
+      document.body.appendChild(link);
+      link.click();
+
+      // Cleanup
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    // ------------------------------
+    // Rendering Tracing Data
+    // ------------------------------
+    function renderKeyValue(container, kv) {
+      const ul = document.createElement("ul");
+      Object.entries(kv).forEach(([k, v]) => {
+        const li = document.createElement("li");
+        li.textContent = `${k}: ${JSON.stringify(v)}`;
+        ul.appendChild(li);
+      });
+      container.appendChild(ul);
+    }
+
+    //
+    // Keep each event on a single line. Don't show "click to expand" if data is null.
+    //
+    function renderEvents(container, events) {
+      const ul = document.createElement("ul");
+      events.forEach((e) => {
+        // Each event => list item
+        const li = document.createElement("li");
+
+        // Create a wrapper span for the event name/time
+        const titleLine = document.createElement("span");
+        titleLine.textContent = `${new Date(
+          e.timestamp * 1000
+        ).toLocaleTimeString()} - ${e.name}`;
+        li.appendChild(titleLine);
+
+        // Only show the collapsible "Data" button if e.data is not null
+        if (e.data != null) {
+          const dataTitle = document.createElement("span");
+          dataTitle.style.fontSize = "0.8em";
+          dataTitle.style.marginLeft = "10px";
+          dataTitle.style.cursor = "pointer";
+          dataTitle.textContent = "[Data (click to expand)]";
+
+          // Collapsible content block (hidden by default)
+          const dataContent = document.createElement("div");
+          dataContent.className =
+            "collapsible-content nested-collapsible-content";
+          dataContent.style.display = "none";
+
+          // Pretty-print JSON with 2-space indentation
+          const pre = document.createElement("pre");
+          pre.textContent = JSON.stringify(e.data, null, 2);
+          dataContent.appendChild(pre);
+
+          li.appendChild(dataTitle);
+          li.appendChild(dataContent);
+
+          // Wire up the click event to toggle the data display
+          dataTitle.addEventListener("click", () => {
+            toggleCollapsible(dataTitle, dataContent);
+          });
+        }
+
+        ul.appendChild(li);
+      });
+      container.appendChild(ul);
+    }
+
+    function drawGraph(canvas, g) {
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width,
+        h = canvas.height,
+        pad = 40;
+      ctx.clearRect(0, 0, w, h);
+
+      if (!g.data?.length) {
+        ctx.fillText("No data", w / 2 - 20, h / 2);
+        return;
+      }
+      const xs = g.data.map((d) => d[0]);
+      const ys = g.data.map((d) => d[1]);
+      let [minX, maxX] = [Math.min(...xs), Math.max(...xs)];
+      if (minX === maxX) [minX, maxX] = [0, 1];
+      let [minY, maxY] = [Math.min(...ys), Math.max(...ys)];
+      if (g.y_range) [minY, maxY] = g.y_range;
+      else if (minY === maxY) [minY, maxY] = [0, 1];
+
+      // Axes
+      ctx.strokeStyle = "#000";
+      ctx.beginPath();
+      ctx.moveTo(pad, h - pad);
+      ctx.lineTo(w - pad, h - pad);
+      ctx.moveTo(pad, pad);
+      ctx.lineTo(pad, h - pad);
+      ctx.stroke();
+
+      const pw = w - 2 * pad,
+        ph = h - 2 * pad;
+      const toCX = (x) => pad + (x - minX) * (pw / (maxX - minX));
+      const toCY = (y) => h - pad - (y - minY) * (ph / (maxY - minY));
+
+      // Graph line
+      ctx.strokeStyle = "red";
+      ctx.beginPath();
+      ctx.moveTo(toCX(xs[0]), toCY(ys[0]));
+      for (let i = 1; i < xs.length; i++) {
+        ctx.lineTo(toCX(xs[i]), toCY(ys[i]));
+      }
+      ctx.stroke();
+
+      // Ticks
+      ctx.strokeStyle = "#000";
+      ctx.fillStyle = "#000";
+      ctx.font = "10px sans-serif";
+
+      // X
+      for (let i = 0; i <= 5; i++) {
+        let vx = minX + (i * (maxX - minX)) / 5;
+        let cx = toCX(vx),
+          cy = h - pad;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx, cy + 5);
+        ctx.stroke();
+        let label = g.x_type === "time" ? timeLabel(vx) : vx.toFixed(2);
+        let tw = ctx.measureText(label).width;
+        ctx.fillText(label, cx - tw / 2, cy + 15);
+      }
+      // Y
+      for (let i = 0; i <= 5; i++) {
+        let vy = minY + (i * (maxY - minY)) / 5;
+        let cx = pad,
+          cy = toCY(vy);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx - 5, cy);
+        ctx.stroke();
+        let lbl = vy.toFixed(2),
+          tw = ctx.measureText(lbl).width;
+        ctx.fillText(lbl, cx - tw - 6, cy + 3);
+      }
+
+      // Labels
+      if (g.x_label) {
+        let tw = ctx.measureText(g.x_label).width;
+        ctx.fillText(g.x_label, w / 2 - tw / 2, h - 5);
+      }
+      if (g.y_label) {
+        ctx.save();
+        ctx.translate(10, h / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = "center";
+        ctx.fillText(g.y_label, 0, 0);
+        ctx.restore();
+      }
+    }
+
+    function renderGraphs(container, graphs) {
+      graphs.forEach((g) => {
+        const gt = document.createElement("div");
+        gt.className = "graph-title";
+        gt.innerText = g.title;
+        container.appendChild(gt);
+
+        const c = document.createElement("canvas");
+        c.width = 400;
+        c.height = 200;
+        container.appendChild(c);
+
+        drawGraph(c, g);
+      });
+    }
+
+    // Render top-level Key/Value, Events, Graphs
+    function renderTracing(container, tracing, runnerId = "__WORKER__") {
+      if (!tracing) {
+        container.textContent = "No tracing data";
+        return;
+      }
+
+      // Key/Value
+      if (tracing.kv) {
+        const kvTitle = document.createElement("div");
+        kvTitle.className = "collapsible-title nested-collapsible-title";
+        kvTitle.innerText = "Key/Value";
+        container.appendChild(kvTitle);
+
+        const kvContent = document.createElement("div");
+        kvContent.className =
+          "collapsible-content nested-collapsible-content";
+        container.appendChild(kvContent);
+
+        // Ensure the open state matches what we have in runnerOpenState
+        let subKey = "Key/Value";
+        applyOpenState(
+          kvTitle,
+          kvContent,
+          getSubSectionOpen(runnerId, subKey)
+        );
+
+        kvTitle.onclick = () => {
+          toggleCollapsible(kvTitle, kvContent);
+          setSubSectionOpen(
+            runnerId,
+            subKey,
+            kvContent.style.display === "block"
+          );
+        };
+        renderKeyValue(kvContent, tracing.kv);
+      }
+
+      // Events
+      if (tracing.events) {
+        const eTitle = document.createElement("div");
+        eTitle.className = "collapsible-title nested-collapsible-title";
+        eTitle.innerText = "Events";
+        container.appendChild(eTitle);
+
+        const eContent = document.createElement("div");
+        eContent.className = "collapsible-content nested-collapsible-content";
+        container.appendChild(eContent);
+
+        let subKey = "Events";
+        applyOpenState(eTitle, eContent, getSubSectionOpen(runnerId, subKey));
+
+        eTitle.onclick = () => {
+          toggleCollapsible(eTitle, eContent);
+          setSubSectionOpen(
+            runnerId,
+            subKey,
+            eContent.style.display === "block"
+          );
+        };
+
+        // Create a button to export the events to JSON
+        const exportBtn = document.createElement("button");
+        exportBtn.textContent = "Export Events to JSON";
+        exportBtn.style.marginBottom = "8px";
+        exportBtn.onclick = () => exportEventsToJSON(tracing.events);
+        eContent.appendChild(exportBtn);
+
+        // Render the events
+        renderEvents(eContent, tracing.events);
+      }
+
+      // Graphs
+      if (tracing.graph) {
+        renderGraphs(container, tracing.graph);
+      }
+    }
+
+    // ------------------------------
+    // Global State Accessors
+    // ------------------------------
+    function getRunnerState(id) {
+      if (!runnerOpenState[id]) {
+        runnerOpenState[id] = { open: false, sub: {} };
+      }
+      return runnerOpenState[id];
+    }
+
+    function isRunnerOpen(id) {
+      return getRunnerState(id).open;
+    }
+    function setRunnerOpen(id, open) {
+      getRunnerState(id).open = open;
+    }
+
+    function getSubSectionOpen(runnerId, subsection) {
+      return getRunnerState(runnerId).sub[subsection] === true;
+    }
+    function setSubSectionOpen(runnerId, subsection, open) {
+      getRunnerState(runnerId).sub[subsection] = open;
+    }
+
+    // ------------------------------
+    // Worker
+    // ------------------------------
+    async function refreshWorker() {
+      const sec = $("workerSection");
+      sec.textContent = "Loading...";
+      try {
+        const data = await fetchJSON("/debug/worker/");
+        sec.innerHTML = "";
+        renderTracing(sec, data.tracing, "__WORKER__"); // use a special ID
+      } catch (e) {
+        sec.textContent = "Error: " + e;
+      }
+    }
+
+    // ------------------------------
+    // Runners
+    // ------------------------------
+    async function refreshRunners() {
+      const rl = $("runnersList");
+      rl.textContent = "Loading...";
+      try {
+        const data = await fetchJSON("/debug/runners/");
+        rl.innerHTML = "";
+
+        data.runners.forEach((r) => {
+          const runnerId = String(r.id);
+
+          const wrap = document.createElement("div");
+          wrap.style.marginBottom = "16px";
+
+          // Collapsible runner title
+          const title = document.createElement("div");
+          title.className = "collapsible-title";
+          title.innerText = `room: ${r.room} — status: ${r.status}, job_id: ${r.job_id}  ${r.id}`;
+          wrap.appendChild(title);
+
+          // Collapsible content
+          const content = document.createElement("div");
+          content.className = "collapsible-content";
+          wrap.appendChild(content);
+
+          // Apply saved open state from runnerOpenState
+          applyOpenState(title, content, isRunnerOpen(runnerId));
+
+          // On title click => toggle + fetch details (only if we open)
+          title.onclick = async () => {
+            if (content.style.display !== "block") {
+              // about to open
+              content.textContent = "Loading...";
+              toggleCollapsible(title, content);
+              setRunnerOpen(runnerId, true);
+              await fetchRunnerDetails(runnerId, content);
+            } else {
+              // about to close
+              toggleCollapsible(title, content);
+              setRunnerOpen(runnerId, false);
+            }
+          };
+
+          rl.appendChild(wrap);
+          // If runner is open from before, we fetch details right away
+          if (isRunnerOpen(runnerId)) {
+            fetchRunnerDetails(runnerId, content);
+          }
+        });
+      } catch (e) {
+        rl.textContent = "Error: " + e;
+      }
+    }
+
+    async function fetchRunnerDetails(id, container) {
+      try {
+        const data = await fetchJSON(
+          `/debug/runner/?id=${encodeURIComponent(id)}`
+        );
+        container.innerHTML = "";
+
+        const dataDiv = document.createElement("div");
+        container.appendChild(dataDiv);
+
+        await loadRunnerTracing(id, dataDiv);
+      } catch (e) {
+        container.textContent = "Error: " + e;
+      }
+    }
+
+    async function loadRunnerTracing(id, container) {
+      try {
+        const d = await fetchJSON(
+          `/debug/runner/?id=${encodeURIComponent(id)}`
+        );
+        container.innerHTML = "";
+        renderTracing(container, d.tracing, id);
+      } catch (e) {
+        container.textContent = "Error: " + e;
+      }
+    }
+
+    // Initial calls
+    refreshWorker();
+    refreshRunners();
+  </script>
+</body>
+
+</html>

@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import socket
 import threading
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
@@ -60,6 +61,24 @@ class ThreadJobExecutor:
 
         self._inference_executor = inference_executor
         self._inference_tasks: list[asyncio.Task[None]] = []
+        self._id = utils.shortuuid("THEXEC_")
+        self._tracing_requests = dict[str, asyncio.Future[proto.TracingResponse]]()
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    async def tracing_info(self) -> dict[str, Any]:
+        if not self.started:
+            raise RuntimeError("thread not started")
+
+        tracing_req = proto.TracingRequest()
+        tracing_req.request_id = utils.shortuuid("trace_req_")
+        fut = asyncio.Future[proto.TracingResponse]()
+        self._tracing_requests[tracing_req.request_id] = fut
+        await channel.asend_message(self._pch, tracing_req)
+        resp = await fut
+        return resp.info
 
     @property
     def status(self) -> JobStatus:
@@ -176,9 +195,7 @@ class ThreadJobExecutor:
                     asyncio.shield(self._main_atask), timeout=self._opts.close_timeout
                 )
         except asyncio.TimeoutError:
-            logger.error(
-                "job shutdown is taking too much time..", extra=self.logging_extra()
-            )
+            logger.error("job shutdown is taking too much time..", extra=self.logging_extra())
 
         async with self._lock:
             if self._main_atask:
@@ -196,9 +213,7 @@ class ThreadJobExecutor:
             return
 
         try:
-            inf_res = await self._inference_executor.do_inference(
-                inf_req.method, inf_req.data
-            )
+            inf_res = await self._inference_executor.do_inference(inf_req.method, inf_req.data)
             await channel.asend_message(
                 self._pch,
                 proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),
@@ -237,8 +252,8 @@ class ThreadJobExecutor:
         monitor_task = asyncio.create_task(self._monitor_task())
 
         await self._join_fut
-        await utils.aio.gracefully_cancel(ping_task, monitor_task)
-        await utils.aio.gracefully_cancel(*self._inference_tasks)
+        await utils.aio.cancel_and_wait(ping_task, monitor_task)
+        await utils.aio.cancel_and_wait(*self._inference_tasks)
 
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()
@@ -262,14 +277,15 @@ class ThreadJobExecutor:
                     )
 
             if isinstance(msg, proto.Exiting):
-                logger.debug(
-                    "job exiting", extra={"reason": msg.reason, **self.logging_extra()}
-                )
+                logger.debug("job exiting", extra={"reason": msg.reason, **self.logging_extra()})
 
             if isinstance(msg, proto.InferenceRequest):
-                self._inference_tasks.append(
-                    asyncio.create_task(self._do_inference_task(msg))
-                )
+                self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+
+            if isinstance(msg, proto.TracingResponse):
+                fut = self._tracing_requests.pop(msg.request_id)
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    fut.set_result(msg)
 
     @utils.log_exceptions(logger=logger)
     async def _ping_task(self) -> None:
@@ -277,9 +293,7 @@ class ThreadJobExecutor:
         while True:
             await ping_interval.tick()
             try:
-                await channel.asend_message(
-                    self._pch, proto.PingRequest(timestamp=utils.time_ms())
-                )
+                await channel.asend_message(self._pch, proto.PingRequest(timestamp=utils.time_ms()))
             except utils.aio.duplex_unix.DuplexClosed:
                 break
 

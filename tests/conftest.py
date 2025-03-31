@@ -2,12 +2,11 @@ import dataclasses
 import logging
 
 import pytest
+
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
 from livekit.agents.cli import log
 
-TEST_CONNECT_OPTIONS = dataclasses.replace(
-    DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0
-)
+TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
 
 
 @pytest.fixture

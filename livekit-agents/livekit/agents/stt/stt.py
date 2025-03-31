@@ -3,18 +3,19 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import AsyncIterable, AsyncIterator, Generic, List, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import STTMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from ..utils import AudioBuffer, aio
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
 
@@ -22,7 +23,7 @@ from ..utils.audio import calculate_audio_duration
 class SpeechEventType(str, Enum):
     START_OF_SPEECH = "start_of_speech"
     """indicate the start of speech
-    if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""
+    if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT"""  # noqa: E501
     INTERIM_TRANSCRIPT = "interim_transcript"
     """interim transcript, useful for real-time transcription"""
     FINAL_TRANSCRIPT = "final_transcript"
@@ -52,7 +53,7 @@ class RecognitionUsage:
 class SpeechEvent:
     type: SpeechEventType
     request_id: str = ""
-    alternatives: List[SpeechData] = field(default_factory=list)
+    alternatives: list[SpeechData] = field(default_factory=list)
     recognition_usage: RecognitionUsage | None = None
 
 
@@ -88,7 +89,7 @@ class STT(
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> SpeechEvent: ...
 
@@ -96,7 +97,7 @@ class STT(
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         for i in range(conn_options.max_retry + 1):
@@ -144,11 +145,11 @@ class STT(
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "RecognizeStream":
+    ) -> RecognizeStream:
         raise NotImplementedError(
-            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"
+            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"  # noqa: E501
         )
 
     async def aclose(self) -> None:
@@ -178,7 +179,7 @@ class RecognizeStream(ABC):
         *,
         stt: STT,
         conn_options: APIConnectOptions,
-        sample_rate: int | None = None,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ):
         """
         Args:
@@ -190,9 +191,7 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[
-            Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]
-        ]()
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
@@ -203,7 +202,7 @@ class RecognizeStream(ABC):
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
-        self._needed_sr = sample_rate
+        self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
@@ -239,9 +238,7 @@ class RecognizeStream(ABC):
 
                 num_retries += 1
 
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[SpeechEvent]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         """Task used to collect metrics"""
 
         start_time = time.perf_counter()
@@ -284,7 +281,7 @@ class RecognizeStream(ABC):
                 )
 
         if self._resampler:
-            for frame in self._resampler.push(frame):
+            for frame in self._resampler.push(frame):  # noqa: B020
                 self._input_ch.send_nowait(frame)
         else:
             self._input_ch.send_nowait(frame)
@@ -308,7 +305,7 @@ class RecognizeStream(ABC):
     async def aclose(self) -> None:
         """Close ths stream immediately"""
         self._input_ch.close()
-        await aio.gracefully_cancel(self._task)
+        await aio.cancel_and_wait(self._task)
 
         if self._metrics_task is not None:
             await self._metrics_task
@@ -320,7 +317,7 @@ class RecognizeStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 

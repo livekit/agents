@@ -20,9 +20,9 @@ import json
 import os
 import time
 import wave
-from typing import Optional, Union
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
@@ -31,7 +31,12 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.utils import AudioBuffer, merge_frames
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import AudioBuffer, is_given, merge_frames
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
 
 from .common import resample_audio
@@ -43,10 +48,10 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: ClovaSttLanguages = "en-US",
-        secret: Optional[str] = None,
-        invoke_url: Optional[str] = None,
-        http_session: Optional[aiohttp.ClientSession] = None,
+        language: ClovaSttLanguages | str = "en-US",
+        secret: NotGivenOr[str] = NOT_GIVEN,
+        invoke_url: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
         threshold: float = 0.5,
     ):
         """
@@ -56,11 +61,11 @@ class STT(stt.STT):
         ``CLOVA_STT_SECRET_KEY`` and ``CLOVA_STT_INVOKE_URL`` environmental variables, respectively.
         """
 
-        super().__init__(
-            capabilities=STTCapabilities(streaming=False, interim_results=True)
+        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
+        self._secret = secret if is_given(secret) else os.environ.get("CLOVA_STT_SECRET_KEY")
+        self._invoke_url = (
+            invoke_url if is_given(invoke_url) else os.environ.get("CLOVA_STT_INVOKE_URL")
         )
-        self._secret = secret or os.environ.get("CLOVA_STT_SECRET_KEY")
-        self._invoke_url = invoke_url or os.environ.get("CLOVA_STT_INVOKE_URL")
         self._language = clova_languages_mapping.get(language, language)
         self._session = http_session
         if self._secret is None:
@@ -69,30 +74,29 @@ class STT(stt.STT):
             )
         self.threshold = threshold
 
-    def update_options(self, *, language: str | None = None) -> None:
-        self._language = (
-            clova_languages_mapping.get(language, language) or self._language
-        )
+    def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
+        if is_given(language):
+            self._language = clova_languages_mapping.get(language, language)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
 
-    def url_builder(
-        self, process_method: ClovaSpeechAPIType = "recognizer/upload"
-    ) -> str:
+    def url_builder(self, process_method: ClovaSpeechAPIType = "recognizer/upload") -> str:
         return f"{self._invoke_url}/{process_method}"
 
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,
         *,
-        language: Union[ClovaSttLanguages, str, None],
-        conn_options: APIConnectOptions,
+        language: NotGivenOr[ClovaSttLanguages | str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         try:
             url = self.url_builder()
+            if is_given(language):
+                self._language = clova_languages_mapping.get(language, language)
             payload = json.dumps({"language": self._language, "completion": "sync"})
 
             buffer = merge_frames(buffer)
@@ -111,9 +115,7 @@ class STT(stt.STT):
             headers = {"X-CLOVASPEECH-API-KEY": self._secret}
             form_data = aiohttp.FormData()
             form_data.add_field("params", payload)
-            form_data.add_field(
-                "media", io_buffer, filename="audio.wav", content_type="audio/wav"
-            )
+            form_data.add_field("media", io_buffer, filename="audio.wav", content_type="audio/wav")
             start = time.time()
             async with self._ensure_session().post(
                 url,
@@ -150,8 +152,8 @@ class STT(stt.STT):
 
     def _transcription_to_speech_event(
         self,
+        text: str,
         event_type: SpeechEventType = stt.SpeechEventType.INTERIM_TRANSCRIPT,
-        text: str | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=event_type,

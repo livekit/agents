@@ -1,7 +1,7 @@
 import ssl
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -20,10 +20,10 @@ class TranscriptionConfig:
     diarization: Optional[str] = None
     """Indicates type of diarization to use, if any."""
 
-    additional_vocab: Optional[Dict] = None
+    additional_vocab: Optional[dict] = None
     """Additional vocabulary that is not part of the standard language."""
 
-    punctuation_overrides: Optional[Dict] = None
+    punctuation_overrides: Optional[dict] = None
     """Permitted puctuation marks for advanced punctuation."""
 
     enable_entities: Optional[bool] = None
@@ -46,11 +46,9 @@ class TranscriptionConfig:
     """Indicates if partials for transcription, where words are produced
     immediately, is enabled."""
 
-    def asdict(self) -> Dict[Any, Any]:
+    def asdict(self) -> dict[Any, Any]:
         """Returns model as a dict while excluding None values recursively."""
-        return asdict(
-            self, dict_factory=lambda x: {k: v for (k, v) in x if v is not None}
-        )
+        return asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if v is not None})
 
 
 @dataclass

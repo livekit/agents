@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterable, Optional
+from collections.abc import AsyncIterable
 
 from .. import tokenize, utils
-from ..types import APIConnectOptions
-from .tts import (
-    TTS,
-    ChunkedStream,
-    SynthesizedAudio,
-    SynthesizeStream,
-    TTSCapabilities,
-)
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from .tts import TTS, ChunkedStream, SynthesizedAudio, SynthesizeStream, TTSCapabilities
 
 
 class StreamAdapter(TTS):
@@ -39,15 +33,15 @@ class StreamAdapter(TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> ChunkedStream:
         return self._tts.synthesize(text=text, conn_options=conn_options)
 
     def stream(
         self,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "StreamAdapterWrapper":
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> StreamAdapterWrapper:
         return StreamAdapterWrapper(
             tts=self,
             conn_options=conn_options,
@@ -64,17 +58,15 @@ class StreamAdapterWrapper(SynthesizeStream):
         self,
         *,
         tts: TTS,
+        conn_options: APIConnectOptions,
         wrapped_tts: TTS,
         sentence_tokenizer: tokenize.SentenceTokenizer,
-        conn_options: Optional[APIConnectOptions],
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._wrapped_tts = wrapped_tts
         self._sent_stream = sentence_tokenizer.stream()
 
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[SynthesizedAudio]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         pass  # do nothing
 
     async def _run(self) -> None:
@@ -108,5 +100,4 @@ class StreamAdapterWrapper(SynthesizeStream):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
-            await self._wrapped_tts.aclose()
+            await utils.aio.cancel_and_wait(*tasks)

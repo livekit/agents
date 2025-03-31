@@ -16,6 +16,7 @@ DeepgramModels = Literal[
     "nova-2-automotive",
     "nova-3",
     "nova-3-general",
+    "nova-3-medical",
     "enhanced-general",
     "enhanced-meeting",
     "enhanced-phonecall",

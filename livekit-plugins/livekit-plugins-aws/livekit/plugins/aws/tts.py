@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import aiohttp
 from aiobotocore.session import AioSession, get_session
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -26,9 +27,15 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
-from ._utils import _get_aws_credentials
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
+from .utils import _strip_nones, get_aws_credentials
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
@@ -40,24 +47,24 @@ DEFAULT_SAMPLE_RATE = 16000
 @dataclass
 class _TTSOptions:
     # https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
-    voice: str | None
-    speech_engine: TTS_SPEECH_ENGINE
+    voice: NotGivenOr[str]
+    speech_engine: NotGivenOr[TTS_SPEECH_ENGINE]
     speech_region: str
     sample_rate: int
-    language: TTS_LANGUAGE | str | None
+    language: NotGivenOr[TTS_LANGUAGE | str]
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: str | None = DEFAULT_VOICE,
-        language: TTS_LANGUAGE | str | None = None,
-        speech_engine: TTS_SPEECH_ENGINE = DEFAULT_SPEECH_ENGINE,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[TTS_LANGUAGE | str] = NOT_GIVEN,
+        speech_engine: NotGivenOr[TTS_SPEECH_ENGINE] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
-        speech_region: str = DEFAULT_SPEECH_REGION,
-        api_key: str | None = None,
-        api_secret: str | None = None,
+        speech_region: NotGivenOr[str] = DEFAULT_SPEECH_REGION,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
         session: AioSession | None = None,
     ) -> None:
         """
@@ -76,7 +83,7 @@ class TTS(tts.TTS):
             speech_region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
-        """
+        """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
@@ -85,14 +92,14 @@ class TTS(tts.TTS):
             num_channels=TTS_NUM_CHANNELS,
         )
 
-        self._api_key, self._api_secret = _get_aws_credentials(
+        self._api_key, self._api_secret, self._speech_region = get_aws_credentials(
             api_key, api_secret, speech_region
         )
 
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
-            speech_region=speech_region,
+            speech_region=self._speech_region,
             language=language,
             sample_rate=sample_rate,
         )
@@ -110,8 +117,8 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             text=text,
@@ -127,7 +134,7 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         text: str,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         opts: _TTSOptions,
         get_client: Callable[[], Any],
     ) -> None:
@@ -144,11 +151,13 @@ class ChunkedStream(tts.ChunkedStream):
                 params = {
                     "Text": self._input_text,
                     "OutputFormat": "mp3",
-                    "Engine": self._opts.speech_engine,
-                    "VoiceId": self._opts.voice,
+                    "Engine": self._opts.speech_engine
+                    if is_given(self._opts.speech_engine)
+                    else DEFAULT_SPEECH_ENGINE,
+                    "VoiceId": self._opts.voice if is_given(self._opts.voice) else DEFAULT_VOICE,
                     "TextType": "text",
                     "SampleRate": str(self._opts.sample_rate),
-                    "LanguageCode": self._opts.language,
+                    "LanguageCode": self._opts.language if is_given(self._opts.language) else None,
                 }
                 response = await client.synthesize_speech(**_strip_nones(params))
                 if "AudioStream" in response:
@@ -194,7 +203,3 @@ class ChunkedStream(tts.ChunkedStream):
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
-
-
-def _strip_nones(d: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in d.items() if v is not None}

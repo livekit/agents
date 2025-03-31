@@ -7,7 +7,7 @@ import traceback
 from collections import OrderedDict
 from datetime import date, datetime, time, timezone
 from inspect import istraceback
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from ..plugin import Plugin
 
@@ -19,6 +19,8 @@ NOISY_LOGGERS = [
     "watchfiles",
     "anthropic",
     "websockets.client",
+    "aiohttp.access",
+    "livekit",
     "botocore",
     "aiobotocore",
 ]
@@ -33,7 +35,7 @@ def _silence_noisy_loggers() -> None:
 
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
-_RESERVED_ATTRS: Tuple[str, ...] = (
+_RESERVED_ATTRS: tuple[str, ...] = (
     "args",
     "asctime",
     "created",
@@ -60,11 +62,9 @@ _RESERVED_ATTRS: Tuple[str, ...] = (
 )
 
 
-def _merge_record_extra(record: logging.LogRecord, target: Dict[Any, Any]):
+def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]):
     for key, value in record.__dict__.items():
-        if key not in _RESERVED_ATTRS and not (
-            hasattr(key, "startswith") and key.startswith("_")
-        ):
+        if key not in _RESERVED_ATTRS and not (hasattr(key, "startswith") and key.startswith("_")):
             target[key] = value
 
 
@@ -77,7 +77,7 @@ def _parse_style(formatter: logging.Formatter) -> list[str]:
     elif isinstance(formatter._style, logging.PercentStyle):
         formatter_style_pattern = re.compile(r"%\((.+?)\)", re.IGNORECASE)
     else:
-        raise ValueError("Invalid format: %s" % formatter._fmt)
+        raise ValueError(f"Invalid format: {formatter._fmt}")
 
     if formatter._fmt:
         return formatter_style_pattern.findall(formatter._fmt)
@@ -110,7 +110,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         """Formats a log record and serializes to json"""
-        message_dict: Dict[str, Any] = {}
+        message_dict: dict[str, Any] = {}
         message_dict["level"] = record.levelname
         message_dict["name"] = record.name
 
@@ -130,7 +130,7 @@ class JsonFormatter(logging.Formatter):
         if record.stack_info and not message_dict.get("stack_info"):
             message_dict["stack_info"] = self.formatStack(record.stack_info)
 
-        log_record: Dict[str, Any] = OrderedDict()
+        log_record: dict[str, Any] = OrderedDict()
 
         for field in self._required_fields:
             log_record[field] = record.__dict__.get(field)
@@ -138,9 +138,7 @@ class JsonFormatter(logging.Formatter):
         log_record.update(message_dict)
         _merge_record_extra(record, log_record)
 
-        log_record["timestamp"] = datetime.fromtimestamp(
-            record.created, tz=timezone.utc
-        )
+        log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
         return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
@@ -178,7 +176,7 @@ class ColoredFormatter(logging.Formatter):
     def formatMessage(self, record: logging.LogRecord) -> str:
         """Formats a log record with colors"""
 
-        extra: Dict[Any, Any] = {}
+        extra: dict[Any, Any] = {}
         _merge_record_extra(record, extra)
 
         args = {}
@@ -190,9 +188,7 @@ class ColoredFormatter(logging.Formatter):
         args.update(self._esc_codes)
 
         if extra:
-            args["extra"] = json.dumps(
-                extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=True
-            )
+            args["extra"] = json.dumps(extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
         for field in self._required_fields:
             if field in extra:
@@ -202,14 +198,21 @@ class ColoredFormatter(logging.Formatter):
         return msg + self._esc_codes["esc_reset"]
 
 
-def setup_logging(log_level: str, devmode: bool) -> None:
+def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
     handler = logging.StreamHandler()
 
     if devmode:
         # colorful logs for dev (improves readability)
-        colored_formatter = ColoredFormatter(
-            "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"
-        )
+        if console:
+            # reset the line before each log message
+            colored_formatter = ColoredFormatter(
+                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
+            )
+        else:
+            colored_formatter = ColoredFormatter(
+                "%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
+            )
+
         handler.setFormatter(colored_formatter)
     else:
         # production logs (serialized of json)
@@ -223,11 +226,6 @@ def setup_logging(log_level: str, devmode: bool) -> None:
     _silence_noisy_loggers()
 
     from ..log import logger
-
-    if logger.level == logging.NOTSET:
-        logger.setLevel(log_level)
-
-    from ..pipeline.log import logger
 
     if logger.level == logging.NOTSET:
         logger.setLevel(log_level)

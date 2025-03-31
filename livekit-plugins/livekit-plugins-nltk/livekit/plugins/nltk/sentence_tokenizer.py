@@ -4,9 +4,8 @@ import dataclasses
 import functools
 from dataclasses import dataclass
 
-from livekit import agents
-
 import nltk  # type: ignore
+from livekit import agents
 
 # nltk is using the punkt tokenizer
 # https://www.nltk.org/_modules/nltk/tokenize/punkt.html
@@ -61,9 +60,7 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
     def stream(self, *, language: str | None = None) -> agents.tokenize.SentenceStream:
         config = self._sanitize_options(language=language)
         return agents.tokenize.BufferedSentenceStream(
-            tokenizer=functools.partial(
-                nltk.tokenize.sent_tokenize, language=config.language
-            ),
+            tokenizer=functools.partial(nltk.tokenize.sent_tokenize, language=config.language),
             min_token_len=self._config.min_sentence_len,
             min_ctx_len=self._config.stream_context_len,
         )

@@ -1,7 +1,19 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal, TypeVar, Union
 
-AgentState = Union[Literal["initializing", "listening", "thinking", "speaking"], str]
+from typing_extensions import TypeAlias
+
+
+class AgentState(str, Enum):
+    INITIALIZING = "initializing"
+    LISTENING = "listening"
+    THINKING = "thinking"
+    SPEAKING = "speaking"
+
+
+ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
+ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"
 """
 The state of the agent, stored in the agent's attributes.
@@ -13,6 +25,9 @@ With components-js, this can be easily retrieved using:
 const { state, ... } = useVoiceAssistant();
 ```
 """
+
+TOPIC_CHAT = "lk.chat"
+TOPIC_TRANSCRIPTION = "lk.transcription"
 
 
 _T = TypeVar("_T")
@@ -26,7 +41,7 @@ class NotGiven:
         return "NOT_GIVEN"
 
 
-NotGivenOr = Union[_T, NotGiven]
+NotGivenOr: TypeAlias = Union[_T, NotGiven]
 NOT_GIVEN = NotGiven()
 
 
@@ -37,7 +52,7 @@ class APIConnectOptions:
     Maximum number of retries to connect to the API.
     """
 
-    retry_interval: float = 5.0
+    retry_interval: float = 2.0
     """
     Interval between retries to connect to the API in seconds.
     """

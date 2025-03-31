@@ -31,8 +31,8 @@ class CGroupV2CPUMonitor(CPUMonitor):
     def cpu_count(self) -> float:
         # quota: The maximum CPU time in microseconds that the cgroup can use within a given period.
         # period: The period of time in microseconds over which the quota applies.
-        # If the quota is set to "max", it means the cgroup is allowed to use all available CPUs without restriction.
-        # Otherwise, the quota is a number that represents the maximum CPU time in microseconds that the cgroup can use within a given period.
+        # If the quota is set to "max", it means the cgroup is allowed to use all available CPUs without restriction.  # noqa: E501
+        # Otherwise, the quota is a number that represents the maximum CPU time in microseconds that the cgroup can use within a given period.  # noqa: E501
         quota, period = self._read_cpu_max()
         if quota == "max":
             return os.cpu_count() or 1
@@ -57,7 +57,7 @@ class CGroupV2CPUMonitor(CPUMonitor):
 
     def _read_cpu_max(self) -> tuple[str, int]:
         try:
-            with open("/sys/fs/cgroup/cpu.max", "r") as f:
+            with open("/sys/fs/cgroup/cpu.max") as f:
                 data = f.read().strip().split()
             quota = data[0]
             period = int(data[1])
@@ -67,7 +67,7 @@ class CGroupV2CPUMonitor(CPUMonitor):
         return quota, period
 
     def _read_cpu_usage(self) -> int:
-        with open("/sys/fs/cgroup/cpu.stat", "r") as f:
+        with open("/sys/fs/cgroup/cpu.stat") as f:
             for line in f:
                 if line.startswith("usage_usec"):
                     return int(line.split()[1])

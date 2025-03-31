@@ -75,13 +75,11 @@ class _EUORunner(_InferenceRunner):
             )
         except (errors.LocalEntryNotFoundError, OSError):
             logger.error(
-                (
-                    f"Could not find model {HG_MODEL}. Make sure you have downloaded the model before running the agent. "
-                    "Use `python3 your_agent.py download-files` to download the models."
-                )
+                f"Could not find model {HG_MODEL}. Make sure you have downloaded the model before running the agent. "  # noqa: E501
+                "Use `python3 your_agent.py download-files` to download the models."
             )
             raise RuntimeError(
-                f"livekit-plugins-turn-detector initialization failed. Could not find model {HG_MODEL}."
+                f"livekit-plugins-turn-detector initialization failed. Could not find model {HG_MODEL}."  # noqa: E501
             ) from None
 
     def run(self, data: bytes) -> bytes | None:
@@ -102,18 +100,16 @@ class _EUORunner(_InferenceRunner):
             truncation=True,
         )
         # Run inference
-        outputs = self._session.run(
-            None, {"input_ids": inputs["input_ids"].astype("int64")}
-        )
+        outputs = self._session.run(None, {"input_ids": inputs["input_ids"].astype("int64")})
         eou_probability = outputs[0][0]
         end_time = time.perf_counter()
 
-        data = {
+        data_dict = {
             "eou_probability": float(eou_probability),
             "input": text,
             "duration": round(end_time - start_time, 3),
         }
-        return json.dumps(data).encode()
+        return json.dumps(data_dict).encode()
 
 
 class EOUModel:
@@ -122,9 +118,7 @@ class EOUModel:
         inference_executor: InferenceExecutor | None = None,
         unlikely_threshold: float = 0.0289,
     ) -> None:
-        self._executor = (
-            inference_executor or get_current_job_context().inference_executor
-        )
+        self._executor = inference_executor or get_current_job_context().inference_executor
         self._unlikely_threshold = unlikely_threshold
 
     def unlikely_threshold(self) -> float:
@@ -146,27 +140,22 @@ class EOUModel:
     ) -> float:
         messages = []
 
-        for msg in chat_ctx.messages:
-            if msg.role not in ("user", "assistant"):
+        for item in chat_ctx.items:
+            if item.type != "message":
                 continue
 
-            if isinstance(msg.content, str):
-                messages.append(
-                    {
-                        "role": msg.role,
-                        "content": msg.content,
-                    }
-                )
-            elif isinstance(msg.content, list):
-                for cnt in msg.content:
-                    if isinstance(cnt, str):
-                        messages.append(
-                            {
-                                "role": msg.role,
-                                "content": cnt,
-                            }
-                        )
-                        break
+            if item.role not in ("user", "assistant"):
+                continue
+
+            for cnt in item.content:
+                if isinstance(cnt, str):
+                    messages.append(
+                        {
+                            "role": item.role,
+                            "content": cnt,
+                        }
+                    )
+                    break
 
         messages = messages[-MAX_HISTORY_TURNS:]
 
@@ -177,9 +166,7 @@ class EOUModel:
             timeout=timeout,
         )
 
-        assert result is not None, (
-            "end_of_utterance prediction should always returns a result"
-        )
+        assert result is not None, "end_of_utterance prediction should always returns a result"
 
         result_json = json.loads(result.decode())
         logger.debug(

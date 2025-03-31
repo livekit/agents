@@ -3,15 +3,15 @@ from __future__ import annotations
 import logging
 import threading
 from abc import ABC
-from typing import List, Literal
+from typing import Literal
 
 from . import utils
 
 EventTypes = Literal["plugin_registered",]
 
 
-class Plugin(ABC):
-    registered_plugins: List["Plugin"] = []
+class Plugin(ABC):  # noqa: B024
+    registered_plugins: list[Plugin] = []
     emitter: utils.EventEmitter[EventTypes] = utils.EventEmitter()
 
     # TODO(theomonnom): make logger mandatory once all plugins have been updated
@@ -28,7 +28,7 @@ class Plugin(ABC):
         self._logger = logger
 
     @classmethod
-    def register_plugin(cls, plugin: "Plugin") -> None:
+    def register_plugin(cls, plugin: Plugin) -> None:
         if threading.current_thread() != threading.main_thread():
             raise RuntimeError("Plugins must be registered on the main thread")
 
@@ -36,7 +36,7 @@ class Plugin(ABC):
         cls.emitter.emit("plugin_registered", plugin)
 
     # plugin can implement an optional download_files method
-    def download_files(self) -> None: ...
+    def download_files(self) -> None: ...  # noqa: B027
 
     @property
     def package(self) -> str:
