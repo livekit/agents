@@ -158,7 +158,7 @@ class LLM(llm.LLM):
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             gemini_tool_choice: types.ToolConfig
-            if isinstance(tool_choice, ToolChoice):
+            if isinstance(tool_choice, dict):
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode="ANY",

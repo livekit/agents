@@ -36,7 +36,7 @@ def to_chat_ctx(
     for i, msg in enumerate(chat_ctx.items):
         if msg.type == "message" and msg.role == "system":
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     system_message = anthropic.types.TextBlockParam(
                         text=content,
                         type="text",
@@ -64,7 +64,7 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for c in msg.content:
-                if isinstance(c, str):
+                if c and isinstance(c, str):
                     content.append(
                         anthropic.types.TextBlockParam(
                             text=c, type="text", cache_control=cache_ctrl

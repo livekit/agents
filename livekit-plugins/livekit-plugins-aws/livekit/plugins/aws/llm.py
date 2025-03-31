@@ -122,7 +122,7 @@ class LLM(llm.LLM):
             tool_config: dict[str, Any] = {"tools": to_fnc_ctx(tools)}
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
-                if isinstance(tool_choice, ToolChoice):
+                if isinstance(tool_choice, dict):
                     tool_config["toolChoice"] = {"tool": {"name": tool_choice.name}}
                 elif tool_choice == "required":
                     tool_config["toolChoice"] = {"any": {}}
