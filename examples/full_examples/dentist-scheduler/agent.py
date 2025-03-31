@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 from api_setup import setup_event_types
 from dotenv import load_dotenv
+from tasks import Messenger, Receptionist, Scheduler
+
 from livekit.agents import (
     JobContext,
     WorkerOptions,
@@ -10,7 +12,6 @@ from livekit.agents import (
 )
 from livekit.agents.voice import Agent, AgentSession
 from livekit.plugins import cartesia, deepgram, openai, silero
-from tasks import Messenger, Receptionist, Scheduler
 
 
 @dataclass

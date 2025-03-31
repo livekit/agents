@@ -6,6 +6,7 @@ from typing import Union
 
 import aiofiles
 from dotenv import load_dotenv
+
 from livekit.agents import (
     JobContext,
     WorkerOptions,
@@ -45,12 +46,14 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         transcriptions_only: bool = False,
     ):
         """
-        Initializes a ConversationPersistor instance which records the events and transcriptions of a VoiceAgent.
+        Initializes a ConversationPersistor instance which records the events and
+        transcriptions of a VoiceAgent.
 
         Args:
             model (AgentSession): an instance of an AgentSession
             log (str): name of the external file to record events in
-            transcriptions_only (bool): a boolean variable to determine if only transcriptions will be recorded, False by default
+            transcriptions_only (bool): a boolean variable to determine
+                if only transcriptions will be recorded, False by default
             user_transcriptions (arr): list of user transcriptions
             agent_transcriptions (arr): list of agent transcriptions
             events (arr): list of all events
@@ -112,9 +115,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
                     else:
                         self._agent_transcriptions.append(log)
 
-                    await file.write(
-                        "\n" + log.time + " " + log.role + " " + log.transcription
-                    )
+                    await file.write("\n" + log.time + " " + log.role + " " + log.transcription)
 
     async def aclose(self) -> None:
         # Exits
@@ -140,17 +141,13 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
             if ev.is_final:
                 event = EventLog(eventname=ev.type)
                 self._log_q.put_nowait(event)
-                transcription = TranscriptionLog(
-                    role="user", transcription=ev.transcript
-                )
+                transcription = TranscriptionLog(role="user", transcription=ev.transcript)
                 self._log_q.put_nowait(transcription)
 
         @self.session.on("conversation_item_added")
         def _conversation_item_added(ev: AgentEvent):
             if ev.message.role == "assistant":
-                transcription = TranscriptionLog(
-                    role="assistant", transcription=ev.message.content
-                )
+                transcription = TranscriptionLog(role="assistant", transcription=ev.message.content)
                 self._log_q.put_nowait(transcription)
             event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
@@ -182,7 +179,8 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
 class MyAgent(Agent):
     def __init__(self):
         super().__init__(
-            instructions="You are a helpful assistant that can answer questions and help with tasks.",
+            instructions="""You are a helpful assistant that can answer questions and help with
+                            tasks. The conversation will be recorded.""",
         )
 
     @function_tool()

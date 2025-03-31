@@ -99,7 +99,7 @@ async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
 
     Args:
         title (str): The title of the event type
-        slug (str): The unique identifier of the event type, typically with dashes in place of spaces
+        slug (str): The unique identifier of the event type, typically with dashes instead of spaces
     """
     payload = {
         "lengthInMinutes": SESSION_LENGTH,
@@ -119,7 +119,9 @@ async def create_event_type(*, title: str, slug: str, schedule_id: str) -> str:
 
 
 async def setup_event_types() -> dict:
-    """Ensures that the schedule and event types are set up correctly in Cal.com for this example. Returns a dictionary with event slugs and their respective IDs"""
+    """Ensures that the schedule and event types are set up correctly in Cal.com for this example.
+    Returns a dictionary with event slugs and their respective IDs
+    """
 
     schedule_id = await search_schedule("LiveKit Dental Office Hours")
     if not schedule_id:

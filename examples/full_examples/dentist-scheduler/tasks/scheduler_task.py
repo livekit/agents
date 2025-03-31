@@ -3,10 +3,11 @@ from enum import Enum
 from typing import Annotated
 
 import aiohttp
+from pydantic import Field
+
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent
 from livekit.plugins import cartesia
-from pydantic import Field
 
 from .global_functions import (
     get_user_info,
@@ -26,10 +27,15 @@ class APIRequests(Enum):
 class Scheduler(Agent):
     def __init__(self, *, service: str) -> None:
         super().__init__(
-            instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental office. If the user's email is not given, ask for it before 
-                            scheduling/rescheduling/canceling. Assume the letters are lowercase unless specified otherwise. When calling functions, return the user's email if already given.
-                            Always confirm details with the user. Convert all times given by the user to ISO 8601 format in UTC timezone,
-                            assuming the user is in America/Los Angeles, and do not mention the conversion or the UTC timezone to the user. Avoiding repeating words.""",
+            instructions="""You are Echo, a scheduler managing appointments for the LiveKit dental
+                            office. If the user's email is not given, ask for it before
+                            scheduling/rescheduling/canceling. Assume the letters are lowercase
+                            unless specified otherwise. When calling functions, return the user's
+                            email if already given. Always confirm details with the user.
+                            Convert all times given by the user to ISO 8601 format in UTC
+                            timezone, assuming the user is in America/Los Angeles,
+                            and do not mention the conversion or the UTC timezone to the user.
+                            Avoiding repeating words.""",
             tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600"),
             tools=[
                 update_information,
@@ -43,7 +49,8 @@ class Scheduler(Agent):
     async def on_enter(self) -> None:
         self._event_ids = self.session.userdata["event_ids"]
         await self.session.generate_reply(
-            instructions=f"Introduce yourself and ask {self.session.userdata['userinfo'].name} to confirm that they would like to {self._service_requested} an appointment."
+            instructions=f"""Introduce yourself and ask {self.session.userdata["userinfo"].name} to
+            confirm that they would like to {self._service_requested} an appointment."""
         )
 
     async def send_request(
@@ -122,18 +129,21 @@ class Scheduler(Agent):
         description: Annotated[
             str,
             Field(
-                description="Reason for scheduling appointment, either 'routine-checkup' or 'tooth-extraction'"
+                description="""Reason for scheduling appointment,
+                                either 'routine-checkup' or 'tooth-extraction'"""
             ),
         ],
         date: Annotated[
             str,
             Field(
-                description="Formatted and converted date and time for the new appointment, in ISO 8601 format in UTC timezone assuming the user is in Los Angeles."
+                description="""Formatted and converted date and time for the new appointment,
+                in ISO 8601 format in UTC timezone assuming the user is in Los Angeles."""
             ),
         ],
     ) -> str:
         """
-        Schedules a new appointment for users. The email should be confirmed by spelling it out to the user.
+        Schedules a new appointment for users.
+        The email should be confirmed by spelling it out to the user.
         """
         self.session.userdata["userinfo"].email = email
         response = await self.send_request(
@@ -177,9 +187,7 @@ class Scheduler(Agent):
         ],
         new_time: Annotated[
             str,
-            Field(
-                description="the new time and day for the appointment to be rescheduled to"
-            ),
+            Field(description="the new time and day for the appointment to be rescheduled to"),
         ],
     ) -> str:
         """
@@ -198,7 +206,8 @@ class Scheduler(Agent):
                 and reschedule_response["error"]["message"]
                 == "User either already has booking at this time or is not available"
             ):
-                return "The office is unavailable at the time specified. Please choose another time to try again."
+                return """The office is unavailable at the time specified.
+                        Please choose another time to try again."""
 
             elif reschedule_response["status"] == "success":
                 return "You are all set, the appointment was moved."

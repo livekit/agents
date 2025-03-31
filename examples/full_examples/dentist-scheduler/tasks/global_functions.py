@@ -1,8 +1,9 @@
 from typing import Annotated
 
+from pydantic import Field
+
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, RunContext
-from pydantic import Field
 
 
 @function_tool()
@@ -10,14 +11,16 @@ async def update_information(
     field: Annotated[
         str,
         Field(
-            description="The type of information to be updated, either 'phone_number', 'email', or 'name'"
+            description="""The type of information to be updated,
+            either 'phone_number', 'email', or 'name'"""
         ),
     ],
     info: Annotated[str, Field(description="The new user provided information")],
     context: RunContext,
 ) -> str:
     """
-    Updates information on record about the user. The only fields to update are names, phone numbers, and emails.
+    Updates information on record about the user.
+    The only fields to update are names, phone numbers, and emails.
     """
     userinfo = context.userdata["userinfo"]
     if field == "name":
@@ -35,13 +38,15 @@ async def get_user_info(
     field: Annotated[
         str,
         Field(
-            description="The type of information to be accessed, either 'phone_number', 'email', or 'name'"
+            description="""The type of information to be accessed,
+            either 'phone_number', 'email', or 'name'"""
         ),
     ],
     context: RunContext,
 ) -> str:
     """
-    Retrieves information on record about the user. The only fields to access are names, phone numbers, and emails.
+    Retrieves information on record about the user.
+    The only fields to access are names, phone numbers, and emails.
     """
     userinfo = context.userdata["userinfo"]
     if field == "name" and userinfo.name:
@@ -56,10 +61,9 @@ async def get_user_info(
 
 @function_tool()
 async def transfer_to_receptionist(context: RunContext) -> tuple[Agent, str]:
-    """Transfers the user to the receptionist for any office inquiries or when they are finished with managing appointments."""
-    return context.userdata[
-        "agents"
-    ].receptionist, "Transferring you to our receptionist!"
+    """Transfers the user to the receptionist for any office inquiries or
+    when they are finished with managing appointments."""
+    return context.userdata["agents"].receptionist, "Transferring you to our receptionist!"
 
 
 @function_tool()
@@ -67,7 +71,8 @@ async def transfer_to_scheduler(
     action: Annotated[
         str,
         Field(
-            description="The appointment action requested, either 'schedule', 'reschedule', or 'cancel'"
+            description="""The appointment action requested,
+            either 'schedule', 'reschedule', or'cancel'"""
         ),
     ],
     context: RunContext,
