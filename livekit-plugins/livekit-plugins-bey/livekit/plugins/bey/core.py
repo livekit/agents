@@ -61,6 +61,10 @@ class BeyAvatarSession:
         return self._local_agent_room_output_options
 
 
+class BeyException(Exception):
+    """Exception for Beyond Presence errors"""
+
+
 async def start_bey_avatar_session(
     ctx: JobContext,
     avatar_id: str = EGE_STOCK_AVATAR_ID,
@@ -74,10 +78,13 @@ async def start_bey_avatar_session(
 
     Returns:
         The context for the Beyond Presence avatar session
+
+    Raises:
+        BeyException: If the Beyond Presence session fails to start
     """
 
     if (api_key := os.environ.get(_API_KEY_ENV_VAR)) is None:
-        raise ValueError(f"{_API_KEY_ENV_VAR} environment variable not set")
+        raise BeyException(f"{_API_KEY_ENV_VAR} environment variable not set")
 
     livekit_avatar_token = (
         api.AccessToken()
@@ -102,7 +109,8 @@ async def start_bey_avatar_session(
                 "livekit_token": livekit_avatar_token,
             },
         )
-        response.raise_for_status()
+    if response.is_error:
+        raise BeyException(f"Avatar session server responded with error: {response.text}")
 
     return BeyAvatarSession(
         avatar_agent_joined_awaitable=ctx.wait_for_participant(

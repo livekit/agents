@@ -13,10 +13,16 @@
 # limitations under the License.
 
 
-from .core import EGE_STOCK_AVATAR_ID, BeyAvatarSession, start_bey_avatar_session
+from .core import EGE_STOCK_AVATAR_ID, BeyAvatarSession, BeyException, start_bey_avatar_session
 from .version import __version__
 
-__all__ = ["EGE_STOCK_AVATAR_ID", "BeyAvatarSession", "start_bey_avatar_session", "__version__"]
+__all__ = [
+    "EGE_STOCK_AVATAR_ID",
+    "BeyAvatarSession",
+    "BeyException",
+    "start_bey_avatar_session",
+    "__version__",
+]
 
 from livekit.agents import Plugin
 
