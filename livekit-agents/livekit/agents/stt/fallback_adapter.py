@@ -215,7 +215,7 @@ class FallbackAdapter(
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         return await super().recognize(buffer, language=language, conn_options=conn_options)
