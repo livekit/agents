@@ -30,7 +30,7 @@ def to_chat_ctx(
         if msg.type == "message" and msg.role == "system":
             sys_parts = []
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     sys_parts.append(types.Part(text=content))
             system_instruction = types.Content(parts=sys_parts)
             continue
@@ -51,9 +51,9 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     parts.append(types.Part(text=content))
-                elif isinstance(content, dict):
+                elif content and isinstance(content, dict):
                     parts.append(types.Part(text=json.dumps(content)))
                 elif isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content, cache_key))

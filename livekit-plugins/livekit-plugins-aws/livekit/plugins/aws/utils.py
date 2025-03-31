@@ -53,7 +53,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
     for msg in chat_ctx.items:
         if msg.type == "message" and msg.role == "system":
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     system_message = {"text": content}
             continue
 
@@ -73,7 +73,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
 
         if msg.type == "message":
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     current_content.append({"text": content})
                 elif isinstance(content, ImageContent):
                     current_content.append(_build_image(content, cache_key))
