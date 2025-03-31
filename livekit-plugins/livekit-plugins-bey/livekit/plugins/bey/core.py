@@ -13,15 +13,26 @@ from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import AudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomOutputOptions
 
-_API_KEY_ENV_VAR = "BEY_API_KEY"
-_API_URL = "https://api.bey.dev/v1"
-_AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
-_AVATAR_AGENT_NAME = "bey-avatar-agent"
+API_URL_ENV_VAR = "BEY_API_URL"
+"""
+The environment variable name for the Beyond Presence API URL
+"""
+
+API_KEY_ENV_VAR = "BEY_API_KEY"
+"""
+The environment variable name for the Beyond Presence API key
+"""
+
 
 EGE_STOCK_AVATAR_ID = "b9be11b8-89fb-4227-8f86-4a881393cbdb"
 """
 The ID of Ege's stock avatar
 """
+
+_DEFAULT_API_URL = "https://api.bey.dev/v1"
+
+_AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
+_AVATAR_AGENT_NAME = "bey-avatar-agent"
 
 
 class BeyAvatarSession:
@@ -83,8 +94,10 @@ async def start_bey_avatar_session(
         BeyException: If the Beyond Presence session fails to start
     """
 
-    if (api_key := os.environ.get(_API_KEY_ENV_VAR)) is None:
-        raise BeyException(f"{_API_KEY_ENV_VAR} environment variable not set")
+    if (api_key := os.environ.get(API_KEY_ENV_VAR)) is None:
+        raise BeyException(f"{API_KEY_ENV_VAR} environment variable not set")
+
+    api_url = os.environ.get(API_URL_ENV_VAR, _DEFAULT_API_URL)
 
     livekit_avatar_token = (
         api.AccessToken()
@@ -99,7 +112,7 @@ async def start_bey_avatar_session(
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{_API_URL}/session",
+            f"{api_url}/session",
             headers={
                 "x-api-key": api_key,
             },
