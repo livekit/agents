@@ -145,12 +145,11 @@ class LLM(llm.LLM):
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
-                if isinstance(tool_choice, dict):
-                    if tool_choice.type == "function":
-                        anthropic_tool_choice = {
-                            "type": "tool",
-                            "name": tool_choice["function"]["name"],
-                        }
+                if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+                    anthropic_tool_choice = {
+                        "type": "tool",
+                        "name": tool_choice["function"]["name"],
+                    }
                 elif isinstance(tool_choice, str):
                     if tool_choice == "required":
                         anthropic_tool_choice = {"type": "any"}
