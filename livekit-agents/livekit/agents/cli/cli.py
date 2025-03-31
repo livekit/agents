@@ -147,9 +147,9 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
     ) -> None:
         # keep everything inside the same process when using the chat mode
         opts.job_executor_type = JobExecutorType.THREAD
-        opts.ws_url = url or opts.ws_url
-        opts.api_key = api_key or opts.api_key
-        opts.api_secret = api_secret or opts.api_secret
+        opts.ws_url = url or opts.ws_url or "ws://localhost:7881/fake_console_url"
+        opts.api_key = api_key or opts.api_key or "fake_console_key"
+        opts.api_secret = api_secret or opts.api_secret or "fake_console_secret"
 
         args = proto.CliArgs(
             opts=opts,
