@@ -264,6 +264,10 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._tools = llm.ToolContext(retained_tools)
             self._gemini_tools = [Tool(function_declarations=gemini_function_declarations)]
+            if self._session:
+                logger.warning("Updating tools; triggering Gemini session reconnect.")
+                self._reconnect_event.set()
+                self._schedule_gemini_session_close()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
