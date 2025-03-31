@@ -567,9 +567,12 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
     Raises:
         ValueError: If an existing instruction message is not of type "message".
     """
-    if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
-        if msg.type == "message":
-            msg.content = [instructions]
+    if idx := chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID):
+        if chat_ctx.items[idx].type == "message":
+            # create a new instance to avoid mutating the original
+            chat_ctx.items[idx] = llm.ChatMessage(
+                id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]
+            )
         else:
             raise ValueError(
                 "expected the instructions inside the chat_ctx to be of type 'message'"
