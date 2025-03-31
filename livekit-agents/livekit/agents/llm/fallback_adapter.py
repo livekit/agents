@@ -5,15 +5,15 @@ import dataclasses
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from livekit.agents._exceptions import APIConnectionError, APIError
 
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext
 from .llm import LLM, ChatChunk, LLMStream, ToolChoice
-from .tool_context import ToolContext
+from .tool_context import FunctionTool, ToolContext
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -46,14 +46,7 @@ class FallbackAdapter(
         if len(llm) < 1:
             raise ValueError("at least one LLM instance must be provided.")
 
-        super().__init__(
-            capabilities=LLMCapabilities(  # noqa: F821
-                supports_choices_on_int=all(t.capabilities.supports_choices_on_int for t in llm),
-                requires_persistent_functions=all(
-                    t.capabilities.requires_persistent_functions for t in llm
-                ),
-            )
-        )
+        super().__init__()
 
         self._llm_instances = llm
         self._attempt_timeout = attempt_timeout
@@ -68,52 +61,42 @@ class FallbackAdapter(
         self,
         *,
         chat_ctx: ChatContext,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
-        fnc_ctx: ToolContext | None = None,
-        temperature: float | None = None,
-        n: int | None = 1,
-        parallel_tool_calls: bool | None = None,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] | None = None,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         return FallbackLLMStream(
             llm=self,
             conn_options=conn_options,
             chat_ctx=chat_ctx,
-            fnc_ctx=fnc_ctx,
-            temperature=temperature,
-            n=n,
+            tools=tools,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            extra_kwargs=extra_kwargs,
         )
 
 
 class FallbackLLMStream(LLMStream):
     def __init__(
         self,
-        *,
         llm: FallbackAdapter,
-        conn_options: APIConnectOptions,
+        *,
         chat_ctx: ChatContext,
-        fnc_ctx: ToolContext | None,
-        temperature: float | None,
-        n: int | None,
-        parallel_tool_calls: bool | None,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] | None = None,
+        tools: list[FunctionTool] | None,
+        conn_options: APIConnectOptions,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, tools=fnc_ctx, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._fallback_adapter = llm
-        self._temperature = temperature
-        self._n = n
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
+        self._extra_kwargs = extra_kwargs
 
         self._current_stream: LLMStream | None = None
-
-    @property
-    def function_calls(self) -> list[FunctionCallInfo]:  # noqa: F821
-        if self._current_stream is None:
-            return []
-        return self._current_stream.function_calls
 
     @property
     def chat_ctx(self) -> ChatContext:
@@ -126,12 +109,6 @@ class FallbackLLMStream(LLMStream):
         if self._current_stream is None:
             return self._tools
         return self._current_stream.tools
-
-    def execute_functions(self) -> list[CalledFunction]:  # noqa: F821
-        # this function is unused, but putting it in place for completeness
-        if self._current_stream is None:
-            return []
-        return self._current_stream.execute_functions()
 
     async def _try_generate(
         self, *, llm: LLM, check_recovery: bool = False
@@ -149,10 +126,9 @@ class FallbackLLMStream(LLMStream):
             async with llm.chat(
                 chat_ctx=self._chat_ctx,
                 tools=self._tools,
-                temperature=self._temperature,
-                n=self._n,
                 parallel_tool_calls=self._parallel_tool_calls,
                 tool_choice=self._tool_choice,
+                extra_kwargs=self._extra_kwargs,
                 conn_options=dataclasses.replace(
                     self._conn_options,
                     max_retry=self._fallback_adapter._max_retry_per_llm,
