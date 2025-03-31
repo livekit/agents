@@ -49,6 +49,7 @@ class RealtimeCapabilities:
     message_truncation: bool
     turn_detection: bool
     user_transcription: bool
+    explicit_reply_after_tool_response: bool
 
 
 class RealtimeError(Exception):

@@ -130,7 +130,10 @@ class RealtimeModel(llm.RealtimeModel):
         """  # noqa: E501
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
-                message_truncation=False, turn_detection=True, user_transcription=False
+                message_truncation=False,
+                turn_detection=True,
+                user_transcription=False,
+                explicit_reply_after_tool_response=False,
             )
         )
 

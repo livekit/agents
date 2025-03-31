@@ -1273,8 +1273,7 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-                # should we have separate flag for this?
-                if self.llm.capabilities.message_truncation:
+                if self.llm.capabilities.explicit_reply_after_tool_response:
                     self._rt_session.interrupt()
 
                     handle = SpeechHandle.create(
