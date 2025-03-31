@@ -203,18 +203,41 @@ class RealtimeSession(llm.RealtimeSession):
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_event_id = None
 
+        self._reconnect_event = asyncio.Event()
+        self._session_lock = asyncio.Lock()
+        self._session_ready = asyncio.Event()
+
+    def _schedule_gemini_session_close(self) -> None:
+        if self._session is not None:
+            asyncio.create_task(self._close_gemini_session())
+
+    async def _close_gemini_session(self) -> None:
+        async with self._session_lock:
+            if self._session:
+                try:
+                    await self._session.close()
+                finally:
+                    self._session = None
+
     def update_options(
         self,
         *,
-        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
     ) -> None:
-        # No-op for Gemini
-        pass
+        if is_given(voice):
+            self._opts.voice = voice
+        if self._session:
+            logger.warning("Updating voice; triggering Gemini session reconnect.")
+            self._reconnect_event.set()
+            self._schedule_gemini_session_close()
 
     async def update_instructions(self, instructions: str) -> None:
-        # No-op for Gemini
-        pass
+        self._opts.instructions = instructions
+        if self._session:
+            logger.warning("Updating instructions; triggering Gemini session reconnect.")
+            self._reconnect_event.set()
+            self._schedule_gemini_session_close()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
@@ -257,26 +280,31 @@ class RealtimeSession(llm.RealtimeSession):
     def generate_reply(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        event_id = utils.shortuuid("gemini-response-")
         fut = asyncio.Future()
-        self._response_created_futures[event_id] = fut
-        self._pending_generation_event_id = event_id
 
-        instructions_content = instructions if is_given(instructions) else "."
+        async def _generate():
+            # Wait until a session is connected.
+            await self._session_ready.wait()
 
-        ctx = [Content(parts=[Part(text=instructions_content)])]
-        self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
+            event_id = utils.shortuuid("gemini-response-")
+            self._response_created_futures[event_id] = fut
+            self._pending_generation_event_id = event_id
 
-        # Add timeout handling to prevent hanging futures
-        def _on_timeout() -> None:
-            if event_id in self._response_created_futures and not fut.done():
-                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
-                self._response_created_futures.pop(event_id, None)
-                if self._pending_generation_event_id == event_id:
-                    self._pending_generation_event_id = None
+            instructions_content = instructions if is_given(instructions) else "."
+            ctx = [Content(parts=[Part(text=instructions_content)], role="user")]
+            self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
 
-        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        fut.add_done_callback(lambda _: handle.cancel())
+            def _on_timeout() -> None:
+                if event_id in self._response_created_futures and not fut.done():
+                    fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+                    self._response_created_futures.pop(event_id, None)
+                    if self._pending_generation_event_id == event_id:
+                        self._pending_generation_event_id = None
+
+            handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+            fut.add_done_callback(lambda _: handle.cancel())
+
+        asyncio.create_task(_generate())
         return fut
 
     def interrupt(self) -> None:
@@ -297,69 +325,90 @@ class RealtimeSession(llm.RealtimeSession):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
-        config = LiveConnectConfig(
-            response_modalities=self._opts.response_modalities
-            if is_given(self._opts.response_modalities)
-            else [Modality.AUDIO],
-            generation_config=GenerationConfig(
-                candidate_count=self._opts.candidate_count,
-                temperature=self._opts.temperature if is_given(self._opts.temperature) else None,
-                max_output_tokens=self._opts.max_output_tokens
-                if is_given(self._opts.max_output_tokens)
+        while True:
+            self._session_ready.clear()
+            config = LiveConnectConfig(
+                response_modalities=self._opts.response_modalities
+                if is_given(self._opts.response_modalities)
+                else [Modality.AUDIO],
+                generation_config=GenerationConfig(
+                    candidate_count=self._opts.candidate_count,
+                    temperature=self._opts.temperature
+                    if is_given(self._opts.temperature)
+                    else None,
+                    max_output_tokens=self._opts.max_output_tokens
+                    if is_given(self._opts.max_output_tokens)
+                    else None,
+                    top_p=self._opts.top_p if is_given(self._opts.top_p) else None,
+                    top_k=self._opts.top_k if is_given(self._opts.top_k) else None,
+                    presence_penalty=self._opts.presence_penalty
+                    if is_given(self._opts.presence_penalty)
+                    else None,
+                    frequency_penalty=self._opts.frequency_penalty
+                    if is_given(self._opts.frequency_penalty)
+                    else None,
+                ),
+                system_instruction=Content(parts=[Part(text=self._opts.instructions)])
+                if is_given(self._opts.instructions)
                 else None,
-                top_p=self._opts.top_p if is_given(self._opts.top_p) else None,
-                top_k=self._opts.top_k if is_given(self._opts.top_k) else None,
-                presence_penalty=self._opts.presence_penalty
-                if is_given(self._opts.presence_penalty)
-                else None,
-                frequency_penalty=self._opts.frequency_penalty
-                if is_given(self._opts.frequency_penalty)
-                else None,
-            ),
-            system_instruction=Content(parts=[Part(text=self._opts.instructions)])
-            if is_given(self._opts.instructions)
-            else None,
-            speech_config=SpeechConfig(
-                voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
+                speech_config=SpeechConfig(
+                    voice_config=VoiceConfig(
+                        prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
+                    )
+                ),
+                tools=self._gemini_tools,
+            )
+
+            async with self._client.aio.live.connect(
+                model=self._opts.model, config=config
+            ) as session:
+                async with self._session_lock:
+                    self._session = session
+                    self._session_ready.set()
+
+                @utils.log_exceptions(logger=logger)
+                async def _send_task():
+                    async for msg in self._msg_ch:
+                        if isinstance(msg, LiveClientContent):
+                            await session.send(input=msg, end_of_turn=True)
+
+                        await session.send(input=msg)
+                    await session.send(input=".", end_of_turn=True)
+
+                @utils.log_exceptions(logger=logger)
+                async def _recv_task():
+                    while True:
+                        async for response in session.receive():
+                            if self._active_response_id is None:
+                                self._start_new_generation()
+                            if response.server_content:
+                                self._handle_server_content(response.server_content)
+                            if response.tool_call:
+                                self._handle_tool_calls(response.tool_call)
+                            if response.tool_call_cancellation:
+                                self._handle_tool_call_cancellation(response.tool_call_cancellation)
+
+                send_task = asyncio.create_task(_send_task(), name="gemini-realtime-send")
+                recv_task = asyncio.create_task(_recv_task(), name="gemini-realtime-recv")
+                reconnect_task = asyncio.create_task(
+                    self._reconnect_event.wait(), name="reconnect-wait"
                 )
-            ),
-            tools=self._gemini_tools,
-        )
 
-        async with self._client.aio.live.connect(model=self._opts.model, config=config) as session:
+                try:
+                    done, _ = await asyncio.wait(
+                        [send_task, recv_task, reconnect_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in done:
+                        if task != reconnect_task:
+                            task.result()
 
-            @utils.log_exceptions(logger=logger)
-            async def _send_task():
-                async for msg in self._msg_ch:
-                    print(msg)
-                    await session.send(input=msg)
+                    if reconnect_task not in done:
+                        break
 
-                await session.send(input=".", end_of_turn=True)
-
-            @utils.log_exceptions(logger=logger)
-            async def _recv_task():
-                while True:
-                    async for response in session.receive():
-                        print(response)
-                        if self._active_response_id is None:
-                            self._start_new_generation()
-
-                        if response.server_content:
-                            self._handle_server_content(response.server_content)
-
-                        if response.tool_call:
-                            self._handle_tool_calls(response.tool_call)
-
-                        if response.tool_call_cancellation:
-                            self._handle_tool_call_cancellation(response.tool_call_cancellation)
-
-            send_task = asyncio.create_task(_send_task(), name="gemini-realtime-send")
-            recv_task = asyncio.create_task(_recv_task(), name="gemini-realtime-recv")
-            try:
-                await asyncio.gather(send_task, recv_task)
-            finally:
-                await utils.aio.cancel_and_wait(send_task, recv_task)
+                    self._reconnect_event.clear()
+                finally:
+                    await utils.aio.cancel_and_wait(send_task, recv_task, reconnect_task)
 
     def _start_new_generation(self):
         self._is_interrupted = False
@@ -470,6 +519,9 @@ class RealtimeSession(llm.RealtimeSession):
 
     def commit_audio(self) -> None:
         raise NotImplementedError("commit_audio_buffer is not supported yet")
+
+    def clear_audio(self) -> None:
+        raise NotImplementedError("clear_audio is not supported yet")
 
     def server_vad_enabled(self) -> bool:
         return True
