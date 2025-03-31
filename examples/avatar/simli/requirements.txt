@@ -1,0 +1,5 @@
+simli-ai[livekit]
+numpy
+opencv-python
+#av==13.1.0
+av==12.3.0
