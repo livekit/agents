@@ -110,6 +110,7 @@ class ChatMessage(BaseModel):
     interrupted: bool = False
     hash: bytes | None = None
 
+    @property
     def text_content(self) -> str | None:
         """
         Returns a string of all text content in the message.
