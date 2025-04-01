@@ -1130,7 +1130,7 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "1.0.0"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1139,13 +1139,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a5/4f/b851ea99e75c04505ff000cf2f512456271cb47e0192266442f7db3b60d0/livekit-1.0.0.tar.gz", hash = "sha256:550cbbf969c1f3985133fa9dbe899376611b0882684bd163fd4ed9d782dbc9b4", size = 110214 }
+sdist = { url = "https://files.pythonhosted.org/packages/71/8a/8cf0448e877b85b432b3a1773fc914c9d8ab3c468f6fca84ae3b95922782/livekit-1.0.1.tar.gz", hash = "sha256:8266a592b1b00c9d6585da2e5b3bc8a7078fdd7632d657a083cceb20af5b0731", size = 110795 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/2f/25ce6f400fd7eacdcf8fa10afa30b3aeabc17a632ddac5c3c350d8f0d0bd/livekit-1.0.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:aaec101382b3e4063298f86ec00ddcd9dd90be76f8447f546d3b09e55dbf6870", size = 10425048 },
-    { url = "https://files.pythonhosted.org/packages/e8/52/1e38d85c3f101a9c1785e3a8bda4560653c3d967207919cd0c273bce6eff/livekit-1.0.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:68d374ba0316e56a6b9ee14c4e38d9e8e4087e3b7d3e92ab3989dd5e64e12f59", size = 9103201 },
-    { url = "https://files.pythonhosted.org/packages/a0/b7/afce00128683fb0b9d2b58b32e3d18b275a16223f9ad0b506ad7bcba0cb3/livekit-1.0.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:12c3b22a8045d78c468521b128b8e09d352bcff9ed89568c9afb22203d2af9c3", size = 10159472 },
-    { url = "https://files.pythonhosted.org/packages/cb/e9/85974b9c0d56d8166e8881bc38cf45d86903f68d0e88f08828edc5cb8139/livekit-1.0.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:dcfdd567f12625200fb4b8f603af51f93712aa9b3260a5231bfd9538c72144af", size = 11659007 },
-    { url = "https://files.pythonhosted.org/packages/12/96/16180feccc50b90eff00be63fb81262b3ad4d2a5bcb093c7956a3265804c/livekit-1.0.0-py3-none-win_amd64.whl", hash = "sha256:d4391c81fae3f7b078507d01505ffe7c755378390e611adf6bd9bd7cef4b0480", size = 11008157 },
+    { url = "https://files.pythonhosted.org/packages/30/71/e05807f2ddd9fbe93c5895cd25d1f195700f4c596a911a95cc8c71d8235c/livekit-1.0.1-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:ec749e9360ab24a2c4d396fedaafc5ec12693d320b285c7c19a4b81750c84649", size = 10426842 },
+    { url = "https://files.pythonhosted.org/packages/fa/a0/ddc73eddd9f2bef1a7afe908f89013dc43c4718f55ed0de57e2d1cae4b00/livekit-1.0.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3f5a5b687883d93902483d09ac654b6de295c5f6949f73f69b0c05bda04af214", size = 9106118 },
+    { url = "https://files.pythonhosted.org/packages/40/9d/b59a900a85a98a6977d949cc9ae6fe1925e3ea0f5757b9e2530303bb888c/livekit-1.0.1-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:66c2a3d582618830061e4527c18c571a94818d91c320b0f12eca0d3d06e5c5f8", size = 10161477 },
+    { url = "https://files.pythonhosted.org/packages/fc/cd/8d3dd75aa7c63a3192de257c02079adaadaefa0b2237f7dbeaef689fd278/livekit-1.0.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:0f206d548d1b2d7faa186922d0dc7d0101f98b5c465ca85d0d7f325a4a5c3666", size = 11661259 },
+    { url = "https://files.pythonhosted.org/packages/ba/36/27999b11ac78f93cf6ba1f93055ed181cf9787473114a4373f257beb740e/livekit-1.0.1-py3-none-win_amd64.whl", hash = "sha256:1631b24025ea577206e009bdfa4a28b1968d8496e7801fd2973221006a9521a8", size = 11008093 },
 ]
 
 [[package]]
@@ -1254,7 +1254,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = "~=1.0" },
+    { name = "livekit", specifier = ">=1.0.1,<2" },
     { name = "livekit-api", specifier = "~=1.0" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },

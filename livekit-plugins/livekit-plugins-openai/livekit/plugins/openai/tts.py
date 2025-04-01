@@ -51,7 +51,7 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     speed: float
-    instructions: str | None = None
+    instructions: str | None
 
 
 class TTS(tts.TTS):
@@ -61,7 +61,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
-        instructions: str | None = None,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -85,7 +85,7 @@ class TTS(tts.TTS):
             model=model,
             voice=voice,
             speed=speed,
-            instructions=instructions,
+            instructions=instructions if is_given(instructions) else None,
         )
 
         self._client = client or openai.AsyncClient(
@@ -126,7 +126,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
-        instructions: str | None = None,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -204,7 +204,7 @@ class ChunkedStream(tts.ChunkedStream):
             voice=self._opts.voice,
             response_format="opus",
             speed=self._opts.speed,
-            instructions=self._opts.instructions if self._opts.instructions else None,
+            instructions=self._opts.instructions or openai.NOT_GIVEN,
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
