@@ -38,9 +38,7 @@ async def entrypoint(ctx: JobContext):
     def on_metrics_collected(ev: MetricsCollectedEvent):
         nonlocal close_task
         if isinstance(ev.metrics, LLMMetrics) and ev.metrics.error:
-            if ev.metrics.error and not (
-                ev.metrics.error.retryable or ev.metrics.error.attempts_remaining == 0
-            ):
+            if not ev.metrics.error.retryable or ev.metrics.error.attempts_remaining == 0:
                 logger.info("Ran into an unrecoverable LLM error, ending session.")
                 # do something with the error
                 close_task = asyncio.create_task(session.aclose())

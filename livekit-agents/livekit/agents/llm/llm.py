@@ -174,6 +174,8 @@ class LLMStream(ABC):
                         },
                     )
 
+                await asyncio.sleep(self._conn_options.retry_interval)
+
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
         start_time = time.perf_counter()
