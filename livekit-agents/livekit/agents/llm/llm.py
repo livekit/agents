@@ -3,17 +3,11 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
-from typing import (
-    Any,
-    AsyncIterable,
-    AsyncIterator,
-    Generic,
-    Literal,
-    TypeVar,
-    Union,
-)
+from typing import Any, Generic, Literal, TypeVar, Union
+
+from pydantic import BaseModel, Field
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
@@ -21,53 +15,42 @@ from livekit.agents._exceptions import APIConnectionError, APIError
 from .. import utils
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from ..utils import aio
-from . import function_context
 from .chat_context import ChatContext, ChatRole
+from .tool_context import FunctionTool, ToolChoice
 
 
-@dataclass
-class ChoiceDelta:
-    role: ChatRole
-    content: str | None = None
-    tool_calls: list[function_context.FunctionCallInfo] | None = None
-
-
-@dataclass
-class CompletionUsage:
+class CompletionUsage(BaseModel):
     completion_tokens: int
     prompt_tokens: int
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
     total_tokens: int
-    cache_creation_input_tokens: int = 0
-    cache_read_input_tokens: int = 0
 
 
-@dataclass
-class Choice:
-    delta: ChoiceDelta
-    index: int = 0
-
-
-@dataclass
-class LLMCapabilities:
-    supports_choices_on_int: bool = True
-    """check whether the LLM supports integer enums choices as function arguments"""
-    requires_persistent_functions: bool = False
-    """if the LLM requires function definition when previous function calls exist in chat context"""
-
-
-@dataclass
-class ChatChunk:
-    request_id: str
-    choices: list[Choice] = field(default_factory=list)
-    usage: CompletionUsage | None = None
-
-
-@dataclass
-class ToolChoice:
-    type: Literal["function"]
+class FunctionToolCall(BaseModel):
+    type: Literal["function"] = "function"
     name: str
+    arguments: str
+    call_id: str
+
+
+class ChoiceDelta(BaseModel):
+    role: ChatRole | None = None
+    content: str | None = None
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+
+
+class ChatChunk(BaseModel):
+    id: str
+    delta: ChoiceDelta | None = None
+    usage: CompletionUsage | None = None
 
 
 TEvent = TypeVar("TEvent")
@@ -78,11 +61,8 @@ class LLM(
     rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
     Generic[TEvent],
 ):
-    def __init__(self, *, capabilities: LLMCapabilities | None = None) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        if capabilities is None:
-            capabilities = LLMCapabilities()
-        self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
 
     @property
@@ -94,18 +74,12 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        fnc_ctx: function_context.FunctionContext | None = None,
-        temperature: float | None = None,
-        n: int | None = None,
-        parallel_tool_calls: bool | None = None,
-        tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]]
-        | None = None,
-    ) -> "LLMStream": ...
-
-    @property
-    def capabilities(self) -> LLMCapabilities:
-        return self._capabilities
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> LLMStream: ...
 
     async def aclose(self) -> None: ...
 
@@ -127,12 +101,12 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        fnc_ctx: function_context.FunctionContext | None,
+        tools: list[FunctionTool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
         self._chat_ctx = chat_ctx
-        self._fnc_ctx = fnc_ctx
+        self._tools = tools
         self._conn_options = conn_options
 
         self._event_ch = aio.Chan[ChatChunk]()
@@ -144,9 +118,6 @@ class LLMStream(ABC):
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
-        self._function_calls_info: list[function_context.FunctionCallInfo] = []
-        self._function_tasks = set[asyncio.Task[Any]]()
-
     @abstractmethod
     async def _run(self) -> None: ...
 
@@ -155,16 +126,15 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
-                retry_interval = self._conn_options._interval_for_retry(i)
                 if self._conn_options.max_retry == 0 or not e.retryable:
                     raise
                 elif i == self._conn_options.max_retry:
                     raise APIConnectionError(
-                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",
+                        f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
                     logger.warning(
-                        f"failed to generate LLM completion, retrying in {retry_interval}s",
+                        f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
                         extra={
                             "llm": self._llm._label,
@@ -172,19 +142,17 @@ class LLMStream(ABC):
                         },
                     )
 
-                await asyncio.sleep(retry_interval)
+                await asyncio.sleep(self._conn_options.retry_interval)
 
     @utils.log_exceptions(logger=logger)
-    async def _metrics_monitor_task(
-        self, event_aiter: AsyncIterable[ChatChunk]
-    ) -> None:
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
         start_time = time.perf_counter()
         ttft = -1.0
         request_id = ""
         usage: CompletionUsage | None = None
 
         async for ev in event_aiter:
-            request_id = ev.request_id
+            request_id = ev.id
             if ttft == -1.0:
                 ttft = time.perf_counter() - start_time
 
@@ -208,34 +176,15 @@ class LLMStream(ABC):
         self._llm.emit("metrics_collected", metrics)
 
     @property
-    def function_calls(self) -> list[function_context.FunctionCallInfo]:
-        """List of called functions from this stream."""
-        return self._function_calls_info
-
-    @property
     def chat_ctx(self) -> ChatContext:
-        """The initial chat context of this stream."""
         return self._chat_ctx
 
     @property
-    def fnc_ctx(self) -> function_context.FunctionContext | None:
-        """The function context of this stream."""
-        return self._fnc_ctx
-
-    def execute_functions(self) -> list[function_context.CalledFunction]:
-        """Execute all functions concurrently of this stream."""
-        called_functions: list[function_context.CalledFunction] = []
-        for fnc_info in self._function_calls_info:
-            called_fnc = fnc_info.execute()
-            self._function_tasks.add(called_fnc.task)
-            called_fnc.task.add_done_callback(self._function_tasks.remove)
-            called_functions.append(called_fnc)
-
-        return called_functions
+    def tools(self) -> list[FunctionTool]:
+        return self._tools
 
     async def aclose(self) -> None:
-        await aio.gracefully_cancel(self._task)
-        await utils.aio.gracefully_cancel(*self._function_tasks)
+        await aio.cancel_and_wait(self._task)
         await self._metrics_task
 
     async def __anext__(self) -> ChatChunk:
@@ -245,7 +194,7 @@ class LLMStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration
+            raise StopAsyncIteration  # noqa: B904
 
         return val
 

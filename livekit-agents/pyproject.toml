@@ -1,3 +1,85 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-agents"
+dynamic = ["version"]
+description = "A powerful framework for building realtime voice AI agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "click~=8.1",
+    "livekit>=1.0.1,<2",
+    "livekit-api~=1.0",
+    "livekit-protocol~=1.0",
+    "protobuf>=3",
+    "pyjwt>=2.0",
+    "types-protobuf>=4,<5",
+    "watchfiles>=1.0",
+    "psutil>=7.0",
+    "aiohttp~=3.10",
+    "typing-extensions>=4.12",
+    "sounddevice>=0.5",
+    "docstring_parser>=0.16",
+    "eval-type-backport",
+    "colorama>=0.4.6",
+    "av>=12.0.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+codecs = ["av>=12.0.0", "numpy>=1.26.0"]
+images = ["pillow>=10.3.0"]
+aws = ["livekit-plugins-aws>=1.0.0.rc4"]
+neuphonic = ["livekit-plugins-neuphonic>=1.0.0.rc4"]
+playai = ["livekit-plugins-playai>=1.0.0.rc4"]
+turn-detector = ["livekit-plugins-turn-detector>=1.0.0.rc4"]
+llama-index = ["livekit-plugins-llama-index>=1.0.0.rc4"]
+assemblyai = ["livekit-plugins-assemblyai>=1.0.0.rc4"]
+rime = ["livekit-plugins-rime>=1.0.0.rc4"]
+nltk = ["livekit-plugins-nltk>=1.0.0.rc4"]
+anthropic = ["livekit-plugins-anthropic>=1.0.0.rc4"]
+openai = ["livekit-plugins-openai>=1.0.0.rc4"]
+groq = ["livekit-plugins-groq>=1.0.0.rc4"]
+elevenlabs = ["livekit-plugins-elevenlabs>=1.0.0.rc4"]
+azure = ["livekit-plugins-azure>=1.0.0.rc4"]
+fal = ["livekit-plugins-fal>=1.0.0.rc4"]
+clova = ["livekit-plugins-clova>=1.0.0.rc4"]
+deepgram = ["livekit-plugins-deepgram>=1.0.0.rc4"]
+rag = ["livekit-plugins-rag>=1.0.0.rc4"]
+silero = ["livekit-plugins-silero>=1.0.0.rc4"]
+cartesia = ["livekit-plugins-cartesia>=1.0.0.rc4"]
+speechmatics = ["livekit-plugins-speechmatics>=1.0.0.rc4"]
+google = ["livekit-plugins-google>=1.0.0.rc4"]
+
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/agents/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+include = ["livekit/agents/resources/*", "livekit/agents/debug/index.html"]
+
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]

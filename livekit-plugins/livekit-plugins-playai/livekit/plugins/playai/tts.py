@@ -4,17 +4,21 @@ import asyncio
 import os
 import weakref
 from dataclasses import dataclass, fields
-from typing import Optional
 
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    tokenize,
-    tts,
-    utils,
-)
 from pyht import AsyncClient as PlayHTAsyncClient  # type: ignore
-from pyht.client import Format, Language, TTSOptions  # type: ignore
+from pyht.client import (
+    Format,  # type: ignore
+    Language,  # type: ignore
+    TTSOptions,  # type: ignore
+)
+
+from livekit.agents import APIConnectionError, APIConnectOptions, tokenize, tts, utils
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSModel
@@ -33,13 +37,13 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        user_id: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        user_id: NotGivenOr[str] = NOT_GIVEN,
         voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
         language: str = "english",
         sample_rate: int = 24000,
         model: TTSModel | str = "Play3.0-mini",
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
+        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
             ignore_punctuation=False
         ),
         **kwargs,
@@ -56,7 +60,7 @@ class TTS(tts.TTS):
             sample_rate (int): sample rate (Hz), A number greater than or equal to 8000, and must be less than or equal to 48000
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             **kwargs: Additional options.
-        """
+        """  # noqa: E501
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -66,12 +70,12 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        api_key = api_key or os.environ.get("PLAYHT_API_KEY")
-        user_id = user_id or os.environ.get("PLAYHT_USER_ID")
+        pyht_api_key = api_key if is_given(api_key) else os.environ.get("PLAYHT_API_KEY")
+        pyht_user_id = user_id if is_given(user_id) else os.environ.get("PLAYHT_USER_ID")
 
-        if not api_key or not user_id:
+        if not pyht_api_key or not pyht_user_id:
             raise ValueError(
-                "PlayHT API key and user ID are required. Set environment variables PLAYHT_API_KEY and PLAYHT_USER_ID or pass them explicitly."
+                "PlayHT API key and user ID are required. Set environment variables PLAYHT_API_KEY and PLAYHT_USER_ID or pass them explicitly."  # noqa: E501
             )
         _validate_kwargs(kwargs)
         self._config = TTSOptions(
@@ -89,8 +93,8 @@ class TTS(tts.TTS):
         )
 
         self._client = PlayHTAsyncClient(
-            user_id=user_id,
-            api_key=api_key,
+            user_id=pyht_user_id,
+            api_key=pyht_api_key,
         )
 
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -98,18 +102,18 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: str | None = None,
-        model: TTSModel | str | None = None,
-        language: str | None = None,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModel | str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         **kwargs,
     ) -> None:
         """
         Update the TTS options.
         """
         updates = {}
-        if voice is not None:
+        if is_given(voice):
             updates["voice"] = voice
-        if language is not None:
+        if is_given(language):
             updates["language"] = Language(language)
         updates.update(kwargs)
 
@@ -119,15 +123,15 @@ class TTS(tts.TTS):
             if value is not None:
                 setattr(self._config, key, value)
 
-        if model is not None:
+        if is_given(model):
             self._opts.model = model
 
     def synthesize(
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             input_text=text,
@@ -136,8 +140,10 @@ class TTS(tts.TTS):
         )
 
     def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> "SynthesizeStream":
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -154,7 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _Options,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._client = tts._client
@@ -169,7 +175,7 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=NUM_CHANNELS,
         )
 
-        decode_task: Optional[asyncio.Task] = None
+        decode_task: asyncio.Task | None = None
         try:
             # Create a task to push data to the decoder
             async def _decode_loop():
@@ -209,7 +215,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         opts: _Options,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._client = tts._client
@@ -221,6 +227,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         input_task = asyncio.create_task(self._tokenize_input())
+
+        if self._opts.model == "PlayDialog-turbo":
+            protocol = "http"
+        else:
+            protocol = "ws"
 
         try:
             text_stream = await self._create_text_stream()
@@ -236,7 +247,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         text_stream=text_stream,
                         options=self._config,
                         voice_engine=self._opts.model,
-                        protocol="ws",
+                        protocol=protocol,
                     ):
                         decoder.push(chunk)
                 finally:
@@ -293,6 +304,4 @@ def _validate_kwargs(kwargs: dict) -> None:
     valid_keys = {field.name for field in fields(TTSOptions)}
     invalid_keys = set(kwargs.keys()) - valid_keys
     if invalid_keys:
-        raise ValueError(
-            f"Invalid parameters: {invalid_keys}. Allowed parameters: {valid_keys}"
-        )
+        raise ValueError(f"Invalid parameters: {invalid_keys}. Allowed parameters: {valid_keys}")

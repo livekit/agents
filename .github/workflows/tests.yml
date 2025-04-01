@@ -3,12 +3,12 @@ name: tests
 on:
   push:
     branches:
-      - main
-      - dev
+      # - main
+      - 0.x
   pull_request:
     branches:
-      - main
-      - dev
+      # - main
+      - 0.x
   workflow_dispatch:
 
 jobs:
@@ -118,7 +118,6 @@ jobs:
           PYTEST_ADDOPTS: "--color=yes"
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          NEUPHONIC_API_KEY: ${{ secrets.NEUPHONIC_API_KEY }}
         working-directory: tests
         run: |
           echo "$GOOGLE_CREDENTIALS_JSON" > google.json

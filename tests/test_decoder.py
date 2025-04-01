@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
 import pytest
+
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.codecs import AudioStreamDecoder, StreamBuffer
 from livekit.plugins import deepgram
@@ -51,7 +52,9 @@ async def test_decode_and_transcribe():
     await session.close()
 
     # Verify the transcription
-    expected_text = "the people that are crazy enough to think they can change the world are the ones who do"
+    expected_text = (
+        "the people that are crazy enough to think they can change the world are the ones who do"
+    )
     assert wer(final_text, expected_text) < 0.2
 
 

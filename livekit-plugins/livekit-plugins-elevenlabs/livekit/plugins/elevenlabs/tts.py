@@ -21,9 +21,10 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -33,6 +34,12 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSEncoding, TTSModels
@@ -49,9 +56,9 @@ def _sample_rate_from_format(output_format: TTSEncoding) -> int:
 class VoiceSettings:
     stability: float  # [0.0 - 1.0]
     similarity_boost: float  # [0.0 - 1.0]
-    style: float | None = None  # [0.0 - 1.0]
-    speed: float | None = 1.0  # [0.8 - 1.2]
-    use_speaker_boost: bool | None = False
+    style: NotGivenOr[float] = NOT_GIVEN  # [0.0 - 1.0]
+    speed: NotGivenOr[float] = NOT_GIVEN  # [0.8 - 1.2]
+    use_speaker_boost: NotGivenOr[bool] = NOT_GIVEN
 
 
 @dataclass
@@ -59,7 +66,7 @@ class Voice:
     id: str
     name: str
     category: str
-    settings: VoiceSettings | None = None
+    settings: NotGivenOr[VoiceSettings] = NOT_GIVEN
 
 
 DEFAULT_VOICE = Voice(
@@ -85,11 +92,11 @@ class _TTSOptions:
     api_key: str
     voice: Voice
     model: TTSModels | str
-    language: str | None
+    language: NotGivenOr[str]
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
-    streaming_latency: int
+    streaming_latency: NotGivenOr[int]
     word_tokenizer: tokenize.WordTokenizer
     chunk_length_schedule: list[int]
     enable_ssml_parsing: bool
@@ -102,17 +109,15 @@ class TTS(tts.TTS):
         *,
         voice: Voice = DEFAULT_VOICE,
         model: TTSModels | str = "eleven_flash_v2_5",
-        api_key: str | None = None,
-        base_url: str | None = None,
-        streaming_latency: int = 0,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
-        word_tokenizer: Optional[tokenize.WordTokenizer] = None,
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         enable_ssml_parsing: bool = False,
-        chunk_length_schedule: list[int] = [80, 120, 200, 260],  # range is [50, 500]
+        chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
-        # deprecated
-        model_id: TTSModels | str | None = None,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -128,9 +133,11 @@ class TTS(tts.TTS):
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            language (str | None): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5". Optional.
-        """
+            language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
+        """  # noqa: E501
 
+        if not is_given(chunk_length_schedule):
+            chunk_length_schedule = [80, 120, 200, 260]
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
@@ -139,19 +146,13 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        if model_id is not None:
-            logger.warning(
-                "model_id is deprecated and will be removed in 1.5.0, use model instead",
-            )
-            model = model_id
-
-        api_key = api_key or os.environ.get("ELEVEN_API_KEY")
-        if not api_key:
+        elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
+        if not elevenlabs_api_key:
             raise ValueError(
-                "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"
+                "ElevenLabs API key is required, either as argument or set ELEVEN_API_KEY environmental variable"  # noqa: E501
             )
 
-        if word_tokenizer is None:
+        if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(
                 ignore_punctuation=False  # punctuation can help for intonation
             )
@@ -159,8 +160,8 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             voice=voice,
             model=model,
-            api_key=api_key,
-            base_url=base_url or API_BASE_URL_V1,
+            api_key=elevenlabs_api_key,
+            base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             encoding=_DefaultEncoding,
             sample_rate=self.sample_rate,
             streaming_latency=streaming_latency,
@@ -179,7 +180,7 @@ class TTS(tts.TTS):
 
         return self._session
 
-    async def list_voices(self) -> List[Voice]:
+    async def list_voices(self) -> list[Voice]:
         async with self._ensure_session().get(
             f"{self._opts.base_url}/voices",
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
@@ -189,26 +190,29 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: Voice = DEFAULT_VOICE,
-        model: TTSModels | str = "eleven_turbo_v2_5",
-        language: str | None = None,
+        voice: NotGivenOr[Voice] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Args:
-            voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
-            model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
-            language (str | None): Language code for the TTS model. Optional.
+            voice (NotGivenOr[Voice]): Voice configuration.
+            model (NotGivenOr[TTSModels | str]): TTS model to use.
+            language (NotGivenOr[str]): Language code for the TTS model.
         """
-        self._opts.model = model or self._opts.model
-        self._opts.voice = voice or self._opts.voice
-        self._opts.language = language or self._opts.language
+        if is_given(model):
+            self._opts.model = model
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(language):
+            self._opts.language = language
 
     def synthesize(
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             input_text=text,
@@ -218,8 +222,8 @@ class TTS(tts.TTS):
         )
 
     def stream(
-        self, *, conn_options: Optional[APIConnectOptions] = None
-    ) -> "SynthesizeStream":
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             conn_options=conn_options,
@@ -245,7 +249,7 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         opts: _TTSOptions,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions,
         session: aiohttp.ClientSession,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
@@ -255,7 +259,7 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice.settings))
-            if self._opts.voice.settings
+            if is_given(self._opts.voice.settings)
             else None
         )
         data = {
@@ -322,7 +326,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         tts: TTS,
         session: aiohttp.ClientSession,
         opts: _TTSOptions,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts, self._session = opts, session
@@ -392,15 +396,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         # 11labs protocol expects the first message to be an "init msg"
-        init_pkt = dict(
-            text=" ",
-            voice_settings=_strip_nones(dataclasses.asdict(self._opts.voice.settings))
-            if self._opts.voice.settings
+        init_pkt = {
+            "text": " ",
+            "voice_settings": _strip_nones(dataclasses.asdict(self._opts.voice.settings))
+            if is_given(self._opts.voice.settings)
             else None,
-            generation_config=dict(
-                chunk_length_schedule=self._opts.chunk_length_schedule
-            ),
-        )
+            "generation_config": {"chunk_length_schedule": self._opts.chunk_length_schedule},
+        }
         await ws_conn.send_str(json.dumps(init_pkt))
         eos_sent = False
 
@@ -423,14 +425,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         continue
 
-                data_pkt = dict(text=f"{text} ")  # must always end with a space
+                data_pkt = {"text": f"{text} "}  # must always end with a space
                 self._mark_started()
                 await ws_conn.send_str(json.dumps(data_pkt))
             if xml_content:
                 logger.warning("11labs stream ended with incomplete xml content")
 
             # no more token, mark eos
-            eos_pkt = dict(text="")
+            eos_pkt = {"text": ""}
             await ws_conn.send_str(json.dumps(eos_pkt))
             eos_sent = True
 
@@ -460,7 +462,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ):
                     if not eos_sent:
                         raise APIStatusError(
-                            "11labs connection closed unexpectedly, not all tokens have been consumed",
+                            "11labs connection closed unexpectedly, not all tokens have been consumed",  # noqa: E501
                             request_id=request_id,
                         )
                     return
@@ -520,7 +522,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 
 def _dict_to_voices_list(data: dict[str, Any]):
-    voices: List[Voice] = []
+    voices: list[Voice] = []
     for voice in data["voices"]:
         voices.append(
             Voice(
@@ -534,7 +536,7 @@ def _dict_to_voices_list(data: dict[str, Any]):
 
 
 def _strip_nones(data: dict[str, Any]):
-    return {k: v for k, v in data.items() if v is not None}
+    return {k: v for k, v in data.items() if is_given(v) and v is not None}
 
 
 def _synthesize_url(opts: _TTSOptions) -> str:
@@ -546,7 +548,7 @@ def _synthesize_url(opts: _TTSOptions) -> str:
         f"{base_url}/text-to-speech/{voice_id}/stream?"
         f"model_id={model_id}&output_format={output_format}"
     )
-    if opts.streaming_latency:
+    if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
     return url
 
@@ -564,8 +566,8 @@ def _stream_url(opts: _TTSOptions) -> str:
         f"model_id={model_id}&output_format={output_format}&"
         f"enable_ssml_parsing={enable_ssml}&inactivity_timeout={inactivity_timeout}"
     )
-    if language is not None:
+    if is_given(language):
         url += f"&language_code={language}"
-    if opts.streaming_latency:
+    if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
     return url

@@ -10,4 +10,4 @@ pip install livekit-plugins-neuphonic
 
 ## Pre-requisites
 
-You'll need an API key from Neuphonic. It can be set as an environment variable: `NEUPHONIC_API_KEY`
+You'll need an API key from Neuphonic. It can be set as an environment variable: `NEUPHONIC_API_TOKEN`

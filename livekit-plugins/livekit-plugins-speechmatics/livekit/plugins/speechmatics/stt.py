@@ -20,9 +20,9 @@ import dataclasses
 import json
 import os
 import weakref
-from typing import Dict, List, Optional
 
 import aiohttp
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
@@ -30,7 +30,11 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 from .types import (
@@ -47,18 +51,11 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        transcription_config: TranscriptionConfig = TranscriptionConfig(
-            language="en",
-            operating_point="enhanced",
-            enable_partials=True,
-            max_delay=0.7,
-        ),
-        connection_settings: ConnectionSettings = ConnectionSettings(
-            url="wss://eu2.rt.speechmatics.com/v2",
-        ),
-        audio_settings: AudioSettings = AudioSettings(),
-        http_session: Optional[aiohttp.ClientSession] = None,
-        extra_headers: Optional[Dict] = None,
+        transcription_config: NotGivenOr[TranscriptionConfig] = NOT_GIVEN,
+        connection_settings: NotGivenOr[ConnectionSettings] = NOT_GIVEN,
+        audio_settings: NotGivenOr[AudioSettings] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_headers: NotGivenOr[dict] = NOT_GIVEN,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -66,6 +63,20 @@ class STT(stt.STT):
                 interim_results=True,
             ),
         )
+        if not is_given(transcription_config):
+            transcription_config = TranscriptionConfig(  # noqa: B008
+                language="en",
+                operating_point="enhanced",
+                enable_partials=True,
+                max_delay=0.7,
+            )
+        if not is_given(connection_settings):
+            connection_settings = ConnectionSettings(  # noqa: B008
+                url="wss://eu2.rt.speechmatics.com/v2",
+            )
+        if not is_given(audio_settings):
+            audio_settings = AudioSettings()  # noqa: B008
+
         self._transcription_config = transcription_config
         self._audio_settings = audio_settings
         self._connection_settings = connection_settings
@@ -83,18 +94,20 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None,
-        conn_options: APIConnectOptions,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         raise NotImplementedError("Not implemented")
 
     def stream(
         self,
         *,
-        language: Optional[str] = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = dataclasses.replace(self._audio_settings)
+        if is_given(language):
+            config.language = language
         stream = SpeechStream(
             stt=self,
             transcription_config=self._transcription_config,
@@ -118,16 +131,14 @@ class SpeechStream(stt.SpeechStream):
         connection_settings: ConnectionSettings,
         conn_options: APIConnectOptions,
         http_session: aiohttp.ClientSession,
-        extra_headers: Optional[Dict] = None,
+        extra_headers: dict,
     ) -> None:
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=audio_settings.sample_rate
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=audio_settings.sample_rate)
         self._transcription_config = transcription_config
         self._audio_settings = audio_settings
         self._connection_settings = connection_settings
         self._session = http_session
-        self._extra_headers = extra_headers or {}
+        self._extra_headers = extra_headers
         self._speech_duration: float = 0
 
         self._reconnect_event = asyncio.Event()
@@ -188,9 +199,7 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="Speechmatics connection closed unexpectedly"
-                    )
+                    raise APIStatusError(message="Speechmatics connection closed unexpectedly")
 
                 try:
                     data = json.loads(msg.data)
@@ -229,9 +238,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        api_key = self._connection_settings.api_key or os.environ.get(
-            "SPEECHMATICS_API_KEY"
-        )
+        api_key = self._connection_settings.api_key or os.environ.get("SPEECHMATICS_API_KEY")
         if api_key is None:
             raise ValueError(
                 "Speechmatics API key is required. "
@@ -244,9 +251,7 @@ class SpeechStream(stt.SpeechStream):
             "Authorization": f"Bearer {api_key}",
             **self._extra_headers,
         }
-        url = sanitize_url(
-            self._connection_settings.url, self._transcription_config.language
-        )
+        url = sanitize_url(self._connection_settings.url, self._transcription_config.language)
         return await self._session.ws_connect(
             url,
             ssl=self._connection_settings.ssl_context,
@@ -281,9 +286,7 @@ class SpeechStream(stt.SpeechStream):
                 usage_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
                     alternatives=[],
-                    recognition_usage=stt.RecognitionUsage(
-                        audio_duration=self._speech_duration
-                    ),
+                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
                 )
                 self._event_ch.send_nowait(usage_event)
                 self._speech_duration = 0
@@ -295,8 +298,8 @@ class SpeechStream(stt.SpeechStream):
                 raise Exception("Speechmatics connection closed unexpectedly")
 
 
-def live_transcription_to_speech_data(data: dict) -> List[stt.SpeechData]:
-    speech_data: List[stt.SpeechData] = []
+def live_transcription_to_speech_data(data: dict) -> list[stt.SpeechData]:
+    speech_data: list[stt.SpeechData] = []
 
     for result in data.get("results", []):
         start_time, end_time, is_eos = (

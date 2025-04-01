@@ -21,11 +21,12 @@ import os
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
+
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -36,7 +37,11 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import AudioBuffer, is_given
 
 from ._utils import PeriodicCollector
 from .log import logger
@@ -57,9 +62,7 @@ class AudioEnergyFilter:
         SILENCE = 2
         END = 3
 
-    def __init__(
-        self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD
-    ):
+    def __init__(self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD):
         self._cooldown_seconds = min_silence
         self._cooldown = min_silence
         self._state = self.State.SILENCE
@@ -92,7 +95,7 @@ class AudioEnergyFilter:
 
 @dataclass
 class STTOptions:
-    language: DeepgramLanguages | str | None
+    language: DeepgramLanguages | str
     detect_language: bool
     interim_results: bool
     punctuate: bool
@@ -103,11 +106,12 @@ class STTOptions:
     filler_words: bool
     sample_rate: int
     num_channels: int
-    keywords: list[Tuple[str, float]]
+    keywords: list[tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
     energy_filter: AudioEnergyFilter | bool = False
     numerals: bool = False
+    mip_opt_out: bool = False
 
 
 class STT(stt.STT):
@@ -125,14 +129,15 @@ class STT(stt.STT):
         endpointing_ms: int = 25,
         # enable filler words by default to improve turn detector accuracy
         filler_words: bool = True,
-        keywords: list[Tuple[str, float]] | None = None,
-        keyterms: list[str] | None = None,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: bool = False,
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
         energy_filter: AudioEnergyFilter | bool = False,
         numerals: bool = False,
+        mip_opt_out: bool = False,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -159,6 +164,7 @@ class STT(stt.STT):
             energy_filter: Audio energy filter configuration for voice activity detection.
                          Can be a boolean or AudioEnergyFilter instance. Defaults to False.
             numerals: Whether to include numerals in the transcription. Defaults to False.
+            mip_opt_out: Whether to take part in the model improvement program
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -166,22 +172,18 @@ class STT(stt.STT):
         Note:
             The api_key must be set either through the constructor argument or by setting
             the DEEPGRAM_API_KEY environmental variable.
-        """
+        """  # noqa: E501
 
         super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=interim_results
-            )
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
         )
         self._base_url = base_url
 
-        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
-        if api_key is None:
+        self._api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
+        if not self._api_key:
             raise ValueError("Deepgram API key is required")
 
         model = _validate_model(model, language)
-
-        self._api_key = api_key
 
         self._opts = STTOptions(
             language=language,
@@ -195,11 +197,12 @@ class STT(stt.STT):
             filler_words=filler_words,
             sample_rate=sample_rate,
             num_channels=1,
-            keywords=keywords or [],
-            keyterms=keyterms or [],
+            keywords=keywords if is_given(keywords) else [],
+            keyterms=keyterms if is_given(keyterms) else [],
             profanity_filter=profanity_filter,
             energy_filter=energy_filter,
             numerals=numerals,
+            mip_opt_out=mip_opt_out,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -214,8 +217,8 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: DeepgramLanguages | str | None,
-        conn_options: APIConnectOptions,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
@@ -265,9 +268,9 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: DeepgramLanguages | str | None = None,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
@@ -283,44 +286,49 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        language: DeepgramLanguages | str | None = None,
-        model: DeepgramModels | str | None = None,
-        interim_results: bool | None = None,
-        punctuate: bool | None = None,
-        smart_format: bool | None = None,
-        sample_rate: int | None = None,
-        no_delay: bool | None = None,
-        endpointing_ms: int | None = None,
-        filler_words: bool | None = None,
-        keywords: list[Tuple[str, float]] | None = None,
-        keyterms: list[str] | None = None,
-        profanity_filter: bool | None = None,
-        numerals: bool | None = None,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
+        model: NotGivenOr[DeepgramModels | str] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        punctuate: NotGivenOr[bool] = NOT_GIVEN,
+        smart_format: NotGivenOr[bool] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        no_delay: NotGivenOr[bool] = NOT_GIVEN,
+        endpointing_ms: NotGivenOr[int] = NOT_GIVEN,
+        filler_words: NotGivenOr[bool] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        numerals: NotGivenOr[bool] = NOT_GIVEN,
+        mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
     ):
-        if language is not None:
+        if is_given(language):
             self._opts.language = language
-        if model is not None:
+        if is_given(model):
             self._opts.model = _validate_model(model, language)
-        if interim_results is not None:
+        if is_given(interim_results):
             self._opts.interim_results = interim_results
-        if punctuate is not None:
+        if is_given(punctuate):
             self._opts.punctuate = punctuate
-        if smart_format is not None:
+        if is_given(smart_format):
             self._opts.smart_format = smart_format
-        if sample_rate is not None:
+        if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
-        if no_delay is not None:
+        if is_given(no_delay):
             self._opts.no_delay = no_delay
-        if endpointing_ms is not None:
+        if is_given(endpointing_ms):
             self._opts.endpointing_ms = endpointing_ms
-        if filler_words is not None:
+        if is_given(filler_words):
             self._opts.filler_words = filler_words
-        if keywords is not None:
+        if is_given(keywords):
             self._opts.keywords = keywords
-        if keyterms is not None:
+        if is_given(keyterms):
             self._opts.keyterms = keyterms
-        if profanity_filter is not None:
+        if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
+        if is_given(numerals):
+            self._opts.numerals = numerals
+        if is_given(mip_opt_out):
+            self._opts.mip_opt_out = mip_opt_out
 
         for stream in self._streams:
             stream.update_options(
@@ -337,11 +345,15 @@ class STT(stt.STT):
                 keyterms=keyterms,
                 profanity_filter=profanity_filter,
                 numerals=numerals,
+                mip_opt_out=mip_opt_out,
             )
 
-    def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
+    def _sanitize_options(
+        self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
+    ) -> STTOptions:
         config = dataclasses.replace(self._opts)
-        config.language = language or config.language
+        if is_given(language):
+            config.language = language
 
         if config.detect_language:
             config.language = None
@@ -364,9 +376,7 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         base_url: str,
     ) -> None:
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         if opts.detect_language and opts.language is None:
             raise ValueError("language detection is not supported in streaming mode")
@@ -381,60 +391,62 @@ class SpeechStream(stt.SpeechStream):
             duration=5.0,
         )
 
-        self._audio_energy_filter: Optional[AudioEnergyFilter] = None
+        self._audio_energy_filter: AudioEnergyFilter | None = None
         if opts.energy_filter:
             if isinstance(opts.energy_filter, AudioEnergyFilter):
                 self._audio_energy_filter = opts.energy_filter
             else:
                 self._audio_energy_filter = AudioEnergyFilter()
 
-        self._pushed_audio_duration = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
     def update_options(
         self,
         *,
-        language: DeepgramLanguages | str | None = None,
-        model: DeepgramModels | str | None = None,
-        interim_results: bool | None = None,
-        punctuate: bool | None = None,
-        smart_format: bool | None = None,
-        sample_rate: int | None = None,
-        no_delay: bool | None = None,
-        endpointing_ms: int | None = None,
-        filler_words: bool | None = None,
-        keywords: list[Tuple[str, float]] | None = None,
-        keyterms: list[str] | None = None,
-        profanity_filter: bool | None = None,
-        numerals: bool | None = None,
+        language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
+        model: NotGivenOr[DeepgramModels | str] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        punctuate: NotGivenOr[bool] = NOT_GIVEN,
+        smart_format: NotGivenOr[bool] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        no_delay: NotGivenOr[bool] = NOT_GIVEN,
+        endpointing_ms: NotGivenOr[int] = NOT_GIVEN,
+        filler_words: NotGivenOr[bool] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        numerals: NotGivenOr[bool] = NOT_GIVEN,
+        mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
     ):
-        if language is not None:
+        if is_given(language):
             self._opts.language = language
-        if model is not None:
+        if is_given(model):
             self._opts.model = _validate_model(model, language)
-        if interim_results is not None:
+        if is_given(interim_results):
             self._opts.interim_results = interim_results
-        if punctuate is not None:
+        if is_given(punctuate):
             self._opts.punctuate = punctuate
-        if smart_format is not None:
+        if is_given(smart_format):
             self._opts.smart_format = smart_format
-        if sample_rate is not None:
+        if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
-        if no_delay is not None:
+        if is_given(no_delay):
             self._opts.no_delay = no_delay
-        if endpointing_ms is not None:
+        if is_given(endpointing_ms):
             self._opts.endpointing_ms = endpointing_ms
-        if filler_words is not None:
+        if is_given(filler_words):
             self._opts.filler_words = filler_words
-        if keywords is not None:
+        if is_given(keywords):
             self._opts.keywords = keywords
-        if keyterms is not None:
+        if is_given(keyterms):
             self._opts.keyterms = keyterms
-        if profanity_filter is not None:
+        if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
-        if numerals is not None:
+        if is_given(numerals):
             self._opts.numerals = numerals
+        if is_given(mip_opt_out):
+            self._opts.mip_opt_out = mip_opt_out
 
         self._reconnect_event.set()
 
@@ -465,7 +477,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            last_frame: Optional[rtc.AudioFrame] = None
+            last_frame: rtc.AudioFrame | None = None
             async for data in self._input_ch:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
@@ -475,21 +487,19 @@ class SpeechStream(stt.SpeechStream):
                         AudioEnergyFilter.State.SPEAKING,
                     ):
                         if last_frame:
-                            frames.extend(
-                                audio_bstream.write(last_frame.data.tobytes())
-                            )
+                            frames.extend(audio_bstream.write(last_frame.data.tobytes()))
                             last_frame = None
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif state == AudioEnergyFilter.State.END:
                         # no need to buffer as we have cooldown period
-                        frames = audio_bstream.flush()
+                        frames.extend(audio_bstream.flush())
                         has_ended = True
                     elif state == AudioEnergyFilter.State.SILENCE:
                         # buffer the last silence frame, since it could contain beginning of speech
                         # TODO: improve accuracy by using a ring buffer with longer window
                         last_frame = data
                 elif isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
+                    frames.extend(audio_bstream.flush())
                     has_ended = True
 
                 for frame in frames:
@@ -519,9 +529,7 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="deepgram connection closed unexpectedly"
-                    )
+                    raise APIStatusError(message="deepgram connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -575,12 +583,11 @@ class SpeechStream(stt.SpeechStream):
             "vad_events": True,
             "sample_rate": self._opts.sample_rate,
             "channels": self._opts.num_channels,
-            "endpointing": False
-            if self._opts.endpointing_ms == 0
-            else self._opts.endpointing_ms,
+            "endpointing": False if self._opts.endpointing_ms == 0 else self._opts.endpointing_ms,
             "filler_words": self._opts.filler_words,
             "profanity_filter": self._opts.profanity_filter,
             "numerals": self._opts.numerals,
+            "mip_opt_out": self._opts.mip_opt_out,
         }
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
@@ -647,9 +654,7 @@ class SpeechStream(stt.SpeechStream):
             if len(alts) > 0 and alts[0].text:
                 if not self._speaking:
                     self._speaking = True
-                    start_event = stt.SpeechEvent(
-                        type=stt.SpeechEventType.START_OF_SPEECH
-                    )
+                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     self._event_ch.send_nowait(start_event)
 
                 if is_final_transcript:
@@ -672,9 +677,7 @@ class SpeechStream(stt.SpeechStream):
             # a non-empty transcript (deepgram doesn't have a SpeechEnded event)
             if is_endpoint and self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                )
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
@@ -682,9 +685,7 @@ class SpeechStream(stt.SpeechStream):
             logger.warning("received unexpected message from deepgram %s", data)
 
 
-def live_transcription_to_speech_data(
-    language: str, data: dict
-) -> List[stt.SpeechData]:
+def live_transcription_to_speech_data(language: str, data: dict) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
     return [
@@ -750,7 +751,7 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
 
 
 def _validate_model(
-    model: DeepgramModels | str, language: DeepgramLanguages | str | None
+    model: DeepgramModels | str, language: NotGivenOr[DeepgramLanguages | str]
 ) -> DeepgramModels | str:
     en_only_models = {
         "nova-2-meeting",
@@ -766,7 +767,7 @@ def _validate_model(
         "nova-3",
         "nova-3-general",
     }
-    if language not in ("en-US", "en") and model in en_only_models:
+    if is_given(language) and language not in ("en-US", "en") and model in en_only_models:
         logger.warning(
             f"{model} does not support language {language}, falling back to nova-2-general"
         )

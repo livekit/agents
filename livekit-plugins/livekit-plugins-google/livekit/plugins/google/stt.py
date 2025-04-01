@@ -19,8 +19,14 @@ import dataclasses
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Callable, List, Union
+from typing import Callable, Union
 
+from google.api_core.client_options import ClientOptions
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
+from google.auth import default as gauth_default
+from google.auth.exceptions import DefaultCredentialsError
+from google.cloud.speech_v2 import SpeechAsyncClient
+from google.cloud.speech_v2.types import cloud_speech
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -31,19 +37,17 @@ from livekit.agents import (
     stt,
     utils,
 )
-
-from google.api_core.client_options import ClientOptions
-from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
-from google.auth import default as gauth_default
-from google.auth.exceptions import DefaultCredentialsError
-from google.cloud.speech_v2 import SpeechAsyncClient
-from google.cloud.speech_v2.types import cloud_speech
+from livekit.agents.types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import SpeechLanguages, SpeechModels
 
 LgType = Union[SpeechLanguages, str]
-LanguageCode = Union[LgType, List[LgType]]
+LanguageCode = Union[LgType, list[LgType]]
 
 # Google STT has a timeout of 5 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -56,25 +60,23 @@ _min_confidence = 0.65
 # This class is only be used internally to encapsulate the options
 @dataclass
 class STTOptions:
-    languages: List[LgType]
+    languages: list[LgType]
     detect_language: bool
     interim_results: bool
     punctuate: bool
     spoken_punctuation: bool
     model: SpeechModels | str
     sample_rate: int
-    keywords: List[tuple[str, float]] | None
+    keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
-        if self.keywords:
+        if is_given(self.keywords):
             return cloud_speech.SpeechAdaptation(
                 phrase_sets=[
                     cloud_speech.SpeechAdaptation.AdaptationPhraseSet(
                         inline_phrase_set=cloud_speech.PhraseSet(
                             phrases=[
-                                cloud_speech.PhraseSet.Phrase(
-                                    value=keyword, boost=boost
-                                )
+                                cloud_speech.PhraseSet.Phrase(value=keyword, boost=boost)
                                 for keyword, boost in self.keywords
                             ]
                         )
@@ -96,9 +98,9 @@ class STT(stt.STT):
         model: SpeechModels | str = "latest_long",
         location: str = "global",
         sample_rate: int = 16000,
-        credentials_info: dict | None = None,
-        credentials_file: str | None = None,
-        keywords: List[tuple[str, float]] | None = None,
+        credentials_info: NotGivenOr[dict] = NOT_GIVEN,
+        credentials_file: NotGivenOr[str] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
     ):
         """
         Create a new instance of Google STT.
@@ -120,19 +122,17 @@ class STT(stt.STT):
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
         """
-        super().__init__(
-            capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
-        )
+        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
         self._location = location
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
 
-        if credentials_file is None and credentials_info is None:
+        if not is_given(credentials_file) and not is_given(credentials_info):
             try:
                 gauth_default()
             except DefaultCredentialsError:
-                raise ValueError(
+                raise ValueError(  # noqa: B904
                     "Application default credentials must be available "
                     "when using Google STT without explicitly passing "
                     "credentials through credentials_info or credentials_file."
@@ -163,23 +163,17 @@ class STT(stt.STT):
         client_options = None
         client: SpeechAsyncClient | None = None
         if self._location != "global":
-            client_options = ClientOptions(
-                api_endpoint=f"{self._location}-speech.googleapis.com"
-            )
-        if self._credentials_info:
+            client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
+        if is_given(self._credentials_info):
             client = SpeechAsyncClient.from_service_account_info(
-                self._credentials_info,
-                client_options=client_options,
+                self._credentials_info, client_options=client_options
             )
-        elif self._credentials_file:
+        elif is_given(self._credentials_file):
             client = SpeechAsyncClient.from_service_account_file(
-                self._credentials_file,
-                client_options=client_options,
+                self._credentials_file, client_options=client_options
             )
         else:
-            client = SpeechAsyncClient(
-                client_options=client_options,
-            )
+            client = SpeechAsyncClient(client_options=client_options)
         assert client is not None
         return client
 
@@ -196,19 +190,17 @@ class STT(stt.STT):
             _, project_id = ga_default()
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
-    def _sanitize_options(self, *, language: str | None = None) -> STTOptions:
+    def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
         config = dataclasses.replace(self._config)
 
-        if language:
+        if is_given(language):
             config.languages = [language]
 
         if not isinstance(config.languages, list):
             config.languages = [config.languages]
         elif not config.detect_language:
             if len(config.languages) > 1:
-                logger.warning(
-                    "multiple languages provided, but language detection is disabled"
-                )
+                logger.warning("multiple languages provided, but language detection is disabled")
             config.languages = [config.languages[0]]
 
         return config
@@ -217,7 +209,7 @@ class STT(stt.STT):
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: SpeechLanguages | str | None,
+        language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
@@ -252,9 +244,9 @@ class STT(stt.STT):
 
                 return _recognize_response_to_speech_event(raw)
         except DeadlineExceeded:
-            raise APITimeoutError()
+            raise APITimeoutError()  # noqa: B904
         except GoogleAPICallError as e:
-            raise APIStatusError(
+            raise APIStatusError(  # noqa: B904
                 e.message,
                 status_code=e.code or -1,
             )
@@ -264,9 +256,9 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: SpeechLanguages | str | None = None,
+        language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
@@ -281,34 +273,34 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        languages: LanguageCode | None = None,
-        detect_language: bool | None = None,
-        interim_results: bool | None = None,
-        punctuate: bool | None = None,
-        spoken_punctuation: bool | None = None,
-        model: SpeechModels | None = None,
-        location: str | None = None,
-        keywords: List[tuple[str, float]] | None = None,
+        languages: NotGivenOr[LanguageCode] = NOT_GIVEN,
+        detect_language: NotGivenOr[bool] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        punctuate: NotGivenOr[bool] = NOT_GIVEN,
+        spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        location: NotGivenOr[str] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
     ):
-        if languages is not None:
+        if is_given(languages):
             if isinstance(languages, str):
                 languages = [languages]
             self._config.languages = languages
-        if detect_language is not None:
+        if is_given(detect_language):
             self._config.detect_language = detect_language
-        if interim_results is not None:
+        if is_given(interim_results):
             self._config.interim_results = interim_results
-        if punctuate is not None:
+        if is_given(punctuate):
             self._config.punctuate = punctuate
-        if spoken_punctuation is not None:
+        if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
-        if model is not None:
+        if is_given(model):
             self._config.model = model
-        if location is not None:
+        if is_given(location):
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
             self._pool.invalidate()
-        if keywords is not None:
+        if is_given(keywords):
             self._config.keywords = keywords
 
         for stream in self._streams:
@@ -337,9 +329,7 @@ class SpeechStream(stt.SpeechStream):
         recognizer_cb: Callable[[SpeechAsyncClient], str],
         config: STTOptions,
     ) -> None:
-        super().__init__(
-            stt=stt, conn_options=conn_options, sample_rate=config.sample_rate
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=config.sample_rate)
 
         self._pool = pool
         self._recognizer_cb = recognizer_cb
@@ -350,29 +340,29 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        languages: LanguageCode | None = None,
-        detect_language: bool | None = None,
-        interim_results: bool | None = None,
-        punctuate: bool | None = None,
-        spoken_punctuation: bool | None = None,
-        model: SpeechModels | None = None,
-        keywords: List[tuple[str, float]] | None = None,
+        languages: NotGivenOr[LanguageCode] = NOT_GIVEN,
+        detect_language: NotGivenOr[bool] = NOT_GIVEN,
+        interim_results: NotGivenOr[bool] = NOT_GIVEN,
+        punctuate: NotGivenOr[bool] = NOT_GIVEN,
+        spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
     ):
-        if languages is not None:
+        if is_given(languages):
             if isinstance(languages, str):
                 languages = [languages]
             self._config.languages = languages
-        if detect_language is not None:
+        if is_given(detect_language):
             self._config.detect_language = detect_language
-        if interim_results is not None:
+        if is_given(interim_results):
             self._config.interim_results = interim_results
-        if punctuate is not None:
+        if is_given(punctuate):
             self._config.punctuate = punctuate
-        if spoken_punctuation is not None:
+        if is_given(spoken_punctuation):
             self._config.spoken_punctuation = spoken_punctuation
-        if model is not None:
+        if is_given(model):
             self._config.model = model
-        if keywords is not None:
+        if is_given(keywords):
             self._config.keywords = keywords
 
         self._reconnect_event.set()
@@ -380,9 +370,7 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         # google requires a async generator when calling streaming_recognize
         # this function basically convert the queue into a async generator
-        async def input_generator(
-            client: SpeechAsyncClient, should_stop: asyncio.Event
-        ):
+        async def input_generator(client: SpeechAsyncClient, should_stop: asyncio.Event):
             try:
                 # first request should contain the config
                 yield cloud_speech.StreamingRecognizeRequest(
@@ -398,14 +386,10 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     if isinstance(frame, rtc.AudioFrame):
-                        yield cloud_speech.StreamingRecognizeRequest(
-                            audio=frame.data.tobytes()
-                        )
+                        yield cloud_speech.StreamingRecognizeRequest(audio=frame.data.tobytes())
 
             except Exception:
-                logger.exception(
-                    "an error occurred while streaming input to google STT"
-                )
+                logger.exception("an error occurred while streaming input to google STT")
 
         async def process_stream(client: SpeechAsyncClient, stream):
             has_started = False
@@ -421,7 +405,7 @@ class SpeechStream(stt.SpeechStream):
 
                 if (
                     resp.speech_event_type
-                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
+                    == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED  # noqa: E501
                 ):
                     result = resp.results[0]
                     speech_data = _streaming_recognize_response_to_speech_data(resp)
@@ -442,19 +426,14 @@ class SpeechStream(stt.SpeechStream):
                                 alternatives=[speech_data],
                             )
                         )
-                        if (
-                            time.time() - self._session_connected_at
-                            > _max_session_duration
-                        ):
+                        if time.time() - self._session_connected_at > _max_session_duration:
                             logger.debug(
                                 "Google STT maximum connection time reached. Reconnecting..."
                             )
                             self._pool.remove(client)
                             if has_started:
                                 self._event_ch.send_nowait(
-                                    stt.SpeechEvent(
-                                        type=stt.SpeechEventType.END_OF_SPEECH
-                                    )
+                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                                 )
                                 has_started = False
                             self._reconnect_event.set()
@@ -498,12 +477,8 @@ class SpeechStream(stt.SpeechStream):
                     )
                     self._session_connected_at = time.time()
 
-                    process_stream_task = asyncio.create_task(
-                        process_stream(client, stream)
-                    )
-                    wait_reconnect_task = asyncio.create_task(
-                        self._reconnect_event.wait()
-                    )
+                    process_stream_task = asyncio.create_task(process_stream(client, stream))
+                    wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                     try:
                         done, _ = await asyncio.wait(
@@ -517,14 +492,12 @@ class SpeechStream(stt.SpeechStream):
                             break
                         self._reconnect_event.clear()
                     finally:
-                        await utils.aio.gracefully_cancel(
-                            process_stream_task, wait_reconnect_task
-                        )
+                        await utils.aio.gracefully_cancel(process_stream_task, wait_reconnect_task)
                         should_stop.set()
             except DeadlineExceeded:
-                raise APITimeoutError()
+                raise APITimeoutError()  # noqa: B904
             except GoogleAPICallError as e:
-                raise APIStatusError(
+                raise APIStatusError(  # noqa: B904
                     e.message,
                     status_code=e.code or -1,
                 )
@@ -580,8 +553,6 @@ def _streaming_recognize_response_to_speech_data(
     if text == "":
         return None
 
-    data = stt.SpeechData(
-        language=lg, start_time=0, end_time=0, confidence=confidence, text=text
-    )
+    data = stt.SpeechData(language=lg, start_time=0, end_time=0, confidence=confidence, text=text)
 
     return data

@@ -17,9 +17,9 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -28,6 +28,12 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSModels, TTSVoices
@@ -49,10 +55,10 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        base_url: str | None = None,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         model: TTSModels | str = "playai-tts",
-        voice: TTSVoices | str = "Eileen-PlayAI",
-        api_key: str | None = None,
+        voice: TTSVoices | str = "Arista-PlayAI",
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
@@ -80,15 +86,14 @@ class TTS(tts.TTS):
         if not base_url:
             base_url = DEFAULT_BASE_URL
 
-        if not api_key:
-            api_key = os.getenv("GROQ_API_KEY")
-            if not api_key:
-                raise ValueError("GROQ_API_KEY is not set")
+        groq_api_key = api_key if is_given(api_key) else os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise ValueError("GROQ_API_KEY is not set")
 
         self._opts = _TTSOptions(
             model=model,
             voice=voice,
-            api_key=api_key,
+            api_key=groq_api_key,
             base_url=base_url,
         )
 
@@ -101,8 +106,8 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: TTSModels | None = None,
-        voice: TTSVoices | None = None,
+        model: NotGivenOr[TTSModels] = NOT_GIVEN,
+        voice: NotGivenOr[TTSVoices] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -111,18 +116,18 @@ class TTS(tts.TTS):
             model (SpeechModels | str, optional): Model to use. Default is None.
             voice (SpeechVoices | str, optional): Voice to use. Default is None.
         """
-        if model:
+        if is_given(model):
             self._opts.model = model
-        if voice:
+        if is_given(voice):
             self._opts.voice = voice
 
     def synthesize(
         self,
         text: str,
         *,
-        conn_options: Optional[APIConnectOptions] = None,
-        segment_id: str | None = None,
-    ) -> "ChunkedStream":
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        segment_id: NotGivenOr[str] = NOT_GIVEN,
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             input_text=text,
@@ -139,15 +144,15 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        conn_options: Optional[APIConnectOptions] = None,
+        conn_options: APIConnectOptions,
         opts: _TTSOptions,
         session: aiohttp.ClientSession,
-        segment_id: str | None = None,
+        segment_id: NotGivenOr[str],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
         self._session = session
-        self._segment_id = segment_id
+        self._segment_id = segment_id if is_given(segment_id) else None
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -167,12 +172,10 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=NUM_CHANNELS,
         )
 
-        decode_task: Optional[asyncio.Task] = None
+        decode_task: asyncio.Task | None = None
         api_url = f"{self._opts.base_url}/audio/speech"
         try:
-            async with self._session.post(
-                api_url, headers=headers, json=payload
-            ) as response:
+            async with self._session.post(api_url, headers=headers, json=payload) as response:
                 if not response.content_type.startswith("audio"):
                     content = await response.text()
                     logger.error("Groq returned non-audio data: %s", content)

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import io
+import pickle
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from livekit.protocol import agent
 
@@ -12,7 +13,7 @@ from . import channel
 
 @dataclass
 class InitializeRequest:
-    """sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc"""
+    """sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc"""  # noqa: E501
 
     MSG_ID: ClassVar[int] = 0
 
@@ -84,7 +85,7 @@ class PongResponse:
 @dataclass
 class StartJobRequest:
     """sent by the main process to the subprocess to start a job, the subprocess will only
-    receive this message if the process is fully initialized (after sending a InitializeResponse)."""
+    receive this message if the process is fully initialized (after sending a InitializeResponse)."""  # noqa: E501
 
     MSG_ID: ClassVar[int] = 4
     running_job: RunningJobInfo = field(init=False)
@@ -188,6 +189,33 @@ class InferenceResponse:
         self.error = channel.read_string(b)
 
 
+@dataclass
+class TracingRequest:
+    MSG_ID: ClassVar[int] = 9
+    request_id: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.request_id)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.request_id = channel.read_string(b)
+
+
+@dataclass
+class TracingResponse:
+    MSG_ID: ClassVar[int] = 10
+    request_id: str = ""
+    info: dict[str, Any] = field(default_factory=dict)
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.request_id)
+        channel.write_bytes(b, pickle.dumps(self.info))
+
+    def read(self, b: io.BytesIO) -> None:
+        self.request_id = channel.read_string(b)
+        self.info = pickle.loads(channel.read_bytes(b))
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -198,4 +226,6 @@ IPC_MESSAGES = {
     Exiting.MSG_ID: Exiting,
     InferenceRequest.MSG_ID: InferenceRequest,
     InferenceResponse.MSG_ID: InferenceResponse,
+    TracingRequest.MSG_ID: TracingRequest,
+    TracingResponse.MSG_ID: TracingResponse,
 }

@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import multiprocessing as mp
 import socket
+from collections.abc import Awaitable
 from multiprocessing.context import BaseContext
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
-from ..utils import aio, log_exceptions
+from ..utils import aio, log_exceptions, shortuuid
 from . import channel, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import JobStatus
@@ -52,6 +53,24 @@ class ProcJobExecutor(SupervisedProc):
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._inference_executor = inference_executor
         self._inference_tasks: list[asyncio.Task[None]] = []
+        self._id = shortuuid("PCEXEC_")
+        self._tracing_requests = dict[str, asyncio.Future[proto.TracingResponse]]()
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    async def tracing_info(self) -> dict[str, Any]:
+        if not self.started:
+            raise RuntimeError("process not started")
+
+        tracing_req = proto.TracingRequest()
+        tracing_req.request_id = shortuuid("trace_req_")
+        fut = asyncio.Future[proto.TracingResponse]()
+        self._tracing_requests[tracing_req.request_id] = fut
+        await channel.asend_message(self._pch, tracing_req)
+        resp = await fut
+        return resp.info
 
     @property
     def status(self) -> JobStatus:
@@ -92,20 +111,16 @@ class ProcJobExecutor(SupervisedProc):
         try:
             async for msg in ipc_ch:
                 if isinstance(msg, proto.InferenceRequest):
-                    self._inference_tasks.append(
-                        asyncio.create_task(self._do_inference_task(msg))
-                    )
+                    self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
         finally:
-            await aio.gracefully_cancel(*self._inference_tasks)
+            await aio.cancel_and_wait(*self._inference_tasks)
 
     @log_exceptions(logger=logger)
     async def _supervise_task(self) -> None:
         try:
             await super()._supervise_task()
         finally:
-            self._job_status = (
-                JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
-            )
+            self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
 
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
@@ -119,9 +134,7 @@ class ProcJobExecutor(SupervisedProc):
             return
 
         try:
-            inf_res = await self._inference_executor.do_inference(
-                inf_req.method, inf_req.data
-            )
+            inf_res = await self._inference_executor.do_inference(inf_req.method, inf_req.data)
             await channel.asend_message(
                 self._pch,
                 proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),

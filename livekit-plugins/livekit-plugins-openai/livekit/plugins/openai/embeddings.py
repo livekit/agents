@@ -6,6 +6,7 @@ import struct
 from dataclasses import dataclass
 
 import aiohttp
+
 from livekit.agents import utils
 
 from . import models

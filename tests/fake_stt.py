@@ -58,7 +58,7 @@ class FakeSTT(STT):
         return self._recognize_ch
 
     @property
-    def stream_ch(self) -> utils.aio.ChanReceiver["FakeRecognizeStream"]:
+    def stream_ch(self) -> utils.aio.ChanReceiver[FakeRecognizeStream]:
         return self._stream_ch
 
     async def _recognize_impl(
@@ -76,9 +76,7 @@ class FakeSTT(STT):
 
         return SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[
-                SpeechData(text=self._fake_transcript or "", language=language or "")
-            ],
+            alternatives=[SpeechData(text=self._fake_transcript or "", language=language or "")],
         )
 
     async def recognize(
@@ -89,16 +87,14 @@ class FakeSTT(STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ):
         self._recognize_ch.send_nowait(RecognizeSentinel())
-        return await super().recognize(
-            buffer, language=language, conn_options=conn_options
-        )
+        return await super().recognize(buffer, language=language, conn_options=conn_options)
 
     def stream(
         self,
         *,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "FakeRecognizeStream":
+    ) -> FakeRecognizeStream:
         stream = FakeRecognizeStream(
             stt=self,
             conn_options=conn_options,

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from collections.abc import Awaitable
 from multiprocessing.context import BaseContext
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Callable, Literal
 
 from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
+from ..utils.hw.cpu import get_cpu_monitor
 from . import inference_executor, job_proc_executor, job_thread_executor
 from .job_executor import JobExecutor
 
@@ -19,7 +22,7 @@ EventTypes = Literal[
     "process_job_launched",
 ]
 
-MAX_CONCURRENT_INITIALIZATIONS = 5
+MAX_CONCURRENT_INITIALIZATIONS = math.ceil(get_cpu_monitor().cpu_count())
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):
@@ -49,13 +52,18 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._loop = loop
         self._memory_limit_mb = memory_limit_mb
         self._memory_warn_mb = memory_warn_mb
-        self._num_idle_processes = num_idle_processes
+        self._default_num_idle_processes = num_idle_processes
+        self._target_idle_processes = num_idle_processes
+
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
-        self._proc_needed_sem = asyncio.Semaphore(num_idle_processes)
         self._warmed_proc_queue = asyncio.Queue[JobExecutor]()
         self._executors: list[JobExecutor] = []
+        self._spawn_tasks: set[asyncio.Task] = set()
+        self._monitor_tasks: set[asyncio.Task] = set()
         self._started = False
         self._closed = False
+
+        self._idle_ready = asyncio.Event()
 
     @property
     def processes(self) -> list[JobExecutor]:
@@ -63,41 +71,48 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     def get_by_job_id(self, job_id: str) -> JobExecutor | None:
         return next(
-            (
-                x
-                for x in self._executors
-                if x.running_job and x.running_job.job.id == job_id
-            ),
+            (x for x in self._executors if x.running_job and x.running_job.job.id == job_id),
             None,
         )
 
-    def start(self) -> None:
+    async def start(self) -> None:
         if self._started:
             return
 
         self._started = True
         self._main_atask = asyncio.create_task(self._main_task())
 
+        if self._default_num_idle_processes > 0:
+            # wait for the idle processes to be warmed up (by the main task)
+            await self._idle_ready.wait()
+
     async def aclose(self) -> None:
         if not self._started:
             return
 
         self._closed = True
-        await aio.gracefully_cancel(self._main_atask)
+        await aio.cancel_and_wait(self._main_atask)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
-        if self._num_idle_processes == 0:
-            self._proc_needed_sem.release()  # ask for a process if prewarmed processes are not disabled
-            proc = await self._warmed_proc_queue.get()
-        else:
-            proc = await self._warmed_proc_queue.get()
-            self._proc_needed_sem.release()  # notify that a new process can be warmed/started
+        if self._warmed_proc_queue.empty() and not self._spawn_tasks:
+            # spawn a new process if there are no idle processes
+            task = asyncio.create_task(self._proc_spawn_task())
+            self._spawn_tasks.add(task)
+            task.add_done_callback(self._spawn_tasks.discard)
 
+        proc = await self._warmed_proc_queue.get()
         await proc.launch_job(info)
         self.emit("process_job_launched", proc)
 
+    def set_target_idle_processes(self, num_idle_processes: int) -> None:
+        self._target_idle_processes = num_idle_processes
+
+    @property
+    def target_idle_processes(self) -> int:
+        return self._target_idle_processes
+
     @utils.log_exceptions(logger=logger)
-    async def _proc_watch_task(self) -> None:
+    async def _proc_spawn_task(self) -> None:
         proc: JobExecutor
         if self._job_executor_type == JobExecutorType.THREAD:
             proc = job_thread_executor.ThreadJobExecutor(
@@ -128,25 +143,34 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         else:
             raise ValueError(f"unsupported job executor: {self._job_executor_type}")
 
+        self._executors.append(proc)
+        async with self._init_sem:
+            if self._closed:
+                self._executors.remove(proc)
+                return
+
+            self.emit("process_created", proc)
+            await proc.start()
+            self.emit("process_started", proc)
+            try:
+                await proc.initialize()
+                # process where initialization times out will never fire "process_ready"
+                # neither be used to launch jobs
+
+                self.emit("process_ready", proc)
+                self._warmed_proc_queue.put_nowait(proc)
+                if self._warmed_proc_queue.qsize() >= self._default_num_idle_processes:
+                    self._idle_ready.set()
+            except Exception:
+                pass
+
+        monitor_task = asyncio.create_task(self._monitor_process_task(proc))
+        self._monitor_tasks.add(monitor_task)
+        monitor_task.add_done_callback(self._monitor_tasks.discard)
+
+    @utils.log_exceptions(logger=logger)
+    async def _monitor_process_task(self, proc: JobExecutor) -> None:
         try:
-            self._executors.append(proc)
-
-            async with self._init_sem:
-                if self._closed:
-                    return
-
-                self.emit("process_created", proc)
-                await proc.start()
-                self.emit("process_started", proc)
-                try:
-                    await proc.initialize()
-                    # process where initialization times out will never fire "process_ready"
-                    # neither be used to launch jobs
-                    self.emit("process_ready", proc)
-                    self._warmed_proc_queue.put_nowait(proc)
-                except Exception:
-                    self._proc_needed_sem.release()  # notify to warm a new process after initialization failure
-
             await proc.join()
             self.emit("process_closed", proc)
         finally:
@@ -154,13 +178,21 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        watch_tasks: list[asyncio.Task[None]] = []
         try:
-            while True:
-                await self._proc_needed_sem.acquire()
-                task = asyncio.create_task(self._proc_watch_task())
-                watch_tasks.append(task)
-                task.add_done_callback(watch_tasks.remove)
+            while not self._closed:
+                current_pending = self._warmed_proc_queue.qsize() + len(self._spawn_tasks)
+                to_spawn = (
+                    min(self._target_idle_processes, self._default_num_idle_processes)
+                    - current_pending
+                )
+
+                for _ in range(to_spawn):
+                    task = asyncio.create_task(self._proc_spawn_task())
+                    self._spawn_tasks.add(task)
+                    task.add_done_callback(self._spawn_tasks.discard)
+
+                await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             await asyncio.gather(*[proc.aclose() for proc in self._executors])
-            await asyncio.gather(*watch_tasks)
+            await asyncio.gather(*self._spawn_tasks)
+            await asyncio.gather(*self._monitor_tasks)

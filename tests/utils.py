@@ -4,19 +4,15 @@ import io
 import os
 import pathlib
 import wave
-from typing import Tuple
 
 import jiwer as tr
+
 from livekit import rtc
 from livekit.agents import utils
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "long.mp3")
-TEST_AUDIO_TRANSCRIPT = pathlib.Path(
-    os.path.dirname(__file__), "long_transcript.txt"
-).read_text()
-TEST_AUDIO_SYNTHESIZE = pathlib.Path(
-    os.path.dirname(__file__), "long_synthesize.txt"
-).read_text()
+TEST_AUDIO_TRANSCRIPT = pathlib.Path(os.path.dirname(__file__), "long_transcript.txt").read_text()
+TEST_AUDIO_SYNTHESIZE = pathlib.Path(os.path.dirname(__file__), "long_synthesize.txt").read_text()
 
 
 def wer(hypothesis: str, reference: str) -> float:
@@ -64,7 +60,7 @@ async def make_test_speech(
     *,
     chunk_duration_ms: int | None = None,
     sample_rate: int | None = None,  # resample if not None
-) -> Tuple[list[rtc.AudioFrame], str]:
+) -> tuple[list[rtc.AudioFrame], str]:
     input_audio = await read_mp3_file(TEST_AUDIO_FILEPATH)
 
     if sample_rate is not None and input_audio.sample_rate != sample_rate:

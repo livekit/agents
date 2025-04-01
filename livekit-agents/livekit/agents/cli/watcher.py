@@ -8,7 +8,7 @@ import socket
 import urllib.parse
 import urllib.request
 from importlib.metadata import Distribution, PackageNotFoundError
-from typing import Any, Callable, Set
+from typing import Any, Callable
 
 import watchfiles
 
@@ -95,10 +95,10 @@ class WatchServer:
                 callback=self._on_reload,
             )
         finally:
-            await utils.aio.gracefully_cancel(read_ipc_task)
+            await utils.aio.cancel_and_wait(read_ipc_task)
             await self._pch.aclose()
 
-    async def _on_reload(self, _: Set[watchfiles.main.FileChange]) -> None:
+    async def _on_reload(self, _: set[watchfiles.main.FileChange]) -> None:
         if self._worker_reloading:
             return
 
@@ -126,9 +126,7 @@ class WatchServer:
                 with contextlib.suppress(asyncio.InvalidStateError):
                     self._recv_jobs_fut.set_result(None)
             if isinstance(msg, proto.ReloadJobsRequest):
-                await channel.asend_message(
-                    self._pch, proto.ReloadJobsResponse(jobs=active_jobs)
-                )
+                await channel.asend_message(self._pch, proto.ReloadJobsResponse(jobs=active_jobs))
             if isinstance(msg, proto.Reloaded):
                 self._worker_reloading = False
 
@@ -151,9 +149,7 @@ class WatchClient:
     async def _run(self) -> None:
         assert self._cli_args.mp_cch
         try:
-            self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(
-                self._cli_args.mp_cch
-            )
+            self._cch = await utils.aio.duplex_unix._AsyncDuplex.open(self._cli_args.mp_cch)
 
             await channel.asend_message(self._cch, proto.ReloadJobsRequest())
 

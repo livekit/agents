@@ -1,8 +1,9 @@
 import enum
 from inspect import _empty
-from typing import Annotated, List, Optional
+from typing import Annotated, Optional
 
 import pytest
+
 from livekit.agents import llm
 from livekit.plugins.openai import _oai_api
 
@@ -10,15 +11,11 @@ from livekit.plugins.openai import _oai_api
 def test_func_basic():
     class TestFunctionContext(llm.FunctionContext):
         @llm.ai_callable(name="test_function", description="A simple test function")
-        def test_fn(
-            self, param: Annotated[str, llm.TypeInfo(description="A string parameter")]
-        ):
+        def test_fn(self, param: Annotated[str, llm.TypeInfo(description="A string parameter")]):
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "test_function" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert "test_function" in fnc_ctx.ai_functions, "Function should be registered in ai_functions"
 
     fnc_info = fnc_ctx.ai_functions["test_function"]
     build_info = _oai_api.build_oai_function_description(fnc_info)
@@ -43,21 +40,15 @@ def test_func_basic():
 
 def test_func_duplicate():
     class TestFunctionContext(llm.FunctionContext):
-        @llm.ai_callable(
-            name="duplicate_function", description="A simple test function"
-        )
+        @llm.ai_callable(name="duplicate_function", description="A simple test function")
         def fn1(self):
             pass
 
-        @llm.ai_callable(
-            name="duplicate_function", description="A simple test function"
-        )
+        @llm.ai_callable(name="duplicate_function", description="A simple test function")
         def fn2(self):
             pass
 
-    with pytest.raises(
-        ValueError, match="duplicate ai_callable name: duplicate_function"
-    ):
+    with pytest.raises(ValueError, match="duplicate ai_callable name: duplicate_function"):
         TestFunctionContext()
 
 
@@ -69,24 +60,20 @@ def test_func_with_docstring():
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "test_fn" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert "test_fn" in fnc_ctx.ai_functions, "Function should be registered in ai_functions"
 
     assert fnc_ctx.ai_functions["test_fn"].description == "A simple test function"
 
 
 def test_func_with_optional_parameter():
     class TestFunctionContext(llm.FunctionContext):
-        @llm.ai_callable(
-            name="optional_function", description="Function with optional parameter"
-        )
+        @llm.ai_callable(name="optional_function", description="Function with optional parameter")
         def optional_fn(
             self,
             param: Annotated[
                 Optional[int], llm.TypeInfo(description="An optional integer parameter")
             ] = None,
-            param2: Optional[List[str]] = None,
+            param2: Optional[list[str]] = None,
             param3: str = "A string",
         ):
             pass
@@ -129,7 +116,7 @@ def test_func_with_optional_parameter():
 
     assert arg_info.name == "param2"
     assert arg_info.description == ""
-    assert arg_info.type == Optional[List[str]]
+    assert arg_info.type == Optional[list[str]]
     assert arg_info.default is None
     assert arg_info.choices == ()
     assert build_arg_info["type"] == "array"
@@ -149,19 +136,15 @@ def test_func_with_optional_parameter():
 
 def test_func_with_list_parameter():
     class TestFunctionContext(llm.FunctionContext):
-        @llm.ai_callable(
-            name="list_function", description="Function with list parameter"
-        )
+        @llm.ai_callable(name="list_function", description="Function with list parameter")
         def list_fn(
             self,
-            items: Annotated[List[str], llm.TypeInfo(description="A list of strings")],
+            items: Annotated[list[str], llm.TypeInfo(description="A list of strings")],
         ):
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "list_function" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert "list_function" in fnc_ctx.ai_functions, "Function should be registered in ai_functions"
 
     fnc_info = fnc_ctx.ai_functions["list_function"]
     build_info = _oai_api.build_oai_function_description(fnc_info)
@@ -177,7 +160,7 @@ def test_func_with_list_parameter():
 
     assert arg_info.name == "items"
     assert arg_info.description == "A list of strings"
-    assert arg_info.type is List[str]
+    assert arg_info.type is list[str]
     assert arg_info.default is _empty
     assert arg_info.choices == ()
     assert build_arg_info["description"] == arg_info.description
@@ -192,9 +175,7 @@ def test_func_with_enum_parameter():
         PENDING = "pending"
 
     class TestFunctionContext(llm.FunctionContext):
-        @llm.ai_callable(
-            name="enum_function", description="Function with enum parameter"
-        )
+        @llm.ai_callable(name="enum_function", description="Function with enum parameter")
         def enum_fn(
             self,
             status: Annotated[Status, llm.TypeInfo(description="Status of the entity")],
@@ -202,9 +183,7 @@ def test_func_with_enum_parameter():
             pass
 
     fnc_ctx = TestFunctionContext()
-    assert "enum_function" in fnc_ctx.ai_functions, (
-        "Function should be registered in ai_functions"
-    )
+    assert "enum_function" in fnc_ctx.ai_functions, "Function should be registered in ai_functions"
 
     fnc_info = fnc_ctx.ai_functions["enum_function"]
     build_info = _oai_api.build_oai_function_description(fnc_info)

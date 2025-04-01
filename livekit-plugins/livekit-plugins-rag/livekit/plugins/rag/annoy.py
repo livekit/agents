@@ -1,7 +1,8 @@
 import pathlib
 import pickle
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 import annoy
 
@@ -66,12 +67,8 @@ class AnnoyIndex:
             )
             yield item
 
-    def query(
-        self, vector: list[float], n: int, search_k: int = -1
-    ) -> list[QueryResult]:
-        ids = self._index.get_nns_by_vector(
-            vector, n, search_k=search_k, include_distances=True
-        )
+    def query(self, vector: list[float], n: int, search_k: int = -1) -> list[QueryResult]:
+        ids = self._index.get_nns_by_vector(vector, n, search_k=search_k, include_distances=True)
         return [
             QueryResult(userdata=self._filedata.userdata[i], distance=distance)
             for i, distance in zip(*ids)

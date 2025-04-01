@@ -1,8 +1,5 @@
 from . import basic, utils
-from .token_stream import (
-    BufferedSentenceStream,
-    BufferedWordStream,
-)
+from .token_stream import BufferedSentenceStream, BufferedWordStream
 from .tokenizer import (
     SentenceStream,
     SentenceTokenizer,
