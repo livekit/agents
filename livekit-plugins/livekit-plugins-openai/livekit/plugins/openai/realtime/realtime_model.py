@@ -6,6 +6,7 @@ import os
 import time
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import Enum
 from typing import AsyncIterable, Literal, Optional, Union, cast, overload
 from urllib.parse import urlencode
 
@@ -146,6 +147,20 @@ class ServerVadOptions:
     create_response: bool = True
 
 
+class SemanticVadEagerness(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    AUTO = "auto"
+
+
+@dataclass
+class SemanticVadOptions:
+    eagerness: SemanticVadEagerness = SemanticVadEagerness.AUTO
+    create_response: bool = True
+    interrupt_response: bool = True
+
+
 @dataclass
 class InputTranscriptionOptions:
     model: api_proto.InputTranscriptionModel | str
@@ -171,7 +186,7 @@ class RealtimeSessionOptions:
     input_audio_format: api_proto.AudioFormat
     output_audio_format: api_proto.AudioFormat
     input_audio_transcription: InputTranscriptionOptions | None
-    turn_detection: ServerVadOptions | None
+    turn_detection: Union[ServerVadOptions, SemanticVadOptions, None]
     tool_choice: api_proto.ToolChoice
     temperature: float
     max_response_output_tokens: int | Literal["inf"]
@@ -198,6 +213,12 @@ DEFAULT_SERVER_VAD_OPTIONS = ServerVadOptions(
     prefix_padding_ms=300,
     silence_duration_ms=500,
     create_response=True,
+)
+
+DEFAULT_SEMANTIC_VAD_OPTIONS = SemanticVadOptions(
+    eagerness=SemanticVadEagerness.AUTO,
+    create_response=True,
+    interrupt_response=True,
 )
 
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputTranscriptionOptions(model="whisper-1")
@@ -462,7 +483,9 @@ class RealtimeModel:
         input_audio_transcription: NotGivenOr[
             InputTranscriptionOptions | None
         ] = NOT_GIVEN,
-        turn_detection: NotGivenOr[ServerVadOptions | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[
+            Union[ServerVadOptions, SemanticVadOptions, None]
+        ] = NOT_GIVEN,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
     ) -> RealtimeSession:
@@ -482,7 +505,9 @@ class RealtimeModel:
         if utils.is_given(input_audio_transcription):
             opts.input_audio_transcription = input_audio_transcription
         if utils.is_given(turn_detection):
-            opts.turn_detection = turn_detection
+            opts.turn_detection = cast(
+                Union[ServerVadOptions, SemanticVadOptions, None], turn_detection
+            )
         if temperature is not None:
             opts.temperature = temperature
         if max_response_output_tokens is not None:
@@ -928,7 +953,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         input_audio_transcription: NotGivenOr[
             InputTranscriptionOptions | None
         ] = NOT_GIVEN,
-        turn_detection: NotGivenOr[ServerVadOptions | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[
+            Union[ServerVadOptions, SemanticVadOptions, None]
+        ] = NOT_GIVEN,
         tool_choice: api_proto.ToolChoice | None = None,
         temperature: float | None = None,
         max_response_output_tokens: int | Literal["inf"] | None = None,
@@ -947,7 +974,9 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         if utils.is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
         if utils.is_given(turn_detection):
-            self._opts.turn_detection = turn_detection
+            self._opts.turn_detection = cast(
+                Union[ServerVadOptions, SemanticVadOptions, None], turn_detection
+            )
         if tool_choice is not None:
             self._opts.tool_choice = tool_choice
         if temperature is not None:
@@ -964,15 +993,24 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
                 function_data["type"] = "function"
                 tools.append(function_data)
 
-        server_vad_opts: api_proto.ServerVad | None = None
+        server_vad_opts: Union[api_proto.ServerVad, api_proto.SemanticVad, None] = None
         if self._opts.turn_detection is not None:
-            server_vad_opts = {
-                "type": "server_vad",
-                "threshold": self._opts.turn_detection.threshold,
-                "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
-                "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
-                "create_response": self._opts.turn_detection.create_response,
-            }
+            if isinstance(self._opts.turn_detection, ServerVadOptions):
+                server_vad_opts = {
+                    "type": "server_vad",
+                    "threshold": self._opts.turn_detection.threshold,
+                    "prefix_padding_ms": self._opts.turn_detection.prefix_padding_ms,
+                    "silence_duration_ms": self._opts.turn_detection.silence_duration_ms,
+                    "create_response": self._opts.turn_detection.create_response,
+                }
+            elif isinstance(self._opts.turn_detection, SemanticVadOptions):
+                server_vad_opts = {
+                    "type": "semantic_vad",
+                    "eagerness": self._opts.turn_detection.eagerness.value,
+                    "create_response": self._opts.turn_detection.create_response,
+                    "interrupt_response": self._opts.turn_detection.interrupt_response,
+                }
+
         input_audio_transcription_opts: api_proto.InputAudioTranscription | None = None
         if self._opts.input_audio_transcription is not None:
             input_audio_transcription_opts = {
@@ -1292,15 +1330,44 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
         self, session_updated: api_proto.ServerEvent.SessionUpdated
     ):
         session = session_updated["session"]
-        if session["turn_detection"] is None:
-            turn_detection = None
-        else:
-            turn_detection = ServerVadOptions(
-                threshold=session["turn_detection"]["threshold"],
-                prefix_padding_ms=session["turn_detection"]["prefix_padding_ms"],
-                silence_duration_ms=session["turn_detection"]["silence_duration_ms"],
-                create_response=session["turn_detection"]["create_response"],
-            )
+        session_turn_detection = session["turn_detection"]
+        turn_detection: Union[ServerVadOptions, SemanticVadOptions, None] = None
+        if session_turn_detection is not None:
+            turn_detection_type = session_turn_detection.get("type")
+            if turn_detection_type == "server_vad":
+                session_turn_detection_opts = cast(
+                    api_proto.ServerVad, session_turn_detection
+                )
+                turn_detection = ServerVadOptions(
+                    threshold=session_turn_detection_opts["threshold"],
+                    prefix_padding_ms=session_turn_detection_opts["prefix_padding_ms"],
+                    silence_duration_ms=session_turn_detection_opts[
+                        "silence_duration_ms"
+                    ],
+                    create_response=session_turn_detection_opts["create_response"],
+                )
+            elif turn_detection_type == "semantic_vad":
+                session_turn_detection_semantic = cast(
+                    api_proto.SemanticVad, session_turn_detection
+                )
+                eagerness_value = session_turn_detection_semantic.get(
+                    "eagerness", "auto"
+                )
+                create_response_value = session_turn_detection_semantic.get(
+                    "create_response", True
+                )
+                interrupt_response_value = session_turn_detection_semantic.get(
+                    "interrupt_response", True
+                )
+
+                turn_detection = SemanticVadOptions(
+                    eagerness=SemanticVadEagerness(eagerness_value),
+                    create_response=bool(create_response_value),
+                    interrupt_response=bool(interrupt_response_value),
+                )
+            else:
+                turn_detection = None
+
         if session["input_audio_transcription"] is None:
             input_audio_transcription = None
         else:
