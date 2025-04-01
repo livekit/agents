@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import boto3
+from aiobotocore.session import AioSession, get_session
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import ChatContext, FunctionTool, FunctionToolCall, ToolChoice
@@ -32,7 +32,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import get_aws_credentials, to_chat_ctx, to_fnc_ctx
+from .utils import get_aws_async_session, to_chat_ctx, to_fnc_ctx
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
 
@@ -60,6 +60,7 @@ class LLM(llm.LLM):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        session: AioSession | None = None,
     ) -> None:
         """
         Create a new instance of AWS Bedrock LLM.
@@ -79,12 +80,12 @@ class LLM(llm.LLM):
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
+            session (aioboto3.Session, optional): Optional aioboto3 session to use.
         """  # noqa: E501
         super().__init__()
-        self._api_key, self._api_secret, self._region = get_aws_credentials(
-            api_key, api_secret, region
+        self._session = session or get_aws_async_session(
+            api_key=api_key, api_secret=api_secret, region=region
         )
-
         model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
         if not model:
             raise ValueError(
@@ -156,9 +157,6 @@ class LLM(llm.LLM):
 
         return LLMStream(
             self,
-            aws_access_key_id=self._api_key,
-            aws_secret_access_key=self._api_secret,
-            region_name=self._region,
             chat_ctx=chat_ctx,
             tools=tools,
             conn_options=conn_options,
@@ -171,22 +169,14 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        aws_access_key_id: str,
-        aws_secret_access_key: str,
-        region_name: str,
         chat_ctx: ChatContext,
         conn_options: APIConnectOptions,
         tools: list[FunctionTool] | None,
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
-        self._client = boto3.client(
-            "bedrock-runtime",
-            region_name=region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-        )
         self._llm: LLM = llm
+        self._client = llm._session.client("bedrock-runtime")
         self._opts = extra_kwargs
 
         self._tool_call_id: str | None = None
