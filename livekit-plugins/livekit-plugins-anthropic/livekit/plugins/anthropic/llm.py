@@ -216,9 +216,19 @@ class LLM(llm.LLM):
         thinking_opts = self._opts.thinking
         max_tokens = opts.get(
             "max_tokens",
-            thinking_opts.budget_tokens + 1 if thinking_opts else 1024,
+            (
+                (
+                    thinking_opts.budget_tokens + 1
+                    if thinking_opts and thinking_opts.budget_tokens
+                    else 1024
+                )
+            ),
         )
-        if max_tokens <= thinking_opts.budget_tokens:
+        if (
+            thinking_opts
+            and thinking_opts.budget_tokens
+            and max_tokens <= thinking_opts.budget_tokens
+        ):
             raise ValueError(
                 f"max_tokens ({max_tokens}) must be greater than thinking.budget_tokens ({thinking_opts.budget_tokens}) if thinking is enabled"
             )
@@ -226,11 +236,13 @@ class LLM(llm.LLM):
         stream = self._client.messages.create(
             max_tokens=max_tokens,
             messages=collaped_anthropic_ctx,
-            model=self._opts.model,
-            temperature=temperature or anthropic.NOT_GIVEN,
-            top_k=n or anthropic.NOT_GIVEN,
+            model=str(self._opts.model),
+            temperature=temperature if temperature is not None else anthropic.NOT_GIVEN,
+            top_k=n if n is not None else anthropic.NOT_GIVEN,
             stream=True,
-            thinking=self._opts.thinking,
+            thinking=(
+                self._opts.thinking if self._opts.thinking else anthropic.NOT_GIVEN
+            ),
             **opts,
         )
 
