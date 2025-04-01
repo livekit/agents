@@ -29,7 +29,7 @@ EGE_STOCK_AVATAR_ID = "b9be11b8-89fb-4227-8f86-4a881393cbdb"
 The ID of Ege's stock avatar
 """
 
-_DEFAULT_API_URL = "https://api.bey.dev/v1"
+_DEFAULT_API_URL = "https://api.bey.dev"
 
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
@@ -112,7 +112,7 @@ async def start_bey_avatar_session(
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{api_url}/session",
+            f"{api_url}/v1/session",
             headers={
                 "x-api-key": api_key,
             },
