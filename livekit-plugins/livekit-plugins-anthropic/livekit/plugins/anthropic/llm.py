@@ -63,7 +63,7 @@ class LLMOptions:
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
-    thinking: anthropic.types.ThinkingConfigEnabledParam | None = None
+    thinking: anthropic.types.ThinkingConfig | None = None
     caching: Literal["ephemeral"] | None = None
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
@@ -80,7 +80,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-        thinking: anthropic.types.ThinkingConfigEnabledParam | None = None,
+        thinking: anthropic.types.ThinkingConfig | None = None,
         caching: Literal["ephemeral"] | None = None,
     ) -> None:
         """
