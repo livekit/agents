@@ -44,7 +44,7 @@ class _LLMOptions:
     user: NotGivenOr[str]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
-    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
+    tool_choice: NotGivenOr[ToolChoice]
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
@@ -64,7 +64,7 @@ class LLM(llm.LLM):
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
     ) -> None:
         """
@@ -74,14 +74,14 @@ class LLM(llm.LLM):
         the ``ANTHROPIC_API_KEY`` environmental variable.
 
         model (str | ChatModels): The model to use. Defaults to "claude-3-5-sonnet-20241022".
-        api_key (str | None): The Anthropic API key. Defaults to the ANTHROPIC_API_KEY environment variable.
-        base_url (str | None): The base URL for the Anthropic API. Defaults to None.
-        user (str | None): The user for the Anthropic API. Defaults to None.
+        api_key (str, optional): The Anthropic API key. Defaults to the ANTHROPIC_API_KEY environment variable.
+        base_url (str, optional): The base URL for the Anthropic API. Defaults to None.
+        user (str, optional): The user for the Anthropic API. Defaults to None.
         client (anthropic.AsyncClient | None): The Anthropic client to use. Defaults to None.
-        temperature (float | None): The temperature for the Anthropic API. Defaults to None.
-        parallel_tool_calls (bool | None): Whether to parallelize tool calls. Defaults to None.
-        tool_choice (Union[ToolChoice, Literal["auto", "required", "none"]] | None): The tool choice for the Anthropic API. Defaults to "auto".
-        caching (Literal["ephemeral"] | None): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
+        temperature (float, optional): The temperature for the Anthropic API. Defaults to None.
+        parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
+        tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
+        caching (Literal["ephemeral"], optional): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
         """  # noqa: E501
 
         super().__init__()
@@ -121,7 +121,7 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}

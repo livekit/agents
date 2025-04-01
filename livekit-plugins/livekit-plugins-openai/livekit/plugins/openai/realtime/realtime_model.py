@@ -226,6 +226,7 @@ class RealtimeSession(
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
+        self._initial_session_update()
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
@@ -372,6 +373,17 @@ class RealtimeSession(
                 except Exception:
                     logger.exception("failed to handle event", extra={"event": event})
 
+        tasks = [
+            asyncio.create_task(_recv_task(), name="_recv_task"),
+            asyncio.create_task(_send_task(), name="_send_task"),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+            await ws_conn.close()
+
+    def _initial_session_update(self) -> None:
         input_audio_transcription = self._realtime_model._opts.input_audio_transcription
         input_audio_transcription = (
             session_update_event.SessionInputAudioTranscription.model_validate(
@@ -417,16 +429,6 @@ class RealtimeSession(
                 event_id=utils.shortuuid("session_update_"),
             )
         )
-
-        tasks = [
-            asyncio.create_task(_recv_task(), name="_recv_task"),
-            asyncio.create_task(_send_task(), name="_send_task"),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
-            await ws_conn.close()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
