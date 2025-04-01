@@ -27,7 +27,6 @@ dependencies = [
     "aioboto3==14.1.0",
     "amazon-transcribe==0.6.2",
     "boto3==1.37.1",
-    "botocore==1.37.1",
 ]
 
 [project.urls]

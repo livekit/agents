@@ -5,7 +5,6 @@ from typing import Any
 
 import aioboto3
 import boto3
-import botocore
 from botocore.exceptions import NoCredentialsError
 
 from livekit.agents import llm
@@ -26,7 +25,9 @@ async def get_aws_async_session(
             aws_secret_access_key=api_secret,
             region_name=region or DEFAULT_REGION,
         )
-        await session.get_credentials()
+        creds = await session.get_credentials()
+        if not creds:
+            raise ValueError("No credentials found")
     except (NoCredentialsError, Exception) as e:
         raise ValueError(f"Unable to locate AWS credentials: {str(e)}") from e
 
@@ -36,14 +37,12 @@ async def get_aws_async_session(
 def validate_aws_credentials(
     api_key: str | None = None,
     api_secret: str | None = None,
-) -> botocore.credentials.Credentials:
+) -> None:
     try:
         session = boto3.Session(aws_access_key_id=api_key, aws_secret_access_key=api_secret)
         creds = session.get_credentials()
         if not creds:
             raise ValueError("No credentials found")
-        frozen_creds = creds.get_frozen_credentials()
-        return frozen_creds
     except (NoCredentialsError, Exception) as e:
         raise ValueError(f"Unable to locate valid AWS credentials: {str(e)}") from e
 
