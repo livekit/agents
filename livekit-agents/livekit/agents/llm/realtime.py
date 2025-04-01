@@ -107,10 +107,6 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     @abstractmethod
     def tools(self) -> ToolContext: ...
 
-    @property
-    @abstractmethod
-    def tool_choice(self) -> ToolChoice: ...
-
     @abstractmethod
     async def update_instructions(self, instructions: str) -> None: ...
 
