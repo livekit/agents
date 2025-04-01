@@ -9,8 +9,8 @@ from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_current_job_context
 
-from .models import EOUModelType, HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME
 from .log import logger
+from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
 
 MAX_HISTORY_TOKENS = 512
 MAX_HISTORY_TURNS = 6
