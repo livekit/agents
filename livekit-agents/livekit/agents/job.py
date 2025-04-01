@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 import functools
 import multiprocessing as mp
 from collections.abc import Coroutine
@@ -33,7 +34,7 @@ from .utils import http_context
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
-def get_current_job_context() -> JobContext:
+def get_job_context() -> JobContext:
     ctx = _JobContextVar.get(None)
     if ctx is None:
         raise RuntimeError(
@@ -41,6 +42,9 @@ def get_current_job_context() -> JobContext:
         )
 
     return ctx
+
+
+get_current_job_context = get_job_context
 
 
 @unique
@@ -98,6 +102,7 @@ class JobContext:
         self._on_shutdown = on_shutdown
         self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
         self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
+        self._log_record_callbacks: list[Callable[[logging.LogRecord], None]] = []
         self._participant_entrypoints: list[
             tuple[
                 Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
@@ -107,6 +112,33 @@ class JobContext:
         self._participant_tasks = dict[tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
+
+        self._init_log_factory()
+
+    def _init_log_factory(self) -> None:
+        old_factory = logging.getLogRecordFactory()
+
+        def record_factory(*args, **kwargs) -> logging.LogRecord:
+            record = old_factory(*args, **kwargs)
+
+            if self.proc.executor_type != JobExecutorType.PROCESS:
+                try:
+                    ctx = get_job_context()
+                except RuntimeError:
+                    return record
+                else:
+                    if ctx != self:
+                        return record
+
+            for callback in self._log_record_callbacks:
+                try:
+                    callback(record)
+                except Exception as e:
+                    print(e)  # use print, not logger
+
+            return record
+
+        logging.setLogRecordFactory(record_factory)
 
     @property
     def inference_executor(self) -> InferenceExecutor:
@@ -143,6 +175,15 @@ class JobContext:
     @property
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
+
+    def add_log_record_callback(
+        self,
+        callback: Callable[[logging.LogRecord], None],
+    ) -> None:
+        """
+        Add a callback to be called when a log record is created.
+        """
+        self._log_record_callbacks.append(callback)
 
     def add_tracing_callback(
         self,
@@ -299,11 +340,17 @@ class JobProcess:
     def __init__(
         self,
         *,
+        executor_type: JobExecutorType,
         user_arguments: Any | None = None,
     ) -> None:
+        self._executor_type = executor_type
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
         self._user_arguments = user_arguments
+
+    @property
+    def executor_type(self) -> JobExecutorType:
+        return self._executor_type
 
     @property
     def pid(self) -> int | None:
