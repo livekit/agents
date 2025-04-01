@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from google import genai
 from google.auth._default_async import default_async

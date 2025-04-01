@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Literal
-
 from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions

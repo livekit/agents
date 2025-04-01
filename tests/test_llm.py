@@ -4,7 +4,7 @@ import asyncio
 import base64
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Callable, Literal
+from typing import Annotated, Callable
 
 import pytest
 

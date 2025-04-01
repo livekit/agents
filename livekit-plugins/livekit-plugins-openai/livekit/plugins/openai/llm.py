@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from typing_extensions import Literal
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
