@@ -181,7 +181,7 @@ class SpeechStream(stt.SpeechStream):
                 "show_speaker_label": self._opts.show_speaker_label,
                 "enable_channel_identification": self._opts.enable_channel_identification,
                 "number_of_channels": self._opts.number_of_channels,
-                "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,
+                "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,  # noqa: E501
                 "partial_results_stability": self._opts.partial_results_stability,
                 "language_model_name": self._opts.language_model_name,
             }
