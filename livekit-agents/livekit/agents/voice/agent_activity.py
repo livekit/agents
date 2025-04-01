@@ -615,6 +615,10 @@ class AgentActivity(RecognitionHooks):
             # ignore vad inference done event if turn_detection is not set to vad or default
             return
 
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
+            # ignore if turn_detection is enabled on the realtime model
+            return
+
         if ev.speech_duration > self._session.options.min_interruption_duration:
             if (
                 self._current_speech is not None
