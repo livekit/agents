@@ -1,5 +1,13 @@
 # livekit-plugins-openai
 
+## 0.12.3
+
+### Patch Changes
+
+- openai: default to use_realtime=False - [#1783](https://github.com/livekit/agents/pull/1783) ([@davidzhao](https://github.com/davidzhao))
+
+- fix(openai): pass NotGiven to OpenAI when instructions are omitted - [#1834](https://github.com/livekit/agents/pull/1834) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.12.2
 
 ### Patch Changes
