@@ -7,6 +7,8 @@ from pydantic import BaseModel
 
 class Error(BaseModel):
     error: str
+    retryable: bool
+    attempts_remaining: int
 
 
 class LLMMetrics(BaseModel):

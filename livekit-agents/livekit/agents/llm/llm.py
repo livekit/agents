@@ -4,7 +4,6 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
-from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
 
@@ -12,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
+from livekit.agents.metrics.base import Error
 
 from .. import utils
 from ..log import logger
@@ -54,18 +54,12 @@ class ChatChunk(BaseModel):
     usage: CompletionUsage | None = None
 
 
-@dataclass
-class LLMFatalErrorEvent:
-    llm: LLM
-    exception: Exception
-
-
 TEvent = TypeVar("TEvent")
 
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"], Literal["llm_fatal_error"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
@@ -135,16 +129,68 @@ class LLMStream(ABC):
             except APIError as e:
                 if self._conn_options.max_retry == 0 or not e.retryable:
                     logger.error("++++ SENDING LLM FATAL ERROR EVENT")
-                    self._llm.emit("llm_fatal_error", LLMFatalErrorEvent(self._llm, e))
+                    metrics = LLMMetrics(
+                        timestamp=time.time(),
+                        request_id="",
+                        ttft=0.0,
+                        duration=0.0,
+                        cancelled=self._task.cancelled(),
+                        label=self._llm._label,
+                        completion_tokens=0,
+                        prompt_tokens=0,
+                        total_tokens=0,
+                        tokens_per_second=0.0,
+                        error=Error(
+                            error=e.message,
+                            retryable=e.retryable,
+                            attempts_remaining=0,
+                        ),
+                    )
+                    self._llm.emit("metrics_collected", metrics)
                     raise
                 elif i == self._conn_options.max_retry:
                     logger.error("++++ SENDING LLM FATAL ERROR EVENT")
-                    self._llm.emit("llm_fatal_error", LLMFatalErrorEvent(self._llm, e))
+                    metrics = LLMMetrics(
+                        timestamp=time.time(),
+                        request_id="",
+                        ttft=0.0,
+                        duration=0.0,
+                        cancelled=self._task.cancelled(),
+                        label=self._llm._label,
+                        completion_tokens=0,
+                        prompt_tokens=0,
+                        total_tokens=0,
+                        tokens_per_second=0.0,
+                        error=Error(
+                            error=e.message,
+                            retryable=e.retryable,
+                            attempts_remaining=0,
+                        ),
+                    )
+                    self._llm.emit("llm_fatal_error", metrics)
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
 
                 else:
+                    metrics = LLMMetrics(
+                        timestamp=time.time(),
+                        request_id="",
+                        ttft=0.0,
+                        duration=0.0,
+                        cancelled=self._task.cancelled(),
+                        label=self._llm._label,
+                        completion_tokens=0,
+                        prompt_tokens=0,
+                        total_tokens=0,
+                        tokens_per_second=0.0,
+                        error=Error(
+                            error=e.message,
+                            retryable=e.retryable,
+                            attempts_remaining=self._conn_options.max_retry - i,
+                        ),
+                    )
+                    self._llm.emit("metrics_collected", metrics)
                     logger.warning(
                         f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
