@@ -45,11 +45,11 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents[codecs]>=0.12.3", "websockets==12.0"],
+    install_requires=["livekit-agents[codecs]>=0.12.10", "websockets>=12.0"],
     package_data={"livekit.plugins.resemble": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",
         "Source": "https://github.com/livekit/agents",
     },
-) 
+)
