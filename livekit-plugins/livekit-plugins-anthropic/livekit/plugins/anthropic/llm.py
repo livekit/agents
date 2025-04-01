@@ -57,19 +57,13 @@ CACHE_CONTROL_EPHEMERAL = anthropic.types.CacheControlEphemeralParam(type="ephem
 
 
 @dataclass
-class ThinkingOptions:
-    enabled: bool = True
-    budget_tokens: int | None = 1024
-
-
-@dataclass
 class LLMOptions:
     model: str | ChatModels
     user: str | None
     temperature: float | None
     parallel_tool_calls: bool | None
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] | None
-    thinking: ThinkingOptions | None = None
+    thinking: anthropic.types.ThinkingConfigEnabledParam | None = None
     caching: Literal["ephemeral"] | None = None
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
