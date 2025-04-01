@@ -1,3 +1,3 @@
 import logging
 
-logger = logging.getLogger("livekit.plugins.resemble") 
+logger = logging.getLogger("livekit.plugins.resemble")

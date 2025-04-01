@@ -195,7 +195,9 @@ class ChunkedStream(tts.ChunkedStream):
             voice=self._opts.voice,
             response_format="opus",
             speed=self._opts.speed,
-            instructions=self._opts.instructions if self._opts.instructions else openai.NOT_GIVEN,
+            instructions=self._opts.instructions
+            if self._opts.instructions
+            else openai.NOT_GIVEN,
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
