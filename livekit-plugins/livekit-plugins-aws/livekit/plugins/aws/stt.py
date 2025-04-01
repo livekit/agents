@@ -104,7 +104,6 @@ class STT(stt.STT):
             partial_results_stability=partial_results_stability,
             language_model_name=language_model_name,
         )
-        self._client_cm = None
         self._pool = utils.ConnectionPool[TranscribeStreamingClient](
             connect_cb=self._create_client,
             max_session_duration=refresh_interval
