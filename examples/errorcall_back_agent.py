@@ -5,8 +5,8 @@ import os
 from dotenv import load_dotenv
 
 from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.agents.voice import Agent, AgentSession, MetricsCollectedEvent
 from livekit.agents.metrics import LLMMetrics
+from livekit.agents.voice import Agent, AgentSession, MetricsCollectedEvent
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
@@ -30,13 +30,17 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
-
     )
+
+    close_task = None
 
     @session.on("metrics_collected")
     def on_metrics_collected(ev: MetricsCollectedEvent):
+        nonlocal close_task
         if isinstance(ev.metrics, LLMMetrics) and ev.metrics.error:
-            if ev.metrics.error and not ev.metrics.error.retryable:
+            if ev.metrics.error and not (
+                ev.metrics.error.retryable or ev.metrics.error.attempts_remaining == 0
+            ):
                 logger.info("Ran into an unrecoverable LLM error, ending session.")
                 # do something with the error
                 close_task = asyncio.create_task(session.aclose())

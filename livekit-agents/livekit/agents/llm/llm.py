@@ -127,68 +127,44 @@ class LLMStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                error_metrics = LLMMetrics(
+                    timestamp=time.time(),
+                    request_id="",
+                    ttft=0.0,
+                    duration=0.0,
+                    cancelled=self._task.cancelled(),
+                    label=self._llm._label,
+                    completion_tokens=0,
+                    prompt_tokens=0,
+                    total_tokens=0,
+                    tokens_per_second=0.0,
+                )
                 if self._conn_options.max_retry == 0 or not e.retryable:
-                    metrics = LLMMetrics(
-                        timestamp=time.time(),
-                        request_id="",
-                        ttft=0.0,
-                        duration=0.0,
-                        cancelled=self._task.cancelled(),
-                        label=self._llm._label,
-                        completion_tokens=0,
-                        prompt_tokens=0,
-                        total_tokens=0,
-                        tokens_per_second=0.0,
-                        error=Error(
-                            error=e.message,
-                            retryable=False,
-                            attempts_remaining=0,
-                        ),
+                    error_metrics.error = Error(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=0,
                     )
-                    self._llm.emit("metrics_collected", metrics)
+                    self._llm.emit("metrics_collected", error_metrics)
                     raise
                 elif i == self._conn_options.max_retry:
-                    metrics = LLMMetrics(
-                        timestamp=time.time(),
-                        request_id="",
-                        ttft=0.0,
-                        duration=0.0,
-                        cancelled=self._task.cancelled(),
-                        label=self._llm._label,
-                        completion_tokens=0,
-                        prompt_tokens=0,
-                        total_tokens=0,
-                        tokens_per_second=0.0,
-                        error=Error(
-                            error=e.message,
-                            retryable=False,
-                            attempts_remaining=0,
-                        ),
+                    error_metrics.error = Error(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=0,
                     )
-                    self._llm.emit("metrics_collected", metrics)
+                    self._llm.emit("metrics_collected", error_metrics)
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
 
                 else:
-                    metrics = LLMMetrics(
-                        timestamp=time.time(),
-                        request_id="",
-                        ttft=0.0,
-                        duration=0.0,
-                        cancelled=self._task.cancelled(),
-                        label=self._llm._label,
-                        completion_tokens=0,
-                        prompt_tokens=0,
-                        total_tokens=0,
-                        tokens_per_second=0.0,
-                        error=Error(
-                            error=e.message,
-                            retryable=True,
-                            attempts_remaining=self._conn_options.max_retry - i,
-                        ),
+                    error_metrics.error = Error(
+                        error=e.message,
+                        retryable=True,
+                        attempts_remaining=self._conn_options.max_retry - i,
                     )
-                    self._llm.emit("metrics_collected", metrics)
+                    self._llm.emit("metrics_collected", error_metrics)
                     logger.warning(
                         f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
@@ -197,8 +173,6 @@ class LLMStream(ABC):
                             "attempt": i + 1,
                         },
                     )
-
-                await asyncio.sleep(self._conn_options.retry_interval)
 
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
