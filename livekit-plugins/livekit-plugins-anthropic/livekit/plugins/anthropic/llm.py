@@ -80,7 +80,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
-        thinking: ThinkingOptions | None = None,
+        thinking: anthropic.types.ThinkingConfigEnabledParam | None = None,
         caching: Literal["ephemeral"] | None = None,
     ) -> None:
         """
