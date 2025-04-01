@@ -127,9 +127,7 @@ class BaseAgent(Agent):
             content=f"You are {agent_name} agent. Current user data is {userdata.summarize()}",
         )
         await self.update_chat_ctx(chat_ctx)
-        speech_handle = self.session.generate_reply(tool_choice="none")
-        # reset tool choice for realtime model
-        speech_handle.add_done_callback(lambda _: self.session.update_options(tool_choice="auto"))
+        self.session.generate_reply(tool_choice="none")
 
     async def _transfer_to_agent(self, name: str, context: RunContext_T) -> tuple[Agent, str]:
         userdata = context.userdata
