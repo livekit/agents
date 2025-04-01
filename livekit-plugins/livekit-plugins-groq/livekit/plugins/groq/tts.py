@@ -57,7 +57,7 @@ class TTS(tts.TTS):
         *,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         model: TTSModels | str = "playai-tts",
-        voice: TTSVoices | str = "Eileen-PlayAI",
+        voice: TTSVoices | str = "Arista-PlayAI",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:

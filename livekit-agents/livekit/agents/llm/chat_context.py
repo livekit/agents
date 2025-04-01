@@ -110,6 +110,18 @@ class ChatMessage(BaseModel):
     interrupted: bool = False
     hash: bytes | None = None
 
+    @property
+    def text_content(self) -> str | None:
+        """
+        Returns a string of all text content in the message.
+
+        Multiple text content items will be joined by a newline.
+        """
+        text_parts = [c for c in self.content if isinstance(c, str)]
+        if not text_parts:
+            return None
+        return "\n".join(text_parts)
+
 
 ChatContent: TypeAlias = Union[ImageContent, AudioContent, str]
 
@@ -172,6 +184,9 @@ class ChatContext:
 
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
+
+    def index_by_id(self, item_id: str) -> int | None:
+        return next((i for i, item in enumerate(self.items) if item.id == item_id), None)
 
     def copy(
         self,

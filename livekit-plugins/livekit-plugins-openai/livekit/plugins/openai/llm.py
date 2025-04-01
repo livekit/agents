@@ -41,7 +41,6 @@ from .models import (
     CerebrasChatModels,
     ChatModels,
     DeepSeekChatModels,
-    GroqChatModels,
     OctoChatModels,
     PerplexityChatModels,
     TelnyxChatModels,
@@ -260,42 +259,6 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "XAI API key is required, either as argument or set XAI_API_KEY environmental variable"  # noqa: E501
-            )
-
-        return LLM(
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            client=client,
-            user=user,
-            temperature=temperature,
-            parallel_tool_calls=parallel_tool_calls,
-            tool_choice=tool_choice,
-        )
-
-    @staticmethod
-    def with_groq(
-        *,
-        model: str | GroqChatModels = "llama3-8b-8192",
-        api_key: str | None = None,
-        base_url: str = "https://api.groq.com/openai/v1",
-        client: openai.AsyncClient | None = None,
-        user: NotGivenOr[str] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
-    ) -> LLM:
-        """
-        Create a new instance of Groq LLM.
-
-        ``api_key`` must be set to your Groq API key, either using the argument or by setting
-        the ``GROQ_API_KEY`` environmental variable.
-        """
-
-        api_key = api_key or os.environ.get("GROQ_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "Groq API key is required, either as argument or set GROQ_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(

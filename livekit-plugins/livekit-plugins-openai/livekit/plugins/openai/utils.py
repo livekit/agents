@@ -65,16 +65,30 @@ def _group_to_chat_item(items: list[llm.ChatItem], cache_key: Any) -> ChatComple
 
 def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessageParam:
     if msg.type == "message":
-        oai_content: list[ChatCompletionContentPartParam] = []
+        list_content: list[ChatCompletionContentPartParam] = []
+        text_content = ""
         for content in msg.content:
             if isinstance(content, str):
-                oai_content.append({"type": "text", "text": content})
+                if text_content:
+                    text_content += "\n"
+                text_content += content
             elif isinstance(content, llm.ImageContent):
-                oai_content.append(_to_image_content(content, cache_key))
+                list_content.append(_to_image_content(content, cache_key))
+
+        if not list_content:
+            # certain providers require text-only content in a string vs a list.
+            # for max-compatibility, we will combine all text content into a single string.
+            return {
+                "role": msg.role,  # type: ignore
+                "content": text_content,
+            }
+
+        if text_content:
+            list_content.append({"type": "text", "text": text_content})
 
         return {
             "role": msg.role,  # type: ignore
-            "content": oai_content,
+            "content": list_content,
         }
 
     elif msg.type == "function_call":
@@ -102,13 +116,21 @@ def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> ChatCompletionMessagePar
 
 def _to_image_content(image: llm.ImageContent, cache_key: Any) -> ChatCompletionContentPartParam:
     img = llm.utils.serialize_image(image)
+    if img.external_url:
+        return {
+            "type": "image_url",
+            "image_url": {
+                "url": img.external_url,
+                "detail": img.inference_detail,
+            },
+        }
     if cache_key not in image._cache:
         image._cache[cache_key] = img.data_bytes
     b64_data = base64.b64encode(image._cache[cache_key]).decode("utf-8")
     return {
         "type": "image_url",
         "image_url": {
-            "url": f"data:{img.media_type};base64,{b64_data}",
+            "url": f"data:{img.mime_type};base64,{b64_data}",
             "detail": img.inference_detail,
         },
     }

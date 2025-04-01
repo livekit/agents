@@ -228,6 +228,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         input_task = asyncio.create_task(self._tokenize_input())
 
+        if self._opts.model == "PlayDialog-turbo":
+            protocol = "http"
+        else:
+            protocol = "ws"
+
         try:
             text_stream = await self._create_text_stream()
             decoder = utils.codecs.AudioStreamDecoder(
@@ -242,7 +247,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         text_stream=text_stream,
                         options=self._config,
                         voice_engine=self._opts.model,
-                        protocol="ws",
+                        protocol=protocol,
                     ):
                         decoder.push(chunk)
                 finally:

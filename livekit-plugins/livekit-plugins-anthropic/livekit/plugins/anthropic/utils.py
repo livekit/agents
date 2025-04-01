@@ -114,6 +114,12 @@ def _to_image_content(
     cache_ctrl: anthropic.types.CacheControlEphemeralParam | None,
 ) -> anthropic.types.ImageBlockParam:
     img = llm.utils.serialize_image(image)
+    if img.external_url:
+        return {
+            "type": "image",
+            "source": {"type": "url", "url": img.external_url},
+            "cache_control": cache_ctrl,
+        }
     if cache_key not in image._cache:
         image._cache[cache_key] = img.data_bytes
     b64_data = base64.b64encode(image._cache[cache_key]).decode("utf-8")
@@ -121,8 +127,8 @@ def _to_image_content(
         "type": "image",
         "source": {
             "type": "base64",
-            "data": f"data:{img.media_type};base64,{b64_data}",
-            "media_type": img.media_type,
+            "data": f"data:{img.mime_type};base64,{b64_data}",
+            "media_type": img.mime_type,
         },
         "cache_control": cache_ctrl,
     }
