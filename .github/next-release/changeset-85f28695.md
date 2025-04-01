@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-remove instructions for update_chat_ctx and add update_options (#1841)
+realtime model: remove instructions for update_chat_ctx and reset tool_choice after generate_reply (#1841)
