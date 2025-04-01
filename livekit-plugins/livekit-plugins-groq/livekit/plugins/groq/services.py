@@ -23,7 +23,7 @@ class LLM(OpenAILLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[Union[ToolChoice, Literal["auto", "required", "none"]]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         base_url: str | None = "https://api.groq.com/openai/v1",
         client: openai.AsyncClient | None = None,
     ):

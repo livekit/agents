@@ -32,7 +32,7 @@ class LLM(llm.LLM):
         temperature: float | None = None,
         n: int | None = 1,
         parallel_tool_calls: bool | None = None,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] | None = None,
+        tool_choice: ToolChoice | None = None,
     ) -> LLMStream:
         if fnc_ctx is not None:
             logger.warning("fnc_ctx is currently not supported with llama_index.LLM")

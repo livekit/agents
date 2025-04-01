@@ -41,7 +41,7 @@ TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
 class _LLMOptions:
     model: str | TEXT_MODEL
     temperature: NotGivenOr[float]
-    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
+    tool_choice: NotGivenOr[ToolChoice]
     max_output_tokens: NotGivenOr[int]
     top_p: NotGivenOr[float]
     additional_request_fields: NotGivenOr[dict[str, Any]]
@@ -58,7 +58,7 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """
@@ -77,7 +77,7 @@ class LLM(llm.LLM):
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
-            tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
+            tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
         """  # noqa: E501
         super().__init__()
@@ -106,7 +106,7 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> LLMStream:
         opts = {}
 
