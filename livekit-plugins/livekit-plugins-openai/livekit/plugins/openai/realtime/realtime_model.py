@@ -224,6 +224,7 @@ class RealtimeSession(
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict]]()
         self._input_resampler: rtc.AudioResampler | None = None
+        self._tool_choice: llm.ToolChoice | None = None
 
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
         self._initial_session_update()
@@ -438,6 +439,10 @@ class RealtimeSession(
     def tools(self) -> llm.ToolContext:
         return self._tools.copy()
 
+    @property
+    def tool_choice(self) -> llm.ToolChoice | None:
+        return self._tool_choice
+
     def update_options(
         self,
         *,
@@ -453,6 +458,7 @@ class RealtimeSession(
                 oai_tool_choice = tool_choice["function"]
 
             kwargs["tool_choice"] = oai_tool_choice
+            self._tool_choice = tool_choice
 
         if is_given(voice):
             kwargs["voice"] = voice
