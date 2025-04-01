@@ -220,10 +220,18 @@ class AgentActivity(RecognitionHooks):
         chat_ctx = chat_ctx.copy(tools=self._agent.tools)
 
         self._agent._chat_ctx = chat_ctx
-        update_instructions(chat_ctx, instructions=self._agent.instructions, add_if_missing=True)
 
         if self._rt_session is not None:
+            remove_instructions(chat_ctx)
             await self._rt_session.update_chat_ctx(chat_ctx)
+        else:
+            update_instructions(
+                chat_ctx, instructions=self._agent.instructions, add_if_missing=True
+            )
+
+    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN) -> None:
+        if self._rt_session is not None:
+            self._rt_session.update_options(tool_choice=tool_choice)
 
     def _create_speech_task(
         self,

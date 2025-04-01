@@ -288,8 +288,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
         return super().emit(event, ev)
 
-    def update_options(self) -> None:
-        pass
+    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN) -> None:
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        if self._activity.draining:
+            if self._next_activity is None:
+                raise RuntimeError("AgentSession is closing, cannot use update_options()")
+            self._next_activity.update_options(tool_choice=tool_choice)
+        else:
+            self._activity.update_options(tool_choice=tool_choice)
 
     def say(
         self,
