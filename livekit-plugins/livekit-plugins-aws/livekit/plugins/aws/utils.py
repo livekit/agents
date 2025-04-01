@@ -1,68 +1,48 @@
 from __future__ import annotations
 
 import json
-import logging
-import os
 from typing import Any
 
 import aioboto3
+import boto3
+import botocore
 from botocore.exceptions import NoCredentialsError
 
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
-from livekit.agents.types import NotGivenOr
-from livekit.agents.utils import is_given
 
-__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session"]
-
-DEFAULT_REGION = "us-east-1"
+__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session", "get_aws_credentials"]
 
 
-def get_aws_async_session(
+async def get_aws_async_session(
+    region: str,
     api_key: str | None = None,
     api_secret: str | None = None,
-    region: str | None = None,
 ) -> aioboto3.Session:
-    """Get an AWS session with the given credentials and region.
-
-    Args:
-        api_key: AWS access key id.
-        api_secret: AWS secret access key.
-        region: AWS region.
-
-    Returns:
-        An AWS session.
-
-    Raises:
-        NoCredentialsError: If no valid credentials are found.
-    """
-    # Validate AWS region first
-    region = region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-
-    if not region:
-        raise ValueError(
-            "AWS region must be set using the argument or by setting the AWS_REGION environment variable."
-        )
-
-    session_params = {"region_name": region}
-    if api_key and api_secret:
-        session_params.update(
-            {
-                "aws_access_key_id": api_key,
-                "aws_secret_access_key": api_secret,
-            }
-        )
-
-    session = aioboto3.Session(**session_params)
-
-    # Validate session by checking if we can get credentials
     try:
-        session.get_credentials()
-    except NoCredentialsError as e:
-        logging.error("Unable to locate AWS credentials")
-        raise e
+        session = aioboto3.Session(
+            aws_access_key_id=api_key,
+            aws_secret_access_key=api_secret,
+            region_name=region,
+        )
+        await session.get_credentials()
+    except (NoCredentialsError, Exception) as e:
+        raise ValueError(f"Unable to locate AWS credentials {str(e)}") from e
 
     return session
+
+
+def get_aws_credentials(
+    api_key: str | None = None,
+    api_secret: str | None = None,
+) -> botocore.credentials.Credentials:
+    try:
+        session = boto3.Session(aws_access_key_id=api_key, aws_secret_access_key=api_secret)
+        creds = session.get_credentials()
+    except (NoCredentialsError, Exception) as e:
+        raise ValueError("Unable to locate valid AWS credentials") from e
+
+    return creds
 
 
 def to_fnc_ctx(fncs: list[FunctionTool]) -> list[dict]:
