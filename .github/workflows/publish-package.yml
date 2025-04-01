@@ -46,7 +46,7 @@ jobs:
         id: release_mode
         run: |
           set +e
-          pnpm changeset pre ${{ github.ref == 'refs/heads/main' && 'exit' || 'enter dev' }}
+          pnpm changeset pre ${{ github.ref == 'refs/heads/0.x' && 'exit' || 'enter dev' }}
           echo "exitcode=$?" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -57,7 +57,7 @@ jobs:
         with:
           add: '[".changeset"]'
           default_author: github_actions
-          message: ${{ github.ref == 'refs/heads/main' && 'Exit' || 'Enter dev' }} pre release mode
+          message: ${{ github.ref == 'refs/heads/0.x' && 'Exit' || 'Enter dev' }} pre release mode
 
       - name: Create Release Pull Request
         id: changesets
