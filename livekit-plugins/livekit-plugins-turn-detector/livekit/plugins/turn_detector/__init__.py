@@ -29,9 +29,10 @@ class EOUPlugin(Plugin):
     def download_files(self) -> None:
         from transformers import AutoTokenizer
 
-        from .eou import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, _download_from_hf_hub
+        from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME
+        from .eou import _download_from_hf_hub
 
-        for model_type, revision in MODEL_REVISIONS.items():
+        for revision in MODEL_REVISIONS.values():
             AutoTokenizer.from_pretrained(HG_MODEL, revision=revision)
             _download_from_hf_hub(
                 HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=revision

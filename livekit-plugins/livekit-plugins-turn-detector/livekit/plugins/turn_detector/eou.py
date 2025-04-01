@@ -9,11 +9,9 @@ from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_current_job_context
 
+from .models import EOUModelType, HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME
 from .log import logger
 
-HG_MODEL = "livekit/turn-detector"
-ONNX_FILENAME = "model_q8.onnx"
-MODEL_REVISIONS = {"en": "v1.2.2-en", "multilingual": "v0.1.0-intl"}
 MAX_HISTORY_TOKENS = 512
 MAX_HISTORY_TURNS = 6
 
@@ -136,7 +134,7 @@ class _EUORunnerMultilingual(_EUORunnerBase):
 class EOUModel:
     def __init__(
         self,
-        model_type: str = "en",  # default to smaller, english-only model
+        model_type: EOUModelType = "en",  # default to smaller, english-only model
         inference_executor: InferenceExecutor | None = None,
     ) -> None:
         self._model_type = model_type
