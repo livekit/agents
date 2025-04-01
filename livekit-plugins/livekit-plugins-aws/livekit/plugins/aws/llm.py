@@ -118,6 +118,11 @@ class LLM(llm.LLM):
         )
 
     async def _create_client(self) -> aioboto3.Session.client:
+        # Exit any existing client context manager
+        if self._client_cm:
+            await self._client_cm.__aexit__(None, None, None)
+            self._client_cm = None
+
         session = self._session or await get_aws_async_session(
             region=self._region,
             api_key=self._creds.access_key,
