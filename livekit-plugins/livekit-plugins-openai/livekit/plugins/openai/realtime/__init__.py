@@ -11,6 +11,8 @@ from .realtime_model import (
     RealtimeSession,
     RealtimeSessionOptions,
     RealtimeToolCall,
+    SemanticVadEagerness,
+    SemanticVadOptions,
     ServerVadOptions,
 )
 
@@ -30,4 +32,6 @@ __all__ = [
     "api_proto",
     "DEFAULT_INPUT_AUDIO_TRANSCRIPTION",
     "DEFAULT_SERVER_VAD_OPTIONS",
+    "SemanticVadEagerness",
+    "SemanticVadOptions",
 ]

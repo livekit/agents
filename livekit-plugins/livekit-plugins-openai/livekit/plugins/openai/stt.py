@@ -80,7 +80,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         api_key: str | None = None,
         client: openai.AsyncClient | None = None,
-        use_realtime: bool = True,
+        use_realtime: bool = False,
     ):
         """
         Create a new instance of OpenAI STT.
@@ -97,6 +97,7 @@ class STT(stt.STT):
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
+            use_realtime: Whether to use the realtime transcription API. (default: False)
         """
 
         super().__init__(
@@ -224,16 +225,19 @@ class STT(stt.STT):
                 "input_audio_transcription": {
                     "model": self._opts.model,
                     "prompt": self._opts.prompt or "",
-                    "language": self._opts.language or "",
                 },
                 "turn_detection": self._opts.turn_detection,
             },
         }
+        if self._opts.language:
+            realtime_config["session"]["input_audio_transcription"]["language"] = (
+                self._opts.language
+            )
 
         if self._opts.noise_reduction_type:
-            realtime_config["session"]["input_audio_transcription"][
-                "noise_reduction_type"
-            ] = self._opts.noise_reduction_type
+            realtime_config["session"]["input_audio_noise_reduction"] = {
+                "type": self._opts.noise_reduction_type
+            }
 
         query_params: dict[str, str] = {
             "intent": "transcription",
