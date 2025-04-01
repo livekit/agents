@@ -16,17 +16,13 @@ import asyncio
 from dataclasses import dataclass
 from typing import Optional
 
+from amazon_transcribe.auth import StaticCredentialResolver
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.model import Result, TranscriptEvent
 from livekit import rtc
-from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
-    stt,
-    utils,
-)
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
 
-from ._utils import _get_aws_credentials
+from ._utils import _get_aws_async_session
 from .log import logger
 
 
@@ -73,9 +69,12 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(streaming=True, interim_results=True)
         )
 
-        self._api_key, self._api_secret = _get_aws_credentials(
-            api_key, api_secret, speech_region
+        self._session = _get_aws_async_session(
+            api_key=api_key,
+            api_secret=api_secret,
+            region=speech_region,
         )
+
         self._config = STTOptions(
             speech_region=speech_region,
             language=language,
@@ -116,6 +115,19 @@ class STT(stt.STT):
             opts=self._config,
         )
 
+    async def _get_client(self) -> TranscribeStreamingClient:
+        """Get a new TranscribeStreamingClient instance."""
+        credentials = await self._session.get_credentials()
+        frozen_credentials = await credentials.get_frozen_credentials()
+        self.cred_resolver = StaticCredentialResolver(
+            access_key_id=frozen_credentials.access_key,
+            secret_access_key=frozen_credentials.secret_key,
+            session_token=frozen_credentials.token,
+        )
+        return TranscribeStreamingClient(
+            region=self._config.speech_region, credential_resolver=self.cred_resolver
+        )
+
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
@@ -128,10 +140,22 @@ class SpeechStream(stt.SpeechStream):
             stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate
         )
         self._opts = opts
-        self._client = TranscribeStreamingClient(region=self._opts.speech_region)
+        self._stt = stt
+        self._client = None
+        self._last_credential_time = 0
+
+    async def _initialize_client(self):
+        # Check if we need to refresh credentials (every 10 minutes or if client is None)
+        current_time = asyncio.get_event_loop().time()
+        if self._client is None or (current_time - self._last_credential_time > 600):
+            self._client = await self._stt._get_client()
+            self._last_credential_time = current_time
+        return self._client
 
     async def _run(self) -> None:
-        stream = await self._client.start_stream_transcription(
+        client = await self._initialize_client()
+
+        stream = await client.start_stream_transcription(
             language_code=self._opts.language,
             media_sample_rate_hz=self._opts.sample_rate,
             media_encoding=self._opts.encoding,
