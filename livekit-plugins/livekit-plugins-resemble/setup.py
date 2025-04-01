@@ -52,4 +52,4 @@ setuptools.setup(
         "Website": "https://livekit.io/",
         "Source": "https://github.com/livekit/agents",
     },
-) 
+)
