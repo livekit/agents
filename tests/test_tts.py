@@ -21,6 +21,7 @@ from livekit.plugins import (
     neuphonic,
     openai,
     playai,
+    resemble,
     rime,
 )
 
@@ -55,6 +56,7 @@ SYNTHESIZE_TTS: list[Callable[[], tts.TTS]] = [
     pytest.param(lambda: playai.TTS(), id="playai"),
     pytest.param(lambda: rime.TTS(), id="rime"),
     pytest.param(lambda: neuphonic.TTS(), id="neuphonic"),
+    pytest.param(lambda: resemble.TTS(), id="resemble"),
 ]
 
 
@@ -99,6 +101,7 @@ STREAM_TTS: list[Callable[[], tts.TTS]] = [
         id="aws.stream",
     ),
     pytest.param(lambda: neuphonic.TTS(), id="neuphonic"),
+    pytest.param(lambda: resemble.TTS(), id="resemble"),
 ]
 
 

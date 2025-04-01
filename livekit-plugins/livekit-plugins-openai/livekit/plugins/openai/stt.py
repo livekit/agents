@@ -101,7 +101,7 @@ class STT(stt.STT):
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
             use_realtime: Whether to use the realtime transcription API. (default: False)
-        """ # noqa: E501
+        """  # noqa: E501
 
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=use_realtime, interim_results=use_realtime)
