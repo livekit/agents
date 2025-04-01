@@ -28,7 +28,6 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .utils import get_aws_async_session, validate_aws_credentials
 
-DEFAULT_REGION = "us-east-1"
 REFRESH_INTERVAL = 1800
 
 

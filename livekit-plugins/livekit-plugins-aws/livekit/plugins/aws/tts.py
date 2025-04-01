@@ -38,7 +38,6 @@ from .utils import _strip_nones, get_aws_async_session, validate_aws_credentials
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
-DEFAULT_REGION = "us-east-1"
 DEFAULT_VOICE = "Ruth"
 DEFAULT_SAMPLE_RATE = 16000
 REFRESH_INTERVAL = 1800
