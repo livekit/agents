@@ -29,7 +29,7 @@ from livekit import rtc
 
 from ..cli import cli
 from ..debug import tracing
-from ..job import JobContext, JobProcess, _JobContextVar, JobExecutorType
+from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message

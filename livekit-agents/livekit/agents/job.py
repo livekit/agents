@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import logging
 import functools
+import logging
 import multiprocessing as mp
 from collections.abc import Coroutine
 from dataclasses import dataclass
