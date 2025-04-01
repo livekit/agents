@@ -27,7 +27,7 @@ async def get_aws_async_session(
         )
         await session.get_credentials()
     except (NoCredentialsError, Exception) as e:
-        raise ValueError(f"Unable to locate AWS credentials {str(e)}") from e
+        raise ValueError(f"Unable to locate AWS credentials: {str(e)}") from e
 
     return session
 
@@ -40,7 +40,7 @@ def get_aws_credentials(
         session = boto3.Session(aws_access_key_id=api_key, aws_secret_access_key=api_secret)
         creds = session.get_credentials()
     except (NoCredentialsError, Exception) as e:
-        raise ValueError("Unable to locate valid AWS credentials") from e
+        raise ValueError(f"Unable to locate valid AWS credentials: {str(e)}") from e
 
     return creds
 
