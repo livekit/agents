@@ -174,7 +174,7 @@ class JobContext:
         return self._room.local_participant
 
     @property
-    def log_fields(self) -> dict[str, Any]:
+    def log_context_fields(self) -> dict[str, Any]:
         """
         Returns the current dictionary of log fields that will be injected into log records.
 
@@ -182,12 +182,12 @@ class JobContext:
         worker ID, trace IDs, or other diagnostic context.
 
         The returned dictionary can be directly edited, or entirely replaced via assignment
-        (e.g., `job_context.log_fields = {...}`)
+        (e.g., `job_context.log_context_fields = {...}`)
         """
         return self._log_fields
 
-    @log_fields.setter
-    def log_fields(self, fields: dict[str, Any]) -> None:
+    @log_context_fields.setter
+    def log_context_fields(self, fields: dict[str, Any]) -> None:
         """
         Sets the log fields to be injected into future log records.
 

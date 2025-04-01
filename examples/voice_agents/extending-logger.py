@@ -1,4 +1,3 @@
-
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
@@ -9,7 +8,7 @@ load_dotenv()
 
 async def entrypoint(ctx: JobContext):
     user_id = "fake_user_id"
-    ctx.log_fields = {"user_id": user_id}
+    ctx.log_context_fields = {"user_id": user_id}
 
     await ctx.connect()
 
