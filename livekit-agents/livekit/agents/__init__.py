@@ -30,7 +30,7 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.tool_context import function_tool
+from .llm.tool_context import FunctionTool, function_tool
 from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -41,7 +41,7 @@ from .types import (
     NotGivenOr,
 )
 from .version import __version__
-from .voice import Agent, AgentEvent, AgentSession, RunContext, io
+from .voice import Agent, AgentEvent, AgentSession, ModelSettings, RunContext, io
 from .voice.background_audio import BackgroundAudio
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
@@ -59,6 +59,7 @@ __all__ = [
     "JobExecutorType",
     "AutoSubscribe",
     "AgentState",
+    "FunctionTool",
     "function_tool",
     "ChatContext",
     "ChatItem",
@@ -75,6 +76,7 @@ __all__ = [
     "Plugin",
     "AgentSession",
     "AgentEvent",
+    "ModelSettings",
     "Agent",
     "cli",
     "AssignmentTimeoutError",

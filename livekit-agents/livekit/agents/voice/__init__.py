@@ -1,4 +1,4 @@
-from .agent import Agent, InlineTask
+from .agent import Agent, InlineTask, ModelSettings
 from .agent_session import AgentSession
 from .chat_cli import ChatCLI
 from .events import (
@@ -18,6 +18,7 @@ __all__ = [
     "ChatCLI",
     "AgentSession",
     "Agent",
+    "ModelSettings",
     "InlineTask",
     "SpeechHandle",
     "RunContext",

@@ -102,7 +102,6 @@ class JobContext:
         self._on_shutdown = on_shutdown
         self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
         self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
-        self._log_record_callbacks: list[Callable[[logging.LogRecord], None]] = []
         self._participant_entrypoints: list[
             tuple[
                 Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
@@ -114,6 +113,7 @@ class JobContext:
         self._inf_executor = inference_executor
 
         self._init_log_factory()
+        self._log_fields = {}
 
     def _init_log_factory(self) -> None:
         old_factory = logging.getLogRecordFactory()
@@ -130,11 +130,8 @@ class JobContext:
                     if ctx != self:
                         return record
 
-            for callback in self._log_record_callbacks:
-                try:
-                    callback(record)
-                except Exception as e:
-                    print(e)  # use print, not logger
+            for key, value in self._log_fields.items():
+                setattr(record, key, value)
 
             return record
 
@@ -176,14 +173,30 @@ class JobContext:
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
 
-    def add_log_record_callback(
-        self,
-        callback: Callable[[logging.LogRecord], None],
-    ) -> None:
+    @property
+    def log_fields(self) -> dict[str, Any]:
         """
-        Add a callback to be called when a log record is created.
+        Returns the current dictionary of log fields that will be injected into log records.
+
+        These fields enable enriched structured logging and can include job metadata,
+        worker ID, trace IDs, or other diagnostic context.
+
+        The returned dictionary can be directly edited, or entirely replaced via assignment
+        (e.g., `job_context.log_fields = {...}`)
         """
-        self._log_record_callbacks.append(callback)
+        return self._log_fields
+
+    @log_fields.setter
+    def log_fields(self, fields: dict[str, Any]) -> None:
+        """
+        Sets the log fields to be injected into future log records.
+
+        Args:
+            fields (dict[str, Any]): A dictionary of key-value pairs representing
+                structured data to attach to each log entry. Typically includes contextual
+                information like job ID, trace information, or worker metadata.
+        """
+        self._log_fields = fields
 
     def add_tracing_callback(
         self,

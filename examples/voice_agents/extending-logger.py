@@ -1,4 +1,3 @@
-import logging
 
 from dotenv import load_dotenv
 
@@ -10,11 +9,7 @@ load_dotenv()
 
 async def entrypoint(ctx: JobContext):
     user_id = "fake_user_id"
-
-    def inject_fields(record: logging.LogRecord):
-        record.user_id = user_id
-
-    ctx.add_log_record_callback(inject_fields)
+    ctx.log_fields = {"user_id": user_id}
 
     await ctx.connect()
 
