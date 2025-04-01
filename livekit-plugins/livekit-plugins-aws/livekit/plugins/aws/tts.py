@@ -42,7 +42,7 @@ DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
 DEFAULT_REGION = "us-east-1"
 DEFAULT_VOICE = "Ruth"
 DEFAULT_SAMPLE_RATE = 16000
-REFRESH_INTERVAL = 600
+REFRESH_INTERVAL = 1800
 
 
 @dataclass
@@ -86,7 +86,7 @@ class TTS(tts.TTS):
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
             session(aioboto3.Session, optional): Optional aioboto3 session to use.
-            refresh_interval(int, optional): Refresh interval for the AWS session. Defaults to 600 seconds.
+            refresh_interval(int, optional): Refresh interval for the AWS session. Defaults to 1800 seconds (30 minutes).
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -120,7 +120,6 @@ class TTS(tts.TTS):
             max_session_duration=refresh_interval
             if is_given(refresh_interval)
             else REFRESH_INTERVAL,
-            mark_refreshed_on_get=True,
         )
 
     async def _create_client(self) -> aioboto3.Session.client:

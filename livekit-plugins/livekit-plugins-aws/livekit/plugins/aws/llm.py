@@ -34,7 +34,7 @@ from .log import logger
 from .utils import get_aws_async_session, get_aws_credentials, to_chat_ctx, to_fnc_ctx
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
-REFRESH_INTERVAL = 600
+REFRESH_INTERVAL = 1800
 DEFAULT_REGION = "us-east-1"
 
 
@@ -83,7 +83,7 @@ class LLM(llm.LLM):
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
             session (aioboto3.Session, optional): Optional aioboto3 session to use.
-            refresh_interval (int, optional): Refresh interval for the AWS session. Defaults to 600 seconds.
+            refresh_interval (int, optional): Refresh interval for the AWS session. Defaults to 1800 seconds (30 minutes).
         """  # noqa: E501
         super().__init__()
         self._session = session
@@ -115,7 +115,6 @@ class LLM(llm.LLM):
             max_session_duration=refresh_interval
             if is_given(refresh_interval)
             else REFRESH_INTERVAL,
-            mark_refreshed_on_get=True,
         )
 
     async def _create_client(self) -> aioboto3.Session.client:
