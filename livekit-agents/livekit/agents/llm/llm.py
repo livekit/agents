@@ -128,7 +128,6 @@ class LLMStream(ABC):
                 return await self._run()
             except APIError as e:
                 if self._conn_options.max_retry == 0 or not e.retryable:
-                    logger.error("++++ SENDING LLM FATAL ERROR EVENT")
                     metrics = LLMMetrics(
                         timestamp=time.time(),
                         request_id="",
@@ -142,14 +141,13 @@ class LLMStream(ABC):
                         tokens_per_second=0.0,
                         error=Error(
                             error=e.message,
-                            retryable=e.retryable,
+                            retryable=False,
                             attempts_remaining=0,
                         ),
                     )
                     self._llm.emit("metrics_collected", metrics)
                     raise
                 elif i == self._conn_options.max_retry:
-                    logger.error("++++ SENDING LLM FATAL ERROR EVENT")
                     metrics = LLMMetrics(
                         timestamp=time.time(),
                         request_id="",
@@ -163,11 +161,11 @@ class LLMStream(ABC):
                         tokens_per_second=0.0,
                         error=Error(
                             error=e.message,
-                            retryable=e.retryable,
+                            retryable=False,
                             attempts_remaining=0,
                         ),
                     )
-                    self._llm.emit("llm_fatal_error", metrics)
+                    self._llm.emit("metrics_collected", metrics)
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
@@ -186,7 +184,7 @@ class LLMStream(ABC):
                         tokens_per_second=0.0,
                         error=Error(
                             error=e.message,
-                            retryable=e.retryable,
+                            retryable=True,
                             attempts_remaining=self._conn_options.max_retry - i,
                         ),
                     )

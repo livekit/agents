@@ -4,8 +4,7 @@ import asyncio
 import copy
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Callable, Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -13,7 +12,6 @@ from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..llm import ChatContext
 from ..log import logger
-from ..metrics import LLMFatalErrorMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
@@ -56,28 +54,6 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 """
 
 
-@dataclass
-class UnrecoverableErrorInfo:
-    """Information about an unrecoverable error that occurred in a component."""
-
-    component: str
-    component_instance: Any
-    error: Exception
-
-    @property
-    def message(self) -> str:
-        """Human-readable error message."""
-        return str(self.error)
-
-
-class ErrorCallbackResult(Enum):
-    END_SESSION = "end_session"
-    CONTINUE = "continue"
-
-
-UnrecoverableErrorCallback = Callable[[UnrecoverableErrorInfo], ErrorCallbackResult]
-
-
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
@@ -88,7 +64,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
-        unrecoverable_error_callback: NotGivenOr[UnrecoverableErrorCallback] = NOT_GIVEN,
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
@@ -115,11 +90,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
 
-        # Store the error callback
-        self._error_callback = (
-            unrecoverable_error_callback if is_given(unrecoverable_error_callback) else None
-        )
-
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
         self._output = io.AgentOutput(
@@ -142,8 +112,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_state: AgentState | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
-
-        self._setup_error_handlers()
 
     @property
     def userdata(self) -> Userdata_T:
@@ -455,75 +423,3 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         pass
 
     # ---
-
-    def set_unrecoverable_error_callback(self, callback: UnrecoverableErrorCallback) -> None:
-        """Set a callback to be called when an unrecoverable error occurs.
-
-        The callback will receive detailed information about the error and can return
-        'end_session' to terminate the session or 'continue' to try to continue despite the error.
-
-        Args:
-            callback: The callback function to call when an unrecoverable error occurs
-        """
-        self._error_callback = callback
-
-    def _setup_error_handlers(self) -> None:
-        """Set up error handlers for components."""
-
-        if self._llm is not None:
-
-            @self._llm.on("llm_fatal_error")
-            def _on_llm_fatal_error(event: llm.LLMFatalErrorEvent):
-                logger.error("++++ RECEIVED LLM FATAL ERROR EVENT")
-                self._handle_component_error(
-                    component="llm",
-                    component_instance=event.llm,
-                    error=event.exception,
-                )
-
-        if self._stt is not None:
-            # TODO(shubhra) handle sst error callback
-            pass
-        if self._tts is not None:
-            # TODO(shubhra) handle sst error callback
-            pass
-
-    def _handle_component_error(
-        self,
-        component: str,
-        component_instance: Any,
-        error: Exception,
-    ) -> None:
-        error_info = UnrecoverableErrorInfo(
-            component=component,
-            component_instance=component_instance,
-            error=error,
-        )
-        self._emit_error_metrics(component, error)
-
-        if self._error_callback is not None:
-            try:
-                result = self._error_callback(error_info)
-                if result == ErrorCallbackResult.END_SESSION:
-                    logger.info(f"Ending session due to unrecoverable error in {component}")
-                    asyncio.create_task(self.aclose())
-                elif result == ErrorCallbackResult.CONTINUE:
-                    logger.info(f"Continuing session despite unrecoverable error in {component}")
-                else:
-                    logger.warning(f"Unknown error callback result: {result}")
-                    asyncio.create_task(self.aclose())
-            except Exception as e:
-                logger.exception(f"Error in unrecoverable error callback: {e}")
-                # If the callback raises an exception, end the session as a precaution
-                asyncio.create_task(self.aclose())
-
-    def _emit_error_metrics(self, component: str, error: Exception) -> None:
-        """Emit metrics about an error that occurred."""
-        if component == "llm":
-            # Emit LLM error metrics
-            metrics = LLMFatalErrorMetrics(
-                error=str(error)  # TODO(shubhra) add error reason, code, message
-            )
-            self.emit("metrics_collected", metrics)
-        else:
-            pass

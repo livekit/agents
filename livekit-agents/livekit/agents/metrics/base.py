@@ -78,11 +78,6 @@ class EOUMetrics(BaseModel):
     error: Error | None = None
 
 
-class LLMFatalErrorMetrics(BaseModel):
-    type: Literal["llm_fatal_error"] = "llm_fatal_error"
-    error: str
-
-
 AgentMetrics = Union[
     STTMetrics,
     LLMMetrics,
