@@ -1095,20 +1095,26 @@ class AgentActivity(RecognitionHooks):
             await self._rt_session.update_chat_ctx(chat_ctx)
             self._session._conversation_item_added(msg)
 
+        last_tool_choice = self._rt_session.tool_choice
         self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
-        generation_ev = await self._rt_session.generate_reply(
-            instructions=instructions or NOT_GIVEN
-        )
+        try:
+            generation_ev = await self._rt_session.generate_reply(
+                instructions=instructions or NOT_GIVEN
+            )
 
-        await self._realtime_generation_task(
-            speech_handle=speech_handle,
-            generation_ev=generation_ev,
-            model_settings=model_settings,
-        )
-
-        # TODO(theomonnom): reset tool_choice value (not needed for now, because it isn't exposed to the user)  # noqa: E501
-        # tool_choice is currently only set to None when draining
+            await self._realtime_generation_task(
+                speech_handle=speech_handle,
+                generation_ev=generation_ev,
+                model_settings=model_settings,
+            )
+        finally:
+            # reset tool_choice value
+            if (
+                utils.is_given(model_settings.tool_choice)
+                and model_settings.tool_choice != last_tool_choice
+            ):
+                self._rt_session.update_options(tool_choice=last_tool_choice)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
