@@ -129,8 +129,7 @@ class StoryAgent(Agent):
         )
 
         job_ctx = get_current_job_context()
-        lkapi = job_ctx.api
-        await lkapi.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
+        await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
 
 
 def prewarm(proc: JobProcess):
