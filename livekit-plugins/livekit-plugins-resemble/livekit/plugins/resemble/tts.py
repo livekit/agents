@@ -194,7 +194,6 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize text into speech in one go using Resemble AI's REST API."""
 
-
     def __init__(
         self,
         *,
@@ -211,14 +210,12 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self) -> None:
         request_id = utils.shortuuid()
 
-
         # Create request headers
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",  # Expect JSON response
         }
-
 
         # Create request payload
         payload = {
@@ -233,11 +230,8 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=NUM_CHANNELS,
         )
 
-
         try:
             async with self._session.post(
-                RESEMBLE_REST_API_URL,
-                headers=headers,
                 RESEMBLE_REST_API_URL,
                 headers=headers,
                 json=payload,
@@ -248,7 +242,6 @@ class ChunkedStream(tts.ChunkedStream):
             ) as response:
                 response.raise_for_status()
                 response_json = await response.json()
-
 
                 # Check for success
                 if not response_json.get("success", False):
@@ -261,7 +254,6 @@ class ChunkedStream(tts.ChunkedStream):
                         body=json.dumps(response_json),
                     )
 
-
                 # Extract base64-encoded audio content
                 audio_content_b64 = response_json.get("audio_content")
                 if not audio_content_b64:
@@ -271,7 +263,6 @@ class ChunkedStream(tts.ChunkedStream):
                         request_id=request_id,
                         body=json.dumps(response_json),
                     )
-
 
                 # Decode base64 to get raw audio bytes
                 audio_bytes = base64.b64decode(audio_content_b64)
@@ -285,7 +276,6 @@ class ChunkedStream(tts.ChunkedStream):
                 async for frame in decoder:
                     emitter.push(frame)
                 emitter.flush()
-
 
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
