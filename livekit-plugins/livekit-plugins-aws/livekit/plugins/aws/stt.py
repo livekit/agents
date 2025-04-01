@@ -75,11 +75,10 @@ class STT(stt.STT):
     ):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
         self._session = session
+        self._api_key = api_key if is_given(api_key) else None
+        self._api_secret = api_secret if is_given(api_secret) else None
+        self._region = region if is_given(region) else None
         if not self._session:
-            self._api_key = api_key if is_given(api_key) else None
-            self._api_secret = api_secret if is_given(api_secret) else None
-            self._region = region if is_given(region) else None
-
             validate_aws_credentials(api_key=self._api_key, api_secret=self._api_secret)
 
         self._config = STTOptions(

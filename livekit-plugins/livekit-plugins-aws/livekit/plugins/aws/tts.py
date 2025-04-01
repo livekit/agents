@@ -95,11 +95,11 @@ class TTS(tts.TTS):
             num_channels=TTS_NUM_CHANNELS,
         )
         self._session = session
-        if not self._session:
-            self._api_key = api_key if is_given(api_key) else None
-            self._api_secret = api_secret if is_given(api_secret) else None
-            self._region = region if is_given(region) else None
+        self._api_key = api_key if is_given(api_key) else None
+        self._api_secret = api_secret if is_given(api_secret) else None
+        self._region = region if is_given(region) else None
 
+        if not self._session:
             validate_aws_credentials(api_key=self._api_key, api_secret=self._api_secret)
         self._opts = _TTSOptions(
             voice=voice,

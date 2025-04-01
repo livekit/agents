@@ -86,11 +86,10 @@ class LLM(llm.LLM):
         """  # noqa: E501
         super().__init__()
         self._session = session
+        self._api_key = api_key if is_given(api_key) else None
+        self._api_secret = api_secret if is_given(api_secret) else None
+        self._region = region if is_given(region) else None
         if not self._session:
-            self._api_key = api_key if is_given(api_key) else None
-            self._api_secret = api_secret if is_given(api_secret) else None
-            self._region = region if is_given(region) else None
-
             validate_aws_credentials(api_key=self._api_key, api_secret=self._api_secret)
 
         model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
