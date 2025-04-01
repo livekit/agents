@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 
 import aioboto3
@@ -27,7 +26,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import get_aws_async_session, get_aws_credentials
+from .utils import get_aws_async_session, validate_aws_credentials
 
 DEFAULT_REGION = "us-east-1"
 REFRESH_INTERVAL = 1800
@@ -77,16 +76,11 @@ class STT(stt.STT):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
         self._session = session
         if not self._session:
-            self._region = (
-                region
-                if is_given(region)
-                else (
-                    os.environ.get("AWS_REGION")
-                    or os.environ.get("AWS_DEFAULT_REGION")
-                    or DEFAULT_REGION
-                )
-            )
-            self._creds = get_aws_credentials(api_key=api_key, api_secret=api_secret)
+            self._api_key = api_key if is_given(api_key) else None
+            self._api_secret = api_secret if is_given(api_secret) else None
+            self._region = region if is_given(region) else None
+
+            validate_aws_credentials(api_key=self._api_key, api_secret=self._api_secret)
 
         self._config = STTOptions(
             region=self._region,
@@ -114,8 +108,8 @@ class STT(stt.STT):
     async def _create_client(self) -> TranscribeStreamingClient:
         session = self._session or await get_aws_async_session(
             region=self._region,
-            api_key=self._creds.access_key,
-            api_secret=self._creds.secret_key,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
         )
         creds = await session.get_credentials()
         frozen_credentials = await creds.get_frozen_credentials()

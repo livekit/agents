@@ -31,11 +31,10 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import get_aws_async_session, get_aws_credentials, to_chat_ctx, to_fnc_ctx
+from .utils import get_aws_async_session, to_chat_ctx, to_fnc_ctx, validate_aws_credentials
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
 REFRESH_INTERVAL = 1800
-DEFAULT_REGION = "us-east-1"
 
 
 @dataclass
@@ -88,13 +87,11 @@ class LLM(llm.LLM):
         super().__init__()
         self._session = session
         if not self._session:
-            self._region = (
-                region
-                or os.environ.get("AWS_REGION")
-                or os.environ.get("AWS_DEFAULT_REGION")
-                or DEFAULT_REGION
-            )
-            self._creds = get_aws_credentials(api_key=api_key, api_secret=api_secret)
+            self._api_key = api_key if is_given(api_key) else None
+            self._api_secret = api_secret if is_given(api_secret) else None
+            self._region = region if is_given(region) else None
+
+            validate_aws_credentials(api_key=self._api_key, api_secret=self._api_secret)
 
         model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
         if not model:
@@ -125,8 +122,8 @@ class LLM(llm.LLM):
 
         session = self._session or await get_aws_async_session(
             region=self._region,
-            api_key=self._creds.access_key,
-            api_secret=self._creds.secret_key,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
         )
         # context manager for the client
         self._client_cm = session.client("bedrock-runtime")

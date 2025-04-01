@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 
 import aioboto3
@@ -35,7 +34,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
-from .utils import _strip_nones, get_aws_async_session, get_aws_credentials
+from .utils import _strip_nones, get_aws_async_session, validate_aws_credentials
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
@@ -97,16 +96,11 @@ class TTS(tts.TTS):
         )
         self._session = session
         if not self._session:
-            self._region = (
-                region
-                if is_given(region)
-                else (
-                    os.environ.get("AWS_REGION")
-                    or os.environ.get("AWS_DEFAULT_REGION")
-                    or DEFAULT_REGION
-                )
-            )
-            self._creds = get_aws_credentials(api_key=api_key, api_secret=api_secret)
+            self._api_key = api_key if is_given(api_key) else None
+            self._api_secret = api_secret if is_given(api_secret) else None
+            self._region = region if is_given(region) else None
+
+            validate_aws_credentials(api_key=self._api_key, api_secret=self._api_secret)
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
@@ -130,8 +124,8 @@ class TTS(tts.TTS):
 
         session = self._session or await get_aws_async_session(
             region=self._region,
-            api_key=self._creds.access_key,
-            api_secret=self._creds.secret_key,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
         )
         # context manager for the client
         self._client_cm = session.client("polly")

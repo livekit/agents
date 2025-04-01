@@ -11,11 +11,12 @@ from botocore.exceptions import NoCredentialsError
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
 
-__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session", "get_aws_credentials"]
+__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session", "validate_aws_credentials"]
+DEFAULT_REGION = "us-east-1"
 
 
 async def get_aws_async_session(
-    region: str,
+    region: str | None = None,
     api_key: str | None = None,
     api_secret: str | None = None,
 ) -> aioboto3.Session:
@@ -23,7 +24,7 @@ async def get_aws_async_session(
         session = aioboto3.Session(
             aws_access_key_id=api_key,
             aws_secret_access_key=api_secret,
-            region_name=region,
+            region_name=region or DEFAULT_REGION,
         )
         await session.get_credentials()
     except (NoCredentialsError, Exception) as e:
@@ -32,17 +33,19 @@ async def get_aws_async_session(
     return session
 
 
-def get_aws_credentials(
+def validate_aws_credentials(
     api_key: str | None = None,
     api_secret: str | None = None,
 ) -> botocore.credentials.Credentials:
     try:
         session = boto3.Session(aws_access_key_id=api_key, aws_secret_access_key=api_secret)
         creds = session.get_credentials()
+        if not creds:
+            raise ValueError("No credentials found")
+        frozen_creds = creds.get_frozen_credentials()
+        return frozen_creds
     except (NoCredentialsError, Exception) as e:
         raise ValueError(f"Unable to locate valid AWS credentials: {str(e)}") from e
-
-    return creds
 
 
 def to_fnc_ctx(fncs: list[FunctionTool]) -> list[dict]:
