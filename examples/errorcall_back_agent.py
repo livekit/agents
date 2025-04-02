@@ -1,18 +1,49 @@
 import asyncio
 import logging
-import os
 
 from dotenv import load_dotenv
 
 from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents._exceptions import APIStatusError
+from livekit.agents.llm import LLM, LLMStream
 from livekit.agents.metrics import LLMMetrics
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.voice import Agent, AgentSession, MetricsCollectedEvent
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import cartesia, deepgram, silero
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
+
+"""
+Simulate and LLM provider being down.
+"""
+class ErrorLLM(LLM):
+    def __init__(self):
+        super().__init__()
+
+    def chat(self, *args, **kwargs):
+        return ErrorLLMStream(self,
+        chat_ctx=None,
+        tools=[],
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        )
+
+
+class ErrorLLMStream(LLMStream):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    async def _run(self):
+        raise APIStatusError(  # noqa: B904
+            message="This is a test error",
+            status_code=500,
+            request_id="123",
+            body="test",
+            retryable=False,
+        )
 
 
 class MyTask(Agent):
@@ -27,7 +58,7 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         stt=deepgram.STT(),
-        llm=openai.LLM(),
+        llm=ErrorLLM(),  # pass in a custom LLM that raises an error
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
@@ -49,6 +80,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    # set the OPENAI_API_KEY to a invalid key to simulate an error
-    os.environ["OPENAI_API_KEY"] = "invalid"
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
