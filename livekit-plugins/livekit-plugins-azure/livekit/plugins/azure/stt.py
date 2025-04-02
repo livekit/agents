@@ -63,9 +63,7 @@ class STT(stt.STT):
         segmentation_max_time_ms: NotGivenOr[int] = NOT_GIVEN,
         segmentation_strategy: NotGivenOr[str] = NOT_GIVEN,
         # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
-        languages: NotGivenOr[list[str]] = NOT_GIVEN,
-        # for compatibility with other STT plugins
-        language: NotGivenOr[str] = NOT_GIVEN,
+        languages: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
     ):
         """
@@ -79,12 +77,11 @@ class STT(stt.STT):
         """
 
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
-
-        if is_given(language) and not is_given(languages):
-            languages = [language]
-
-        if not is_given(languages):
+        if not languages or not is_given(languages):
             languages = ["en-US"]
+
+        if isinstance(languages, str):
+            languages = [languages]
 
         if not is_given(speech_host):
             speech_host = os.environ.get("AZURE_SPEECH_HOST")
@@ -131,25 +128,20 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        languages: NotGivenOr[list[str]] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = deepcopy(self._config)
-        if is_given(language) and not is_given(languages):
-            languages = [language]
-        if is_given(languages):
-            config.languages = languages
+        if is_given(language):
+            config.languages = [language]
         stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
-    def update_options(
-        self, *, language: NotGivenOr[str] = NOT_GIVEN, languages: NotGivenOr[list[str]] = NOT_GIVEN
-    ):
-        if is_given(language) and not is_given(languages):
-            languages = [language]
+    def update_options(self, *, languages: NotGivenOr[list[str] | str] = NOT_GIVEN):
         if is_given(languages):
+            if isinstance(languages, str):
+                languages = [languages]
             self._config.languages = languages
             for stream in self._streams:
                 stream.update_options(languages=languages)
