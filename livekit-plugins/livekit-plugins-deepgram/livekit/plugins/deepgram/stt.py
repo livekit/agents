@@ -378,8 +378,11 @@ class SpeechStream(stt.SpeechStream):
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
-        if opts.detect_language and opts.language is None:
-            raise ValueError("language detection is not supported in streaming mode")
+        if opts.detect_language or opts.language is None:
+            raise ValueError(
+                "language detection is not supported in streaming mode, "
+                "please disable it and specify a language"
+            )
 
         self._opts = opts
         self._api_key = api_key
