@@ -13,7 +13,7 @@ from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..metrics import STTMetrics
+from ..metrics import AgentComponentError, STTMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
@@ -217,13 +217,39 @@ class RecognizeStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
+                error_metrics = STTMetrics(
+                    timestamp=time.time(),
+                    label=self._stt._label,
+                )
                 if max_retries == 0:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=0,
+                        component=self._stt,
+                    )
+                    self._stt.emit("metrics_collected", error_metrics)
                     raise
                 elif num_retries == max_retries:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=0,
+                        component=self._stt,
+                    )
+                    self._stt.emit("metrics_collected", error_metrics)
                     raise APIConnectionError(
                         f"failed to recognize speech after {num_retries} attempts",
                     ) from e
                 else:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=max_retries - num_retries,
+                        component=self._stt,
+                    )
+                    self._stt.emit("metrics_collected", error_metrics)
+
                     retry_interval = self._conn_options._interval_for_retry(num_retries)
                     logger.warning(
                         f"failed to recognize speech, retrying in {retry_interval}s",

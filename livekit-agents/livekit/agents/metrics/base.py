@@ -29,12 +29,12 @@ class LLMMetrics(BaseModel):
 
 class STTMetrics(BaseModel):
     type: Literal["stt_metrics"] = "stt_metrics"
-    label: str
-    request_id: str
     timestamp: float
-    duration: float
-    audio_duration: float
-    streamed: bool
+    label: str
+    request_id: str = ""
+    duration: float = 0.0
+    audio_duration: float = 0.0
+    streamed: bool = False
     speech_id: str | None = None
     error: AgentComponentError | None = None
 
