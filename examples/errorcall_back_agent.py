@@ -20,15 +20,18 @@ load_dotenv()
 """
 Simulate and LLM provider being down.
 """
+
+
 class ErrorLLM(LLM):
     def __init__(self):
         super().__init__()
 
     def chat(self, *args, **kwargs):
-        return ErrorLLMStream(self,
-        chat_ctx=None,
-        tools=[],
-        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        return ErrorLLMStream(
+            self,
+            chat_ctx=None,
+            tools=[],
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
         )
 
 
