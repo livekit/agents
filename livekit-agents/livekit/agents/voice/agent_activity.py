@@ -589,9 +589,9 @@ class AgentActivity(RecognitionHooks):
             "user_input_transcribed",
             UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
         )
-        self._session._conversation_item_added(
-            llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
-        )
+        msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
+        self._agent._chat_ctx.items.append(msg)
+        self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
@@ -1101,6 +1101,7 @@ class AgentActivity(RecognitionHooks):
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
             await self._rt_session.update_chat_ctx(chat_ctx)
+            self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)
 
         ori_tool_choice = self._tool_choice
@@ -1246,6 +1247,7 @@ class AgentActivity(RecognitionHooks):
                 msg = llm.ChatMessage(
                     role="assistant", content=[text_out.text], id=msg_id, interrupted=True
                 )
+                self._agent._chat_ctx.items.append(msg)
                 self._session._conversation_item_added(msg)
             return
 
@@ -1256,6 +1258,7 @@ class AgentActivity(RecognitionHooks):
             msg = llm.ChatMessage(
                 role="assistant", content=[text_out.text], id=msg_id, interrupted=False
             )
+            self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)
 
         tool_output.first_tool_fut.add_done_callback(
