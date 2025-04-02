@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from typing import Any
+
 from livekit.agents import APIConnectionError, llm
-from livekit.agents.llm import ToolChoice
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.llm import ChatContext, FunctionTool, ToolChoice
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
     StreamingAgentChatResponse,
@@ -24,16 +31,15 @@ class LLM(llm.LLM):
     def chat(
         self,
         *,
-        chat_ctx: llm.ChatContext,
+        chat_ctx: ChatContext,
+        tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        fnc_ctx: llm.FunctionContext | None = None,
-        temperature: float | None = None,
-        n: int | None = 1,
-        parallel_tool_calls: bool | None = None,
-        tool_choice: ToolChoice | None = None,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
-        if fnc_ctx is not None:
-            logger.warning("fnc_ctx is currently not supported with llama_index.LLM")
+        if tools:
+            logger.warning("tools is currently not supported with llama_index.LLM")
 
         return LLMStream(
             self,
@@ -52,38 +58,35 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(llm, chat_ctx=chat_ctx, fnc_ctx=None, conn_options=conn_options)
+        super().__init__(llm, chat_ctx=chat_ctx, tools=[], conn_options=conn_options)
         self._chat_engine = chat_engine
         self._stream: StreamingAgentChatResponse | None = None
 
     async def _run(self) -> None:
         chat_ctx = self._chat_ctx.copy()
-        user_msg = chat_ctx.messages.pop()
+        user_msg = chat_ctx.items.pop()
 
         if user_msg.role != "user":
             raise ValueError("The last message in the chat context must be from the user")
-
-        assert isinstance(user_msg.content, str), "user message content must be a string"
+        text_content = user_msg.text_content
+        if not isinstance(text_content, str):
+            raise ValueError("User message content must be a string")
 
         try:
             if not self._stream:
                 self._stream = await self._chat_engine.astream_chat(
-                    user_msg.content,
+                    text_content,
                     chat_history=_to_llama_chat_messages(self._chat_ctx),
                 )
 
             async for delta in self._stream.async_response_gen():
                 self._event_ch.send_nowait(
                     llm.ChatChunk(
-                        request_id="",
-                        choices=[
-                            llm.Choice(
-                                delta=llm.ChoiceDelta(
-                                    role="assistant",
-                                    content=delta,
-                                )
-                            )
-                        ],
+                        id="",
+                        delta=llm.ChoiceDelta(
+                            role="assistant",
+                            content=delta,
+                        ),
                     )
                 )
         except Exception as e:
@@ -92,8 +95,9 @@ class LLMStream(llm.LLMStream):
 
 def _to_llama_chat_messages(chat_ctx: llm.ChatContext) -> list[ChatMessage]:
     return [
-        ChatMessage(content=msg.content, role=_to_llama_message_role(msg.role))
-        for msg in chat_ctx.messages
+        ChatMessage(content=msg.text_content, role=_to_llama_message_role(msg.role))
+        for msg in chat_ctx.items
+        if isinstance(msg, llm.ChatMessage)
     ]
 
 

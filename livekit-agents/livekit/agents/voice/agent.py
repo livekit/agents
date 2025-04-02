@@ -316,7 +316,7 @@ class Agent:
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool],
         model_settings: ModelSettings,
-    ) -> AsyncIterable[llm.ChatChunk] | None | AsyncIterable[str] | None | str | None:
+    ) -> AsyncIterable[llm.ChatChunk] | AsyncIterable[str] | str | None:
         """
         A node in the processing pipeline that processes text generation with an LLM.
 
