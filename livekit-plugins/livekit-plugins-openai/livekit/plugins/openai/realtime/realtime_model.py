@@ -39,11 +39,13 @@ from openai.types.beta.realtime import (
     ResponseAudioDoneEvent,
     ResponseAudioTranscriptDoneEvent,
     ResponseCancelEvent,
+    ResponseContentPartAddedEvent,
     ResponseCreatedEvent,
     ResponseCreateEvent,
     ResponseDoneEvent,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
     SessionUpdateEvent,
     session_update_event,
 )
@@ -350,6 +352,12 @@ class RealtimeSession(
                         self._handle_conversion_item_input_audio_transcription_failed(
                             ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
                         )
+                    elif event["type"] == "response.content_part.added":
+                        self._handle_response_content_part_added(
+                            ResponseContentPartAddedEvent.construct(**event)
+                        )
+                    elif event["type"] == "response.text.delta":
+                        self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
                     elif event["type"] == "response.audio_transcript.delta":
                         self._handle_response_audio_transcript_delta(event)
                     elif event["type"] == "response.audio.delta":
@@ -749,6 +757,34 @@ class RealtimeSession(
             "OpenAI Realtime API failed to transcribe input audio",
             extra={"error": event.error},
         )
+
+    def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+
+        if event.part.type == "text":
+            # TODO(long): try to recover to audio mode or raise an error?
+            logger.warning("text-only response received from OpenAI Realtime API")
+            item_id = event.item_id
+            item_generation = self._current_generation.messages[item_id]
+
+            # put a dummy audio frame to send playback finished event
+            data = b"\x00\x00" * int(SAMPLE_RATE * 0.01) * NUM_CHANNELS
+            item_generation.audio_ch.send_nowait(
+                rtc.AudioFrame(
+                    data=data,
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    samples_per_channel=len(data) // 2,
+                )
+            )
+
+    def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+
+        item_id = event.item_id
+        delta = event.delta
+        item_generation = self._current_generation.messages[item_id]
+        item_generation.text_ch.send_nowait(delta)
 
     def _handle_response_audio_transcript_delta(self, event: dict) -> None:
         assert self._current_generation is not None, "current_generation is None"
