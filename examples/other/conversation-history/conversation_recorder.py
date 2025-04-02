@@ -20,7 +20,7 @@ class MyAgent(Agent):
         )
         if file_name:
             self._file = wave.open(file_name, "wb")
-            self._file.setnchannels(2)
+            self._file.setnchannels(1)
             self._file.setframerate(24000)
             self._file.setsampwidth(2)
 
@@ -46,7 +46,9 @@ class MyAgent(Agent):
 
     @function_tool()
     async def open_door(self) -> str:
-        await self.session.generate_reply(instructions="Opening the door..")
+        if self.session.current_speech is not None:
+            await self.session.current_speech
+        await self.session.generate_reply(instructions="Opening the door..", tool_choice="none")
 
         return "The door is open!"
 
@@ -60,7 +62,7 @@ logger.setLevel(logging.INFO)
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
     session = AgentSession(
-        stt=deepgram.STT(), llm=openai.LLM(), tts=openai.TTS(), vad=silero.VAD.load()
+        stt=deepgram.STT(), llm=openai.LLM(), tts=deepgram.TTS(), vad=silero.VAD.load()
     )
 
     await session.start(agent=MyAgent(file_name="recording.wav"), room=ctx.room)

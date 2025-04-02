@@ -77,7 +77,7 @@ userdata = {"event_ids": event_ids, "userinfo": UserInfo(), "agents": Agents()}
 ```
 
 # Running the example
-After setting up the environment, run `python agent.py dev` to meet the Receptionist.
+After setting up the environment, run `python dental_agent.py dev` to meet the Receptionist.
 
 Try out:
 - Scheduling a new appointment 

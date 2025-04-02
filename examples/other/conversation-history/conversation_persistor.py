@@ -27,7 +27,7 @@ from livekit.agents.voice.events import (
     UserStartedSpeakingEvent,
     UserStoppedSpeakingEvent,
 )
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, openai, cartesia, silero
 
 
 @dataclass
@@ -218,14 +218,14 @@ class MyAgent(Agent):
 
 load_dotenv()
 
-logger = logging.getLogger("my-worker")
+logger = logging.getLogger("my-persistor")
 logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
     session = AgentSession(
-        stt=deepgram.STT(), llm=openai.LLM(), tts=openai.TTS(), vad=silero.VAD.load()
+        stt=deepgram.STT(), llm=openai.LLM(), tts=cartesia.TTS(), vad=silero.VAD.load()
     )
 
     cp = ConversationPersistor(session=session, log="log.txt")
