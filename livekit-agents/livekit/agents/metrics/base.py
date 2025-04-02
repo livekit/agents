@@ -5,7 +5,7 @@ from typing import Literal, Union
 from pydantic import BaseModel
 
 
-class Error(BaseModel):
+class AgentComponentError(BaseModel):
     error: str
     retryable: bool
     attempts_remaining: int
@@ -24,7 +24,7 @@ class LLMMetrics(BaseModel):
     total_tokens: int = 0
     tokens_per_second: float = 0.0
     speech_id: str | None = None
-    error: Error | None = None
+    error: AgentComponentError | None = None
 
 
 class STTMetrics(BaseModel):
@@ -36,7 +36,7 @@ class STTMetrics(BaseModel):
     audio_duration: float
     streamed: bool
     speech_id: str | None = None
-    error: Error | None = None
+    error: AgentComponentError | None = None
 
 
 class TTSMetrics(BaseModel):
@@ -51,7 +51,7 @@ class TTSMetrics(BaseModel):
     characters_count: int
     streamed: bool
     speech_id: str | None = None
-    error: Error | None = None
+    error: AgentComponentError | None = None
 
 
 class VADMetrics(BaseModel):
@@ -62,7 +62,7 @@ class VADMetrics(BaseModel):
     inference_duration_total: float
     inference_count: int
     speech_id: str | None = None
-    error: Error | None = None
+    error: AgentComponentError | None = None
 
 
 class EOUMetrics(BaseModel):
@@ -75,7 +75,7 @@ class EOUMetrics(BaseModel):
     """Time taken to obtain the transcript after the end of the user's speech."""
 
     speech_id: str | None = None
-    error: Error | None = None
+    error: AgentComponentError | None = None
 
 
 AgentMetrics = Union[
@@ -87,7 +87,7 @@ AgentMetrics = Union[
 ]
 
 # @dataclass
-# class MultimodalLLMError(Error):
+# class MultimodalLLMError(AgentComponentError):
 #     type: str | None
 #     reason: str | None = None
 #     code: str | None = None

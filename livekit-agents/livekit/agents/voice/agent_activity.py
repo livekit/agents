@@ -17,6 +17,7 @@ from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks
 from .events import (
+    AgentErrorEvent,
     AgentStartedSpeakingEvent,
     AgentStoppedSpeakingEvent,
     FunctionToolsExecutedEvent,
@@ -547,6 +548,8 @@ class AgentActivity(RecognitionHooks):
         if speech_handle := _SpeechHandleContextVar.get(None):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
+        if ev.error:
+            self._session.emit("agent_error", AgentErrorEvent(error=ev.error))
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")

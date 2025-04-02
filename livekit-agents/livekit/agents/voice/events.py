@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..llm import ChatMessage, FunctionCall, FunctionCallOutput
-from ..metrics import AgentMetrics
+from ..metrics import AgentComponentError, AgentMetrics
 from ..types import AgentState
 from .speech_handle import SpeechHandle
 
@@ -57,6 +57,7 @@ EventTypes = Literal[
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
+    "agent_error",
 ]
 
 
@@ -114,6 +115,9 @@ class SpeechCreatedEvent(BaseModel):
     speech_handle: SpeechHandle = Field(..., exclude=True)
     """The speech handle that was created"""
 
+class AgentErrorEvent(BaseModel):
+    type: Literal["agent_error"] = "agent_error"
+    error: AgentComponentError
 
 AgentEvent = Union[
     UserStartedSpeakingEvent,
@@ -125,4 +129,5 @@ AgentEvent = Union[
     MetricsCollectedEvent,
     ConversationItemAddedEvent,
     SpeechCreatedEvent,
+    AgentErrorEvent,
 ]
