@@ -13,16 +13,16 @@ class Error(BaseModel):
 
 class LLMMetrics(BaseModel):
     type: Literal["llm_metrics"] = "llm_metrics"
-    label: str
-    request_id: str
     timestamp: float
-    duration: float
-    ttft: float
+    label: str
     cancelled: bool
-    completion_tokens: int
-    prompt_tokens: int
-    total_tokens: int
-    tokens_per_second: float
+    request_id: str = ""
+    duration: float = 0.0
+    ttft: float = 0.0
+    completion_tokens: int = 0
+    prompt_tokens: int = 0
+    total_tokens: int = 0
+    tokens_per_second: float = 0.0
     speech_id: str | None = None
     error: Error | None = None
 

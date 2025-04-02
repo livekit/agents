@@ -129,15 +129,8 @@ class LLMStream(ABC):
             except APIError as e:
                 error_metrics = LLMMetrics(
                     timestamp=time.time(),
-                    request_id="",
-                    ttft=0.0,
-                    duration=0.0,
-                    cancelled=self._task.cancelled(),
                     label=self._llm._label,
-                    completion_tokens=0,
-                    prompt_tokens=0,
-                    total_tokens=0,
-                    tokens_per_second=0.0,
+                    cancelled=self._task.cancelled(),
                 )
                 if self._conn_options.max_retry == 0 or not e.retryable:
                     error_metrics.error = Error(
