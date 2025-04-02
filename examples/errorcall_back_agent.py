@@ -7,7 +7,7 @@ from livekit.agents._exceptions import APIStatusError
 from livekit.agents.llm import LLM, LLMStream
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.voice import Agent, AgentSession
-from livekit.agents.voice.events import AgentErrorEvent
+from livekit.agents.voice.events import SessionCloseEvent
 from livekit.plugins import cartesia, deepgram, silero
 
 logger = logging.getLogger("my-worker")
@@ -17,7 +17,7 @@ load_dotenv()
 
 
 """
-Simulate and LLM provider being down.
+Simulate an LLM provider being down.
 """
 
 
@@ -58,21 +58,17 @@ class MyTask(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    # Define an async error handler
-    async def on_agent_error(session: AgentSession, ev: AgentErrorEvent):
-        if not ev.error.retryable or ev.error.attempts_remaining == 0:
-            logger.info("Ran into an unrecoverable LLM error, ending session.")
-            await session.aclose()
-            logger.info("Session closed")
-
-    # Create session with the error handler
+    # Create session
     session = AgentSession(
         stt=deepgram.STT(),
         llm=ErrorLLM(),  # pass in a custom LLM that raises an error
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
-        error_handler=on_agent_error,  # Pass the async error handler
     )
+
+    @session.on("session_close")
+    def on_session_close(ev: SessionCloseEvent):
+        logger.info(f"Session is closing due to error in {ev.component.__class__.__name__}")
 
     await session.start(agent=MyTask(), room=ctx.room)
 

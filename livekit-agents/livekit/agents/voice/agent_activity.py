@@ -10,14 +10,16 @@ from typing import TYPE_CHECKING, Any
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
+from ..llm import LLM
 from ..log import logger
-from ..metrics import AgentMetrics
+from ..metrics import AgentMetrics, LLMMetrics, STTMetrics, TTSMetrics
+from ..stt import STT
+from ..tts import TTS
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks
 from .events import (
-    AgentErrorEvent,
     AgentStartedSpeakingEvent,
     AgentStoppedSpeakingEvent,
     FunctionToolsExecutedEvent,
@@ -549,7 +551,17 @@ class AgentActivity(RecognitionHooks):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
         if ev.error:
-            self._session.emit("agent_error", AgentErrorEvent(error=ev.error))
+            if not ev.error.retryable or ev.error.attempts_remaining == 0:
+                component = self._get_component_from_metrics(ev)
+                self._session._create_session_close_task(component, ev.error)
+
+    def _get_component_from_metrics(self, metrics: AgentMetrics) -> LLM | STT | TTS:
+        if isinstance(metrics, LLMMetrics):
+            return self.llm
+        elif isinstance(metrics, STTMetrics):
+            return self.stt
+        elif isinstance(metrics, TTSMetrics):
+            return self.tts
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")

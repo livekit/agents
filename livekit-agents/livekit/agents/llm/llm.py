@@ -137,6 +137,7 @@ class LLMStream(ABC):
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=0,
+                        component=self._llm,
                     )
                     self._llm.emit("metrics_collected", error_metrics)
                     raise
@@ -145,6 +146,7 @@ class LLMStream(ABC):
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=0,
+                        component=self._llm,
                     )
                     self._llm.emit("metrics_collected", error_metrics)
                     raise APIConnectionError(
@@ -156,6 +158,7 @@ class LLMStream(ABC):
                         error=e.message,
                         retryable=True,
                         attempts_remaining=self._conn_options.max_retry - i,
+                        component=self._llm,
                     )
                     self._llm.emit("metrics_collected", error_metrics)
                     logger.warning(

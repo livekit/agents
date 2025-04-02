@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import AsyncIterable, Awaitable
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Callable, Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -12,6 +12,7 @@ from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..llm import ChatContext
 from ..log import logger
+from ..metrics import AgentComponentError
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
@@ -19,11 +20,11 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
-    AgentErrorEvent,
     AgentEvent,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
     EventTypes,
+    SessionCloseEvent,
 )
 from .speech_handle import SpeechHandle
 
@@ -65,9 +66,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
-        error_handler: NotGivenOr[
-            Callable[[AgentSession, AgentErrorEvent], Awaitable[None]]
-        ] = NOT_GIVEN,
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
@@ -116,10 +114,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_state: AgentState | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
-        self._error_handler: Callable[[AgentSession, AgentErrorEvent], Awaitable[None]] | None = (
-            error_handler if is_given(error_handler) else None
-        )
-        self._error_handler_task: asyncio.Task | None = None
+        self._closing_task: asyncio.Task | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -203,7 +198,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._agent = agent
             self._update_agent_state(AgentState.INITIALIZING)
-            self.on("agent_error", self._on_error_wrapper)
 
             if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
                 from .chat_cli import ChatCLI
@@ -373,13 +367,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
 
-    def _on_error_wrapper(self, ev: AgentErrorEvent) -> None:
-        """Non-async wrapper function that spawns a task to run the async error handler."""
-        if self._error_handler:
-            if self._error_handler_task is not None:
-                raise RuntimeError("Error handler task already running")
-            self._error_handler_task = asyncio.create_task(self._error_handler(self, ev))
-            self._error_handler_task.add_done_callback(lambda _: None)
+    def _create_session_close_task(
+        self, component: llm.LLM | stt.STT | tts.TTS, error: AgentComponentError
+    ) -> None:
+        self.emit("session_close", SessionCloseEvent(error=error, component=component))
+        self._closing_task = asyncio.create_task(self._drain_and_close_session())
+
+    async def _drain_and_close_session(self) -> None:
+        """Close the session after waiting for any current activity to drain."""
+        # Drain the current activity if it exists
+        if self._activity is not None:
+            await self._activity.drain()
+
+        # Finally close the session
+        await self.aclose()
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:

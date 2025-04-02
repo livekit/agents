@@ -1,10 +1,12 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..llm import ChatMessage, FunctionCall, FunctionCallOutput
+from ..llm import ChatMessage, FunctionCall, FunctionCallOutput, LLM
+from ..stt import STT
+from ..tts import TTS
 from ..metrics import AgentComponentError, AgentMetrics
 from ..types import AgentState
 from .speech_handle import SpeechHandle
@@ -58,6 +60,7 @@ EventTypes = Literal[
     "metrics_collected",
     "speech_created",
     "agent_error",
+    "session_close",
 ]
 
 
@@ -116,9 +119,11 @@ class SpeechCreatedEvent(BaseModel):
     """The speech handle that was created"""
 
 
-class AgentErrorEvent(BaseModel):
-    type: Literal["agent_error"] = "agent_error"
+class SessionCloseEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["session_close"] = "session_close"
     error: AgentComponentError
+    component: LLM | STT | TTS = Field(..., exclude=True)
 
 
 AgentEvent = Union[
@@ -131,5 +136,5 @@ AgentEvent = Union[
     MetricsCollectedEvent,
     ConversationItemAddedEvent,
     SpeechCreatedEvent,
-    AgentErrorEvent,
+    SessionCloseEvent,
 ]
