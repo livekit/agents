@@ -309,7 +309,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         async def worker(_: Any):
             body = json.dumps({
                 "agent_name": self._opts.agent_name,
-                "worker_type": self._opts.worker_type,
+                "worker_type": agent.JobType.Name(self._opts.worker_type.value),
                 "active_jobs": len(self.active_jobs),
             })
             return web.Response(body=body, content_type="application/json")
