@@ -115,9 +115,11 @@ class SpeechCreatedEvent(BaseModel):
     speech_handle: SpeechHandle = Field(..., exclude=True)
     """The speech handle that was created"""
 
+
 class AgentErrorEvent(BaseModel):
     type: Literal["agent_error"] = "agent_error"
     error: AgentComponentError
+
 
 AgentEvent = Union[
     UserStartedSpeakingEvent,

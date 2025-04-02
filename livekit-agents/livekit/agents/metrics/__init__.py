@@ -1,11 +1,11 @@
 from .base import (
+    AgentComponentError,
     AgentMetrics,
     EOUMetrics,
     LLMMetrics,
     STTMetrics,
     TTSMetrics,
     VADMetrics,
-    AgentComponentError,
 )
 from .usage_collector import UsageCollector, UsageSummary
 from .utils import log_metrics

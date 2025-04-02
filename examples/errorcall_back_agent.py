@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents._exceptions import APIStatusError
 from livekit.agents.llm import LLM, LLMStream
-from livekit.agents.metrics import LLMMetrics
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import AgentErrorEvent
@@ -60,22 +59,21 @@ class MyTask(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
+    # Define an async error handler
+    async def on_agent_error(session: AgentSession, ev: AgentErrorEvent):
+        if not ev.error.retryable or ev.error.attempts_remaining == 0:
+            logger.info("Ran into an unrecoverable LLM error, ending session.")
+            await session.aclose()
+            logger.info("Session closed")
+
+    # Create session with the error handler
     session = AgentSession(
         stt=deepgram.STT(),
         llm=ErrorLLM(),  # pass in a custom LLM that raises an error
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
+        error_handler=on_agent_error,  # Pass the async error handler
     )
-
-    close_task = None
-
-    @session.on("agent_error")
-    def on_agent_error(ev: AgentErrorEvent):
-        nonlocal close_task
-        if not ev.error.retryable or ev.error.attempts_remaining == 0:
-            logger.info("Ran into an unrecoverable LLM error, ending session.")
-            close_task = asyncio.create_task(session.aclose())
-            close_task.add_done_callback(lambda _: logger.info("Session closed"))
 
     await session.start(agent=MyTask(), room=ctx.room)
 

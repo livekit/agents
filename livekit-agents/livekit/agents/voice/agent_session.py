@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar, Union
+from typing import Callable, Generic, Literal, TypeVar, Union
 
 from livekit import rtc
 
@@ -19,6 +19,7 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
+    AgentErrorEvent,
     AgentEvent,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
@@ -64,6 +65,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
+        error_handler: NotGivenOr[
+            Callable[[AgentSession, AgentErrorEvent], Awaitable[None]]
+        ] = NOT_GIVEN,
         allow_interruptions: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
@@ -112,6 +116,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_state: AgentState | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
+        self._error_handler: Callable[[AgentSession, AgentErrorEvent], Awaitable[None]] | None = (
+            error_handler if is_given(error_handler) else None
+        )
+        self._error_handler_task: asyncio.Task | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -195,6 +203,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._agent = agent
             self._update_agent_state(AgentState.INITIALIZING)
+            self.on("agent_error", self._on_error_wrapper)
 
             if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
                 from .chat_cli import ChatCLI
@@ -283,6 +292,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._room_io:
                 await self._room_io.aclose()
+        logger.debug("AgentSession closed")
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
@@ -362,6 +372,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._update_activity_atask = asyncio.create_task(
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
+
+    def _on_error_wrapper(self, ev: AgentErrorEvent) -> None:
+        """Non-async wrapper function that spawns a task to run the async error handler."""
+        if self._error_handler:
+            if self._error_handler_task is not None:
+                raise RuntimeError("Error handler task already running")
+            self._error_handler_task = asyncio.create_task(self._error_handler(self, ev))
+            self._error_handler_task.add_done_callback(lambda _: None)
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
