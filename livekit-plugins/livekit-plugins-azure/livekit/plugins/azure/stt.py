@@ -80,11 +80,11 @@ class STT(stt.STT):
 
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
 
-        if not is_given(languages):
-            languages = ["en-US"]
-
         if is_given(language) and not is_given(languages):
             languages = [language]
+
+        if not is_given(languages):
+            languages = ["en-US"]
 
         if not is_given(speech_host):
             speech_host = os.environ.get("AZURE_SPEECH_HOST")
