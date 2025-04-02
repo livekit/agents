@@ -27,7 +27,7 @@ from livekit.agents.voice.events import (
     UserStartedSpeakingEvent,
     UserStoppedSpeakingEvent,
 )
-from livekit.plugins import deepgram, openai, cartesia, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 
 @dataclass
