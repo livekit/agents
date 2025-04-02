@@ -12,7 +12,7 @@ from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..metrics import TTSMetrics
+from ..metrics import AgentComponentError, TTSMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import aio
 
@@ -188,13 +188,37 @@ class ChunkedStream(ABC):
                 return await self._run()
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
+                error_metrics = TTSMetrics(
+                    timestamp=time.time(),
+                    label=self._tts._label,
+                )
                 if self._conn_options.max_retry == 0:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=0,
+                        component=self._tts,
+                    )
+                    self._tts.emit("metrics_collected", error_metrics)
                     raise
                 elif i == self._conn_options.max_retry:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=0,
+                        component=self._tts,
+                    )
+                    self._tts.emit("metrics_collected", error_metrics)
                     raise APIConnectionError(
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=self._conn_options.max_retry - i,
+                        component=self._tts,
+                    )
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
@@ -268,13 +292,38 @@ class SynthesizeStream(ABC):
                 return await self._run()
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
+                error_metrics = TTSMetrics(
+                    timestamp=time.time(),
+                    label=self._tts._label,
+                )
                 if self._conn_options.max_retry == 0:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=0,
+                        component=self._tts,
+                    )
+                    self._tts.emit("metrics_collected", error_metrics)
                     raise
                 elif i == self._conn_options.max_retry:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=0,
+                        component=self._tts,
+                    )
+                    self._tts.emit("metrics_collected", error_metrics)
                     raise APIConnectionError(
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
+                    error_metrics.error = AgentComponentError(
+                        error=e.message,
+                        retryable=e.retryable,
+                        attempts_remaining=self._conn_options.max_retry - i,
+                        component=self._tts,
+                    )
+                    self._tts.emit("metrics_collected", error_metrics)
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,

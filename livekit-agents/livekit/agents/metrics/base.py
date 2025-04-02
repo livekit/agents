@@ -41,15 +41,15 @@ class STTMetrics(BaseModel):
 
 class TTSMetrics(BaseModel):
     type: Literal["tts_metrics"] = "tts_metrics"
-    label: str
-    request_id: str
     timestamp: float
-    ttfb: float
-    duration: float
-    audio_duration: float
-    cancelled: bool
-    characters_count: int
-    streamed: bool
+    label: str
+    request_id: str = ""
+    ttfb: float = 0.0
+    duration: float = 0.0
+    audio_duration: float = 0.0
+    cancelled: bool = False
+    characters_count: int = 0
+    streamed: bool = False
     speech_id: str | None = None
     error: AgentComponentError | None = None
 
