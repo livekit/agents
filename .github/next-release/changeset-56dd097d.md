@@ -2,4 +2,4 @@
 "livekit-plugins-azure": patch
 ---
 
-fix azure language (#1861)
+fix: remove `language` parameter from constructor, retain only `languages` (#1861)
