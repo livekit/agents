@@ -11,11 +11,10 @@ from pydantic import BaseModel, Field
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
-from livekit.agents.metrics.base import AgentComponentError
 
 from .. import utils
 from ..log import logger
-from ..metrics import LLMMetrics
+from ..metrics import Error, LLMMetrics
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -133,7 +132,7 @@ class LLMStream(ABC):
                     cancelled=self._task.cancelled(),
                 )
                 if self._conn_options.max_retry == 0 or not e.retryable:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=0,
@@ -142,7 +141,7 @@ class LLMStream(ABC):
                     self._llm.emit("metrics_collected", error_metrics)
                     raise
                 elif i == self._conn_options.max_retry:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=0,
@@ -154,7 +153,7 @@ class LLMStream(ABC):
                     ) from e
 
                 else:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=True,
                         attempts_remaining=self._conn_options.max_retry - i,

@@ -12,7 +12,7 @@ from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..metrics import AgentComponentError, TTSMetrics
+from ..metrics import Error, TTSMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import aio
 
@@ -193,7 +193,7 @@ class ChunkedStream(ABC):
                     label=self._tts._label,
                 )
                 if self._conn_options.max_retry == 0:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=0,
@@ -202,7 +202,7 @@ class ChunkedStream(ABC):
                     self._tts.emit("metrics_collected", error_metrics)
                     raise
                 elif i == self._conn_options.max_retry:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=0,
@@ -213,7 +213,7 @@ class ChunkedStream(ABC):
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=self._conn_options.max_retry - i,
@@ -297,7 +297,7 @@ class SynthesizeStream(ABC):
                     label=self._tts._label,
                 )
                 if self._conn_options.max_retry == 0:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=0,
@@ -306,7 +306,7 @@ class SynthesizeStream(ABC):
                     self._tts.emit("metrics_collected", error_metrics)
                     raise
                 elif i == self._conn_options.max_retry:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=0,
@@ -317,7 +317,7 @@ class SynthesizeStream(ABC):
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
-                    error_metrics.error = AgentComponentError(
+                    error_metrics.error = Error(
                         error=e.message,
                         retryable=e.retryable,
                         attempts_remaining=self._conn_options.max_retry - i,

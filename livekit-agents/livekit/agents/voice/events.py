@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..llm import ChatMessage, FunctionCall, FunctionCallOutput, LLM
 from ..stt import STT
 from ..tts import TTS
-from ..metrics import AgentComponentError, AgentMetrics
+from ..metrics import AgentMetrics, Error
 from ..types import AgentState
 from .speech_handle import SpeechHandle
 
@@ -122,7 +122,7 @@ class SpeechCreatedEvent(BaseModel):
 class SessionCloseEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["session_close"] = "session_close"
-    error: AgentComponentError
+    error: Error
     component: LLM | STT | TTS = Field(..., exclude=True)
 
 

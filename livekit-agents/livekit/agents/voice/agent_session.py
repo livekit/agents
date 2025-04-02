@@ -12,7 +12,7 @@ from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..llm import ChatContext
 from ..log import logger
-from ..metrics import AgentComponentError
+from ..metrics import Error
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
@@ -368,7 +368,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
 
     def _create_session_close_task(
-        self, component: llm.LLM | stt.STT | tts.TTS, error: AgentComponentError
+        self, component: llm.LLM | stt.STT | tts.TTS, error: Error
     ) -> None:
         self.emit("session_close", SessionCloseEvent(error=error, component=component))
         self._closing_task = asyncio.create_task(self._drain_and_close_session())
