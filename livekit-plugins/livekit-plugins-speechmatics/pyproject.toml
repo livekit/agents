@@ -9,7 +9,7 @@ description = "Agent Framework plugin for Speechmatics"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
-authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit"]
 classifiers = [
     "Intended Audience :: Developers",
