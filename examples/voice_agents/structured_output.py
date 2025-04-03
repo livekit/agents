@@ -91,7 +91,9 @@ class MyAgent(Agent):
                 # when the response isn't empty, we can assume voice_instructions is complete.
                 # (if the LLM sent the fields in the right order)
                 instruction_updated = True
-                logger.info(f"Updating TTS instructions: {resp['voice_instructions']}")
+                logger.info(
+                    f'Applying TTS instructions before generating response audio: "{resp["voice_instructions"]}"'
+                )
 
                 tts = cast(openai.TTS, self.tts)
                 tts.update_options(instructions=resp["voice_instructions"])
