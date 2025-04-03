@@ -10,7 +10,7 @@ from botocore.exceptions import NoCredentialsError
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
 
-__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session", "validate_aws_credentials"]
+__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session"]
 DEFAULT_REGION = "us-east-1"
 
 
@@ -19,7 +19,7 @@ def get_aws_async_session(
     api_key: str | None = None,
     api_secret: str | None = None,
 ) -> aioboto3.Session:
-    validate_aws_credentials(api_key, api_secret)
+    _validate_aws_credentials(api_key, api_secret)
     session = aioboto3.Session(
         aws_access_key_id=api_key,
         aws_secret_access_key=api_secret,
@@ -28,7 +28,7 @@ def get_aws_async_session(
     return session
 
 
-def validate_aws_credentials(
+def _validate_aws_credentials(
     api_key: str | None = None,
     api_secret: str | None = None,
 ) -> None:
