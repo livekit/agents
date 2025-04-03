@@ -40,14 +40,12 @@ RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
 NUM_CHANNELS = 1
 DEFAULT_VOICE_UUID = "55592656"
 BUFFERED_WORDS_COUNT = 3
-DEFAULT_PRECISION = "PCM_16"
 
 
 @dataclass
 class _TTSOptions:
     voice_uuid: str
     sample_rate: int
-    precision: str
     tokenizer: tokenize.SentenceTokenizer
 
 
@@ -59,7 +57,6 @@ class TTS(tts.TTS):
         voice_uuid: str | None = None,
         tokenizer: tokenize.SentenceTokenizer | None = None,
         sample_rate: int = 44100,
-        precision: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         use_streaming: bool = True,
     ) -> None:
@@ -71,7 +68,6 @@ class TTS(tts.TTS):
         Args:
             voice_uuid (str, optional): The voice UUID for the desired voice. Defaults to None.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 44100.
-            precision (str, optional): The precision to use. Defaults to "PCM_16".
             api_key (str | None, optional): The Resemble API key. If not provided, it will be read from the RESEMBLE_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to tokenize.SentenceTokenizer().
@@ -94,16 +90,12 @@ class TTS(tts.TTS):
                 min_sentence_len=BUFFERED_WORDS_COUNT
             )
 
-        if precision is None:
-            precision = DEFAULT_PRECISION
-
         if voice_uuid is None:
             voice_uuid = DEFAULT_VOICE_UUID
 
         self._opts = _TTSOptions(
             voice_uuid=voice_uuid,
             sample_rate=sample_rate,
-            precision=precision,
             tokenizer=tokenizer,
         )
 
@@ -142,7 +134,6 @@ class TTS(tts.TTS):
         *,
         voice_uuid: str | None = None,
         sample_rate: int | None = None,
-        precision: str | None = None,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -150,11 +141,9 @@ class TTS(tts.TTS):
         Args:
             voice_uuid (str, optional): The voice UUID for the desired voice.
             sample_rate (int, optional): The audio sample rate in Hz.
-            precision (str, optional): The precision to use.
         """  # noqa: E501
         self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
         self._opts.sample_rate = sample_rate or self._opts.sample_rate
-        self._opts.precision = precision or self._opts.precision
 
     def synthesize(
         self,
@@ -222,7 +211,7 @@ class ChunkedStream(tts.ChunkedStream):
             "voice_uuid": self._opts.voice_uuid,
             "data": self._input_text,
             "sample_rate": self._opts.sample_rate,
-            "precision": self._opts.precision,
+            "precision": "PCM_16",
         }
 
         decoder = utils.codecs.AudioStreamDecoder(
@@ -384,7 +373,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "data": data.text,
                         "request_id": request_id,
                         "sample_rate": self._opts.sample_rate,
-                        "precision": self._opts.precision,
+                        "precision": "PCM_16",
                         "no_audio_header": True,
                     }
                     await ws.send_str(json.dumps(payload))
