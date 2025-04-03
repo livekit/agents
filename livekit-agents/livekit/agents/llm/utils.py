@@ -13,7 +13,7 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined
 
@@ -24,6 +24,7 @@ from ..log import logger
 from . import _strict
 from .chat_context import ChatContext
 from .tool_context import FunctionTool, get_function_info
+from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -94,9 +95,6 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
             last_id_in_sequence = new_msg.id
 
     return DiffOps(to_remove=to_remove, to_create=to_create)
-
-
-# Convert FunctionContext to LLM API format
 
 
 def is_context_type(ty: type) -> bool:
@@ -208,6 +206,54 @@ def build_strict_openai_schema(
             "strict": True,
             "description": info.description or "",
             "parameters": schema,
+        },
+    }
+
+
+ResponseFormatT = TypeVar("ResponseFormatT", default=None)
+
+
+def is_typed_dict(cls) -> bool:
+    return isinstance(cls, type) and issubclass(cls, dict) and hasattr(cls, "__annotations__")
+
+
+# mostly from https://github.com/openai/openai-python/blob/main/src/openai/lib/_parsing/_completions.py
+# and https://github.com/instructor-ai/instructor/blob/be7821e34fb10f7dabf658d684135297a2e40ef3/instructor/process_response.py#L812C1-L816C10
+
+
+def to_response_format_param(response_format: type | dict) -> dict:
+    if isinstance(response_format, dict):
+        # TODO(theomonnom): better type validation, copy TypedDict from OpenAI
+        if response_format.get("type", "") not in ("text", "json_schema", "json_object"):
+            raise TypeError("Unsupported response_format type")
+
+        return response_format
+
+    # add support for TypedDict
+    if is_typed_dict(response_format):
+        response_format = create_model(
+            response_format.__name__,
+            **{k: (v, ...) for k, v in response_format.__annotations__.items()},  # type: ignore
+        )
+    json_schema_type: type[BaseModel] | TypeAdapter[Any] | None = None
+    if inspect.isclass(response_format) and issubclass(response_format, BaseModel):
+        name = response_format.__name__
+        json_schema_type = response_format
+    elif inspect.isclass(response_format) and hasattr(
+        response_format, "__pydantic_config__"
+    ):  # @pydantic.dataclass
+        name = response_format.__name__
+        json_schema_type = TypeAdapter(response_format)
+    else:
+        raise TypeError(f"Unsupported response_format type - {response_format}")
+
+    schema = _strict.to_strict_json_schema(json_schema_type)
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": schema,
+            "name": name,
+            "strict": True,
         },
     }
 

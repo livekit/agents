@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import datetime
 import inspect
+import json
 import math
 import multiprocessing as mp
 import os
@@ -305,7 +306,18 @@ class Worker(utils.EventEmitter[EventTypes]):
         async def health_check(_: Any):
             return web.Response(text="OK")
 
+        async def worker(_: Any):
+            body = json.dumps(
+                {
+                    "agent_name": self._opts.agent_name,
+                    "worker_type": agent.JobType.Name(self._opts.worker_type.value),
+                    "active_jobs": len(self.active_jobs),
+                }
+            )
+            return web.Response(body=body, content_type="application/json")
+
         self._http_server.app.add_routes([web.get("/", health_check)])
+        self._http_server.app.add_routes([web.get("/worker", worker)])
         self._http_server.app.add_subapp("/debug", tracing._create_tracing_app(self))
 
         self._conn_task: asyncio.Task[None] | None = None

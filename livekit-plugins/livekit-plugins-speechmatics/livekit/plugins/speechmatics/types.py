@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 @dataclass
 class TranscriptionConfig:
-    """Real-time: Defines transcription parameters."""
+    """Real-time: Defines transcription parameters. See https://docs.speechmatics.com/rt-api-ref#transcription-config"""
 
     language: str = "en"
     """ISO 639-1 language code. eg. `en`"""
@@ -39,12 +39,15 @@ class TranscriptionConfig:
     entity. Fixed means that max_delay specified ignores any potential
     entity that would not be completed within that threshold."""
 
-    streaming_mode: Optional[bool] = None
-    """Indicates if we run the engine in streaming mode, or regular RT mode."""
-
     enable_partials: Optional[bool] = None
     """Indicates if partials for transcription, where words are produced
     immediately, is enabled."""
+
+    audio_filtering_config: Optional[dict] = None
+    """Puts a lower limit on the volume of processed audio by using the volume_threshold setting."""
+
+    transcript_filtering_config: Optional[dict] = None
+    """Removes disfluencies with the remove_disfluencies setting."""
 
     def asdict(self) -> dict[Any, Any]:
         """Returns model as a dict while excluding None values recursively."""
