@@ -59,7 +59,6 @@ EventTypes = Literal[
     "function_tools_executed",
     "metrics_collected",
     "speech_created",
-    "agent_error",
     "session_close",
 ]
 
