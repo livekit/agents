@@ -8,14 +8,13 @@ from typing import (
     Annotated,
     Any,
     Callable,
-    TypedDict,
+    TypeVar,
     get_args,
     get_origin,
     get_type_hints,
-    TypeVar,
 )
 
-from pydantic import BaseModel, create_model, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined
 

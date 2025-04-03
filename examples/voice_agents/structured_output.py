@@ -1,6 +1,12 @@
 import logging
+from collections.abc import AsyncIterable
+from typing import Annotated, Callable, Optional, cast
+
 from dotenv import load_dotenv
 from pydantic import Field
+from pydantic_core import from_json
+from typing_extensions import TypedDict
+
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -13,9 +19,6 @@ from livekit.agents import (
     cli,
 )
 from livekit.plugins import openai, silero, turn_detector
-from typing import AsyncIterable, Callable, Optional, cast
-from pydantic_core import from_json
-from typing_extensions import TypedDict, Annotated
 
 logger = logging.getLogger("structured-output")
 load_dotenv()
