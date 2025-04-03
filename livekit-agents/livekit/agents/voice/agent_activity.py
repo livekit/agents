@@ -568,16 +568,12 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
         if ev.error:
             if not ev.error.retryable or ev.error.attempts_remaining == 0:
-                component = self._get_component_from_metrics(ev)
-                self._session._create_session_close_task(component, ev.error)
-
-    def _get_component_from_metrics(self, metrics: AgentMetrics) -> LLM | STT | TTS:
-        if isinstance(metrics, LLMMetrics):
-            return self.llm
-        elif isinstance(metrics, STTMetrics):
-            return self.stt
-        elif isinstance(metrics, TTSMetrics):
-            return self.tts
+                if isinstance(ev, LLMMetrics):
+                    self._session._create_session_close_task(self.llm, ev.error)
+                elif isinstance(ev, STTMetrics):
+                    self._session._create_session_close_task(self.stt, ev.error)
+                elif isinstance(ev, TTSMetrics):
+                    self._session._create_session_close_task(self.tts, ev.error)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
