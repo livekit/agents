@@ -42,7 +42,7 @@ class STTOptions:
     segmentation_silence_timeout_ms: NotGivenOr[int]
     segmentation_max_time_ms: NotGivenOr[int]
     segmentation_strategy: NotGivenOr[str]
-    languages: list[
+    language: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
@@ -63,7 +63,7 @@ class STT(stt.STT):
         segmentation_max_time_ms: NotGivenOr[int] = NOT_GIVEN,
         segmentation_strategy: NotGivenOr[str] = NOT_GIVEN,
         # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
-        languages: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
+        language: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
     ):
         """
@@ -77,11 +77,11 @@ class STT(stt.STT):
         """
 
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
-        if not languages or not is_given(languages):
-            languages = ["en-US"]
+        if not language or not is_given(language):
+            language = ["en-US"]
 
-        if isinstance(languages, str):
-            languages = [languages]
+        if isinstance(language, str):
+            language = [language]
 
         if not is_given(speech_host):
             speech_host = os.environ.get("AZURE_SPEECH_HOST")
@@ -106,7 +106,7 @@ class STT(stt.STT):
             speech_region=speech_region,
             speech_host=speech_host,
             speech_auth_token=speech_auth_token,
-            languages=languages,
+            language=language,
             sample_rate=sample_rate,
             num_channels=num_channels,
             segmentation_silence_timeout_ms=segmentation_silence_timeout_ms,
@@ -133,18 +133,18 @@ class STT(stt.STT):
     ) -> SpeechStream:
         config = deepcopy(self._config)
         if is_given(language):
-            config.languages = [language]
+            config.language = [language]
         stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
-    def update_options(self, *, languages: NotGivenOr[list[str] | str] = NOT_GIVEN):
-        if is_given(languages):
-            if isinstance(languages, str):
-                languages = [languages]
-            self._config.languages = languages
+    def update_options(self, *, language: NotGivenOr[list[str] | str] = NOT_GIVEN):
+        if is_given(language):
+            if isinstance(language, str):
+                language = [language]
+            self._config.language = language
             for stream in self._streams:
-                stream.update_options(languages=languages)
+                stream.update_options(language=language)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -159,8 +159,8 @@ class SpeechStream(stt.SpeechStream):
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, *, languages: list[str]):
-        self._opts.languages = languages
+    def update_options(self, *, language: list[str]):
+        self._opts.language = language
         self._reconnect_event.set()
 
     async def _run(self) -> None:
@@ -224,8 +224,8 @@ class SpeechStream(stt.SpeechStream):
         if not text:
             return
 
-        if not detected_lg and self._opts.languages:
-            detected_lg = self._opts.languages[0]
+        if not detected_lg and self._opts.language:
+            detected_lg = self._opts.language[0]
 
         final_data = stt.SpeechData(language=detected_lg, confidence=1.0, text=evt.result.text)
 
@@ -243,8 +243,8 @@ class SpeechStream(stt.SpeechStream):
         if not text:
             return
 
-        if not detected_lg and self._opts.languages:
-            detected_lg = self._opts.languages[0]
+        if not detected_lg and self._opts.language:
+            detected_lg = self._opts.language[0]
 
         interim_data = stt.SpeechData(language=detected_lg, confidence=0.0, text=evt.result.text)
 
@@ -323,9 +323,9 @@ def _create_speech_recognizer(
         speech_config.set_profanity(config.profanity)
 
     auto_detect_source_language_config = None
-    if config.languages and len(config.languages) >= 1:
+    if config.language and len(config.language) >= 1:
         auto_detect_source_language_config = (
-            speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.languages)
+            speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.language)
         )
 
     audio_config = speechsdk.audio.AudioConfig(stream=stream)
