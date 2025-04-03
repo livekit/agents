@@ -379,16 +379,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "session_close",
             SessionCloseEvent(session_error=SessionError(error=error, component=component)),
         )
-        self._closing_task = asyncio.create_task(self._drain_and_close_session())
-
-    async def _drain_and_close_session(self) -> None:
-        """Close the session after waiting for any current activity to drain."""
-        # Drain the current activity if it exists
-        if self._activity is not None:
-            await self._activity.drain()
-
-        # Finally close the session
-        await self.aclose()
+        self._closing_task = asyncio.create_task(self.aclose())
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
