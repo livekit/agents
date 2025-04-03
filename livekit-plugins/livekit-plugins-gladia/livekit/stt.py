@@ -22,7 +22,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
 
 import aiohttp
 import numpy as np
@@ -135,22 +135,28 @@ class STT(stt.STT):
         """Create a new instance of Gladia STT.
 
         Args:
-            interim_results: Whether to return interim (non-final) transcription results. Defaults to True.
-            languages: List of language codes to use for recognition. Defaults to None (auto-detect).
-            code_switching: Whether to allow switching between languages during recognition. Defaults to True.
+            interim_results: Whether to return interim (non-final) transcription results.
+                            Defaults to True.
+            languages: List of language codes to use for recognition. Defaults to None
+                    (auto-detect).
+            code_switching: Whether to allow switching between languages during recognition.
+                            Defaults to True.
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             bit_depth: The bit depth of the audio. Defaults to 16.
             channels: The number of audio channels. Defaults to 1.
             encoding: The encoding of the audio. Defaults to "wav/pcm".
-            api_key: Your Gladia API key. If not provided, will look for GLADIA_API_KEY environment variable.
+            api_key: Your Gladia API key. If not provided, will look for GLADIA_API_KEY
+                        environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Gladia API. Defaults to "https://api.gladia.io/v2/live".
             energy_filter: Audio energy filter configuration for voice activity detection.
                          Can be a boolean or AudioEnergyFilter instance. Defaults to False.
             translation_enabled: Whether to enable translation. Defaults to False.
-            translation_target_languages: List of target languages for translation. Required if translation_enabled is True.
+            translation_target_languages: List of target languages for translation.
+                                        Required if translation_enabled is True.
             translation_model: Translation model to use. Defaults to "base".
-            translation_match_original_utterances: Whether to match original utterances with translations. Defaults to True.
+            translation_match_original_utterances: Whether to match original utterances with
+                                                    translations. Defaults to True.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -203,7 +209,7 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: Optional[list[str]] = None,
+        language: list[str] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         """Implement synchronous speech recognition for Gladia using the live endpoint."""
@@ -316,7 +322,7 @@ class STT(stt.STT):
                                 logger.error(f"Gladia WebSocket error: {data.get('data')}")
                                 raise APIConnectionError(
                                     f"Gladia WebSocket error: {data.get('data')}"
-                                )
+                                ) from None
 
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             logger.error(f"Gladia WebSocket connection error: {ws.exception()}")
@@ -341,7 +347,7 @@ class STT(stt.STT):
                     if not utterances:
                         raise APITimeoutError(
                             f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
-                        )
+                        ) from None
 
                 # Create a speech event from the collected final utterances
                 return self._create_speech_event(
@@ -400,7 +406,7 @@ class STT(stt.STT):
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
     def _create_speech_event(
-        self, utterances: list[dict], session_id: str, languages: Optional[list[str]]
+        self, utterances: list[dict], session_id: str, languages: list[str] | None
     ) -> stt.SpeechEvent:
         """Create a SpeechEvent from Gladia's transcript data."""
         alternatives = []
@@ -439,7 +445,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: Optional[list[str]] = None,
+        language: list[str] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = self._sanitize_options(languages=language)
@@ -457,17 +463,17 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        languages: Optional[list[str]] = None,
-        code_switching: Optional[bool] = None,
-        interim_results: Optional[bool] = None,
-        sample_rate: Optional[int] = None,
-        bit_depth: Optional[Literal[8, 16, 24, 32]] = None,
-        channels: Optional[int] = None,
-        encoding: Optional[Literal["wav/pcm", "wav/alaw", "wav/ulaw"]] = None,
-        translation_enabled: Optional[bool] = None,
-        translation_target_languages: Optional[list[str]] = None,
-        translation_model: Optional[str] = None,
-        translation_match_original_utterances: Optional[bool] = None,
+        languages: list[str] | None = None,
+        code_switching: bool | None = None,
+        interim_results: bool | None = None,
+        sample_rate: int | None = None,
+        bit_depth: Literal[8, 16, 24, 32] | None = None,
+        channels: int | None = None,
+        encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] | None = None,
+        translation_enabled: bool | None = None,
+        translation_target_languages: list[str] | None = None,
+        translation_model: str | None = None,
+        translation_match_original_utterances: bool | None = None,
     ):
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
@@ -530,7 +536,7 @@ class STT(stt.STT):
                 translation_match_original_utterances=translation_match_original_utterances,
             )
 
-    def _sanitize_options(self, *, languages: Optional[list[str]] = None) -> STTOptions:
+    def _sanitize_options(self, *, languages: list[str] | None = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
         if languages is not None:
             language_config = dataclasses.replace(
@@ -574,22 +580,22 @@ class SpeechStream(stt.SpeechStream):
         self._pushed_audio_duration = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
-        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     def update_options(
         self,
         *,
-        languages: Optional[list[str]] = None,
-        code_switching: Optional[bool] = None,
-        interim_results: Optional[bool] = None,
-        sample_rate: Optional[int] = None,
-        bit_depth: Optional[Literal[8, 16, 24, 32]] = None,
-        channels: Optional[int] = None,
-        encoding: Optional[Literal["wav/pcm", "wav/alaw", "wav/ulaw"]] = None,
-        translation_enabled: Optional[bool] = None,
-        translation_target_languages: Optional[list[str]] = None,
-        translation_model: Optional[str] = None,
-        translation_match_original_utterances: Optional[bool] = None,
+        languages: list[str] | None = None,
+        code_switching: bool | None = None,
+        interim_results: bool | None = None,
+        sample_rate: int | None = None,
+        bit_depth: Literal[8, 16, 24, 32] | None = None,
+        channels: int | None = None,
+        encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] | None = None,
+        translation_enabled: bool | None = None,
+        translation_target_languages: list[str] | None = None,
+        translation_model: str | None = None,
+        translation_match_original_utterances: bool | None = None,
     ):
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
@@ -716,7 +722,8 @@ class SpeechStream(stt.SpeechStream):
             streaming_config["realtime_processing"]["translation_config"] = {
                 "target_languages": self._opts.translation_config.target_languages,
                 "model": self._opts.translation_config.model,
-                "match_original_utterances": self._opts.translation_config.match_original_utterances,
+                "match_original_utterances":
+                    self._opts.translation_config.match_original_utterances,
             }
 
         try:

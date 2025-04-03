@@ -66,6 +66,7 @@ silero = ["livekit-plugins-silero>=1.0.0.rc5"]
 cartesia = ["livekit-plugins-cartesia>=1.0.0.rc5"]
 speechmatics = ["livekit-plugins-speechmatics>=1.0.0.rc5"]
 google = ["livekit-plugins-google>=1.0.0.rc5"]
+gladia = ["livekit-plugins-gladia>=1.0.0.rc5"]
 
 
 [project.urls]
