@@ -214,6 +214,8 @@ class ChunkedStream(ABC):
                     )
 
                 await asyncio.sleep(retry_interval)
+                # Reset the flag when retrying
+                self._current_attempt_has_error = False
 
     def _emit_error_metrics(self, api_error: APIError, attempts_remaining: int):
         error_metrics = TTSMetrics(
