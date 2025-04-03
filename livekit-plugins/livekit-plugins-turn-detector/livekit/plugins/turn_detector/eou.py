@@ -114,7 +114,8 @@ class _EUORunnerBase(_InferenceRunner):
             "input": text,
             "duration": round(end_time - start_time, 3),
         }
-        return json.dumps(data, ensure_ascii=False).encode("utf-8")
+        print(f"\nConvo--\n{text}\n--End Convo")
+        return json.dumps(data).encode()
 
 
 class _EUORunnerEn(_EUORunnerBase):
@@ -201,9 +202,7 @@ class EOUModel:
 
         messages = messages[-MAX_HISTORY_TURNS:]
 
-        json_data = json.dumps({"chat_ctx": messages}, ensure_ascii=False).encode(
-            "utf-8"
-        )
+        json_data = json.dumps({"chat_ctx": messages}).encode()
 
         result = await asyncio.wait_for(
             self._executor.do_inference(self._inference_method, json_data),
@@ -219,4 +218,5 @@ class EOUModel:
             "eou prediction",
             extra=result_json,
         )
+        print(f"\nConvo2--\n{result_json['input']}\n--End Convo2")
         return result_json["eou_probability"]
