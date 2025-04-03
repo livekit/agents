@@ -264,6 +264,19 @@ class RecognizeStream(ABC):
 
                 num_retries += 1
 
+    def _emit_error_metrics(self, api_error: APIError, attempts_remaining: int):
+        error_metrics = STTMetrics(
+            timestamp=time.time(),
+            label=self._stt._label,
+            error=Error(
+                error=api_error.message,
+                retryable=api_error.retryable,
+                attempts_remaining=attempts_remaining,
+                component=self._llm,
+            ),
+        )
+        self._llm.emit("metrics_collected", error_metrics)
+
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         """Task used to collect metrics"""
 

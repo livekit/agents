@@ -15,10 +15,10 @@ class LLMMetrics(BaseModel):
     type: Literal["llm_metrics"] = "llm_metrics"
     timestamp: float
     label: str
-    cancelled: bool
     request_id: str = ""
     duration: float = 0.0
     ttft: float = 0.0
+    cancelled: bool = False
     completion_tokens: int = 0
     prompt_tokens: int = 0
     total_tokens: int = 0

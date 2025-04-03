@@ -121,13 +121,12 @@ class ChunkedStream(ABC):
         self._tts = tts
         self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
         self._event_ch = aio.Chan[SynthesizedAudio]()
-
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
-        self._metrics_task = asyncio.create_task(
-            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
-        )
-        self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
-        self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
+        self._cancelled = False
+        self._error_metrics_emitted = False
+        self._create_time = time.time()
+        self._first_byte_time: float | None = None
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @property
     def input_text(self) -> str:
@@ -135,11 +134,11 @@ class ChunkedStream(ABC):
 
     @property
     def done(self) -> bool:
-        return self._synthesize_task.done()
+        return self._task.done()
 
     @property
     def exception(self) -> BaseException | None:
-        return self._synthesize_task.exception()
+        return self._task.exception()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
@@ -164,7 +163,7 @@ class ChunkedStream(ABC):
             duration=duration,
             characters_count=len(self._input_text),
             audio_duration=audio_duration,
-            cancelled=self._synthesize_task.cancelled(),
+            cancelled=self._task.cancelled(),
             label=self._tts._label,
             streamed=False,
             error=None,
@@ -200,6 +199,7 @@ class ChunkedStream(ABC):
                         component=self._tts,
                     )
                     self._tts.emit("metrics_collected", error_metrics)
+                    self._error_metrics_emitted = True
                     raise
                 elif i == self._conn_options.max_retry:
                     error_metrics.error = Error(
@@ -209,6 +209,7 @@ class ChunkedStream(ABC):
                         component=self._tts,
                     )
                     self._tts.emit("metrics_collected", error_metrics)
+                    self._error_metrics_emitted = True
                     raise APIConnectionError(
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
@@ -219,6 +220,8 @@ class ChunkedStream(ABC):
                         attempts_remaining=self._conn_options.max_retry - i,
                         component=self._tts,
                     )
+                    self._tts.emit("metrics_collected", error_metrics)
+                    self._error_metrics_emitted = True
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
@@ -230,22 +233,26 @@ class ChunkedStream(ABC):
                     )
 
                 await asyncio.sleep(retry_interval)
+                # Reset the flag when retrying
+                self._error_metrics_emitted = False
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
-        await aio.cancel_and_wait(self._synthesize_task)
+        self._cancelled = True
+        await aio.cancel_and_wait(self._task)
         self._event_ch.close()
-        await self._metrics_task
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
-            val = await self._event_aiter.__anext__()
+            val = await self._event_ch.__anext__()
         except StopAsyncIteration:
-            if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
+            if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
             raise StopAsyncIteration  # noqa: B904
 
+        if isinstance(val, SynthesizedAudio) and self._first_byte_time is None:
+            self._first_byte_time = time.time()
         return val
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
@@ -282,6 +289,8 @@ class SynthesizeStream(ABC):
         # used to track metrics
         self._mtc_pending_texts: list[str] = []
         self._mtc_text = ""
+        self._cancelled = False
+        self._error_metrics_emitted = False
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -304,6 +313,7 @@ class SynthesizeStream(ABC):
                         component=self._tts,
                     )
                     self._tts.emit("metrics_collected", error_metrics)
+                    self._error_metrics_emitted = True
                     raise
                 elif i == self._conn_options.max_retry:
                     error_metrics.error = Error(
@@ -313,6 +323,7 @@ class SynthesizeStream(ABC):
                         component=self._tts,
                     )
                     self._tts.emit("metrics_collected", error_metrics)
+                    self._error_metrics_emitted = True
                     raise APIConnectionError(
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
@@ -324,6 +335,7 @@ class SynthesizeStream(ABC):
                         component=self._tts,
                     )
                     self._tts.emit("metrics_collected", error_metrics)
+                    self._error_metrics_emitted = True
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
@@ -335,6 +347,8 @@ class SynthesizeStream(ABC):
                     )
 
                 await asyncio.sleep(retry_interval)
+                # Reset the flag when retrying
+                self._error_metrics_emitted = False
 
     def _mark_started(self) -> None:
         # only set the started time once, it'll get reset after we emit metrics
