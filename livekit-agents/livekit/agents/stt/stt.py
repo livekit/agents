@@ -253,6 +253,8 @@ class RecognizeStream(ABC):
                 component=self._stt,
             ),
         )
+        # Since regulat metrics are emitted on every event, there may be duplicate error
+        # metrics emitted.
         self._stt.emit("metrics_collected", error_metrics)
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
