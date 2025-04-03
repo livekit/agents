@@ -118,11 +118,16 @@ class SpeechCreatedEvent(BaseModel):
     """The speech handle that was created"""
 
 
-class SessionCloseEvent(BaseModel):
+class SessionError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["session_close"] = "session_close"
+    type: Literal["session_error"] = "session_error"
     error: Error
     component: LLM | STT | TTS = Field(..., exclude=True)
+
+
+class SessionCloseEvent(BaseModel):
+    type: Literal["session_close"] = "session_close"
+    session_error: SessionError | None = None
 
 
 AgentEvent = Union[

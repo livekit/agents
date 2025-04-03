@@ -25,6 +25,7 @@ from .events import (
     ConversationItemAddedEvent,
     EventTypes,
     SessionCloseEvent,
+    SessionError,
 )
 from .speech_handle import SpeechHandle
 
@@ -367,10 +368,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
 
+    async def drain(self) -> None:
+        if self._activity is not None:
+            await self._activity.drain()
+
     def _create_session_close_task(
         self, component: llm.LLM | stt.STT | tts.TTS, error: Error
     ) -> None:
-        self.emit("session_close", SessionCloseEvent(error=error, component=component))
+        self.emit(
+            "session_close",
+            SessionCloseEvent(session_error=SessionError(error=error, component=component)),
+        )
         self._closing_task = asyncio.create_task(self._drain_and_close_session())
 
     async def _drain_and_close_session(self) -> None:
