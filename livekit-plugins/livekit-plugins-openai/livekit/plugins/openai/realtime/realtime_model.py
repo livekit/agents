@@ -159,7 +159,12 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
     def update_options(
-        self, *, voice: NotGivenOr[str] = NOT_GIVEN, temperature: NotGivenOr[float] = NOT_GIVEN
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
@@ -167,8 +172,19 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(temperature):
             self._opts.temperature = temperature
 
+        if is_given(turn_detection):
+            self._opts.turn_detection = turn_detection
+
+        if is_given(tool_choice):
+            self._opts.tool_choice = tool_choice
+
         for sess in self._sessions:
-            sess.update_options(voice=self._opts.voice, temperature=self._opts.temperature)
+            sess.update_options(
+                voice=voice,
+                temperature=temperature,
+                turn_detection=turn_detection,
+                tool_choice=tool_choice,
+            )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
@@ -482,6 +498,7 @@ class RealtimeSession(
                     event_id=utils.shortuuid("options_update_"),
                 )
             )
+            print(kwargs)
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
