@@ -97,7 +97,7 @@ class MyAgent(Agent):
                 # (if the LLM sent the fields in the right order)
                 instruction_updated = True
                 logger.info(
-                    f'Applying TTS instructions before generating response audio: '
+                    f"Applying TTS instructions before generating response audio: "
                     f'"{resp["voice_instructions"]}"'
                 )
 
