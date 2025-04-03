@@ -123,6 +123,7 @@ class ChunkedStream(ABC):
         self._event_ch = aio.Chan[SynthesizedAudio]()
 
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._current_attempt_has_error = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
         )
@@ -157,6 +158,10 @@ class ChunkedStream(ABC):
             audio_duration += ev.frame.duration
 
         duration = time.perf_counter() - start_time
+
+        if self._current_attempt_has_error:
+            return
+
         metrics = TTSMetrics(
             timestamp=time.time(),
             request_id=request_id,
@@ -188,37 +193,16 @@ class ChunkedStream(ABC):
                 return await self._run()
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
-                error_metrics = TTSMetrics(
-                    timestamp=time.time(),
-                    label=self._tts._label,
-                )
                 if self._conn_options.max_retry == 0:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=0,
-                        component=self._tts,
-                    )
-                    self._tts.emit("metrics_collected", error_metrics)
+                    self._emit_error_metrics(e, attempts_remaining=0)
                     raise
                 elif i == self._conn_options.max_retry:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=0,
-                        component=self._tts,
-                    )
-                    self._tts.emit("metrics_collected", error_metrics)
+                    self._emit_error_metrics(e, attempts_remaining=0)
                     raise APIConnectionError(
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=self._conn_options.max_retry - i,
-                        component=self._tts,
-                    )
+                    self._emit_error_metrics(e, attempts_remaining=self._conn_options.max_retry - i)
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
@@ -230,6 +214,20 @@ class ChunkedStream(ABC):
                     )
 
                 await asyncio.sleep(retry_interval)
+
+    def _emit_error_metrics(self, api_error: APIError, attempts_remaining: int):
+        error_metrics = TTSMetrics(
+            timestamp=time.time(),
+            label=self._tts._label,
+            error=Error(
+                error=api_error.message,
+                retryable=api_error.retryable,
+                attempts_remaining=attempts_remaining,
+                component=self._tts,
+            ),
+        )
+        self._current_attempt_has_error = True
+        self._tts.emit("metrics_collected", error_metrics)
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
@@ -277,6 +275,7 @@ class SynthesizeStream(ABC):
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._metrics_task: asyncio.Task | None = None  # started on first push
+        self._current_attempt_has_error = False
         self._started_time: float = 0
 
         # used to track metrics
@@ -292,38 +291,16 @@ class SynthesizeStream(ABC):
                 return await self._run()
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
-                error_metrics = TTSMetrics(
-                    timestamp=time.time(),
-                    label=self._tts._label,
-                )
                 if self._conn_options.max_retry == 0:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=0,
-                        component=self._tts,
-                    )
-                    self._tts.emit("metrics_collected", error_metrics)
+                    self._emit_error_metrics(e, attempts_remaining=0)
                     raise
                 elif i == self._conn_options.max_retry:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=0,
-                        component=self._tts,
-                    )
-                    self._tts.emit("metrics_collected", error_metrics)
+                    self._emit_error_metrics(e, attempts_remaining=0)
                     raise APIConnectionError(
                         f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
                 else:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=self._conn_options.max_retry - i,
-                        component=self._tts,
-                    )
-                    self._tts.emit("metrics_collected", error_metrics)
+                    self._emit_error_metrics(e, attempts_remaining=self._conn_options.max_retry - i)
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
@@ -335,6 +312,22 @@ class SynthesizeStream(ABC):
                     )
 
                 await asyncio.sleep(retry_interval)
+                self._current_attempt_has_error = False
+
+    def _emit_error_metrics(self, api_error: APIError, attempts_remaining: int):
+        error_metrics = TTSMetrics(
+            timestamp=time.time(),
+            label=self._tts._label,
+            error=Error(
+                error=api_error.message,
+                retryable=api_error.retryable,
+                attempts_remaining=attempts_remaining,
+                component=self._tts,
+            ),
+        )
+        self._current_attempt_has_error = True
+        self._tts.emit("metrics_collected", error_metrics)
+
 
     def _mark_started(self) -> None:
         # only set the started time once, it'll get reset after we emit metrics
@@ -350,7 +343,7 @@ class SynthesizeStream(ABC):
         def _emit_metrics():
             nonlocal audio_duration, ttfb, request_id
 
-            if not self._started_time:
+            if not self._started_time or self._current_attempt_has_error:
                 return
 
             duration = time.perf_counter() - self._started_time

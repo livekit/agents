@@ -111,7 +111,7 @@ class LLMStream(ABC):
 
         self._event_ch = aio.Chan[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
-        self._error_metrics_emitted = False
+        self._current_attempt_has_error = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -149,7 +149,7 @@ class LLMStream(ABC):
 
                 await asyncio.sleep(self._conn_options.retry_interval)
                 # Reset the flag when retrying
-                self._error_metrics_emitted = False
+                self._current_attempt_has_error = False
 
     def _emit_error_metrics(self, api_error: APIError, attempts_remaining: int):
         error_metrics = LLMMetrics(
@@ -162,7 +162,7 @@ class LLMStream(ABC):
                 component=self._llm,
             ),
         )
-        self._error_metrics_emitted = True
+        self._current_attempt_has_error = True
         self._llm.emit("metrics_collected", error_metrics)
 
     @utils.log_exceptions(logger=logger)
@@ -182,8 +182,7 @@ class LLMStream(ABC):
 
         duration = time.perf_counter() - start_time
 
-        # Skip emitting metrics if error metrics were already emitted
-        if self._error_metrics_emitted:
+        if self._current_attempt_has_error:
             return
 
         metrics = LLMMetrics(
