@@ -328,7 +328,6 @@ class SynthesizeStream(ABC):
         self._current_attempt_has_error = True
         self._tts.emit("metrics_collected", error_metrics)
 
-
     def _mark_started(self) -> None:
         # only set the started time once, it'll get reset after we emit metrics
         if self._started_time == 0:
