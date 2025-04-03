@@ -22,7 +22,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, List, Optional, Literal, Union
+from typing import Literal, Optional
 
 import aiohttp
 import numpy as np
@@ -86,14 +86,14 @@ class AudioEnergyFilter:
 
 @dataclass
 class LanguageConfiguration:
-    languages: Optional[List[str]] = None
+    languages: list[str] | None = None
     code_switching: bool = True
 
 
 @dataclass
 class TranslationConfiguration:
     enabled: bool = False
-    target_languages: List[str] = dataclasses.field(default_factory=list)
+    target_languages: list[str] = dataclasses.field(default_factory=list)
     model: str = "base"
     match_original_utterances: bool = True
 
@@ -109,7 +109,7 @@ class STTOptions:
     translation_config: TranslationConfiguration = dataclasses.field(
         default_factory=TranslationConfiguration
     )
-    energy_filter: Union[AudioEnergyFilter, bool] = False
+    energy_filter: AudioEnergyFilter | bool = False
 
 
 class STT(stt.STT):
@@ -117,18 +117,18 @@ class STT(stt.STT):
         self,
         *,
         interim_results: bool = True,
-        languages: Optional[List[str]] = None,
+        languages: list[str] | None = None,
         code_switching: bool = True,
         sample_rate: int = 16000,
         bit_depth: Literal[8, 16, 24, 32] = 16,
         channels: int = 1,
         encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"] = "wav/pcm",
-        api_key: Optional[str] = None,
-        http_session: Optional[aiohttp.ClientSession] = None,
+        api_key: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
-        energy_filter: Union[AudioEnergyFilter, bool] = False,
+        energy_filter: AudioEnergyFilter | bool = False,
         translation_enabled: bool = False,
-        translation_target_languages: Optional[List[str]] = None,
+        translation_target_languages: list[str] | None = None,
         translation_model: str = "base",
         translation_match_original_utterances: bool = True,
     ) -> None:
@@ -203,7 +203,7 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: Optional[List[str]] = None,
+        language: Optional[list[str]] = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         """Implement synchronous speech recognition for Gladia using the live endpoint."""
@@ -329,7 +329,8 @@ class STT(stt.STT):
                             aiohttp.WSMsgType.CLOSING,
                         ):
                             logger.warning(
-                                f"Gladia WebSocket closed unexpectedly during result receiving: type={msg.type}"
+                                "Gladia WebSocket closed unexpectedly during result receiving: "
+                                f"type={msg.type}"
                             )
                             break
 
@@ -399,7 +400,7 @@ class STT(stt.STT):
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
     def _create_speech_event(
-        self, utterances: List[dict], session_id: str, languages: Optional[List[str]]
+        self, utterances: list[dict], session_id: str, languages: Optional[list[str]]
     ) -> stt.SpeechEvent:
         """Create a SpeechEvent from Gladia's transcript data."""
         alternatives = []
@@ -438,7 +439,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: Optional[List[str]] = None,
+        language: Optional[list[str]] = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = self._sanitize_options(languages=language)
@@ -456,7 +457,7 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        languages: Optional[List[str]] = None,
+        languages: Optional[list[str]] = None,
         code_switching: Optional[bool] = None,
         interim_results: Optional[bool] = None,
         sample_rate: Optional[int] = None,
@@ -464,7 +465,7 @@ class STT(stt.STT):
         channels: Optional[int] = None,
         encoding: Optional[Literal["wav/pcm", "wav/alaw", "wav/ulaw"]] = None,
         translation_enabled: Optional[bool] = None,
-        translation_target_languages: Optional[List[str]] = None,
+        translation_target_languages: Optional[list[str]] = None,
         translation_model: Optional[str] = None,
         translation_match_original_utterances: Optional[bool] = None,
     ):
@@ -529,7 +530,7 @@ class STT(stt.STT):
                 translation_match_original_utterances=translation_match_original_utterances,
             )
 
-    def _sanitize_options(self, *, languages: Optional[List[str]] = None) -> STTOptions:
+    def _sanitize_options(self, *, languages: Optional[list[str]] = None) -> STTOptions:
         config = dataclasses.replace(self._opts)
         if languages is not None:
             language_config = dataclasses.replace(
@@ -563,7 +564,7 @@ class SpeechStream(stt.SpeechStream):
             duration=5.0,
         )
 
-        self._audio_energy_filter: Optional[AudioEnergyFilter] = None
+        self._audio_energy_filter: AudioEnergyFilter | None = None
         if opts.energy_filter:
             if isinstance(opts.energy_filter, AudioEnergyFilter):
                 self._audio_energy_filter = opts.energy_filter
@@ -578,7 +579,7 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        languages: Optional[List[str]] = None,
+        languages: Optional[list[str]] = None,
         code_switching: Optional[bool] = None,
         interim_results: Optional[bool] = None,
         sample_rate: Optional[int] = None,
@@ -586,7 +587,7 @@ class SpeechStream(stt.SpeechStream):
         channels: Optional[int] = None,
         encoding: Optional[Literal["wav/pcm", "wav/alaw", "wav/ulaw"]] = None,
         translation_enabled: Optional[bool] = None,
-        translation_target_languages: Optional[List[str]] = None,
+        translation_target_languages: Optional[list[str]] = None,
         translation_model: Optional[str] = None,
         translation_match_original_utterances: Optional[bool] = None,
     ):
@@ -739,7 +740,7 @@ class SpeechStream(stt.SpeechStream):
                 return await res.json()
         except Exception as e:
             logger.exception(f"Failed to initialize Gladia session: {e}")
-            raise
+            raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
     async def _send_audio_task(self):
         """Send audio data to Gladia WebSocket."""
@@ -755,7 +756,7 @@ class SpeechStream(stt.SpeechStream):
         )
 
         has_ended = False
-        last_frame: Optional[rtc.AudioFrame] = None
+        last_frame: rtc.AudioFrame | None = None
 
         async for data in self._input_ch:
             if not self._ws:
@@ -903,8 +904,9 @@ class SpeechStream(stt.SpeechStream):
 
                 if translated_text and language:
                     # Log the translation
-                    logger.info(
-                        f"Translation from {translation_data.get('original_language')} to {language}: {translated_text}"
+                    logger.debug(
+                        f"Translation from {translation_data.get('original_language')} "
+                        f"to {language}: {translated_text}"
                     )
 
                     # Create speech data for the translation
@@ -940,12 +942,11 @@ class SpeechStream(stt.SpeechStream):
             # So, we might not strictly need to act on this message anymore for END_OF_SPEECH,
             # but ensure speaking state is reset if somehow missed.
             if self._speaking:
-                logger.warning(
-                    "Resetting speaking state on post_final_transcript, END_OF_SPEECH might have been missed."
+                logger.debug(
+                    "Resetting speaking state on post_final_transcript, "
+                    "END_OF_SPEECH might have been missed."
                 )
                 self._speaking = False
-                # Optionally emit END_OF_SPEECH here as a fallback, though it might cause duplicates
-                # self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id))
 
     def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
         """Check the energy state of an audio frame."""
