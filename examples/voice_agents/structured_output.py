@@ -83,7 +83,6 @@ class MyAgent(Agent):
                 yield chunk
 
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
-        tts = cast(openai.TTS, self.tts)
         instruction_updated = False
 
         def output_processed(resp: ResponseEmotion):
@@ -93,6 +92,8 @@ class MyAgent(Agent):
                 # (if the LLM sent the fields in the right order)
                 instruction_updated = True
                 logger.info(f"Updating TTS instructions: {resp['voice_instructions']}")
+
+                tts = cast(openai.TTS, self.tts)
                 tts.update_options(instructions=resp["voice_instructions"])
 
         return super().tts_node(
