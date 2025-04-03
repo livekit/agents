@@ -452,6 +452,7 @@ class RealtimeSession(
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
@@ -469,6 +470,9 @@ class RealtimeSession(
 
         if is_given(temperature):
             kwargs["temperature"] = temperature
+
+        if is_given(turn_detection):
+            kwargs["turn_detection"] = turn_detection
 
         if kwargs:
             self.send_event(
