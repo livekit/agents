@@ -8,7 +8,6 @@ from typing import (
     Annotated,
     Any,
     Callable,
-    TypeVar,
     get_args,
     get_origin,
     get_type_hints,
@@ -25,6 +24,7 @@ from ..log import logger
 from . import _strict
 from .chat_context import ChatContext
 from .tool_context import FunctionTool, get_function_info
+from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
