@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Optional
 
 import aiohttp
 from livekit.agents import (
@@ -31,7 +32,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .log import logger
 
@@ -79,11 +79,12 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        self._api_key = api_key or os.environ.get("RESEMBLE_API_KEY")
-        if not self._api_key:
+        api_key = api_key or os.environ.get("RESEMBLE_API_KEY")
+        if not api_key:
             raise ValueError(
                 "Resemble API key is required, either as argument or set RESEMBLE_API_KEY environment variable"
             )
+        self._api_key = api_key
 
         if tokenizer is None:
             tokenizer = tokenize.basic.SentenceTokenizer(
@@ -149,7 +150,7 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: Optional[APIConnectOptions] = None,
     ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
@@ -161,13 +162,14 @@ class TTS(tts.TTS):
         )
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: Optional[APIConnectOptions] = None
     ) -> SynthesizeStream:
         stream = SynthesizeStream(
             tts=self,
             pool=self._pool,
             opts=self._opts,
             api_key=self._api_key,
+            conn_options=conn_options,
         )
         self._streams.add(stream)
         return stream
@@ -370,7 +372,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 async for data in input_stream:
                     payload = {
                         "voice_uuid": self._opts.voice_uuid,
-                        "data": data.text,
+                        "data": data.token,
                         "request_id": request_id,
                         "sample_rate": self._opts.sample_rate,
                         "precision": "PCM_16",
