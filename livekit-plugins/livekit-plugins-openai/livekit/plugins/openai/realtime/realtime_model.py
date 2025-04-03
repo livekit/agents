@@ -498,7 +498,6 @@ class RealtimeSession(
                     event_id=utils.shortuuid("options_update_"),
                 )
             )
-            print(kwargs)
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
