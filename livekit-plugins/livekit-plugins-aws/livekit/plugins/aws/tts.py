@@ -34,13 +34,12 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
-from .utils import _strip_nones, get_aws_async_session, validate_aws_credentials
+from .utils import _strip_nones, get_aws_async_session
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
 DEFAULT_VOICE = "Ruth"
 DEFAULT_SAMPLE_RATE = 16000
-REFRESH_INTERVAL = 1800
 
 
 @dataclass
@@ -65,7 +64,6 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         session: aioboto3.Session | None = None,
-        refresh_interval: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of AWS Polly TTS.
@@ -84,7 +82,6 @@ class TTS(tts.TTS):
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
             session(aioboto3.Session, optional): Optional aioboto3 session to use.
-            refresh_interval(int, optional): Refresh interval for the AWS session. Defaults to 1800 seconds (30 minutes).
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -93,13 +90,11 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=TTS_NUM_CHANNELS,
         )
-        self._session = session
-        self._api_key = api_key if is_given(api_key) else None
-        self._api_secret = api_secret if is_given(api_secret) else None
-        self._region = region if is_given(region) else None
-
-        if not self._session:
-            validate_aws_credentials(api_key=self._api_key, api_secret=self._api_secret)
+        self._session = session or get_aws_async_session(
+            api_key=api_key if is_given(api_key) else None,
+            api_secret=api_secret if is_given(api_secret) else None,
+            region=region if is_given(region) else None,
+        )
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
@@ -107,35 +102,6 @@ class TTS(tts.TTS):
             language=language,
             sample_rate=sample_rate,
         )
-        self._client_cm = None
-        self._pool = utils.ConnectionPool[aioboto3.Session.client](
-            connect_cb=self._create_client,
-            max_session_duration=refresh_interval
-            if is_given(refresh_interval)
-            else REFRESH_INTERVAL,
-        )
-
-    async def _create_client(self) -> aioboto3.Session.client:
-        # Exit any existing client context manager
-        if self._client_cm:
-            await self._client_cm.__aexit__(None, None, None)
-            self._client_cm = None
-
-        session = self._session or await get_aws_async_session(
-            region=self._region,
-            api_key=self._api_key,
-            api_secret=self._api_secret,
-        )
-        # context manager for the client
-        self._client_cm = session.client("polly")
-        client = await self._client_cm.__aenter__()
-        return client
-
-    async def aclose(self) -> None:
-        if self._client_cm:
-            await self._client_cm.__aexit__()
-        await self._pool.aclose()
-        await super().aclose()
 
     def synthesize(
         self,
@@ -147,7 +113,7 @@ class TTS(tts.TTS):
             tts=self,
             text=text,
             conn_options=conn_options,
-            pool=self._pool,
+            session=self._session,
             opts=self._opts,
         )
 
@@ -158,20 +124,20 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         text: str,
-        pool: utils.ConnectionPool[aioboto3.Session.client],
+        session: aioboto3.Session,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         opts: _TTSOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=text, conn_options=conn_options)
         self._opts = opts
         self._segment_id = utils.shortuuid()
-        self._pool = pool
+        self._session = session
 
     async def _run(self):
         request_id = utils.shortuuid()
 
         try:
-            async with self._pool.connection() as client:
+            async with self._session.client("polly") as client:
                 params = {
                     "Text": self._input_text,
                     "OutputFormat": "mp3",

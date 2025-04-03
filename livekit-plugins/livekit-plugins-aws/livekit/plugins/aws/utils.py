@@ -14,23 +14,17 @@ __all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session", "validate_aws_c
 DEFAULT_REGION = "us-east-1"
 
 
-async def get_aws_async_session(
+def get_aws_async_session(
     region: str | None = None,
     api_key: str | None = None,
     api_secret: str | None = None,
 ) -> aioboto3.Session:
-    try:
-        session = aioboto3.Session(
-            aws_access_key_id=api_key,
-            aws_secret_access_key=api_secret,
-            region_name=region or DEFAULT_REGION,
-        )
-        creds = await session.get_credentials()
-        if not creds:
-            raise ValueError("No credentials found")
-    except (NoCredentialsError, Exception) as e:
-        raise ValueError(f"Unable to locate AWS credentials: {str(e)}") from e
-
+    validate_aws_credentials(api_key, api_secret)
+    session = aioboto3.Session(
+        aws_access_key_id=api_key,
+        aws_secret_access_key=api_secret,
+        region_name=region or DEFAULT_REGION,
+    )
     return session
 
 

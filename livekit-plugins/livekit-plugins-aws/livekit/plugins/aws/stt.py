@@ -26,14 +26,13 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import get_aws_async_session, validate_aws_credentials
+from .utils import DEFAULT_REGION, get_aws_async_session
 
 REFRESH_INTERVAL = 1800
 
 
 @dataclass
 class STTOptions:
-    region: str
     sample_rate: int
     language: str
     encoding: str
@@ -53,7 +52,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        region: str = "us-east-1",
+        region: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 48000,
@@ -73,15 +72,14 @@ class STT(stt.STT):
         refresh_interval: NotGivenOr[int] = NOT_GIVEN,
     ):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
-        self._session = session
-        self._api_key = api_key if is_given(api_key) else None
-        self._api_secret = api_secret if is_given(api_secret) else None
-        self._region = region if is_given(region) else None
-        if not self._session:
-            validate_aws_credentials(api_key=self._api_key, api_secret=self._api_secret)
+        self._region = region if is_given(region) else DEFAULT_REGION
+        self._session = session or get_aws_async_session(
+            api_key=api_key if is_given(api_key) else None,
+            api_secret=api_secret if is_given(api_secret) else None,
+            region=self._region,
+        )
 
         self._config = STTOptions(
-            region=self._region,
             language=language,
             sample_rate=sample_rate,
             encoding=encoding,
@@ -104,15 +102,10 @@ class STT(stt.STT):
         )
 
     async def _create_client(self) -> TranscribeStreamingClient:
-        session = self._session or await get_aws_async_session(
-            region=self._region,
-            api_key=self._api_key,
-            api_secret=self._api_secret,
-        )
-        creds = await session.get_credentials()
+        creds = await self._session.get_credentials()
         frozen_credentials = await creds.get_frozen_credentials()
         return TranscribeStreamingClient(
-            region=self._config.region,
+            region=self._region,
             credential_resolver=StaticCredentialResolver(
                 access_key_id=frozen_credentials.access_key,
                 secret_access_key=frozen_credentials.secret_key,
