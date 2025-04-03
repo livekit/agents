@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from google import genai
 from google.auth._default_async import default_async
@@ -43,7 +43,7 @@ from .utils import to_chat_ctx, to_fnc_ctx
 class _LLMOptions:
     model: ChatModels | str
     temperature: NotGivenOr[float]
-    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
+    tool_choice: NotGivenOr[ToolChoice]
     vertexai: NotGivenOr[bool]
     project: NotGivenOr[str]
     location: NotGivenOr[str]
@@ -69,7 +69,7 @@ class LLM(llm.LLM):
         top_k: NotGivenOr[float] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -93,7 +93,7 @@ class LLM(llm.LLM):
             top_k (int, optional): The top-k sampling value for response generation. Defaults to None.
             presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
-            tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
+            tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -147,7 +147,7 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}

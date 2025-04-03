@@ -61,6 +61,7 @@ class AgentActivity(RecognitionHooks):
         self._rt_session: llm.RealtimeSession | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
+        self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
         self._draining = False
@@ -220,10 +221,21 @@ class AgentActivity(RecognitionHooks):
         chat_ctx = chat_ctx.copy(tools=self._agent.tools)
 
         self._agent._chat_ctx = chat_ctx
-        update_instructions(chat_ctx, instructions=self._agent.instructions, add_if_missing=True)
 
         if self._rt_session is not None:
+            remove_instructions(chat_ctx)
             await self._rt_session.update_chat_ctx(chat_ctx)
+        else:
+            update_instructions(
+                chat_ctx, instructions=self._agent.instructions, add_if_missing=True
+            )
+
+    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
+        if utils.is_given(tool_choice):
+            self._tool_choice = tool_choice
+
+        if self._rt_session is not None:
+            self._rt_session.update_options(tool_choice=self._tool_choice)
 
     def _create_speech_task(
         self,
@@ -486,7 +498,11 @@ class AgentActivity(RecognitionHooks):
                     tools=self._agent.tools,
                     user_input=user_input or None,
                     instructions=instructions or None,
-                    model_settings=ModelSettings(tool_choice=tool_choice),
+                    model_settings=ModelSettings(
+                        tool_choice=tool_choice
+                        if utils.is_given(tool_choice) or self._tool_choice is None
+                        else self._tool_choice
+                    ),
                 ),
                 owned_speech_handle=handle,
                 name="AgentActivity.pipeline_reply",
@@ -573,9 +589,9 @@ class AgentActivity(RecognitionHooks):
             "user_input_transcribed",
             UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
         )
-        self._session._conversation_item_added(
-            llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
-        )
+        msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
+        self._agent._chat_ctx.items.append(msg)
+        self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
@@ -613,6 +629,10 @@ class AgentActivity(RecognitionHooks):
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection_mode not in ("vad", None):
             # ignore vad inference done event if turn_detection is not set to vad or default
+            return
+
+        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
+            # ignore if turn_detection is enabled on the realtime model
             return
 
         if ev.speech_duration > self._session.options.min_interruption_duration:
@@ -1081,22 +1101,30 @@ class AgentActivity(RecognitionHooks):
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
             await self._rt_session.update_chat_ctx(chat_ctx)
+            self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)
 
-        self._rt_session.update_options(tool_choice=model_settings.tool_choice)
+        ori_tool_choice = self._tool_choice
+        if utils.is_given(model_settings.tool_choice):
+            self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
-        generation_ev = await self._rt_session.generate_reply(
-            instructions=instructions or NOT_GIVEN
-        )
+        try:
+            generation_ev = await self._rt_session.generate_reply(
+                instructions=instructions or NOT_GIVEN
+            )
 
-        await self._realtime_generation_task(
-            speech_handle=speech_handle,
-            generation_ev=generation_ev,
-            model_settings=model_settings,
-        )
-
-        # TODO(theomonnom): reset tool_choice value (not needed for now, because it isn't exposed to the user)  # noqa: E501
-        # tool_choice is currently only set to None when draining
+            await self._realtime_generation_task(
+                speech_handle=speech_handle,
+                generation_ev=generation_ev,
+                model_settings=model_settings,
+            )
+        finally:
+            # reset tool_choice value
+            if (
+                utils.is_given(model_settings.tool_choice)
+                and model_settings.tool_choice != ori_tool_choice
+            ):
+                self._rt_session.update_options(tool_choice=ori_tool_choice)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
@@ -1219,6 +1247,7 @@ class AgentActivity(RecognitionHooks):
                 msg = llm.ChatMessage(
                     role="assistant", content=[text_out.text], id=msg_id, interrupted=True
                 )
+                self._agent._chat_ctx.items.append(msg)
                 self._session._conversation_item_added(msg)
             return
 
@@ -1229,6 +1258,7 @@ class AgentActivity(RecognitionHooks):
             msg = llm.ChatMessage(
                 role="assistant", content=[text_out.text], id=msg_id, interrupted=False
             )
+            self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)
 
         tool_output.first_tool_fut.add_done_callback(

@@ -13,7 +13,7 @@ from livekit.agents.utils.audio import AudioBuffer
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
@@ -84,7 +84,7 @@ class FallbackAdapter(
         *,
         stt: STT,
         buffer: utils.AudioBuffer,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
         recovering: bool = False,
     ) -> SpeechEvent:
@@ -143,7 +143,7 @@ class FallbackAdapter(
         *,
         stt: STT,
         buffer: utils.AudioBuffer,
-        language: str | None,
+        language: NotGivenOr[str],
         conn_options: APIConnectOptions,
     ) -> None:
         stt_status = self._status[self._stt_instances.index(stt)]
@@ -177,7 +177,7 @@ class FallbackAdapter(
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ):
         start_time = time.time()
@@ -215,7 +215,7 @@ class FallbackAdapter(
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         return await super().recognize(buffer, language=language, conn_options=conn_options)
@@ -223,7 +223,7 @@ class FallbackAdapter(
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
@@ -242,7 +242,7 @@ class FallbackRecognizeStream(RecognizeStream):
         self,
         *,
         stt: FallbackAdapter,
-        language: str | None,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=None)
