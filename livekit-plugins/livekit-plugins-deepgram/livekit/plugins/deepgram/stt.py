@@ -698,16 +698,19 @@ def live_transcription_to_speech_data(
 ) -> List[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
-    return [
-        stt.SpeechData(
+    speech_data = []
+    for alt in dg_alts:
+        sd = stt.SpeechData(
             language=language,
             start_time=alt["words"][0]["start"] if alt["words"] else 0,
             end_time=alt["words"][-1]["end"] if alt["words"] else 0,
             confidence=alt["confidence"],
             text=alt["transcript"],
         )
-        for alt in dg_alts
-    ]
+        if language == "multi" and "languages" in alt:
+            sd.language = alt["languages"][0]  # TODO: handle multiple languages
+        speech_data.append(sd)
+    return speech_data
 
 
 def prerecorded_transcription_to_speech_event(
@@ -774,7 +777,6 @@ def _validate_model(
         "nova-2-drivethru",
         "nova-2-automotive",
         # nova-3 will support more languages, but english-only for now
-        "nova-3",
         "nova-3-general",
     }
     if language not in ("en-US", "en") and model in en_only_models:

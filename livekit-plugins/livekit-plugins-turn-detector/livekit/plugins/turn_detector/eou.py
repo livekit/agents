@@ -114,7 +114,7 @@ class _EUORunnerBase(_InferenceRunner):
             "input": text,
             "duration": round(end_time - start_time, 3),
         }
-        return json.dumps(data).encode()
+        return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
 class _EUORunnerEn(_EUORunnerBase):
@@ -151,7 +151,6 @@ class EOUModel:
         )
         with open(config_fname, "r") as f:
             self._languages = json.load(f)
-            print(list(self._languages.keys()))
 
     def unlikely_threshold(self, language: str | None) -> float | None:
         if language is None:
@@ -202,7 +201,9 @@ class EOUModel:
 
         messages = messages[-MAX_HISTORY_TURNS:]
 
-        json_data = json.dumps({"chat_ctx": messages}).encode()
+        json_data = json.dumps({"chat_ctx": messages}, ensure_ascii=False).encode(
+            "utf-8"
+        )
 
         result = await asyncio.wait_for(
             self._executor.do_inference(self._inference_method, json_data),
