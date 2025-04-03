@@ -40,10 +40,18 @@ EXPECTED_MIN_20_RETAIN_FORMAT = [
     " f(x) = x * 2.54 + 42.",
     " Hey!\n Hi! Hello! \n\n",
 ]
+EXPECTED_MIN_20_RETAIN_FORMAT_RELAXED = [
+    "Hi! LiveKit is a platform for live audio and video applications and services.",
+    " \n\nR.T.C stands for Real-Time Communication... again R.T.C. Mr. Theo is testing the sentence tokenizer.",
+    " \nThis is a test. Another test.",
+    " A short sentence.\nA longer sentence that is longer than the previous sentence. f(x) = x * 2.54 + 42.",
+    " Hey!\n Hi! Hello! \n\n",
+]
 
 SENT_TOKENIZERS = [
     (nltk.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20),
     (basic.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20),
+    (basic.BlingfireSentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20_RETAIN_FORMAT_RELAXED),
     (
         basic.SentenceTokenizer(min_sentence_len=20, retain_format=True),
         EXPECTED_MIN_20_RETAIN_FORMAT,

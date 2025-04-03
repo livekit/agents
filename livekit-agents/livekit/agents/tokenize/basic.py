@@ -8,6 +8,7 @@ from . import (
     _basic_paragraph,
     _basic_sent,
     _basic_word,
+    _blingfire_sent,
     token_stream,
     tokenizer,
 )
@@ -63,6 +64,41 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
                 _basic_sent.split_sentences,
                 min_sentence_len=self._config.min_sentence_len,
                 retain_format=self._config.retain_format,
+            ),
+            min_token_len=self._config.min_sentence_len,
+            min_ctx_len=self._config.stream_context_len,
+        )
+
+
+class BlingfireSentenceTokenizer(tokenizer.SentenceTokenizer):
+    def __init__(
+        self,
+        *,
+        language: str = "english",
+        min_sentence_len: int = 20,
+        stream_context_len: int = 10,
+    ) -> None:
+        self._config = _TokenizerOptions(
+            language=language,
+            min_sentence_len=min_sentence_len,
+            stream_context_len=stream_context_len,
+            retain_format=True,
+        )
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        return [
+            tok[0]
+            for tok in _blingfire_sent.split_sentences(
+                text,
+                min_sentence_len=self._config.min_sentence_len,
+            )
+        ]
+
+    def stream(self, *, language: str | None = None) -> tokenizer.SentenceStream:
+        return token_stream.BufferedSentenceStream(
+            tokenizer=functools.partial(
+                _blingfire_sent.split_sentences,
+                min_sentence_len=self._config.min_sentence_len,
             ),
             min_token_len=self._config.min_sentence_len,
             min_ctx_len=self._config.stream_context_len,
