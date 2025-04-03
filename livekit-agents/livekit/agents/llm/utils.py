@@ -16,6 +16,7 @@ from typing import (
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined
+from typing_extensions import TypeVar
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -24,7 +25,6 @@ from ..log import logger
 from . import _strict
 from .chat_context import ChatContext
 from .tool_context import FunctionTool, get_function_info
-from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
