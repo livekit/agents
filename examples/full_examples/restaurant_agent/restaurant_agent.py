@@ -113,7 +113,11 @@ class BaseAgent(Agent):
         chat_ctx = self.chat_ctx.copy()
 
         # add the previous agent's chat history to the current agent
-        if userdata.prev_agent:
+        llm_model = self.llm or self.session.llm
+        if userdata.prev_agent and not isinstance(llm_model, llm.RealtimeModel):
+            # only add chat history for non-realtime models for now
+            # OpenAI realtime model may response in text mode when text chat context loaded
+            # https://community.openai.com/t/trouble-loading-previous-messages-with-realtime-api
             items_copy = self._truncate_chat_ctx(
                 userdata.prev_agent.chat_ctx.items, keep_function_call=True
             )
@@ -186,7 +190,7 @@ class Greeter(BaseAgent):
 
     @function_tool()
     async def to_reservation(self, context: RunContext_T) -> Agent:
-        """Called when user wants to make a reservation.
+        """Called when user wants to make or update a reservation.
         This function handles transitioning to the reservation agent
         who will collect the necessary details like reservation time,
         customer name and phone number."""
@@ -351,6 +355,7 @@ async def entrypoint(ctx: JobContext):
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
         max_tool_steps=5,
+        # to use realtime model, replace the stt, llm, tts and vad with the following
         # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 

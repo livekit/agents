@@ -459,6 +459,8 @@ class RealtimeSession(
             oai_tool_choice = tool_choice
             if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
                 oai_tool_choice = tool_choice["function"]
+            if oai_tool_choice is None:
+                oai_tool_choice = "auto"
 
             kwargs["tool_choice"] = oai_tool_choice
 
