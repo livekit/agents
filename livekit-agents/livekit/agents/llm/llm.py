@@ -162,8 +162,8 @@ class LLMStream(ABC):
                 component=self._llm,
             ),
         )
-        self._llm.emit("metrics_collected", error_metrics)
         self._error_metrics_emitted = True
+        self._llm.emit("metrics_collected", error_metrics)
 
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
