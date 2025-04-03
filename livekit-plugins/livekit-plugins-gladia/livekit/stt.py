@@ -275,10 +275,6 @@ class STT(stt.STT):
                 chunk_size = (bytes_per_second * 150) // 1000
                 chunk_size = max(chunk_size, 1024)
 
-                logger.debug(
-                    f"Sending {len(pcm_data)} bytes of PCM data in chunks of {chunk_size} bytes"
-                )
-
                 # Send raw PCM audio data in chunks
                 for i in range(0, len(pcm_data), chunk_size):
                     chunk = pcm_data[i : i + chunk_size]
@@ -289,7 +285,6 @@ class STT(stt.STT):
 
                 # Tell Gladia we're done sending audio
                 await ws.send_str(json.dumps({"type": "stop_recording"}))
-                logger.debug("Sent stop_recording message")
 
                 # Wait for final transcript
                 utterances = []
@@ -301,25 +296,18 @@ class STT(stt.STT):
                     async for msg in ws.iter(timeout=receive_timeout):
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
-                            logger.debug(
-                                f"Received Gladia message: {data.get('type')}"
-                            )  # Log message type
                             # Collect final utterances
                             if data["type"] == "transcript" and data["data"]["is_final"]:
                                 utterance = data["data"]["utterance"]
-                                logger.debug(f"Received final utterance: {utterance.get('text')}")
                                 utterances.append(utterance)
                             # Check for translation as the final result if enabled
                             elif (
                                 data["type"] == "translation" and config.translation_config.enabled
                             ):
-                                logger.debug("Received translation message")
                                 pass
                             elif data["type"] == "post_final_transcript":
-                                logger.debug("Received post_final_transcript message")
                                 break
                             elif data["type"] == "error":
-                                logger.error(f"Gladia WebSocket error: {data.get('data')}")
                                 raise APIConnectionError(
                                     f"Gladia WebSocket error: {data.get('data')}"
                                 ) from None
@@ -910,11 +898,6 @@ class SpeechStream(stt.SpeechStream):
                 translated_text = translated_utterance.get("text", "").strip()
 
                 if translated_text and language:
-                    # Log the translation
-                    logger.debug(
-                        f"Translation from {translation_data.get('original_language')} "
-                        f"to {language}: {translated_text}"
-                    )
 
                     # Create speech data for the translation
                     speech_data = stt.SpeechData(
@@ -949,10 +932,6 @@ class SpeechStream(stt.SpeechStream):
             # So, we might not strictly need to act on this message anymore for END_OF_SPEECH,
             # but ensure speaking state is reset if somehow missed.
             if self._speaking:
-                logger.debug(
-                    "Resetting speaking state on post_final_transcript, "
-                    "END_OF_SPEECH might have been missed."
-                )
                 self._speaking = False
 
     def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
