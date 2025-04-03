@@ -114,7 +114,6 @@ class _EUORunnerBase(_InferenceRunner):
             "input": text,
             "duration": round(end_time - start_time, 3),
         }
-        print(f"\nConvo--\n{text}\n--End Convo")
         return json.dumps(data).encode()
 
 
@@ -218,5 +217,4 @@ class EOUModel:
             "eou prediction",
             extra=result_json,
         )
-        print(f"\nConvo2--\n{result_json['input']}\n--End Convo2")
         return result_json["eou_probability"]
