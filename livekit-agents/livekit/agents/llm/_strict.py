@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypeGuard
 
 from ..types import NOT_GIVEN
@@ -13,8 +13,12 @@ from ..types import NOT_GIVEN
 _T = TypeVar("_T")
 
 
-def to_strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
-    schema = model.model_json_schema()
+def to_strict_json_schema(model: type[BaseModel] | TypeAdapter[Any]) -> dict[str, Any]:
+    if isinstance(model, TypeAdapter):
+        schema = model.json_schema()
+    else:
+        schema = model.model_json_schema()
+
     return _ensure_strict_json_schema(schema, path=(), root=schema)
 
 
