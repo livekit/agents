@@ -1270,11 +1270,19 @@ class AgentActivity(RecognitionHooks):
 
         if len(tool_output.output) > 0:
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
+            fnc_executed_ev = FunctionToolsExecutedEvent(
+                function_calls=[],
+                function_call_outputs=[],
+            )
             new_agent_task: Agent | None = None
             ignore_task_switch = False
 
             for py_out in tool_output.output:
                 sanitized_out = py_out.sanitize()
+
+                # add the function call and output to the event, including the None outputs
+                fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
+                fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
                 if sanitized_out.fnc_call_out is not None:
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
@@ -1286,6 +1294,7 @@ class AgentActivity(RecognitionHooks):
                     ignore_task_switch = True
 
                 new_agent_task = sanitized_out.agent_task
+            self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.draining
             if not ignore_task_switch and new_agent_task is not None:
