@@ -15,6 +15,7 @@ livekit-plugins-fal = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-llama-index = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
+livekit-plugins-blingfire = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-rag = { workspace = true }
 livekit-plugins-rime = { workspace = true }
@@ -31,12 +32,12 @@ exclude = ["livekit-plugins/livekit-plugins-browser"]
 
 [dependency-groups]
 dev = [
-    "python-dotenv>=1.0.1",
-    "mypy",
-    "pytest",
-    "ruff",
-    "pytest-asyncio>=0.25.3",
-    "jiwer>=3.1.0",
+  "python-dotenv>=1.0.1",
+  "mypy",
+  "pytest",
+  "ruff",
+  "pytest-asyncio>=0.25.3",
+  "jiwer>=3.1.0",
 ]
 
 [tool.ruff]
@@ -46,13 +47,13 @@ exclude = [".github"]
 
 [tool.ruff.lint]
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
+  "E",  # pycodestyle errors
+  "W",  # pycodestyle warnings
+  "F",  # pyflakes
+  "I",  # isort
+  "B",  # flake8-bugbear
+  "C4", # flake8-comprehensions
+  "UP", # pyupgrade
 ]
 
 [tool.ruff.lint.isort]

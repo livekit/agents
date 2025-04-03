@@ -15,6 +15,7 @@ members = [
     "livekit-plugins-assemblyai",
     "livekit-plugins-aws",
     "livekit-plugins-azure",
+    "livekit-plugins-blingfire",
     "livekit-plugins-cartesia",
     "livekit-plugins-clova",
     "livekit-plugins-deepgram",
@@ -367,6 +368,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fc/fd/af607bdfa95306b13fcdeadcd48d28b80b27cc5e3b99e2bde96f6212cd3a/azure_cognitiveservices_speech-1.42.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:106fbdb165a215cada47d7e95851e0b9d2755a3f2355369bab4915ad001efe89", size = 39508123 },
     { url = "https://files.pythonhosted.org/packages/17/fb/1c998efbfcb1e44f9dc4dbb8b182ea3e5287fdc167aa352aef4685e29435/azure_cognitiveservices_speech-1.42.0-py3-none-win32.whl", hash = "sha256:7d57218beec24360a8b7ce89755c2c133259e3411c233ef0a659b951e4c4c904", size = 2109807 },
     { url = "https://files.pythonhosted.org/packages/52/bb/ef7a29f5717cca646be6698d80e542446a6a442be897c8f67bf93551c672/azure_cognitiveservices_speech-1.42.0-py3-none-win_amd64.whl", hash = "sha256:32076ee03b3b402a2e8841f2c21e5cd54dc3ffbf5af183426344727298c8bbd4", size = 2377971 },
+]
+
+[[package]]
+name = "blingfire"
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/55/e5b9ac53281b89b7fb182c9858b78c6109e350797e93f5e4cbdb90dfbbe6/blingfire-0.1.8.tar.gz", hash = "sha256:fac20b4c1bb6519a32716a8bf64f0fcb7b6ea7631ad1ffab29f14df85c5b4d6a", size = 41948752 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/6e/bbf134837ca86e416183e98c4ed2f4e35cb805296a940fb96e58faaa2123/blingfire-0.1.8-py3-none-any.whl", hash = "sha256:9534102bb81f69bc175e2373ef46d8eb0a2a43da052442c7708bfcef171899df", size = 42060688 },
 ]
 
 [[package]]
@@ -1165,6 +1175,7 @@ dependencies = [
     { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "protobuf" },
     { name = "psutil" },
+    { name = "pydantic" },
     { name = "pyjwt" },
     { name = "sounddevice" },
     { name = "types-protobuf" },
@@ -1283,6 +1294,7 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'images'", specifier = ">=10.3.0" },
     { name = "protobuf", specifier = ">=3" },
     { name = "psutil", specifier = ">=7.0" },
+    { name = "pydantic", specifier = ">=2.10.6" },
     { name = "pyjwt", specifier = ">=2.0" },
     { name = "sounddevice", specifier = ">=0.5" },
     { name = "types-protobuf", specifier = ">=4,<5" },
@@ -1362,6 +1374,28 @@ requires-dist = [
     { name = "azure-cognitiveservices-speech", specifier = ">=1.41.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-blingfire"
+source = { editable = "livekit-plugins/livekit-plugins-blingfire" }
+dependencies = [
+    { name = "blingfire" },
+    { name = "livekit-agents" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "blingfire", specifier = ">=0.1.8" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.3.5" }]
 
 [[package]]
 name = "livekit-plugins-cartesia"

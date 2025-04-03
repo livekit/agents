@@ -40,6 +40,7 @@ dependencies = [
     "colorama>=0.4.6",
     "av>=12.0.0",
     "numpy>=1.26.0",
+    "pydantic>=2.10.6",
 ]
 
 [project.optional-dependencies]
