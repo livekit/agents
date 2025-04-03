@@ -29,7 +29,7 @@ class ResponseEmotion(TypedDict):
     response: str
 
 
-async def process_text_stream(
+async def process_structured_output(
     text: AsyncIterable[str],
     callback: Optional[Callable[[ResponseEmotion], None]] = None,
 ) -> AsyncIterable[str]:
@@ -82,15 +82,11 @@ class MyAgent(Agent):
             async for chunk in stream:
                 yield chunk
 
-    async def transcription_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
-        async for delta in process_text_stream(text):
-            yield delta
-
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         tts = cast(openai.TTS, self.tts)
         instruction_updated = False
 
-        def update_instruction(resp: ResponseEmotion):
+        def output_processed(resp: ResponseEmotion):
             nonlocal instruction_updated
             if resp.get("voice_instructions") and resp.get("response") and not instruction_updated:
                 # when the response isn't empty, we can assume voice_instructions is complete.
@@ -99,12 +95,13 @@ class MyAgent(Agent):
                 logger.info(f"Updating TTS instructions: {resp['voice_instructions']}")
                 tts.update_options(instructions=resp["voice_instructions"])
 
-        async def structured_stream() -> AsyncIterable[str]:
-            async for delta in process_text_stream(text, callback=update_instruction):
-                logger.debug(f"Response generation delta: {delta}")
-                yield delta
+        return super().tts_node(
+            process_structured_output(text, callback=output_processed), model_settings
+        )
 
-        return super().tts_node(structured_stream(), model_settings)
+    async def transcription_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
+        async for delta in process_structured_output(text):
+            yield delta
 
 
 async def entrypoint(ctx: JobContext):
