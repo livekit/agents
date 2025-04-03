@@ -94,7 +94,7 @@ class LanguageConfiguration:
 class TranslationConfiguration:
     enabled: bool = False
     target_languages: List[str] = dataclasses.field(default_factory=list)
-    model: str = "base" 
+    model: str = "base"
     match_original_utterances: bool = True
 
 
@@ -106,7 +106,9 @@ class STTOptions:
     bit_depth: Literal[8, 16, 24, 32]
     channels: int
     encoding: Literal["wav/pcm", "wav/alaw", "wav/ulaw"]
-    translation_config: TranslationConfiguration = dataclasses.field(default_factory=TranslationConfiguration)
+    translation_config: TranslationConfiguration = dataclasses.field(
+        default_factory=TranslationConfiguration
+    )
     energy_filter: Union[AudioEnergyFilter, bool] = False
 
 
@@ -164,20 +166,19 @@ class STT(stt.STT):
 
         self._api_key = api_key
 
-        language_config = LanguageConfiguration(
-            languages=languages,
-            code_switching=code_switching
-        )
-        
+        language_config = LanguageConfiguration(languages=languages, code_switching=code_switching)
+
         translation_config = TranslationConfiguration(
             enabled=translation_enabled,
             target_languages=translation_target_languages or [],
             model=translation_model,
-            match_original_utterances=translation_match_original_utterances
+            match_original_utterances=translation_match_original_utterances,
         )
 
         if translation_enabled and not translation_target_languages:
-            raise ValueError("translation_target_languages is required when translation_enabled is True")
+            raise ValueError(
+                "translation_target_languages is required when translation_enabled is True"
+            )
 
         self._opts = STTOptions(
             language_config=language_config,
@@ -264,12 +265,13 @@ class STT(stt.STT):
                 # Get the raw bytes from the combined frame
                 pcm_data = combined_frame.data.tobytes()
 
-
                 bytes_per_second = config.sample_rate * config.channels * (config.bit_depth // 8)
                 chunk_size = (bytes_per_second * 150) // 1000
                 chunk_size = max(chunk_size, 1024)
 
-                logger.debug(f"Sending {len(pcm_data)} bytes of PCM data in chunks of {chunk_size} bytes")
+                logger.debug(
+                    f"Sending {len(pcm_data)} bytes of PCM data in chunks of {chunk_size} bytes"
+                )
 
                 # Send raw PCM audio data in chunks
                 for i in range(0, len(pcm_data), chunk_size):
@@ -293,14 +295,18 @@ class STT(stt.STT):
                     async for msg in ws.iter(timeout=receive_timeout):
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
-                            logger.debug(f"Received Gladia message: {data.get('type')}") # Log message type
+                            logger.debug(
+                                f"Received Gladia message: {data.get('type')}"
+                            )  # Log message type
                             # Collect final utterances
                             if data["type"] == "transcript" and data["data"]["is_final"]:
                                 utterance = data["data"]["utterance"]
                                 logger.debug(f"Received final utterance: {utterance.get('text')}")
                                 utterances.append(utterance)
                             # Check for translation as the final result if enabled
-                            elif data["type"] == "translation" and config.translation_config.enabled:
+                            elif (
+                                data["type"] == "translation" and config.translation_config.enabled
+                            ):
                                 logger.debug("Received translation message")
                                 pass
                             elif data["type"] == "post_final_transcript":
@@ -308,25 +314,41 @@ class STT(stt.STT):
                                 break
                             elif data["type"] == "error":
                                 logger.error(f"Gladia WebSocket error: {data.get('data')}")
-                                raise APIConnectionError(f"Gladia WebSocket error: {data.get('data')}")
+                                raise APIConnectionError(
+                                    f"Gladia WebSocket error: {data.get('data')}"
+                                )
 
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             logger.error(f"Gladia WebSocket connection error: {ws.exception()}")
-                            raise ws.exception() or APIConnectionError("Gladia WebSocket connection error")
-                        elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING):
-                            logger.warning(f"Gladia WebSocket closed unexpectedly during result receiving: type={msg.type}")
+                            raise ws.exception() or APIConnectionError(
+                                "Gladia WebSocket connection error"
+                            )
+                        elif msg.type in (
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.CLOSING,
+                        ):
+                            logger.warning(
+                                f"Gladia WebSocket closed unexpectedly during result receiving: type={msg.type}"
+                            )
                             break
 
                 except asyncio.TimeoutError:
-                    logger.warning(f"Timeout waiting for Gladia final transcript ({receive_timeout}s)")
+                    logger.warning(
+                        f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
+                    )
                     if not utterances:
-                         raise APITimeoutError(f"Timeout waiting for Gladia final transcript ({receive_timeout}s)")
+                        raise APITimeoutError(
+                            f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
+                        )
 
                 # Create a speech event from the collected final utterances
-                return self._create_speech_event(utterances, session_id, config.language_config.languages)
+                return self._create_speech_event(
+                    utterances, session_id, config.language_config.languages
+                )
 
         except asyncio.TimeoutError as e:
-             # Catch timeout during connection or initial phase
+            # Catch timeout during connection or initial phase
             logger.error(f"Timeout during Gladia connection/initialization: {e}")
             raise APITimeoutError("Timeout connecting to or initializing Gladia session") from e
         except aiohttp.ClientResponseError as e:
@@ -335,16 +357,20 @@ class STT(stt.STT):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=e.headers.get("X-Request-ID"), # Check if Gladia provides a request ID header
-                body=await e.response.text() if hasattr(e, 'response') else None,
+                request_id=e.headers.get(
+                    "X-Request-ID"
+                ),  # Check if Gladia provides a request ID header
+                body=await e.response.text() if hasattr(e, "response") else None,
             ) from e
         except aiohttp.ClientError as e:
-             # General client errors (connection refused, DNS resolution etc.)
+            # General client errors (connection refused, DNS resolution etc.)
             logger.error(f"Gladia connection error: {e}")
             raise APIConnectionError(f"Gladia connection error: {e}") from e
         except Exception as e:
             # Catch-all for other unexpected errors
-            logger.exception(f"Unexpected error during Gladia synchronous recognition: {e}") # Use logger.exception to include stack trace
+            logger.exception(
+                f"Unexpected error during Gladia synchronous recognition: {e}"
+            )  # Use logger.exception to include stack trace
             raise APIConnectionError(f"An unexpected error occurred: {e}") from e
 
     async def _init_live_session(self, config: dict, conn_options: APIConnectOptions) -> dict:
@@ -373,14 +399,11 @@ class STT(stt.STT):
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
     def _create_speech_event(
-        self, 
-        utterances: List[dict], 
-        session_id: str, 
-        languages: Optional[List[str]]
+        self, utterances: List[dict], session_id: str, languages: Optional[List[str]]
     ) -> stt.SpeechEvent:
         """Create a SpeechEvent from Gladia's transcript data."""
         alternatives = []
-        
+
         # Process each utterance into a SpeechData object
         for utterance in utterances:
             text = utterance.get("text", "").strip()
@@ -394,7 +417,7 @@ class STT(stt.STT):
                         text=text,
                     )
                 )
-        
+
         if not alternatives:
             alternatives.append(
                 stt.SpeechData(
@@ -405,7 +428,7 @@ class STT(stt.STT):
                     text="",
                 )
             )
-        
+
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
             request_id=session_id,
@@ -448,22 +471,38 @@ class STT(stt.STT):
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
                 self._opts.language_config,
-                languages=languages if languages is not None else self._opts.language_config.languages,
-                code_switching=code_switching if code_switching is not None else self._opts.language_config.code_switching,
+                languages=languages
+                if languages is not None
+                else self._opts.language_config.languages,
+                code_switching=code_switching
+                if code_switching is not None
+                else self._opts.language_config.code_switching,
             )
             self._opts.language_config = language_config
-            
-        if (translation_enabled is not None or translation_target_languages is not None or
-            translation_model is not None or translation_match_original_utterances is not None):
+
+        if (
+            translation_enabled is not None
+            or translation_target_languages is not None
+            or translation_model is not None
+            or translation_match_original_utterances is not None
+        ):
             translation_config = dataclasses.replace(
                 self._opts.translation_config,
-                enabled=translation_enabled if translation_enabled is not None else self._opts.translation_config.enabled,
-                target_languages=translation_target_languages if translation_target_languages is not None else self._opts.translation_config.target_languages,
-                model=translation_model if translation_model is not None else self._opts.translation_config.model,
-                match_original_utterances=translation_match_original_utterances if translation_match_original_utterances is not None else self._opts.translation_config.match_original_utterances,
+                enabled=translation_enabled
+                if translation_enabled is not None
+                else self._opts.translation_config.enabled,
+                target_languages=translation_target_languages
+                if translation_target_languages is not None
+                else self._opts.translation_config.target_languages,
+                model=translation_model
+                if translation_model is not None
+                else self._opts.translation_config.model,
+                match_original_utterances=translation_match_original_utterances
+                if translation_match_original_utterances is not None
+                else self._opts.translation_config.match_original_utterances,
             )
             self._opts.translation_config = translation_config
-            
+
         if interim_results is not None:
             self._opts.interim_results = interim_results
         if sample_rate is not None:
@@ -554,22 +593,38 @@ class SpeechStream(stt.SpeechStream):
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
                 self._opts.language_config,
-                languages=languages if languages is not None else self._opts.language_config.languages,
-                code_switching=code_switching if code_switching is not None else self._opts.language_config.code_switching,
+                languages=languages
+                if languages is not None
+                else self._opts.language_config.languages,
+                code_switching=code_switching
+                if code_switching is not None
+                else self._opts.language_config.code_switching,
             )
             self._opts.language_config = language_config
-            
-        if (translation_enabled is not None or translation_target_languages is not None or
-            translation_model is not None or translation_match_original_utterances is not None):
+
+        if (
+            translation_enabled is not None
+            or translation_target_languages is not None
+            or translation_model is not None
+            or translation_match_original_utterances is not None
+        ):
             translation_config = dataclasses.replace(
                 self._opts.translation_config,
-                enabled=translation_enabled if translation_enabled is not None else self._opts.translation_config.enabled,
-                target_languages=translation_target_languages if translation_target_languages is not None else self._opts.translation_config.target_languages,
-                model=translation_model if translation_model is not None else self._opts.translation_config.model,
-                match_original_utterances=translation_match_original_utterances if translation_match_original_utterances is not None else self._opts.translation_config.match_original_utterances,
+                enabled=translation_enabled
+                if translation_enabled is not None
+                else self._opts.translation_config.enabled,
+                target_languages=translation_target_languages
+                if translation_target_languages is not None
+                else self._opts.translation_config.target_languages,
+                model=translation_model
+                if translation_model is not None
+                else self._opts.translation_config.model,
+                match_original_utterances=translation_match_original_utterances
+                if translation_match_original_utterances is not None
+                else self._opts.translation_config.match_original_utterances,
             )
             self._opts.translation_config = translation_config
-            
+
         if interim_results is not None:
             self._opts.interim_results = interim_results
         if sample_rate is not None:
@@ -586,40 +641,40 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         backoff_time = 1.0
         max_backoff = 30.0
-        
+
         while True:
             try:
                 # Initialize the Gladia session
                 session_info = await self._init_live_session()
                 session_url = session_info["url"]
                 self._request_id = session_info["id"]
-                
+
                 # Reset backoff on success
                 backoff_time = 1.0
-                
+
                 # Connect to the WebSocket
                 async with self._session.ws_connect(session_url) as ws:
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
-                    
+
                     send_task = asyncio.create_task(self._send_audio_task())
                     recv_task = asyncio.create_task(self._recv_messages_task())
-                    
+
                     wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                    
+
                     try:
                         done, _ = await asyncio.wait(
                             [send_task, recv_task, wait_reconnect_task],
                             return_when=asyncio.FIRST_COMPLETED,
                         )
-                        
+
                         for task in done:
                             if task != wait_reconnect_task:
                                 task.result()
-                                
+
                         if wait_reconnect_task not in done:
                             break
-                            
+
                         self._reconnect_event.clear()
                         logger.info("Reconnecting Gladia session due to options change")
                     finally:
@@ -627,7 +682,9 @@ class SpeechStream(stt.SpeechStream):
                         self._ws = None
             except APIStatusError as e:
                 if e.status_code == 429:
-                    logger.warning(f"Rate limited by Gladia API. Backing off for {backoff_time} seconds.")
+                    logger.warning(
+                        f"Rate limited by Gladia API. Backing off for {backoff_time} seconds."
+                    )
                     await asyncio.sleep(backoff_time)
                     backoff_time = min(backoff_time * 2, max_backoff)
                 else:
@@ -649,18 +706,18 @@ class SpeechStream(stt.SpeechStream):
                 "languages": self._opts.language_config.languages or [],
                 "code_switching": self._opts.language_config.code_switching,
             },
-            "realtime_processing": {}
+            "realtime_processing": {},
         }
-        
+
         # Add translation configuration if enabled
         if self._opts.translation_config.enabled:
             streaming_config["realtime_processing"]["translation"] = True
             streaming_config["realtime_processing"]["translation_config"] = {
                 "target_languages": self._opts.translation_config.target_languages,
                 "model": self._opts.translation_config.model,
-                "match_original_utterances": self._opts.translation_config.match_original_utterances
+                "match_original_utterances": self._opts.translation_config.match_original_utterances,
             }
-        
+
         try:
             async with self._session.post(
                 url=self._base_url,
@@ -688,7 +745,7 @@ class SpeechStream(stt.SpeechStream):
         """Send audio data to Gladia WebSocket."""
         if not self._ws:
             return
-            
+
         # We'll aim to send audio chunks every ~100ms
         samples_100ms = self._opts.sample_rate // 10
         audio_bstream = utils.audio.AudioByteStream(
@@ -696,14 +753,14 @@ class SpeechStream(stt.SpeechStream):
             num_channels=self._opts.channels,
             samples_per_channel=samples_100ms,
         )
-        
+
         has_ended = False
         last_frame: Optional[rtc.AudioFrame] = None
-        
+
         async for data in self._input_ch:
             if not self._ws:
                 break
-                
+
             frames: list[rtc.AudioFrame] = []
             if isinstance(data, rtc.AudioFrame):
                 state = self._check_energy_state(data)
@@ -723,19 +780,19 @@ class SpeechStream(stt.SpeechStream):
             elif isinstance(data, self._FlushSentinel):
                 frames = audio_bstream.flush()
                 has_ended = True
-                
+
             for frame in frames:
                 self._audio_duration_collector.push(frame.duration)
                 # Encode the audio data as base64
                 chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                 message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
                 await self._ws.send_str(message)
-                
+
                 if has_ended:
                     self._audio_duration_collector.flush()
                     await self._ws.send_str(json.dumps({"type": "stop_recording"}))
                     has_ended = False
-        
+
         # Tell Gladia we're done sending audio when the stream ends
         if self._ws:
             await self._ws.send_str(json.dumps({"type": "stop_recording"}))
@@ -744,7 +801,7 @@ class SpeechStream(stt.SpeechStream):
         """Receive and process messages from Gladia WebSocket."""
         if not self._ws:
             return
-            
+
         async for msg in self._ws:
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
@@ -752,7 +809,11 @@ class SpeechStream(stt.SpeechStream):
                     self._process_gladia_message(data)
                 except Exception as e:
                     logger.exception(f"Error processing Gladia message: {e}")
-            elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
+            elif msg.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+            ):
                 break
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
@@ -763,14 +824,23 @@ class SpeechStream(stt.SpeechStream):
             is_final = data["data"]["is_final"]
             utterance = data["data"]["utterance"]
             text = utterance.get("text", "").strip()
-            
+
             if not self._speaking and text:
                 self._speaking = True
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH, request_id=self._request_id))
-                
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH, request_id=self._request_id
+                    )
+                )
+
             if text:
-                language = utterance.get("language", self._opts.language_config.languages[0] if self._opts.language_config.languages else "en")
-                
+                language = utterance.get(
+                    "language",
+                    self._opts.language_config.languages[0]
+                    if self._opts.language_config.languages
+                    else "en",
+                )
+
                 speech_data = stt.SpeechData(
                     language=language,
                     start_time=utterance.get("start", 0),
@@ -778,7 +848,7 @@ class SpeechStream(stt.SpeechStream):
                     confidence=utterance.get("confidence", 1.0),
                     text=text,
                 )
-                
+
                 if is_final:
                     # Only emit FINAL_TRANSCRIPT for the *original* language
                     # if translation is NOT enabled.
@@ -789,11 +859,16 @@ class SpeechStream(stt.SpeechStream):
                             alternatives=[speech_data],
                         )
                         self._event_ch.send_nowait(event)
-                        
+
                         # End of speech after final original transcript only if not translating
                         if self._speaking:
                             self._speaking = False
-                            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id))
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(
+                                    type=stt.SpeechEventType.END_OF_SPEECH,
+                                    request_id=self._request_id,
+                                )
+                            )
                     # If translation *is* enabled, we suppress this final event
                     # and wait for the 'translation' message to emit the final event.
                 elif self._opts.interim_results:
@@ -804,52 +879,60 @@ class SpeechStream(stt.SpeechStream):
                         alternatives=[speech_data],
                     )
                     self._event_ch.send_nowait(event)
-                    
+
         elif data["type"] == "translation":
             # Process translation messages according to Gladia's documentation:
             # https://docs.gladia.io/reference/realtime-messages/translation
             if self._opts.translation_config.enabled and "data" in data:
                 translation_data = data["data"]
-                
+
                 # Extract translated utterance
                 translated_utterance = translation_data.get("translated_utterance", {})
                 if not translated_utterance:
-                    logger.warning(f"No translated_utterance in translation message: {translation_data}")
+                    logger.warning(
+                        f"No translated_utterance in translation message: {translation_data}"
+                    )
                     return
-                
+
                 # Get language information
                 target_language = translation_data.get("target_language", "")
                 language = translated_utterance.get("language", target_language)
-                
+
                 # Get the translated text
                 translated_text = translated_utterance.get("text", "").strip()
-                
+
                 if translated_text and language:
                     # Log the translation
-                    logger.info(f"Translation from {translation_data.get('original_language')} to {language}: {translated_text}")
-                    
+                    logger.info(
+                        f"Translation from {translation_data.get('original_language')} to {language}: {translated_text}"
+                    )
+
                     # Create speech data for the translation
                     speech_data = stt.SpeechData(
-                        language=language, # Use the target language
+                        language=language,  # Use the target language
                         start_time=translated_utterance.get("start", 0),
                         end_time=translated_utterance.get("end", 0),
                         confidence=translated_utterance.get("confidence", 1.0),
-                        text=translated_text, # Use the translated text
+                        text=translated_text,  # Use the translated text
                     )
-                    
+
                     # Emit FINAL_TRANSCRIPT containing the TRANSLATION
                     event = stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=self._request_id,
-                        alternatives=[speech_data], # Now contains translated data
+                        alternatives=[speech_data],  # Now contains translated data
                     )
                     self._event_ch.send_nowait(event)
-                    
+
                     # Emit END_OF_SPEECH after the final *translated* transcript
                     if self._speaking:
                         self._speaking = False
-                        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id))
-                    
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id
+                            )
+                        )
+
         elif data["type"] == "post_final_transcript":
             # This is sent at the end of a session
             # We now tie END_OF_SPEECH to the emission of the relevant FINAL_TRANSCRIPT
@@ -857,7 +940,9 @@ class SpeechStream(stt.SpeechStream):
             # So, we might not strictly need to act on this message anymore for END_OF_SPEECH,
             # but ensure speaking state is reset if somehow missed.
             if self._speaking:
-                logger.warning("Resetting speaking state on post_final_transcript, END_OF_SPEECH might have been missed.")
+                logger.warning(
+                    "Resetting speaking state on post_final_transcript, END_OF_SPEECH might have been missed."
+                )
                 self._speaking = False
                 # Optionally emit END_OF_SPEECH here as a fallback, though it might cause duplicates
                 # self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id))
