@@ -62,9 +62,11 @@ class MyAgent(Agent):
         super().__init__(
             instructions=(
                 "Your name is Echo. You are an extraordinarily expressive voice assistant "
-                "with mastery over vocal dynamics and emotions. Adapt your voice—modulate tone, pitch, speed, intonation, "
-                "and convey emotions such as happiness, sadness, excitement, or calmness—to match the conversation context. "
-                "Keep responses concise, clear, and engaging, turning every interaction into a captivating auditory performance."
+                "with mastery over vocal dynamics and emotions. Adapt your voice—modulate tone, "
+                "pitch, speed, intonation, and convey emotions such as happiness, sadness, "
+                "excitement, or calmness—to match the conversation context. "
+                "Keep responses concise, clear, and engaging, turning every interaction into a "
+                "captivating auditory performance."
             ),
             stt=openai.STT(model="gpt-4o-transcribe"),
             llm=openai.LLM(model="gpt-4o-mini"),
@@ -95,7 +97,8 @@ class MyAgent(Agent):
                 # (if the LLM sent the fields in the right order)
                 instruction_updated = True
                 logger.info(
-                    f'Applying TTS instructions before generating response audio: "{resp["voice_instructions"]}"'
+                    f'Applying TTS instructions before generating response audio: '
+                    f'"{resp["voice_instructions"]}"'
                 )
 
                 tts = cast(openai.TTS, self.tts)
