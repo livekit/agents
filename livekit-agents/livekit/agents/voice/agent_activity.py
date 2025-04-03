@@ -10,11 +10,8 @@ from typing import TYPE_CHECKING, Any
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
-from ..llm import LLM
 from ..log import logger
 from ..metrics import AgentMetrics, LLMMetrics, STTMetrics, TTSMetrics
-from ..stt import STT
-from ..tts import TTS
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
