@@ -217,38 +217,16 @@ class RecognizeStream(ABC):
             try:
                 return await self._run()
             except APIError as e:
-                error_metrics = STTMetrics(
-                    timestamp=time.time(),
-                    label=self._stt._label,
-                )
                 if max_retries == 0:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=0,
-                        component=self._stt,
-                    )
-                    self._stt.emit("metrics_collected", error_metrics)
+                    self._emit_error_metrics(e, attempts_remaining=0)
                     raise
                 elif num_retries == max_retries:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=0,
-                        component=self._stt,
-                    )
-                    self._stt.emit("metrics_collected", error_metrics)
+                    self._emit_error_metrics(e, attempts_remaining=0)
                     raise APIConnectionError(
                         f"failed to recognize speech after {num_retries} attempts",
                     ) from e
                 else:
-                    error_metrics.error = Error(
-                        error=e.message,
-                        retryable=e.retryable,
-                        attempts_remaining=max_retries - num_retries,
-                        component=self._stt,
-                    )
-                    self._stt.emit("metrics_collected", error_metrics)
+                    self._emit_error_metrics(e, attempts_remaining=max_retries - num_retries)
 
                     retry_interval = self._conn_options._interval_for_retry(num_retries)
                     logger.warning(
