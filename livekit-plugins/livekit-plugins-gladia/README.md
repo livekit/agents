@@ -44,7 +44,7 @@ stt = GladiaSTT(
     encoding="wav/pcm",      # Audio encoding format
     energy_filter=True,      # Enable voice activity detection
     translation_enabled=True,
-    translation_target_languages=["es", "de"],
+    translation_target_languages=["en"],
     translation_model="base",
     translation_match_original_utterances=True
 )
