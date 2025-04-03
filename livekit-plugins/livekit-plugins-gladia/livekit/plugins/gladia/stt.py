@@ -710,8 +710,7 @@ class SpeechStream(stt.SpeechStream):
             streaming_config["realtime_processing"]["translation_config"] = {
                 "target_languages": self._opts.translation_config.target_languages,
                 "model": self._opts.translation_config.model,
-                "match_original_utterances":
-                    self._opts.translation_config.match_original_utterances,
+                "match_original_utterances": self._opts.translation_config.match_original_utterances,
             }
 
         try:
@@ -898,7 +897,6 @@ class SpeechStream(stt.SpeechStream):
                 translated_text = translated_utterance.get("text", "").strip()
 
                 if translated_text and language:
-
                     # Create speech data for the translation
                     speech_data = stt.SpeechData(
                         language=language,  # Use the target language
