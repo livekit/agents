@@ -72,7 +72,7 @@ async def entrypoint(ctx: JobContext):
             logger.info(
                 f"Session is closing due to error in {
                     ev.session_error.component.__class__.__name__
-                    }"
+                }"
             )
 
     await session.start(agent=MyTask(), room=ctx.room)
