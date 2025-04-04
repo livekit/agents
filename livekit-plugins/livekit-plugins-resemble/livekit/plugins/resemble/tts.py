@@ -391,7 +391,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async def _emit_task():
                 emitter = tts.SynthesizedAudioEmitter(
                     event_ch=self._event_ch,
-                    request_id=current_index,
+                    request_id=str(current_index),
                     segment_id=segment_id,
                 )
                 async for frame in decoder:
@@ -409,7 +409,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     ):
                         raise APIStatusError(
                             "Resemble connection closed unexpectedly",
-                            request_id=current_index,
+                            request_id=str(current_index),
                         )
 
                     if msg.type != aiohttp.WSMsgType.TEXT:
@@ -447,7 +447,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise APIStatusError(
                     message=e.message,
                     status_code=e.status,
-                    request_id=current_index,
+                    request_id=str(current_index),
                     body=None,
                 ) from e
             except Exception as e:
