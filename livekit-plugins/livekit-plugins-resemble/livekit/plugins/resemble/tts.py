@@ -169,7 +169,6 @@ class TTS(tts.TTS):
             pool=self._pool,
             opts=self._opts,
             api_key=self._api_key,
-            conn_options=conn_options,
         )
         self._streams.add(stream)
         return stream
