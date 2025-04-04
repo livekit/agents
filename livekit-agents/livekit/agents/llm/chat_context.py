@@ -29,6 +29,7 @@ from ..log import logger
 if TYPE_CHECKING:
     from ..llm import FunctionTool
 
+from datetime import datetime
 
 class ImageContent(BaseModel):
     """
@@ -109,6 +110,7 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     hash: bytes | None = None
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
     @property
     def text_content(self) -> str | None:
