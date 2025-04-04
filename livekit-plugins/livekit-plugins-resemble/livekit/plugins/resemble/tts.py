@@ -18,7 +18,6 @@ import asyncio
 import base64
 import json
 import os
-import random
 import weakref
 from dataclasses import dataclass
 from typing import Optional
@@ -308,8 +307,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts, self._pool, self._api_key = opts, pool, api_key
 
     async def _run(self) -> None:
-        request_id = random.randint(1, 100000)
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        request_id = utils.shortuuid()
+        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
@@ -347,7 +346,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=str(request_id),
+                request_id=request_id,
                 body=None,
             ) from e
         except Exception as e:
@@ -362,32 +361,43 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         async with self._pool.connection() as ws:
             segment_id = utils.shortuuid()
+            decoder = utils.codecs.AudioStreamDecoder(
+                sample_rate=self._opts.sample_rate,
+                num_channels=NUM_CHANNELS,
+            )
+            index_lock = asyncio.Lock()
+            pending_requests = set()
 
             @utils.log_exceptions(logger=logger)
             async def _send_task(ws: aiohttp.ClientWebSocketResponse):
-                """Stream text to the websocket."""
+                index = 0
                 async for data in input_stream:
                     payload = {
                         "voice_uuid": self._opts.voice_uuid,
                         "data": data.token,
-                        "request_id": request_id,
+                        "request_id": index,
                         "sample_rate": self._opts.sample_rate,
                         "precision": "PCM_16",
-                        "no_audio_header": True,
+                        "output_format": "mp3",
                     }
+                    async with index_lock:
+                        pending_requests.add(index)
+                    index += 1
                     await ws.send_str(json.dumps(payload))
 
             @utils.log_exceptions(logger=logger)
-            async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
-                audio_bstream = utils.audio.AudioByteStream(
-                    sample_rate=self._opts.sample_rate,
-                    num_channels=NUM_CHANNELS,
-                )
+            async def _emit_task():
                 emitter = tts.SynthesizedAudioEmitter(
                     event_ch=self._event_ch,
-                    request_id=str(request_id),
+                    request_id=request_id,
                     segment_id=segment_id,
                 )
+                async for frame in decoder:
+                    emitter.push(frame)
+                emitter.flush()
+
+            @utils.log_exceptions(logger=logger)
+            async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
                 while True:
                     msg = await ws.receive()
                     if msg.type in (
@@ -397,7 +407,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     ):
                         raise APIStatusError(
                             "Resemble connection closed unexpectedly",
-                            request_id=str(request_id),
+                            request_id=request_id,
                         )
 
                     if msg.type != aiohttp.WSMsgType.TEXT:
@@ -407,21 +417,24 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data = json.loads(msg.data)
 
                     if data.get("type") == "audio":
-                        b64data = base64.b64decode(data["audio_content"])
-                        for frame in audio_bstream.write(b64data):
-                            emitter.push(frame)
+                        if data.get("audio_content", None):
+                            b64data = base64.b64decode(data["audio_content"])
+                            decoder.push(b64data)
 
                     elif data.get("type") == "audio_end":
-                        for frame in audio_bstream.flush():
-                            emitter.push(frame)
-                        emitter.flush()
-                        break  # we are not going to receive any more audio
+                        async with index_lock:
+                            index = data["request_id"]
+                            pending_requests.remove(index)
+                            if not pending_requests:
+                                decoder.end_input()
+                                break  # we are not going to receive any more audio
                     else:
                         logger.error("Unexpected Resemble message %s", data)
 
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),
+                asyncio.create_task(_emit_task()),
             ]
 
             try:
@@ -432,7 +445,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise APIStatusError(
                     message=e.message,
                     status_code=e.status,
-                    request_id=str(request_id),
+                    request_id=request_id,
                     body=None,
                 ) from e
             except Exception as e:
