@@ -32,6 +32,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .log import logger
 
@@ -155,7 +156,7 @@ class TTS(tts.TTS):
         return ChunkedStream(
             tts=self,
             input_text=text,
-            conn_options=conn_options,
+            conn_options=conn_options or DEFAULT_API_CONNECT_OPTIONS,
             opts=self._opts,
             api_key=self._api_key,
             session=self._ensure_session(),
