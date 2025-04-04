@@ -63,7 +63,6 @@ class _EUORunnerBase(_InferenceRunner):
                 revision=self._model_revision,
                 local_files_only=True,
             )
-            print(f"Loading: {HG_MODEL}|{self._model_revision}")
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"]
             )
