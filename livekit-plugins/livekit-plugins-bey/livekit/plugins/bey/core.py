@@ -125,10 +125,14 @@ async def start_bey_avatar_session(
     if response.is_error:
         raise BeyException(f"Avatar session server responded with error: {response.text}")
 
+    async def wait_for_participant() -> None:
+        await ctx.wait_for_participant(
+            identity=_AVATAR_AGENT_IDENTITY,
+            kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT,
+        )
+
     return BeyAvatarSession(
-        avatar_agent_joined_awaitable=ctx.wait_for_participant(
-            identity=_AVATAR_AGENT_IDENTITY, kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
-        ),
+        avatar_agent_joined_awaitable=wait_for_participant(),
         local_agent_audio_output=DataStreamAudioOutput(
             ctx.room, destination_identity=_AVATAR_AGENT_IDENTITY
         ),
