@@ -307,7 +307,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts, self._pool, self._api_key = opts, pool, api_key
 
     async def _run(self) -> None:
-        request_id = utils.shortuuid()
+        request_id = random.randint(1, 100000)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
         @utils.log_exceptions(logger=logger)
@@ -346,7 +346,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=request_id,
+                request_id=str(request_id),
                 body=None,
             ) from e
         except Exception as e:
@@ -361,10 +361,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         async with self._pool.connection() as ws:
             segment_id = utils.shortuuid()
-            decoder = utils.codecs.AudioStreamDecoder(
-                sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
-            )
 
             @utils.log_exceptions(logger=logger)
             async def _send_task(ws: aiohttp.ClientWebSocketResponse):
@@ -382,6 +378,15 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             @utils.log_exceptions(logger=logger)
             async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
+                audio_bstream = utils.audio.AudioByteStream(
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                )
+                emitter = tts.SynthesizedAudioEmitter(
+                    event_ch=self._event_ch,
+                    request_id=str(request_id),
+                    segment_id=segment_id,
+                )
                 while True:
                     msg = await ws.receive()
                     if msg.type in (
@@ -391,7 +396,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     ):
                         raise APIStatusError(
                             "Resemble connection closed unexpectedly",
-                            request_id=request_id,
+                            request_id=str(request_id),
                         )
 
                     if msg.type != aiohttp.WSMsgType.TEXT:
@@ -402,29 +407,20 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     if data.get("type") == "audio":
                         b64data = base64.b64decode(data["audio_content"])
-                        decoder.push(b64data)
+                        for frame in audio_bstream.write(b64data):
+                            emitter.push(frame)
 
                     elif data.get("type") == "audio_end":
-                        decoder.end_input()
+                        for frame in audio_bstream.flush():
+                            emitter.push(frame)
+                        emitter.flush()
                         break  # we are not going to receive any more audio
                     else:
                         logger.error("Unexpected Resemble message %s", data)
 
-            @utils.log_exceptions(logger=logger)
-            async def generate_task():
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
-                    segment_id=segment_id,
-                )
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
-
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),
-                asyncio.create_task(generate_task()),
             ]
 
             try:
@@ -435,11 +431,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise APIStatusError(
                     message=e.message,
                     status_code=e.status,
-                    request_id=request_id,
+                    request_id=str(request_id),
                     body=None,
                 ) from e
             except Exception as e:
                 raise APIConnectionError() from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
-                await decoder.aclose()
