@@ -305,7 +305,7 @@ class LLMStream(llm.LLMStream):
 
         except ClientError as e:
             raise APIStatusError(
-                "gemini llm: client error",
+                f"gemini llm: client error {str(e)}",
                 status_code=e.code,
                 body=e.message,
                 request_id=request_id,
@@ -313,7 +313,7 @@ class LLMStream(llm.LLMStream):
             ) from e
         except ServerError as e:
             raise APIStatusError(
-                "gemini llm: server error",
+                f"gemini llm: server error {str(e)}",
                 status_code=e.code,
                 body=e.message,
                 request_id=request_id,
@@ -321,7 +321,7 @@ class LLMStream(llm.LLMStream):
             ) from e
         except APIError as e:
             raise APIStatusError(
-                "gemini llm: api error",
+                f"gemini llm: api error {str(e)}",
                 status_code=e.code,
                 body=e.message,
                 request_id=request_id,
@@ -329,7 +329,7 @@ class LLMStream(llm.LLMStream):
             ) from e
         except Exception as e:
             raise APIConnectionError(
-                "gemini llm: error generating content",
+                f"gemini llm: error generating content {str(e)}",
                 retryable=retryable,
             ) from e
 
