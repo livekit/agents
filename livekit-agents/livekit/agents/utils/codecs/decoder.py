@@ -118,6 +118,9 @@ class AudioStreamDecoder:
 
     def end_input(self):
         self._input_buf.end_input()
+        if not self._started:
+            # if no data was pushed, close the output channel
+            self._output_ch.close()
 
     def _decode_loop(self):
         container: av.container.InputContainer | None = None
