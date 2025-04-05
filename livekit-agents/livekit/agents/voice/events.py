@@ -1,14 +1,14 @@
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..errors import Error
-from ..llm import ChatMessage, FunctionCall, FunctionCallOutput, LLM
+from ..llm import LLM, ChatMessage, FunctionCall, FunctionCallOutput
+from ..metrics import AgentMetrics
 from ..stt import STT
 from ..tts import TTS
-from ..metrics import AgentMetrics
 from ..types import AgentState
 from .speech_handle import SpeechHandle
 
