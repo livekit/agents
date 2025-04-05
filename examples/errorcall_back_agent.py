@@ -7,7 +7,7 @@ from livekit.agents._exceptions import APIStatusError
 from livekit.agents.llm import LLM, LLMStream
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.voice import Agent, AgentSession
-from livekit.agents.voice.events import SessionCloseEvent, ErrorEvent
+from livekit.agents.voice.events import ErrorEvent, SessionCloseEvent
 from livekit.plugins import cartesia, deepgram, silero
 
 logger = logging.getLogger("my-worker")
