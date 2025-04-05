@@ -65,12 +65,15 @@ class STT(stt.STT):
         # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
         language: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
+        speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
     ):
         """
         Create a new instance of Azure STT.
 
         Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
-        ``speech_auth_token`` and ``speech_region`` must be set using arguments.
+        ``speech_auth_token`` and ``speech_region`` or
+        ``speech_key`` and ``speech_endpoint``
+        must be set using arguments.
          Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
         and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
@@ -96,9 +99,10 @@ class STT(stt.STT):
             is_given(speech_host)
             or (is_given(speech_key) and is_given(speech_region))
             or (is_given(speech_auth_token) and is_given(speech_region))
+            or (is_given(speech_key) and is_given(speech_endpoint))
         ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and speech_endpoint must be set"  # noqa: E501
             )
 
         self._config = STTOptions(
@@ -113,6 +117,7 @@ class STT(stt.STT):
             segmentation_max_time_ms=segmentation_max_time_ms,
             segmentation_strategy=segmentation_strategy,
             profanity=profanity,
+            speech_endpoint=speech_endpoint,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
