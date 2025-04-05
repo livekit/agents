@@ -1,7 +1,6 @@
 from .base import (
     AgentMetrics,
     EOUMetrics,
-    Error,
     LLMMetrics,
     STTMetrics,
     TTSMetrics,
@@ -20,5 +19,4 @@ __all__ = [
     "UsageSummary",
     "UsageCollector",
     "log_metrics",
-    "Error",
 ]

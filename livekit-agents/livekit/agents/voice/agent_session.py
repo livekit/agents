@@ -12,7 +12,6 @@ from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..llm import ChatContext
 from ..log import logger
-from ..metrics import Error
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
@@ -25,7 +24,6 @@ from .events import (
     ConversationItemAddedEvent,
     EventTypes,
     SessionCloseEvent,
-    SessionError,
 )
 from .speech_handle import SpeechHandle
 
@@ -372,12 +370,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is not None:
             await self._activity.drain()
 
-    def _create_session_close_task(
-        self, component: llm.LLM | stt.STT | tts.TTS, error: Error
-    ) -> None:
+    def _create_session_close_task(self) -> None:
         self.emit(
             "session_close",
-            SessionCloseEvent(session_error=SessionError(error=error, component=component)),
+            SessionCloseEvent(),
         )
         self._closing_task = asyncio.create_task(self.aclose())
 

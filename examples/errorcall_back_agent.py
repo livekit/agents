@@ -7,7 +7,7 @@ from livekit.agents._exceptions import APIStatusError
 from livekit.agents.llm import LLM, LLMStream
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.voice import Agent, AgentSession
-from livekit.agents.voice.events import SessionCloseEvent
+from livekit.agents.voice.events import SessionCloseEvent, ErrorEvent
 from livekit.plugins import cartesia, deepgram, silero
 
 logger = logging.getLogger("my-worker")
@@ -66,14 +66,13 @@ async def entrypoint(ctx: JobContext):
         vad=silero.VAD.load(),
     )
 
+    @session.on("error")
+    def on_error(ev: ErrorEvent):
+        logger.info(f"Session is closing due to error in {ev.component.__class__.__name__}")
+
     @session.on("session_close")
     def on_session_close(ev: SessionCloseEvent):
-        if ev.session_error is not None:
-            logger.info(
-                f"Session is closing due to error in {
-                    ev.session_error.component.__class__.__name__
-                }"
-            )
+        logger.info("Play custom audio before session close")
 
     await session.start(agent=MyTask(), room=ctx.room)
 

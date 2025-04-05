@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Any
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
+from ..errors import Error, LLMError, STTError, TTSError
 from ..log import logger
-from ..metrics import AgentMetrics, LLMMetrics, STTMetrics, TTSMetrics
+from ..metrics import AgentMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
@@ -19,6 +20,7 @@ from .audio_recognition import AudioRecognition, RecognitionHooks
 from .events import (
     AgentStartedSpeakingEvent,
     AgentStoppedSpeakingEvent,
+    ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
@@ -317,19 +319,22 @@ class AgentActivity(RecognitionHooks):
                 except ValueError:
                     logger.exception("failed to update the instructions")
 
-            # metrics
+            # metrics and error handling
             if isinstance(self.llm, llm.LLM):
                 self.llm.on("metrics_collected", self._on_metrics_collected)
+                self.llm.on("error", self._on_error)
 
             if isinstance(self.stt, stt.STT):
                 self.stt.on("metrics_collected", self._on_metrics_collected)
+                self.stt.on("error", self._on_error)
 
             if isinstance(self.tts, tts.TTS):
                 self.tts.on("metrics_collected", self._on_metrics_collected)
+                self.tts.on("error", self._on_error)
 
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)
-
+                self.vad.on("error", self._on_error)
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
                 hooks=self,
@@ -563,14 +568,17 @@ class AgentActivity(RecognitionHooks):
         if speech_handle := _SpeechHandleContextVar.get(None):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
-        if ev.error:
-            if not ev.error.retryable or ev.error.attempts_remaining == 0:
-                if isinstance(ev, LLMMetrics):
-                    self._session._create_session_close_task(self.llm, ev.error)
-                elif isinstance(ev, STTMetrics):
-                    self._session._create_session_close_task(self.stt, ev.error)
-                elif isinstance(ev, TTSMetrics):
-                    self._session._create_session_close_task(self.tts, ev.error)
+
+    def _on_error(self, ev: Error) -> None:
+        if isinstance(ev, LLMError):
+            self._session.emit("error", ErrorEvent(error=ev, component=self.llm))
+        elif isinstance(ev, STTError):
+            self._session.emit("error", ErrorEvent(error=ev, component=self.stt))
+        elif isinstance(ev, TTSError):
+            self._session.emit("error", ErrorEvent(error=ev, component=self.tts))
+
+        if not ev.retryable or ev.attempts_remaining == 0:
+            self._session._create_session_close_task()
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
