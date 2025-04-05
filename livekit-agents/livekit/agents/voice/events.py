@@ -124,12 +124,12 @@ class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
     error: Error
-    component: LLM | STT | TTS
+    source: LLM | STT | TTS
 
 
 class SessionCloseEvent(BaseModel):
     type: Literal["session_close"] = "session_close"
-    cause: Error | None = None
+    cause: ErrorEvent | None = None
 
 
 AgentEvent = Union[

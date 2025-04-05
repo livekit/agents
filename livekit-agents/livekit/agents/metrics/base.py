@@ -7,41 +7,41 @@ from pydantic import BaseModel
 
 class LLMMetrics(BaseModel):
     type: Literal["llm_metrics"] = "llm_metrics"
-    timestamp: float
     label: str
-    request_id: str = ""
-    duration: float = 0.0
-    ttft: float = 0.0
-    cancelled: bool = False
-    completion_tokens: int = 0
-    prompt_tokens: int = 0
-    total_tokens: int = 0
-    tokens_per_second: float = 0.0
+    request_id: str
+    timestamp: float
+    duration: float
+    ttft: float
+    cancelled: bool
+    completion_tokens: int
+    prompt_tokens: int
+    total_tokens: int
+    tokens_per_second: float
     speech_id: str | None = None
 
 
 class STTMetrics(BaseModel):
     type: Literal["stt_metrics"] = "stt_metrics"
-    timestamp: float
     label: str
-    request_id: str = ""
-    duration: float = 0.0
-    audio_duration: float = 0.0
-    streamed: bool = False
+    request_id: str
+    timestamp: float
+    duration: float
+    audio_duration: float
+    streamed: bool
     speech_id: str | None = None
 
 
 class TTSMetrics(BaseModel):
     type: Literal["tts_metrics"] = "tts_metrics"
-    timestamp: float
     label: str
-    request_id: str = ""
-    ttfb: float = 0.0
-    duration: float = 0.0
-    audio_duration: float = 0.0
-    cancelled: bool = False
-    characters_count: int = 0
-    streamed: bool = False
+    request_id: str
+    timestamp: float
+    ttfb: float
+    duration: float
+    audio_duration: float
+    cancelled: bool
+    characters_count: int
+    streamed: bool
     speech_id: str | None = None
 
 

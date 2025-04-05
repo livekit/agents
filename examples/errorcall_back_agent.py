@@ -68,7 +68,7 @@ async def entrypoint(ctx: JobContext):
 
     @session.on("error")
     def on_error(ev: ErrorEvent):
-        logger.info(f"Session is closing due to error in {ev.component.__class__.__name__}")
+        logger.info(f"Session is closing due to error in {ev.source.__class__.__name__}")
 
     @session.on("session_close")
     def on_session_close(ev: SessionCloseEvent):

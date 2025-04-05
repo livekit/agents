@@ -571,14 +571,17 @@ class AgentActivity(RecognitionHooks):
 
     def _on_error(self, ev: Error) -> None:
         if isinstance(ev, LLMError):
-            self._session.emit("error", ErrorEvent(error=ev, component=self.llm))
+            error_event = ErrorEvent(error=ev, source=self.llm)
+            self._session.emit("error", error_event)
         elif isinstance(ev, STTError):
-            self._session.emit("error", ErrorEvent(error=ev, component=self.stt))
+            error_event = ErrorEvent(error=ev, source=self.stt)
+            self._session.emit("error", error_event)
         elif isinstance(ev, TTSError):
-            self._session.emit("error", ErrorEvent(error=ev, component=self.tts))
+            error_event = ErrorEvent(error=ev, source=self.tts)
+            self._session.emit("error", error_event)
 
         if not ev.retryable or ev.attempts_remaining == 0:
-            self._session._create_session_close_task()
+            self._session._create_session_close_task(error_event)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")

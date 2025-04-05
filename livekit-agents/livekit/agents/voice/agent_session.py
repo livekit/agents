@@ -22,6 +22,7 @@ from .events import (
     AgentEvent,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    ErrorEvent,
     EventTypes,
     SessionCloseEvent,
 )
@@ -370,10 +371,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is not None:
             await self._activity.drain()
 
-    def _create_session_close_task(self) -> None:
+    def _create_session_close_task(self, cause: ErrorEvent | None = None) -> None:
         self.emit(
             "session_close",
-            SessionCloseEvent(),
+            SessionCloseEvent(cause=cause),
         )
         self._closing_task = asyncio.create_task(self.aclose())
 
