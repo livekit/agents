@@ -129,6 +129,7 @@ class ErrorEvent(BaseModel):
 
 class SessionCloseEvent(BaseModel):
     type: Literal["session_close"] = "session_close"
+    cause: Error | None = None
 
 
 AgentEvent = Union[
