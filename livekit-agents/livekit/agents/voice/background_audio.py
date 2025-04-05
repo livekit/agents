@@ -20,21 +20,6 @@ from ..utils.audio import audio_frames_from_file
 from .agent_session import AgentSession
 from .events import AgentStateChangedEvent
 
-SoundSource = Union[AsyncIterator[rtc.AudioFrame], str]
-
-
-class BackgroundSound(NamedTuple):
-    sound: SoundSource
-    volume: float = 1.0
-    probability: float = 1.0
-
-
-# The queue size is set to 400ms, which determines how much audio Rust will buffer.
-# We intentionally keep this small within BackgroundAudio because calling
-# AudioSource.clear_queue() would abruptly cut off ambient sounds.
-# Instead, we remove the sound from the mixer, and it will get removed 400ms later.
-_AUDIO_SOURCE_BUFFER_MS = 400
-
 _resource_stack = contextlib.ExitStack()
 atexit.register(_resource_stack.close)
 
@@ -49,15 +34,39 @@ class DefaultSound(enum.Enum):
         return str(_resource_stack.enter_context(as_file(sound)))
 
 
+SoundSource = Union[AsyncIterator[rtc.AudioFrame], str, DefaultSound]
+
+
+class BackgroundSound(NamedTuple):
+    """
+    Definition for the sound to be played in the background
+
+    Args:
+        volume: The volume of the sound (0.0-1.0)
+        probability: The probability of the sound being played, when multiple sounds are provided (0.0-1.0)
+    """
+
+    sound: SoundSource
+    volume: float = 1.0
+    probability: float = 1.0
+
+
+# The queue size is set to 400ms, which determines how much audio Rust will buffer.
+# We intentionally keep this small within BackgroundAudio because calling
+# AudioSource.clear_queue() would abruptly cut off ambient sounds.
+# Instead, we remove the sound from the mixer, and it will get removed 400ms later.
+_AUDIO_SOURCE_BUFFER_MS = 400
+
+
 class BackgroundAudio:
     def __init__(
         self,
         *,
         ambient_sound: NotGivenOr[
-            Union[DefaultSound, SoundSource, BackgroundSound, list[BackgroundSound], None]
+            Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
         ] = NOT_GIVEN,
         thinking_sound: NotGivenOr[
-            Union[DefaultSound, SoundSource, BackgroundSound, list[BackgroundSound], None]
+            Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
         ] = NOT_GIVEN,
     ) -> None:
         """
@@ -78,11 +87,11 @@ class BackgroundAudio:
         - A total probability below 1.0 means there is a chance no sound will be selected (resulting in silence).
 
         Args:
-            ambient_sound (NotGivenOr[Union[DefaultSound, SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
+            ambient_sound (NotGivenOr[Union[SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
                 The ambient sound to be played continuously. For file paths, the sound will be looped.
                 For AsyncIterator sources, ensure the iterator is infinite or looped. Defaults to a low‑volume
                 office ambience sound.
-            thinking_sound (NotGivenOr[Union[DefaultSound, SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
+            thinking_sound (NotGivenOr[Union[SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
                 The sound to be played when the associated agent enters a “thinking” state. This can be a single
                 sound source or a list of BackgroundSound objects (with volume and probability settings).
 
@@ -91,7 +100,7 @@ class BackgroundAudio:
         self._ambient_sound = (
             ambient_sound
             if is_given(ambient_sound)
-            else BackgroundSound(DefaultSound.OFFICE_AMBIENCE.path(), volume=0.8)
+            else BackgroundSound(DefaultSound.OFFICE_AMBIENCE, volume=0.8)
         )
         self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
 
@@ -139,7 +148,7 @@ class BackgroundAudio:
         return sounds[-1]
 
     def _normalize_sound_source(
-        self, source: Union[DefaultSound, SoundSource, BackgroundSound, list[BackgroundSound], None]
+        self, source: Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
     ) -> Union[tuple[SoundSource, float], None]:
         if source is None:
             return None
@@ -312,6 +321,9 @@ class BackgroundAudio:
     async def _play_task(
         self, play_handle: "PlayHandle", sound: SoundSource, volume: float, loop: bool
     ) -> None:
+        if isinstance(sound, DefaultSound):
+            sound = sound.path()
+
         if isinstance(sound, str):
             if loop:
                 sound = _loop_audio_frames(sound)
