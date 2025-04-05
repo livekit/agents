@@ -1,6 +1,7 @@
 import asyncio
 import atexit
 import contextlib
+import enum
 import random
 from collections.abc import AsyncGenerator, AsyncIterator
 from importlib.resources import as_file, files
@@ -38,15 +39,25 @@ _resource_stack = contextlib.ExitStack()
 atexit.register(_resource_stack.close)
 
 
+class DefaultSound(enum.Enum):
+    OFFICE_AMBIENCE = "office-ambience.ogg"
+    KEYBOARD_TYPING = "keyboard-typing.ogg"
+    KEYBOARD_TYPING2 = "keyboard-typing2.ogg"
+
+    def path(self) -> str:
+        sound = files("livekit.agents.resources") / self.value
+        return str(_resource_stack.enter_context(as_file(sound)))
+
+
 class BackgroundAudio:
     def __init__(
         self,
         *,
         ambient_sound: NotGivenOr[
-            Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
+            Union[DefaultSound, SoundSource, BackgroundSound, list[BackgroundSound], None]
         ] = NOT_GIVEN,
         thinking_sound: NotGivenOr[
-            Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
+            Union[DefaultSound, SoundSource, BackgroundSound, list[BackgroundSound], None]
         ] = NOT_GIVEN,
     ) -> None:
         """
@@ -67,36 +78,22 @@ class BackgroundAudio:
         - A total probability below 1.0 means there is a chance no sound will be selected (resulting in silence).
 
         Args:
-            ambient_sound (NotGivenOr[Union[SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
+            ambient_sound (NotGivenOr[Union[DefaultSound, SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
                 The ambient sound to be played continuously. For file paths, the sound will be looped.
                 For AsyncIterator sources, ensure the iterator is infinite or looped. Defaults to a low‑volume
                 office ambience sound.
-            thinking_sound (NotGivenOr[Union[SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
+            thinking_sound (NotGivenOr[Union[DefaultSound, SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
                 The sound to be played when the associated agent enters a “thinking” state. This can be a single
-                sound source or a list of BackgroundSound objects (with volume and probability settings). Defaults
-                to a set of keyboard typing sounds.
-        """  # noqa: E501
-        default_office = files("livekit.agents.resources") / "office-ambience.ogg"
-        default_keyboard = files("livekit.agents.resources") / "keyboard-typing.ogg"
-        default_keyboard2 = files("livekit.agents.resources") / "keyboard-typing2.ogg"
+                sound source or a list of BackgroundSound objects (with volume and probability settings).
 
-        office_path = _resource_stack.enter_context(as_file(default_office))
-        keyboard_path = _resource_stack.enter_context(as_file(default_keyboard))
-        keyboard_path2 = _resource_stack.enter_context(as_file(default_keyboard2))
+        """  # noqa: E501
 
         self._ambient_sound = (
             ambient_sound
             if is_given(ambient_sound)
-            else BackgroundSound(str(office_path), volume=0.2)
+            else BackgroundSound(DefaultSound.OFFICE_AMBIENCE.path(), volume=0.8)
         )
-        self._thinking_sound = (
-            thinking_sound
-            if is_given(thinking_sound)
-            else [
-                BackgroundSound(str(keyboard_path), volume=0.8, probability=0.4),
-                BackgroundSound(str(keyboard_path2), volume=0.8, probability=0.6),
-            ]
-        )
+        self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
 
         self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
         self._audio_mixer = rtc.AudioMixer(48000, 1, blocksize=4800, capacity=1)
@@ -142,18 +139,19 @@ class BackgroundAudio:
         return sounds[-1]
 
     def _normalize_sound_source(
-        self, source: Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
+        self, source: Union[DefaultSound, SoundSource, BackgroundSound, list[BackgroundSound], None]
     ) -> Union[tuple[SoundSource, float], None]:
         if source is None:
             return None
 
-        if isinstance(source, list):
+        if isinstance(source, DefaultSound):
+            return source.path(), 1.0
+        elif isinstance(source, list):
             selected = self._select_sound_from_list(cast(list[BackgroundSound], source))
             if selected is None:
                 return None
             return selected.sound, selected.volume
-
-        if isinstance(source, BackgroundSound):
+        elif isinstance(source, BackgroundSound):
             return source.sound, source.volume
 
         return source, 1.0
