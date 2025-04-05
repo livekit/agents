@@ -5,9 +5,11 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from pydantic import TypeAdapter
+
 from google.genai import types
 from livekit.agents import llm
-from livekit.agents.llm import FunctionTool
+from livekit.agents.llm import FunctionTool, utils as llm_utils
 
 from .log import logger
 
@@ -109,6 +111,16 @@ def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
     )
 
 
+def to_response_format(response_format: type | dict) -> types.SchemaUnion:
+    _, json_schema_type = llm_utils.to_response_format_param(response_format)
+    if isinstance(json_schema_type, TypeAdapter):
+        schema = json_schema_type.json_schema()
+    else:
+        schema = json_schema_type.model_json_schema()
+
+    return _GeminiJsonSchema(schema).simplify()
+
+
 class _GeminiJsonSchema:
     """
     Transforms the JSON Schema from Pydantic to be suitable for Gemini.
@@ -140,6 +152,7 @@ class _GeminiJsonSchema:
     def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
         schema.pop("title", None)
         schema.pop("default", None)
+        schema.pop("additionalProperties", None)
         if ref := schema.pop("$ref", None):
             key = re.sub(r"^#/\$defs/", "", ref)
             if key in refs_stack:
@@ -200,7 +213,6 @@ class _GeminiJsonSchema:
             "maxItems": "max_items",
             "minProperties": "min_properties",
             "maxProperties": "max_properties",
-            "additionalProperties": "additional_properties",
         }
 
         for json_name, gemini_name in mappings.items():
@@ -208,11 +220,6 @@ class _GeminiJsonSchema:
                 schema[gemini_name] = schema.pop(json_name)
 
     def _object(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
-        # Gemini doesn't support additionalProperties
-        ad_props = schema.pop("additional_properties", None)
-        if ad_props:
-            raise ValueError("Additional properties in JSON Schema are not supported by Gemini")
-
         if properties := schema.get("properties"):
             for value in properties.values():
                 self._simplify(value, refs_stack)
