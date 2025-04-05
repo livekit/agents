@@ -184,6 +184,7 @@ class STT(stt.STT):
             raise ValueError("Deepgram API key is required")
 
         model = _validate_model(model, language)
+        keyterms, keywords = _validate_keyterms(model, language, keyterms, keywords)
 
         self._opts = STTOptions(
             language=language,
@@ -776,3 +777,35 @@ def _validate_model(
         )
         return "nova-2-general"
     return model
+
+
+def _validate_keyterms(
+    model: DeepgramModels | str,
+    language: NotGivenOr[DeepgramLanguages | str],
+    keyterms: NotGivenOr[list[str]],
+    keywords: NotGivenOr[list[tuple[str, float]]],
+) -> tuple[
+    NotGivenOr[list[str]],
+    NotGivenOr[list[tuple[str, float]]],
+]:
+    if model.startswith("nova-3") and is_given(keywords):
+        logger.warning(
+            "Keywords is only available for use with Nova-2, Nova-1, Enhanced, and "
+            "Base speech to text models. For Nova-3, use Keyterm Prompting."
+        )
+        return keyterms, NOT_GIVEN
+
+    if model.startswith("nova-3") and language not in ("en-US", "en") and is_given(keyterms):
+        logger.warning(
+            "Keyterm Prompting is only available for English transcription using the Nova-3 Model."
+        )
+        return NOT_GIVEN, keywords
+
+    if not model.startswith("nova-3") and is_given(keyterms):
+        logger.warning(
+            "Keyterm Prompting is only available for English transcription using the Nova-3 Model. "
+            "To boost recognition of keywords using another model, use the Keywords feature."
+        )
+        return NOT_GIVEN, keywords
+
+    return keyterms, keywords
