@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
@@ -28,7 +29,6 @@ from ..log import logger
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool
-
 
 class ImageContent(BaseModel):
     """
@@ -109,6 +109,7 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     hash: bytes | None = None
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
     @property
     def text_content(self) -> str | None:
