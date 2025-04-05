@@ -43,7 +43,8 @@ class AudioConfig(NamedTuple):
 
     Args:
         volume: The volume of the audio (0.0-1.0)
-        probability: The probability of the audio being played, when multiple AudioConfigs are provided (0.0-1.0)
+        probability: The probability of the audio being played, when multiple
+            AudioConfigs are provided (0.0-1.0)
     """
 
     source: AudioSource
