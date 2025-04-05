@@ -1,5 +1,11 @@
 # livekit-plugins-google
 
+## 0.11.3
+
+### Patch Changes
+
+- google tts: configure api_endpoint based on location - [#1890](https://github.com/livekit/agents/pull/1890) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.11.2
 
 ### Patch Changes
