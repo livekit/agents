@@ -65,6 +65,7 @@ class FunctionInfo:
     auto_retry: bool
     callable: Callable
     arguments: dict[str, FunctionArgInfo]
+    wait_for_response: bool = True
 
 
 @dataclass(frozen=True)
@@ -107,9 +108,16 @@ def ai_callable(
     name: str | None = None,
     description: str | _UseDocMarker = USE_DOCSTRING,
     auto_retry: bool = False,
+    wait_for_response: bool = True,
 ) -> Callable:
     def deco(f):
-        _set_metadata(f, name=name, desc=description, auto_retry=auto_retry)
+        _set_metadata(
+            f,
+            name=name,
+            desc=description,
+            auto_retry=auto_retry,
+            wait_for_response=wait_for_response,
+        )
         return f
 
     return deco
@@ -196,6 +204,7 @@ class FunctionContext:
             auto_retry=metadata.auto_retry,
             callable=fnc,
             arguments=args,
+            wait_for_response=metadata.wait_for_response,
         )
 
     @property
@@ -208,6 +217,7 @@ class _AIFncMetadata:
     name: str
     description: str
     auto_retry: bool
+    wait_for_response: bool
 
 
 def _extract_types(annotation: type) -> tuple[type, TypeInfo | None]:
@@ -245,6 +255,7 @@ def _set_metadata(
     name: str | None = None,
     desc: str | _UseDocMarker = USE_DOCSTRING,
     auto_retry: bool = False,
+    wait_for_response: bool = True,
 ) -> None:
     if isinstance(desc, _UseDocMarker):
         docstring = inspect.getdoc(f)
@@ -256,7 +267,10 @@ def _set_metadata(
         desc = docstring
 
     metadata = _AIFncMetadata(
-        name=name or f.__name__, description=desc, auto_retry=auto_retry
+        name=name or f.__name__,
+        description=desc,
+        auto_retry=auto_retry,
+        wait_for_response=wait_for_response,
     )
 
     setattr(f, METADATA_ATTR, metadata)
