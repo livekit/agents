@@ -85,7 +85,10 @@ class PlaybackFinishedEvent:
 
 class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
     def __init__(
-        self, *, next_in_chain: AudioOutput | None, sample_rate: int | None = None
+        self,
+        *,
+        next_in_chain: AudioOutput | None = None,
+        sample_rate: int | None = None,
     ) -> None:
         """
         Args:
