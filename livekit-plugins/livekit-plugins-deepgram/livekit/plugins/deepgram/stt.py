@@ -112,6 +112,7 @@ class STTOptions:
     energy_filter: AudioEnergyFilter | bool = False
     numerals: bool = False
     mip_opt_out: bool = False
+    tags: NotGivenOr[list[str]] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -131,6 +132,7 @@ class STT(stt.STT):
         filler_words: bool = True,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        tags: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: bool = False,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
@@ -157,6 +159,7 @@ class STT(stt.STT):
                      `keywords` does not work with Nova-3 models. Use `keyterms` instead.
             keyterms: List of key terms to improve recognition accuracy. Defaults to None.
                      `keyterms` is supported by Nova-3 models.
+            tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
             profanity_filter: Whether to filter profanity from the transcription. Defaults to False.
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
@@ -203,6 +206,7 @@ class STT(stt.STT):
             energy_filter=energy_filter,
             numerals=numerals,
             mip_opt_out=mip_opt_out,
+            tags=_validate_tags(tags) if is_given(tags) else [],
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -300,6 +304,7 @@ class STT(stt.STT):
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
+        tags: NotGivenOr[list[str]] = NOT_GIVEN,
     ):
         if is_given(language):
             self._opts.language = language
@@ -329,6 +334,8 @@ class STT(stt.STT):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
+        if is_given(tags):
+            self._opts.tags = _validate_tags(tags)
 
         for stream in self._streams:
             stream.update_options(
@@ -421,6 +428,7 @@ class SpeechStream(stt.SpeechStream):
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
+        tags: NotGivenOr[list[str]] = NOT_GIVEN,
     ):
         if is_given(language):
             self._opts.language = language
@@ -450,6 +458,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
+        if is_given(tags):
+            self._opts.tags = _validate_tags(tags)
 
         self._reconnect_event.set()
 
@@ -602,6 +612,9 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.language:
             live_config["language"] = self._opts.language
 
+        if self._opts.tags:
+            live_config["tag"] = self._opts.tags
+
         ws = await asyncio.wait_for(
             self._session.ws_connect(
                 _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
@@ -749,7 +762,6 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
 
     elif not websocket and base_url.startswith("ws"):
         base_url = base_url.replace("ws", "http", 1)
-
     return f"{base_url}?{urlencode(opts, doseq=True)}"
 
 
@@ -776,3 +788,10 @@ def _validate_model(
         )
         return "nova-2-general"
     return model
+
+
+def _validate_tags(tags: list[str]) -> list[str]:
+    for tag in tags:
+        if len(tag) > 128:
+            raise ValueError("tag must be no more than 128 characters")
+    return tags
