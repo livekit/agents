@@ -19,6 +19,7 @@ class LLMMetrics(BaseModel):
     tokens_per_second: float = 0.0
     speech_id: str | None = None
 
+
 class STTMetrics(BaseModel):
     type: Literal["stt_metrics"] = "stt_metrics"
     timestamp: float
