@@ -164,7 +164,7 @@ class AgentTranscriptionOptions:
 class _TurnDetector(Protocol):
     # When endpoint probability is below this threshold we think the user is not finished speaking
     # so we will use a long delay
-    def unlikely_threshold(self) -> float: ...
+    def unlikely_threshold(self, language: str | None) -> float: ...
     def supports_language(self, language: str | None) -> bool: ...
     async def predict_end_of_turn(self, chat_ctx: ChatContext) -> float: ...
 
@@ -1314,6 +1314,10 @@ class _DeferredReplyValidation:
 
     def on_human_final_transcript(self, transcript: str, language: str | None) -> None:
         self._last_final_transcript += " " + transcript.strip()  # type: ignore
+        logger.debug(
+            "last language updated",
+            extra={"from": self._last_language, "to": language},
+        )
         self._last_language = language
         self._last_recv_transcript_time = time.perf_counter()
 
@@ -1355,21 +1359,28 @@ class _DeferredReplyValidation:
         @utils.log_exceptions(logger=logger)
         async def _run_task(chat_ctx: ChatContext, delay: float) -> None:
             use_turn_detector = self._last_final_transcript and not self._speaking
-            if (
-                use_turn_detector
-                and self._turn_detector is not None
-                and self._turn_detector.supports_language(self._last_language)
-            ):
-                start_time = time.perf_counter()
-                try:
-                    eot_prob = await self._turn_detector.predict_end_of_turn(chat_ctx)
-                    unlikely_threshold = self._turn_detector.unlikely_threshold()
-                    elasped = time.perf_counter() - start_time
-                    if eot_prob < unlikely_threshold:
-                        delay = self._max_endpointing_delay
-                    delay = max(0, delay - elasped)
-                except (TimeoutError, AssertionError):
-                    pass  # inference process is unresponsive
+
+            if use_turn_detector and self._turn_detector is not None:
+                if not self._turn_detector.supports_language(self._last_language):
+                    logger.debug(
+                        "turn detector does not support language",
+                        extra={"language": self._last_language},
+                    )
+                else:
+                    start_time = time.perf_counter()
+                    try:
+                        eot_prob = await self._turn_detector.predict_end_of_turn(
+                            chat_ctx
+                        )
+                        unlikely_threshold = self._turn_detector.unlikely_threshold(
+                            self._last_language
+                        )
+                        elasped = time.perf_counter() - start_time
+                        if eot_prob < unlikely_threshold:
+                            delay = self._max_endpointing_delay
+                        delay = max(0, delay - elasped)
+                    except (TimeoutError, AssertionError):
+                        pass  # inference process is unresponsive
 
             await asyncio.sleep(delay)
 
