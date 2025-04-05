@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from abc import ABC, abstractmethod
 
 from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
@@ -24,9 +25,9 @@ def _download_from_hf_hub(repo_id, filename, **kwargs):
 
 
 class _EUORunnerBase(_InferenceRunner):
-    def __init__(self, model_revision: str):
+    def __init__(self, model_type: EOUModelType):
         super().__init__()
-        self._model_revision = model_revision
+        self._model_revision = MODEL_REVISIONS[model_type]
 
     def _format_chat_ctx(self, chat_ctx: dict):
         new_chat_ctx = []
@@ -117,21 +118,7 @@ class _EUORunnerBase(_InferenceRunner):
         return json.dumps(data).encode()
 
 
-class _EUORunnerEn(_EUORunnerBase):
-    INFERENCE_METHOD = "lk_end_of_utterance_en"
-
-    def __init__(self):
-        super().__init__(MODEL_REVISIONS["en"])
-
-
-class _EUORunnerMultilingual(_EUORunnerBase):
-    INFERENCE_METHOD = "lk_end_of_utterance_multilingual"
-
-    def __init__(self):
-        super().__init__(MODEL_REVISIONS["multilingual"])
-
-
-class EOUModel:
+class EOUModelBase(ABC):
     def __init__(
         self,
         model_type: EOUModelType = "en",  # default to smaller, english-only model
@@ -141,10 +128,7 @@ class EOUModel:
         self._executor = (
             inference_executor or get_current_job_context().inference_executor
         )
-        if self._model_type == "multilingual":
-            self._inference_method = _EUORunnerMultilingual.INFERENCE_METHOD
-        else:
-            self._inference_method = _EUORunnerEn.INFERENCE_METHOD
+
         config_fname = _download_from_hf_hub(
             HG_MODEL,
             "languages.json",
@@ -153,6 +137,9 @@ class EOUModel:
         )
         with open(config_fname, "r") as f:
             self._languages = json.load(f)
+
+    @abstractmethod
+    def _inference_method(self): ...
 
     def unlikely_threshold(self, language: str | None) -> float | None:
         if language is None:
@@ -206,7 +193,7 @@ class EOUModel:
         json_data = json.dumps({"chat_ctx": messages}).encode()
 
         result = await asyncio.wait_for(
-            self._executor.do_inference(self._inference_method, json_data),
+            self._executor.do_inference(self._inference_method(), json_data),
             timeout=timeout,
         )
 

@@ -13,13 +13,12 @@
 # limitations under the License.
 
 from livekit.agents import Plugin
-from livekit.agents.inference_runner import _InferenceRunner
 
-from .eou import EOUModel, _EUORunnerEn, _EUORunnerMultilingual
+from .english import EnglishModel
 from .log import logger
 from .version import __version__
 
-__all__ = ["EOUModel", "__version__"]
+__all__ = ["EOUModel", "english", "multilingual", "__version__"]
 
 
 class EOUPlugin(Plugin):
@@ -29,7 +28,7 @@ class EOUPlugin(Plugin):
     def download_files(self) -> None:
         from transformers import AutoTokenizer
 
-        from .eou import _download_from_hf_hub
+        from .base import _download_from_hf_hub
         from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME
 
         for revision in MODEL_REVISIONS.values():
@@ -41,5 +40,4 @@ class EOUPlugin(Plugin):
 
 
 Plugin.register_plugin(EOUPlugin())
-_InferenceRunner.register_runner(_EUORunnerEn)
-_InferenceRunner.register_runner(_EUORunnerMultilingual)
+EOUModel = EnglishModel
