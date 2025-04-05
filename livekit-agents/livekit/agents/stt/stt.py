@@ -251,8 +251,6 @@ class RecognizeStream(ABC):
             retryable=api_error.retryable,
             attempts_remaining=attempts_remaining,
         )
-        # Since regulat metrics are emitted on every event, there may be duplicate error
-        # metrics emitted.
         self._stt.emit("error", error_metrics)
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
