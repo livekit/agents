@@ -13,6 +13,7 @@ from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
 
 from .. import utils
+from ..errors import LLMError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..types import (
@@ -58,7 +59,7 @@ TEvent = TypeVar("TEvent")
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected"], Literal["error"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
@@ -111,6 +112,7 @@ class LLMStream(ABC):
 
         self._event_ch = aio.Chan[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._current_attempt_has_error = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -127,12 +129,16 @@ class LLMStream(ABC):
                 return await self._run()
             except APIError as e:
                 if self._conn_options.max_retry == 0 or not e.retryable:
+                    self._emit_error(e, attempts_remaining=0)
                     raise
                 elif i == self._conn_options.max_retry:
+                    self._emit_error(e, attempts_remaining=0)
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
+
                 else:
+                    self._emit_error(e, attempts_remaining=self._conn_options.max_retry - i)
                     logger.warning(
                         f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
@@ -143,6 +149,19 @@ class LLMStream(ABC):
                     )
 
                 await asyncio.sleep(self._conn_options.retry_interval)
+                # Reset the flag when retrying
+                self._current_attempt_has_error = False
+
+    def _emit_error(self, api_error: APIError, attempts_remaining: int):
+        error_metrics = LLMError(
+            timestamp=time.time(),
+            label=self._llm._label,
+            error=api_error.message,
+            retryable=api_error.retryable,
+            attempts_remaining=attempts_remaining,
+        )
+        self._current_attempt_has_error = True
+        self._llm.emit("error", error_metrics)
 
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
@@ -160,6 +179,10 @@ class LLMStream(ABC):
                 usage = ev.usage
 
         duration = time.perf_counter() - start_time
+
+        if self._current_attempt_has_error:
+            return
+
         metrics = LLMMetrics(
             timestamp=time.time(),
             request_id=request_id,

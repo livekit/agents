@@ -5,10 +5,6 @@ from typing import Literal, Union
 from pydantic import BaseModel
 
 
-class Error(BaseModel):
-    error: str
-
-
 class LLMMetrics(BaseModel):
     type: Literal["llm_metrics"] = "llm_metrics"
     label: str
@@ -22,7 +18,6 @@ class LLMMetrics(BaseModel):
     total_tokens: int
     tokens_per_second: float
     speech_id: str | None = None
-    error: Error | None = None
 
 
 class STTMetrics(BaseModel):
@@ -34,7 +29,6 @@ class STTMetrics(BaseModel):
     audio_duration: float
     streamed: bool
     speech_id: str | None = None
-    error: Error | None = None
 
 
 class TTSMetrics(BaseModel):
@@ -49,7 +43,6 @@ class TTSMetrics(BaseModel):
     characters_count: int
     streamed: bool
     speech_id: str | None = None
-    error: Error | None = None
 
 
 class VADMetrics(BaseModel):
@@ -60,7 +53,6 @@ class VADMetrics(BaseModel):
     inference_duration_total: float
     inference_count: int
     speech_id: str | None = None
-    error: Error | None = None
 
 
 class EOUMetrics(BaseModel):
@@ -73,7 +65,6 @@ class EOUMetrics(BaseModel):
     """Time taken to obtain the transcript after the end of the user's speech."""
 
     speech_id: str | None = None
-    error: Error | None = None
 
 
 AgentMetrics = Union[

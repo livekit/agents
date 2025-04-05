@@ -12,6 +12,7 @@ from typing import Generic, Literal, TypeVar, Union
 from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
+from ..errors import STTError
 from ..log import logger
 from ..metrics import STTMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -68,7 +69,7 @@ TEvent = TypeVar("TEvent")
 
 class STT(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected"], Literal["error"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
@@ -218,12 +219,16 @@ class RecognizeStream(ABC):
                 return await self._run()
             except APIError as e:
                 if max_retries == 0:
+                    self._emit_error(e, attempts_remaining=0)
                     raise
                 elif num_retries == max_retries:
+                    self._emit_error(e, attempts_remaining=0)
                     raise APIConnectionError(
                         f"failed to recognize speech after {num_retries} attempts",
                     ) from e
                 else:
+                    self._emit_error(e, attempts_remaining=max_retries - num_retries)
+
                     retry_interval = self._conn_options._interval_for_retry(num_retries)
                     logger.warning(
                         f"failed to recognize speech, retrying in {retry_interval}s",
@@ -237,6 +242,16 @@ class RecognizeStream(ABC):
                     await asyncio.sleep(retry_interval)
 
                 num_retries += 1
+
+    def _emit_error(self, api_error: APIError, attempts_remaining: int):
+        error_metrics = STTError(
+            timestamp=time.time(),
+            label=self._stt._label,
+            error=api_error.message,
+            retryable=api_error.retryable,
+            attempts_remaining=attempts_remaining,
+        )
+        self._stt.emit("error", error_metrics)
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         """Task used to collect metrics"""

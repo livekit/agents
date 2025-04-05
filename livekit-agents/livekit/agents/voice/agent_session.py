@@ -22,7 +22,9 @@ from .events import (
     AgentEvent,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    ErrorEvent,
     EventTypes,
+    SessionCloseEvent,
 )
 from .speech_handle import SpeechHandle
 
@@ -112,6 +114,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_state: AgentState | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
+        self._closing_task: asyncio.Task | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -283,6 +286,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._room_io:
                 await self._room_io.aclose()
+        logger.debug("AgentSession closed")
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
@@ -362,6 +366,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._update_activity_atask = asyncio.create_task(
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
+
+    async def drain(self) -> None:
+        if self._activity is not None:
+            await self._activity.drain()
+
+    def _create_session_close_task(self, cause: ErrorEvent | None = None) -> None:
+        self.emit(
+            "session_close",
+            SessionCloseEvent(cause=cause),
+        )
+        self._closing_task = asyncio.create_task(self.aclose())
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
