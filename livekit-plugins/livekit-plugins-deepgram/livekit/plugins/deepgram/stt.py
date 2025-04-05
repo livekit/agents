@@ -793,20 +793,18 @@ def _validate_keyterms(
     See: https://developers.deepgram.com/docs/keyterm and https://developers.deepgram.com/docs/keywords
     """
     if model.startswith("nova-3") and is_given(keywords):
-        logger.warning(
+        raise ValueError(
             "Keywords is only available for use with Nova-2, Nova-1, Enhanced, and "
             "Base speech to text models. For Nova-3, use Keyterm Prompting."
         )
-        return keyterms, NOT_GIVEN
 
     if is_given(keyterms) and (
         (model.startswith("nova-3") and language not in ("en-US", "en"))
         or not model.startswith("nova-3")
     ):
-        logger.warning(
+        raise ValueError(
             "Keyterm Prompting is only available for English transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."
         )
-        return NOT_GIVEN, keywords
 
     return keyterms, keywords
