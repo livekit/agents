@@ -1,14 +1,18 @@
 import logging
+import os
+import pathlib
 
 from dotenv import load_dotenv
 
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents._exceptions import APIStatusError
-from livekit.agents.llm import LLM, LLMStream
+from livekit.agents.llm import LLMStream
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import ErrorEvent, SessionCloseEvent
 from livekit.plugins import cartesia, deepgram, silero
+from livekit.plugins.openai import LLM
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -17,21 +21,31 @@ load_dotenv()
 
 
 """
-Simulate an LLM provider being down.
+This is a custom LLM that simulates an LLM provider being down.
+It will raise an error after a predefined number of calls.
 """
 
 
 class ErrorLLM(LLM):
-    def __init__(self):
+    def __init__(self, fail_after: int):
         super().__init__()
+        self._num_llm_calls = 0
+        self._fail_after = fail_after
+        logger.info(f"Error LLM initialized with fail_after={self._fail_after}")
 
     def chat(self, *args, **kwargs):
-        return ErrorLLMStream(
-            self,
-            chat_ctx=None,
-            tools=[],
-            conn_options=DEFAULT_API_CONNECT_OPTIONS,
-        )
+        if self._num_llm_calls < self._fail_after:
+            self._num_llm_calls += 1
+            logger.info(f"Normal LLM call #{self._num_llm_calls}")
+            return super().chat(*args, **kwargs)
+        else:
+            logger.info(f"Error LLM call #{self._num_llm_calls}")
+            return ErrorLLMStream(
+                self,
+                chat_ctx=None,
+                tools=[],
+                conn_options=DEFAULT_API_CONNECT_OPTIONS,
+            )
 
 
 class ErrorLLMStream(LLMStream):
@@ -51,7 +65,7 @@ class ErrorLLMStream(LLMStream):
 class MyTask(Agent):
     def __init__(self):
         super().__init__(
-            instructions="You are a helpful assistant that can answer questions and help with tasks.",  # noqa: E501
+            instructions="Repeat exactly what you are told.",  # noqa: E501
         )
 
 
@@ -61,14 +75,18 @@ async def entrypoint(ctx: JobContext):
     # Create session
     session = AgentSession(
         stt=deepgram.STT(),
-        llm=ErrorLLM(),  # pass in a custom LLM that raises an error
+        llm=ErrorLLM(fail_after=2),  # pass in a custom LLM that raises an error
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
 
+    error_wav_path = os.path.join(pathlib.Path(__file__).parent.absolute(), "error_message.wav")
+
     @session.on("error")
     def on_error(ev: ErrorEvent):
         logger.info(f"Session is closing due to error in {ev.source.__class__.__name__}")
+        logger.info(f"Playing error audio file from: {error_wav_path}")
+        session.say("", audio=audio_frames_from_file(error_wav_path))
 
     @session.on("session_close")
     def on_session_close(ev: SessionCloseEvent):
