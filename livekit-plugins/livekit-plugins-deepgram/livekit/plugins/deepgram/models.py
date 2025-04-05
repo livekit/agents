@@ -77,4 +77,5 @@ DeepgramLanguages = Literal[
     "pt-BR",
     "ru",
     "th",
+    "multi",
 ]

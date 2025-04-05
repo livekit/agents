@@ -775,4 +775,22 @@ def _validate_model(
             f"{model} does not support language {language}, falling back to nova-2-general"
         )
         return "nova-2-general"
+
+    # see https://developers.deepgram.com/docs/multilingual-code-switching
+    if (
+        is_given(language)
+        and language == "multi"
+        and model
+        not in {
+            "nova-3",
+            "nova-3-general",
+            "nova-2",
+            "nova-2-general",
+        }
+    ):
+        logger.warning(
+            f"{model} does not support multilingual code-switching, falling back to nova-3-general"
+        )
+        return "nova-3-general"
+
     return model
