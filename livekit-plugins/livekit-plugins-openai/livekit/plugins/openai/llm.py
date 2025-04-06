@@ -522,7 +522,7 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         if is_given(response_format):
-            extra["response_format"] = llm_utils.to_response_format_param(response_format)
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format)
 
         return LLMStream(
             self,

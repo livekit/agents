@@ -187,6 +187,7 @@ class STT(stt.STT):
             raise ValueError("Deepgram API key is required")
 
         model = _validate_model(model, language)
+        _validate_keyterms(model, language, keyterms, keywords)
 
         self._opts = STTOptions(
             language=language,
@@ -795,3 +796,29 @@ def _validate_tags(tags: list[str]) -> list[str]:
         if len(tag) > 128:
             raise ValueError("tag must be no more than 128 characters")
     return tags
+
+
+def _validate_keyterms(
+    model: DeepgramModels | str,
+    language: NotGivenOr[DeepgramLanguages | str],
+    keyterms: NotGivenOr[list[str]],
+    keywords: NotGivenOr[list[tuple[str, float]]],
+) -> None:
+    """
+    Validating keyterms and keywords for model compatibility.
+    See: https://developers.deepgram.com/docs/keyterm and https://developers.deepgram.com/docs/keywords
+    """
+    if model.startswith("nova-3") and is_given(keywords):
+        raise ValueError(
+            "Keywords is only available for use with Nova-2, Nova-1, Enhanced, and "
+            "Base speech to text models. For Nova-3, use Keyterm Prompting."
+        )
+
+    if is_given(keyterms) and (
+        (model.startswith("nova-3") and language not in ("en-US", "en"))
+        or not model.startswith("nova-3")
+    ):
+        raise ValueError(
+            "Keyterm Prompting is only available for English transcription using the Nova-3 Model. "
+            "To boost recognition of keywords using another model, use the Keywords feature."
+        )

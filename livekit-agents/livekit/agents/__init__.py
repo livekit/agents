@@ -42,7 +42,7 @@ from .types import (
 )
 from .version import __version__
 from .voice import Agent, AgentEvent, AgentSession, ModelSettings, RunContext, io
-from .voice.background_audio import BackgroundAudio
+from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
 
@@ -90,7 +90,9 @@ __all__ = [
     "NOT_GIVEN",
     "NotGivenOr",
     "DEFAULT_API_CONNECT_OPTIONS",
-    "BackgroundAudio",
+    "BackgroundAudioPlayer",
+    "BuiltinAudioClip",
+    "AudioConfig",
 ]
 
 # Cleanup docs of unexported modules

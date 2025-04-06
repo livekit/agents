@@ -328,6 +328,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
+        """Generate a reply for the agent to speak to the user.
+
+        Args:
+            user_input (NotGivenOr[str], optional): The user's input that may influence the reply,
+                such as answering a question.
+            instructions (NotGivenOr[str], optional): Additional instructions for generating the reply.
+            tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
+                generating the reply. If generate_reply is invoked within a function_tool, defaults to "none".
+            allow_interruptions (NotGivenOr[bool], optional): Indicates whether the user can interrupt this speech.
+
+        Returns:
+            SpeechHandle: A handle to the generated reply.
+        """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 

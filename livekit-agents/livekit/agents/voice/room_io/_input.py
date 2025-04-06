@@ -40,7 +40,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._room.on("track_subscribed", self._on_track_available)
 
     async def __anext__(self) -> T:
-        return await self._data_ch.recv()
+        return await self._data_ch.__anext__()
 
     def __aiter__(self) -> AsyncIterator[T]:
         return self
@@ -91,11 +91,13 @@ class _ParticipantInputStream(Generic[T], ABC):
                 self._on_track_available(publication.track, publication, participant)
 
     async def aclose(self) -> None:
+        if self._stream:
+            await self._stream.aclose()
+            self._stream = None
         if self._forward_atask:
             await utils.aio.cancel_and_wait(self._forward_atask)
 
         self._room.off("track_subscribed", self._on_track_available)
-        self._close_stream()
         self._data_ch.close()
 
     @utils.log_exceptions(logger=logger)

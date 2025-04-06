@@ -14,10 +14,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable
 
+import aioboto3
 import aiohttp
-from aiobotocore.session import AioSession, get_session
 
 from livekit.agents import (
     APIConnectionError,
@@ -35,11 +34,10 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
-from .utils import _strip_nones, get_aws_credentials
+from .utils import _strip_nones, get_aws_async_session
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
-DEFAULT_SPEECH_REGION = "us-east-1"
 DEFAULT_VOICE = "Ruth"
 DEFAULT_SAMPLE_RATE = 16000
 
@@ -49,7 +47,7 @@ class _TTSOptions:
     # https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
     voice: NotGivenOr[str]
     speech_engine: NotGivenOr[TTS_SPEECH_ENGINE]
-    speech_region: str
+    region: str
     sample_rate: int
     language: NotGivenOr[TTS_LANGUAGE | str]
 
@@ -62,10 +60,10 @@ class TTS(tts.TTS):
         language: NotGivenOr[TTS_LANGUAGE | str] = NOT_GIVEN,
         speech_engine: NotGivenOr[TTS_SPEECH_ENGINE] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
-        speech_region: NotGivenOr[str] = DEFAULT_SPEECH_REGION,
+        region: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        session: AioSession | None = None,
+        session: aioboto3.Session | None = None,
     ) -> None:
         """
         Create a new instance of AWS Polly TTS.
@@ -80,9 +78,10 @@ class TTS(tts.TTS):
             language (TTS_LANGUAGE, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
             sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
             speech_engine(TTS_SPEECH_ENGINE, optional): The engine to use for the synthesis. Defaults to "generative".
-            speech_region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
+            region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
+            session(aioboto3.Session, optional): Optional aioboto3 session to use.
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -91,26 +90,17 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=TTS_NUM_CHANNELS,
         )
-
-        self._api_key, self._api_secret, self._speech_region = get_aws_credentials(
-            api_key, api_secret, speech_region
+        self._session = session or get_aws_async_session(
+            api_key=api_key if is_given(api_key) else None,
+            api_secret=api_secret if is_given(api_secret) else None,
+            region=region if is_given(region) else None,
         )
-
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
-            speech_region=self._speech_region,
+            region=region,
             language=language,
             sample_rate=sample_rate,
-        )
-        self._session = session or get_session()
-
-    def _get_client(self):
-        return self._session.create_client(
-            "polly",
-            region_name=self._opts.speech_region,
-            aws_access_key_id=self._api_key,
-            aws_secret_access_key=self._api_secret,
         )
 
     def synthesize(
@@ -123,8 +113,8 @@ class TTS(tts.TTS):
             tts=self,
             text=text,
             conn_options=conn_options,
+            session=self._session,
             opts=self._opts,
-            get_client=self._get_client,
         )
 
 
@@ -134,20 +124,20 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         text: str,
+        session: aioboto3.Session,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         opts: _TTSOptions,
-        get_client: Callable[[], Any],
     ) -> None:
         super().__init__(tts=tts, input_text=text, conn_options=conn_options)
         self._opts = opts
-        self._get_client = get_client
         self._segment_id = utils.shortuuid()
+        self._session = session
 
     async def _run(self):
         request_id = utils.shortuuid()
 
         try:
-            async with self._get_client() as client:
+            async with self._session.client("polly") as client:
                 params = {
                     "Text": self._input_text,
                     "OutputFormat": "mp3",

@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "livekit-plugins-aws"
+name = "livekit-plugins-resemble"
 dynamic = ["version"]
-description = "LiveKit Agents Plugin for services from AWS"
+description = "LiveKit Agents Plugin for Resemble AI"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "video", "livekit", "aws"]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -24,9 +24,6 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.0.0.rc6",
-    "aioboto3==14.1.0",
-    "amazon-transcribe==0.6.2",
-    "boto3==1.37.1",
 ]
 
 [project.urls]
@@ -35,7 +32,7 @@ Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
-path = "livekit/plugins/aws/version.py"
+path = "livekit/plugins/resemble/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
