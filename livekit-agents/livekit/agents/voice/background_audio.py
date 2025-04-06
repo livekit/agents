@@ -79,11 +79,6 @@ class BackgroundAudioPlayer:
         - A file path (string) pointing to an audio file, which can be looped.
         - An AsyncIterator that yields rtc.AudioFrame
 
-        If no ambient sound is provided, a default low‑volume office ambience sound
-        (from "office-ambience.ogg" in the package resources) is used. Similarly, if no thinking sound is provided,
-        a default list of two keyboard typing sounds (from "keyboard-typing.ogg" and "keyboard-typing2.ogg")
-        with higher volume and associated selection probabilities is used.
-
         When a list (or AudioConfig) is supplied, the component considers each sound’s volume and probability:
         - The probability value determines the chance that a particular sound is selected for playback.
         - A total probability below 1.0 means there is a chance no sound will be selected (resulting in silence).
@@ -91,19 +86,15 @@ class BackgroundAudioPlayer:
         Args:
             ambient_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
                 The ambient sound to be played continuously. For file paths, the sound will be looped.
-                For AsyncIterator sources, ensure the iterator is infinite or looped. Defaults to a low‑volume
-                office ambience sound.
+                For AsyncIterator sources, ensure the iterator is infinite or looped.
+
             thinking_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
                 The sound to be played when the associated agent enters a “thinking” state. This can be a single
                 sound source or a list of AudioConfig objects (with volume and probability settings).
 
         """  # noqa: E501
 
-        self._ambient_sound = (
-            ambient_sound
-            if is_given(ambient_sound)
-            else AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.8)
-        )
+        self._ambient_sound = ambient_sound if is_given(ambient_sound) else None
         self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
 
         self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
