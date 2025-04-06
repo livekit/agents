@@ -35,9 +35,10 @@ def run_app(
 ) -> None:
     """Run the CLI to interact with the worker"""
     IN_COLAB = "google.colab" in sys.modules
+    IN_JUPYTER = "ipykernel" in sys.modules
 
     # when running jupyter, setup a 1:1 session with an agent, don't run the CLI
-    if IN_COLAB:  # TODO: check local jupyter too
+    if IN_JUPYTER or IN_COLAB:
         opts.job_executor_type = JobExecutorType.THREAD
 
         if IN_COLAB:
@@ -79,7 +80,11 @@ def run_app(
             user_token = (
                 api.AccessToken(opts.api_key, opts.api_secret)
                 .with_identity("user")
-                .with_grants(api.VideoGrants(can_publish=True, can_subscribe=True, room=room_name))
+                .with_grants(
+                    api.VideoGrants(
+                        can_publish=True, can_subscribe=True, room_join=True, room=room_name
+                    )
+                )
                 .to_jwt()
             )
 
@@ -88,7 +93,11 @@ def run_app(
                 .with_identity("agent")
                 .with_grants(
                     api.VideoGrants(
-                        can_publish=True, can_subscribe=True, room=room_name, agent=True
+                        can_publish=True,
+                        can_subscribe=True,
+                        room_join=True,
+                        room=room_name,
+                        agent=True,
                     )
                 )
                 .to_jwt()
@@ -97,6 +106,13 @@ def run_app(
         from livekit.rtc.jupyter import display_room
 
         display_room(opts.ws_url, user_token)
+
+        import logging
+
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            if isinstance(handler, logging.StreamHandler):
+                root.removeHandler(handler)
 
         args = proto.CliArgs(
             opts=opts,
@@ -108,7 +124,10 @@ def run_app(
             register=False,
             simulate_job=agent_token,
         )
-        run_worker(args)
+        thread = threading.Thread(target=run_worker, args=(args,))
+        thread.start()
+        if IN_COLAB:
+            thread.join()
         return
 
     cli = click.Group()
@@ -358,6 +377,14 @@ def run_worker(args: proto.CliArgs) -> None:
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    IN_COLAB = "google.colab" in sys.modules
+    IN_JUPYTER = "ipykernel" in sys.modules
+
+    if IN_JUPYTER or IN_COLAB:
+        import nest_asyncio
+
+        nest_asyncio.apply(loop)
 
     if args.console:
         print(_esc(34) + "=" * 50 + _esc(0))
