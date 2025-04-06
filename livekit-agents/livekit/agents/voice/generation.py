@@ -358,7 +358,7 @@ async def _execute_tools_task(
                 name=f"function_tool_{fnc_call.name}",
             )
             tasks.append(task)
-            _authorize_inline_task(task)
+            _authorize_inline_task(task, function_call=fnc_call)
 
             def _log_exceptions(task: asyncio.Task) -> None:
                 if task.exception() is not None:
