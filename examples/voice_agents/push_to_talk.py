@@ -23,18 +23,22 @@ class MyAgent(Agent):
         super().__init__(
             instructions="You are a helpful assistant.",
             stt=deepgram.STT(),
-            llm=openai.LLM(model="gpt-4o-mini"),
-            tts=cartesia.TTS(),
+            # llm=openai.LLM(model="gpt-4o-mini"),
+            # tts=cartesia.TTS(),
+            llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
         )
 
     async def on_end_of_turn(
         self, chat_ctx: ChatContext, new_message: ChatMessage, generating_reply: bool
     ) -> None:
-        # callback when user input is transcribed
-        chat_ctx = chat_ctx.copy()
-        chat_ctx.items.append(new_message)
-        await self.update_chat_ctx(chat_ctx)
-        logger.info("add user message to chat context", extra={"content": new_message.content})
+        # callback when `session.end_user_turn` is called in manual turn detection mode
+        if new_message.text_content:
+            chat_ctx = chat_ctx.copy()
+            chat_ctx.items.append(new_message)
+            await self.update_chat_ctx(chat_ctx)
+            logger.info("add user message to chat context", extra={"content": new_message.content})
+
+        self.session.generate_reply()
 
 
 async def entrypoint(ctx: JobContext):
@@ -51,6 +55,7 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.local_participant.register_rpc_method("start_turn")
     async def start_turn(data: rtc.RpcInvocationData):
         session.interrupt()
+        session.start_user_turn()
 
         # listen to the caller if multi-user
         room_io.set_participant(data.caller_identity)
@@ -59,7 +64,7 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.local_participant.register_rpc_method("end_turn")
     async def end_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
-        session.generate_reply()
+        await session.end_user_turn()
 
 
 if __name__ == "__main__":

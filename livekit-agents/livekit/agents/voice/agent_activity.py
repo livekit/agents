@@ -340,6 +340,7 @@ class AgentActivity(RecognitionHooks):
                 ),
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
+                manual_turn_detection=self._turn_detection_mode == "manual",
             )
             self._audio_recognition.on("metrics_collected", self._on_metrics_collected)
             self._audio_recognition.start()
@@ -528,6 +529,16 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.interrupt()
 
+    def start_user_turn(self) -> None:
+        if self._audio_recognition:
+            self._audio_recognition.start_user_turn()
+
+    async def end_user_turn(self) -> None:
+        if self._audio_recognition:
+            await self._audio_recognition.end_user_turn()
+        else:
+            await self.on_end_of_turn(new_transcript="")
+
     def _schedule_speech(
         self, speech: SpeechHandle, priority: int, bypass_draining: bool = False
     ) -> None:
@@ -675,12 +686,18 @@ class AgentActivity(RecognitionHooks):
 
     async def on_end_of_turn(self, new_transcript: str) -> None:
         # When the audio recognition detects the end of a user turn:
-        #  - check if the turn detection mode is set to "manual"
         #  - check if realtime model server-side turn detection is enabled
+        #  - check if the turn detection mode is set to "manual"
         #  - check if there is no current generation happening
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
         #  turn)
         #  - generate a reply to the user input
+
+        if isinstance(self.llm, llm.RealtimeModel):
+            if self.llm.capabilities.turn_detection:
+                return
+            assert self._rt_session is not None
+            self._rt_session.commit_audio()
 
         user_message = llm.ChatMessage(role="user", content=[new_transcript])
         if self._turn_detection_mode == "manual":
@@ -688,13 +705,6 @@ class AgentActivity(RecognitionHooks):
                 self._agent.chat_ctx, user_message, generating_reply=False
             )
             return
-
-        if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
-            if self.llm.capabilities.turn_detection:
-                return
-            # ignore stt transcription for realtime model and commit the audio buffer
-            new_transcript = ""
-            self._rt_session.commit_audio()
 
         if self._current_speech is not None:
             if not self._current_speech.allow_interruptions:
@@ -737,6 +747,10 @@ class AgentActivity(RecognitionHooks):
             # TODO(theomonnom): should we "forward" this new turn to the next agent?
             logger.warning("ignoring new user turn, the agent is draining")
             return
+
+        if isinstance(self.llm, llm.RealtimeModel):
+            # ignore stt transcription for realtime model
+            new_transcript = ""
 
         self.generate_reply(user_input=new_transcript)
 

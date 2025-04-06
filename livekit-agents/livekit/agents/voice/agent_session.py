@@ -368,6 +368,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.interrupt()
 
+    def start_user_turn(self) -> None:
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        self._activity.start_user_turn()
+
+    async def end_user_turn(self) -> None:
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        await self._activity.end_user_turn()
+
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
 
