@@ -23,6 +23,10 @@ from livekit.plugins import openai, silero, turn_detector
 logger = logging.getLogger("structured-output")
 load_dotenv()
 
+## This example demonstrates how to use structured output from the LLM to control the TTS.
+## The LLM is instructed to provide a TTS directive, which is returned as a ResponseEmotion object.
+## before generating the response
+
 
 class ResponseEmotion(TypedDict):
     voice_instructions: Annotated[
@@ -76,6 +80,7 @@ class MyAgent(Agent):
     async def llm_node(
         self, chat_ctx: ChatContext, tools: list[FunctionTool], model_settings: ModelSettings
     ):
+        # not all LLMs support structured output, so we need to cast to the specific LLM type
         llm = cast(openai.LLM, self.llm)
         tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
         async with llm.chat(
@@ -104,11 +109,14 @@ class MyAgent(Agent):
                 tts = cast(openai.TTS, self.tts)
                 tts.update_options(instructions=resp["voice_instructions"])
 
+        # process_structured_output strips the TTS instructions and only synthesizes the verbal part
+        # of the LLM output
         return super().tts_node(
             process_structured_output(text, callback=output_processed), model_settings
         )
 
     async def transcription_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
+        # transcription_node needs to return what the agent would say, minus the TTS instructions
         async for delta in process_structured_output(text):
             yield delta
 

@@ -6,10 +6,15 @@ from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOp
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector import EOUModel
 
-logger = logging.getLogger("vad-realtime-example")
+logger = logging.getLogger("realtime-turn-detector")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
+
+## This example demonstrates how to use LiveKit's turn detection model with a realtime LLM.
+## Since the current turn detection model runs in text space, it will need to be combined
+## with a STT model, even though the audio is going directly to the Realtime API.
+## In this example, speech is being processed in parallel by both the STT and the realtime API
 
 
 class MyAgent(Agent):
@@ -17,7 +22,11 @@ class MyAgent(Agent):
         super().__init__(
             instructions="You are Alloy.",
             llm=openai.realtime.RealtimeModel(
-                voice="alloy", turn_detection=None, input_audio_transcription=None
+                # it's necessary to turn off turn detection in the Realtime API in order to use
+                # LiveKit's turn detection model
+                voice="alloy",
+                turn_detection=None,
+                input_audio_transcription=None,
             ),
         )
 
