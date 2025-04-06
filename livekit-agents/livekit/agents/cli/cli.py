@@ -126,8 +126,6 @@ def run_app(
         )
         thread = threading.Thread(target=run_worker, args=(args,))
         thread.start()
-        if IN_COLAB:
-            thread.join()
         return
 
     cli = click.Group()
