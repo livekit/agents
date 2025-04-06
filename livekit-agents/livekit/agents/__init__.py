@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad  # noqa: F401
+from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad  # noqa: F401, I001
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -44,7 +44,7 @@ from .version import __version__
 from .voice import Agent, AgentEvent, AgentSession, ModelSettings, RunContext, io
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
-from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
+from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType, SimulateJobInfo
 
 __all__ = [
     "__version__",
@@ -93,6 +93,7 @@ __all__ = [
     "BackgroundAudioPlayer",
     "BuiltinAudioClip",
     "AudioConfig",
+    "SimulateJobInfo",
 ]
 
 # Cleanup docs of unexported modules

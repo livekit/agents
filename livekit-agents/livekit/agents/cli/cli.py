@@ -1,10 +1,14 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import asyncio
+import uuid
+import os
 import pathlib
+import aiohttp
 import signal
 import sys
 import threading
+from livekit import api
 
 import click
 
@@ -12,7 +16,7 @@ from .. import utils
 from ..log import logger
 from ..plugin import Plugin
 from ..types import NOT_GIVEN, NotGivenOr
-from ..worker import JobExecutorType, Worker, WorkerOptions
+from ..worker import JobExecutorType, Worker, WorkerOptions, SimulateJobInfo
 from . import proto
 from .log import setup_logging
 
@@ -23,8 +27,90 @@ def _esc(*codes: int) -> str:
     return "\033[" + ";".join(str(c) for c in codes) + "m"
 
 
-def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) -> None:
+def run_app(
+    opts: WorkerOptions,
+    *,
+    hot_reload: NotGivenOr[bool] = NOT_GIVEN,
+    jupyter_url: NotGivenOr[str] = NOT_GIVEN,
+) -> None:
     """Run the CLI to interact with the worker"""
+    IN_COLAB = "google.colab" in sys.modules
+
+    # when running jupyter, setup a 1:1 session with an agent, don't run the CLI
+    if IN_COLAB:  # TODO: check local jupyter too
+        opts.job_executor_type = JobExecutorType.THREAD
+
+        if IN_COLAB:
+            from google.colab import userdata
+
+            if not jupyter_url:
+                opts.ws_url = userdata.get("LIVEKIT_URL")
+                opts.api_key = userdata.get("LIVEKIT_API_KEY")
+                opts.api_secret = userdata.get("LIVEKIT_API_SECRET")
+        else:
+            opts.ws_url = os.environ.get("LIVEKIT_URL", "")
+            opts.api_key = os.environ.get("LIVEKIT_API_KEY", "")
+            opts.api_secret = os.environ.get("LIVEKIT_API_SECRET", "")
+
+        if not jupyter_url and (not opts.ws_url or not opts.api_key or not opts.api_secret):
+            raise ValueError(
+                "Failed to get LIVEKIT_URL, LIVEKIT_API_KEY, or LIVEKIT_API_SECRET from environment variables. "  # noqa: E501
+                "Alternatively, you can use `jupyter_url`, which generates and uses join tokens for authentication."  # noqa: E501
+            )
+
+        if jupyter_url:
+
+            async def fetch_join_tokens(url: str):
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url) as response:
+                        data = await response.json()
+                        return data["livekit_url"], data["user_token"], data["agent_token"]
+
+            try:
+                opts.ws_url, user_token, agent_token = asyncio.run(fetch_join_tokens(jupyter_url))
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to fetch join tokens via jupyter_url. Error: {e}\n"
+                    "You can still use your own LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET from environment variables instead."  # noqa: E501
+                ) from None
+        else:
+            # manually create the user_token and agent_token using the provided api key and secret
+            room_name = f"jupyter-room-{uuid.uuid4()}"
+            user_token = (
+                api.AccessToken(opts.api_key, opts.api_secret)
+                .with_identity("user")
+                .with_grants(api.VideoGrants(can_publish=True, can_subscribe=True, room=room_name))
+                .to_jwt()
+            )
+
+            agent_token = (
+                api.AccessToken(opts.api_key, opts.api_secret)
+                .with_identity("agent")
+                .with_grants(
+                    api.VideoGrants(
+                        can_publish=True, can_subscribe=True, room=room_name, agent=True
+                    )
+                )
+                .to_jwt()
+            )
+
+        from livekit.rtc.jupyter import display_room
+
+        display_room(opts.ws_url, user_token)
+
+        args = proto.CliArgs(
+            opts=opts,
+            log_level="DEBUG",
+            devmode=True,
+            asyncio_debug=False,
+            watch=False,
+            drain_timeout=0,
+            register=False,
+            simulate_job=agent_token,
+        )
+        run_worker(args)
+        return
+
     cli = click.Group()
 
     @cli.command(help="Start the worker in production mode.")
@@ -160,9 +246,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
             console=True,
             drain_timeout=0,
             register=False,
-            simulate_job=proto.SimulateJobArgs(
-                room="mock-console",
-            ),
+            simulate_job=SimulateJobInfo(room="mock-console"),
         )
         run_worker(args)
 
@@ -221,10 +305,7 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
             asyncio_debug=asyncio_debug,
             watch=watch,
             drain_timeout=0,
-            simulate_job=proto.SimulateJobArgs(
-                room=room,
-                participant_identity=participant_identity,
-            ),
+            simulate_job=SimulateJobInfo(room=room, participant_identity=participant_identity),
         )
 
         _run_dev(args)
@@ -293,10 +374,7 @@ def run_worker(args: proto.CliArgs) -> None:
     @worker.once("worker_started")
     def _worker_started():
         if args.simulate_job and args.reload_count == 0:
-            # logger.info("connecting to room %s", args.simulate_job.room)
-            loop.create_task(
-                worker.simulate_job(args.simulate_job.room, args.simulate_job.participant_identity)
-            )
+            loop.create_task(worker.simulate_job(args.simulate_job))
 
         if args.devmode:
             logger.info(
