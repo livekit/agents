@@ -1,5 +1,11 @@
 # livekit-plugins-deepgram
 
+## 0.7.3
+
+### Patch Changes
+
+- support multilingual with Nova-3 model - [#1736](https://github.com/livekit/agents/pull/1736) ([@jeradf](https://github.com/jeradf))
+
 ## 0.7.2
 
 ### Patch Changes
