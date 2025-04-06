@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli
+from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli, llm
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.plugins import cartesia, deepgram, openai
 
@@ -23,16 +23,16 @@ class MyAgent(Agent):
         super().__init__(
             instructions="You are a helpful assistant.",
             stt=deepgram.STT(),
-            # llm=openai.LLM(model="gpt-4o-mini"),
-            # tts=cartesia.TTS(),
-            llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
+            llm=openai.LLM(model="gpt-4o-mini"),
+            tts=cartesia.TTS(),
+            # llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
         )
 
     async def on_end_of_turn(
         self, chat_ctx: ChatContext, new_message: ChatMessage, generating_reply: bool
     ) -> None:
         # callback when `session.end_user_turn` is called in manual turn detection mode
-        if new_message.text_content:
+        if not isinstance(self.llm, llm.RealtimeModel) and new_message.text_content:
             chat_ctx = chat_ctx.copy()
             chat_ctx.items.append(new_message)
             await self.update_chat_ctx(chat_ctx)
