@@ -6,7 +6,9 @@ from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentSession,
-    BackgroundAudio,
+    AudioConfig,
+    BackgroundAudioPlayer,
+    BuiltinAudioClip,
     JobContext,
     WorkerOptions,
     cli,
@@ -17,6 +19,10 @@ from livekit.plugins import openai
 logger = logging.getLogger("background-audio")
 
 load_dotenv()
+
+## NOTE: this example relies on an unreleased version of livekit-agents.
+## To test it out, you'll need to install the package from source.
+## It'll be part of 1.0.0rc7 release.
 
 
 class FakeWebSearchAgent(Agent):
@@ -46,11 +52,14 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(llm=openai.realtime.RealtimeModel())
     await session.start(FakeWebSearchAgent(), room=ctx.room)
 
-    # by default BackgroundAudio will play a office ambience sound and a keyboard typing sound
-    # when the agent is thinking.
-    background_audio = BackgroundAudio(
-        # ambient_sound="background-sound.ogg",
-        # thinking_sound="beep.ogg",
+    background_audio = BackgroundAudioPlayer(
+        # play office ambience sound looping in the background
+        ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.8),
+        # play keyboard typing sound when the agent is thinking
+        thinking_sound=[
+            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.8),
+            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.7),
+        ],
     )
 
     await background_audio.start(room=ctx.room, agent_session=session)
