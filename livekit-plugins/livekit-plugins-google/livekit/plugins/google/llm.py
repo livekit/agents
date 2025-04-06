@@ -25,7 +25,7 @@ from google.auth._default_async import default_async
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import FunctionTool, ToolChoice
+from livekit.agents.llm import FunctionTool, ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -36,7 +36,7 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .utils import to_chat_ctx, to_fnc_ctx
+from .utils import to_chat_ctx, to_fnc_ctx, to_response_format
 
 
 @dataclass
@@ -148,6 +148,9 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[
+            types.SchemaUnion | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
@@ -188,6 +191,10 @@ class LLM(llm.LLM):
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice
+
+        if is_given(response_format):
+            extra["response_schema"] = to_response_format(response_format)
+            extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
@@ -237,10 +244,11 @@ class LLMStream(llm.LLMStream):
 
         try:
             turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm))
-
-            self._extra_kwargs["tools"] = [
-                types.Tool(function_declarations=to_fnc_ctx(self._tools))
-            ]
+            function_declarations = to_fnc_ctx(self._tools)
+            if function_declarations:
+                self._extra_kwargs["tools"] = [
+                    types.Tool(function_declarations=function_declarations)
+                ]
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 **self._extra_kwargs,
@@ -297,7 +305,7 @@ class LLMStream(llm.LLMStream):
 
         except ClientError as e:
             raise APIStatusError(
-                "gemini llm: client error",
+                f"gemini llm: client error {str(e)}",
                 status_code=e.code,
                 body=e.message,
                 request_id=request_id,
@@ -305,7 +313,7 @@ class LLMStream(llm.LLMStream):
             ) from e
         except ServerError as e:
             raise APIStatusError(
-                "gemini llm: server error",
+                f"gemini llm: server error {str(e)}",
                 status_code=e.code,
                 body=e.message,
                 request_id=request_id,
@@ -313,7 +321,7 @@ class LLMStream(llm.LLMStream):
             ) from e
         except APIError as e:
             raise APIStatusError(
-                "gemini llm: api error",
+                f"gemini llm: api error {str(e)}",
                 status_code=e.code,
                 body=e.message,
                 request_id=request_id,
@@ -321,7 +329,7 @@ class LLMStream(llm.LLMStream):
             ) from e
         except Exception as e:
             raise APIConnectionError(
-                "gemini llm: error generating content",
+                f"gemini llm: error generating content {str(e)}",
                 retryable=retryable,
             ) from e
 
