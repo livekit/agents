@@ -471,7 +471,7 @@ class AgentActivity(RecognitionHooks):
         if not is_given(tool_choice) and task is not None:
             if task_info := _get_inline_task_info(task):
                 if task_info.function_call is not None:
-                    # when generete_reply is called inside a function_tool, set tool_choice to None by default
+                    # when generete_reply is called inside a function_tool, set tool_choice to None by default  # noqa: E501
                     tool_choice = "none"
 
         handle = SpeechHandle.create(

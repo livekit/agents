@@ -340,7 +340,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Returns:
             SpeechHandle: A handle to the generated reply.
-        """
+        """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
