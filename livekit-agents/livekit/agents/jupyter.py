@@ -58,6 +58,9 @@ def run_app(
                 f"Failed to fetch join tokens via jupyter_url. Error: {e}\n"
                 "You can still use your own LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET from environment variables instead."  # noqa: E501
             ) from None
+
+        opts.api_key = "fake_jupyter_key"
+        opts.api_secret = "fake_jupyter_secret"
     else:
         # manually create the user_token and agent_token using the provided api key and secret
         room_name = f"jupyter-room-{uuid.uuid4()}"
