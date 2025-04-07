@@ -219,14 +219,16 @@ class ChunkedStream(ABC):
                 self._current_attempt_has_error = False
 
     def _emit_error(self, api_error: APIError, recoverable: bool):
-        error_metrics = TTSError(
-            timestamp=time.time(),
-            label=self._tts._label,
-            error=api_error.message,
-            recoverable=recoverable,
-        )
         self._current_attempt_has_error = True
-        self._tts.emit("error", error_metrics)
+        self._tts.emit(
+            "error",
+            TTSError(
+                timestamp=time.time(),
+                label=self._tts._label,
+                error=api_error.message,
+                recoverable=recoverable,
+            ),
+        )
 
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
@@ -315,14 +317,16 @@ class SynthesizeStream(ABC):
                 self._current_attempt_has_error = False
 
     def _emit_error(self, api_error: APIError, recoverable: bool):
-        error_metrics = TTSError(
-            timestamp=time.time(),
-            label=self._tts._label,
-            error=api_error.message,
-            recoverable=recoverable,
-        )
         self._current_attempt_has_error = True
-        self._tts.emit("error", error_metrics)
+        self._tts.emit(
+            "error",
+            TTSError(
+                timestamp=time.time(),
+                label=self._tts._label,
+                error=api_error.message,
+                recoverable=recoverable,
+            ),
+        )
 
     def _mark_started(self) -> None:
         # only set the started time once, it'll get reset after we emit metrics

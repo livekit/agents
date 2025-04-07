@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Literal, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class _Error(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
     timestamp: float
     label: str
     error: str

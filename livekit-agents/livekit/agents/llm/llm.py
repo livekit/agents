@@ -153,14 +153,16 @@ class LLMStream(ABC):
                 self._current_attempt_has_error = False
 
     def _emit_error(self, api_error: APIError, recoverable: bool):
-        error_metrics = LLMError(
-            timestamp=time.time(),
-            label=self._llm._label,
-            error=api_error.message,
-            recoverable=recoverable,
-        )
         self._current_attempt_has_error = True
-        self._llm.emit("error", error_metrics)
+        self._llm.emit(
+            "error",
+            LLMError(
+                timestamp=time.time(),
+                label=self._llm._label,
+                error=api_error.message,
+                recoverable=recoverable,
+            ),
+        )
 
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
