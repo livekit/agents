@@ -1215,7 +1215,10 @@ class AgentActivity(RecognitionHooks):
                     audio_out = None
                     if audio_output is not None:
                         forward_task, audio_out = perform_audio_forwarding(
-                            audio_output=audio_output, tts_output=msg.audio_stream
+                            audio_output=audio_output,
+                            tts_output=self._agent.realtime_audio_output_node(
+                                msg.audio_stream, model_settings
+                            ),
                         )
                         forward_tasks.append(forward_task)
                         audio_out.first_frame_fut.add_done_callback(_on_first_frame)
