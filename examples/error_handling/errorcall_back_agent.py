@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import pathlib
@@ -84,13 +85,25 @@ async def entrypoint(ctx: JobContext):
 
     @session.on("error")
     def on_error(ev: ErrorEvent):
+        global drain_task
         logger.info(f"Session is closing due to error in {ev.source.__class__.__name__}")
         logger.info(f"Playing error audio file from: {error_wav_path}")
-        session.say("", audio=audio_frames_from_file(error_wav_path))
+        session.say(
+            "I'm having trouble connecting right now. Let me transfer your call.",
+            # If you define a custom audio file, it will play out even if the TTS provider is down
+            audio=audio_frames_from_file(error_wav_path),
+        )
+        drain_task = asyncio.create_task(session.drain())
 
     @session.on("session_close")
     def on_session_close(ev: SessionCloseEvent):
-        logger.info("Play custom audio before session close")
+        global room_close_task
+        # Delete the room and disconnect all participants
+        room_close_task = asyncio.create_task(ctx.delete_room())
+        room_close_task.add_done_callback(lambda _: logger.info("Room closed!"))
+
+    # wait for a participant to join the room
+    await ctx.wait_for_participant()
 
     await session.start(agent=MyTask(), room=ctx.room)
 

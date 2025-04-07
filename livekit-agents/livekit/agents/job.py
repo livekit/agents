@@ -291,6 +291,10 @@ class JobContext:
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
+    async def delete_room(self) -> None:
+        """Delete the room and disconnect all participants."""
+        await self.api.room.delete_room(api.DeleteRoomRequest(room=self.room.name))
+
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
 
