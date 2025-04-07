@@ -89,7 +89,7 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Playing error audio file from: {error_wav_path}")
         session.say(
             "I'm having trouble connecting right now. Let me transfer your call.",
-            # If you define a custom audio file, it will play out even if the TTS provider is down
+            # If you define a custom audio file, it will play out even if the TTS provider is down.
             audio=audio_frames_from_file(error_wav_path),
         )
 
