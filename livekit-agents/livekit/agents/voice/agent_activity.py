@@ -1029,8 +1029,8 @@ class AgentActivity(RecognitionHooks):
             for py_out in tool_output.output:
                 sanitized_out = py_out.sanitize()
 
-                new_calls.append(sanitized_out.fnc_call)
                 if sanitized_out.fnc_call_out is not None:
+                    new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
                 # add the function call and output to the event, including the None outputs
@@ -1052,7 +1052,7 @@ class AgentActivity(RecognitionHooks):
                 self._session.update_agent(new_agent_task)
                 draining = True
 
-            if len(new_fnc_outputs) > 0:
+            if any(fnc_out.generate_reply for fnc_out in new_fnc_outputs):
                 chat_ctx.items.extend(new_calls)
                 chat_ctx.items.extend(new_fnc_outputs)
 
@@ -1085,6 +1085,9 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, bypass_draining=True
                 )
+            elif len(new_fnc_outputs) > 0:
+                self._agent._chat_ctx.items.extend(new_calls)
+                self._agent._chat_ctx.items.extend(new_fnc_outputs)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -1318,6 +1321,7 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
+            if any(fnc_out.generate_reply for fnc_out in new_fnc_outputs):
                 self._rt_session.interrupt()
 
                 handle = SpeechHandle.create(

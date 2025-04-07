@@ -541,11 +541,10 @@ class _PythonOutput:
                 llm.FunctionCallOutput(
                     name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
-                    output=str(fnc_out),  # take the string representation of the output
+                    output=str(fnc_out or ""),  # take the string representation of the output
                     is_error=False,
+                    generate_reply=fnc_out is not None,
                 )
-                if fnc_out is not None
-                else None
             ),
             agent_task=task,
         )
