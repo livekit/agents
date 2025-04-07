@@ -125,7 +125,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
     finally:
         if jupyter:
             loop.close()  # close can only be called from the main thread
-            return
+            return  # noqa: B012
 
         try:
             tasks = asyncio.all_tasks(loop)
