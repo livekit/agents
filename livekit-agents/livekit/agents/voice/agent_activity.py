@@ -453,9 +453,6 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> SpeechHandle:
-        if self._current_speech is not None and not self._current_speech.interrupted:
-            raise RuntimeError("another reply is already in progress")
-
         if (
             isinstance(self.llm, llm.RealtimeModel)
             and self.llm.capabilities.turn_detection
@@ -472,6 +469,15 @@ class AgentActivity(RecognitionHooks):
             user_input=user_input or None,
             instructions=instructions or None,
         )
+
+        from .agent import _get_inline_task_info
+
+        task = asyncio.current_task()
+        if not is_given(tool_choice) and task is not None:
+            if task_info := _get_inline_task_info(task):
+                if task_info.function_call is not None:
+                    # when generete_reply is called inside a function_tool, set tool_choice to None by default  # noqa: E501
+                    tool_choice = "none"
 
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
@@ -516,9 +522,18 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
-    def interrupt(self) -> None:
-        if self._current_speech is not None:
-            self._current_speech.interrupt()
+    def interrupt(self) -> asyncio.Future:
+        """Interrupt the current speech generation and any queued speeches.
+
+        Returns:
+            An asyncio.Future that completes when the interruption is fully processed
+            and chat context has been updated
+        """
+        future = asyncio.Future()
+        current_speech = self._current_speech
+
+        if current_speech is not None:
+            current_speech = current_speech.interrupt()
 
         for speech in self._speech_q:
             _, _, speech = speech
@@ -526,6 +541,22 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.interrupt()
+
+        if current_speech is None:
+            future.set_result(None)
+        else:
+
+            def on_playout_done(sh: SpeechHandle) -> None:
+                if future.done():
+                    return
+
+                future.set_result(None)
+
+            current_speech.add_done_callback(on_playout_done)
+            if current_speech.done():
+                future.set_result(None)
+
+        return future
 
     def _schedule_speech(
         self, speech: SpeechHandle, priority: int, bypass_draining: bool = False
@@ -1205,7 +1236,10 @@ class AgentActivity(RecognitionHooks):
                     audio_out = None
                     if audio_output is not None:
                         forward_task, audio_out = perform_audio_forwarding(
-                            audio_output=audio_output, tts_output=msg.audio_stream
+                            audio_output=audio_output,
+                            tts_output=self._agent.realtime_audio_output_node(
+                                msg.audio_stream, model_settings
+                            ),
                         )
                         forward_tasks.append(forward_task)
                         audio_out.first_frame_fut.add_done_callback(_on_first_frame)

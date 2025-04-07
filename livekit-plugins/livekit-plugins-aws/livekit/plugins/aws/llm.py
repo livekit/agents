@@ -14,12 +14,11 @@
 # limitations under the License.
 from __future__ import annotations
 
-import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import boto3
+import aioboto3
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import ChatContext, FunctionTool, FunctionToolCall, ToolChoice
@@ -32,7 +31,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import get_aws_credentials, to_chat_ctx, to_fnc_ctx
+from .utils import get_aws_async_session, to_chat_ctx, to_fnc_ctx
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
 
@@ -60,6 +59,7 @@ class LLM(llm.LLM):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        session: aioboto3.Session | None = None,
     ) -> None:
         """
         Create a new instance of AWS Bedrock LLM.
@@ -79,10 +79,14 @@ class LLM(llm.LLM):
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
+            session (aioboto3.Session, optional): Optional aioboto3 session to use.
         """  # noqa: E501
         super().__init__()
-        self._api_key, self._api_secret, self._region = get_aws_credentials(
-            api_key, api_secret, region
+
+        self._session = session or get_aws_async_session(
+            api_key=api_key if is_given(api_key) else None,
+            api_secret=api_secret if is_given(api_secret) else None,
+            region=region if is_given(region) else None,
         )
 
         model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
@@ -156,11 +160,9 @@ class LLM(llm.LLM):
 
         return LLMStream(
             self,
-            aws_access_key_id=self._api_key,
-            aws_secret_access_key=self._api_secret,
-            region_name=self._region,
             chat_ctx=chat_ctx,
             tools=tools,
+            session=self._session,
             conn_options=conn_options,
             extra_kwargs=opts,
         )
@@ -171,24 +173,16 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        aws_access_key_id: str,
-        aws_secret_access_key: str,
-        region_name: str,
         chat_ctx: ChatContext,
+        session: aioboto3.Session,
         conn_options: APIConnectOptions,
         tools: list[FunctionTool] | None,
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
-        self._client = boto3.client(
-            "bedrock-runtime",
-            region_name=region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-        )
         self._llm: LLM = llm
         self._opts = extra_kwargs
-
+        self._session = session
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
@@ -197,23 +191,21 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         try:
-            response = self._client.converse_stream(**self._opts)  # type: ignore
-            request_id = response["ResponseMetadata"]["RequestId"]
-            if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
-                raise APIStatusError(
-                    f"aws bedrock llm: error generating content: {response}",
-                    retryable=False,
-                    request_id=request_id,
-                )
+            async with self._session.client("bedrock-runtime") as client:
+                response = await client.converse_stream(**self._opts)  # type: ignore
+                request_id = response["ResponseMetadata"]["RequestId"]
+                if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
+                    raise APIStatusError(
+                        f"aws bedrock llm: error generating content: {response}",
+                        retryable=False,
+                        request_id=request_id,
+                    )
 
-            for chunk in response["stream"]:
-                chat_chunk = self._parse_chunk(request_id, chunk)
-                if chat_chunk is not None:
-                    retryable = False
-                    self._event_ch.send_nowait(chat_chunk)
-
-                # Let other coroutines run
-                await asyncio.sleep(0)
+                async for chunk in response["stream"]:
+                    chat_chunk = self._parse_chunk(request_id, chunk)
+                    if chat_chunk is not None:
+                        retryable = False
+                        self._event_ch.send_nowait(chat_chunk)
 
         except Exception as e:
             raise APIConnectionError(
@@ -233,12 +225,17 @@ class LLMStream(llm.LLMStream):
             if "toolUse" in delta:
                 self._fnc_raw_arguments += delta["toolUse"]["input"]
             elif "text" in delta:
-                self._text += delta["text"]
+                return llm.ChatChunk(
+                    id=request_id,
+                    delta=llm.ChoiceDelta(content=delta["text"], role="assistant"),
+                )
+            else:
+                logger.warning(f"aws bedrock llm: unknown chunk type: {chunk}")
 
         elif "metadata" in chunk:
             metadata = chunk["metadata"]
             return llm.ChatChunk(
-                request_id=request_id,
+                id=request_id,
                 usage=llm.CompletionUsage(
                     completion_tokens=metadata["usage"]["outputTokens"],
                     prompt_tokens=metadata["usage"]["inputTokens"],
@@ -246,14 +243,7 @@ class LLMStream(llm.LLMStream):
                 ),
             )
         elif "contentBlockStop" in chunk:
-            if self._text:
-                chat_chunk = llm.ChatChunk(
-                    id=request_id,
-                    delta=llm.ChoiceDelta(content=self._text, role="assistant"),
-                )
-                self._text = ""
-                return chat_chunk
-            elif self._tool_call_id:
+            if self._tool_call_id:
                 if self._tool_call_id is None:
                     logger.warning("aws bedrock llm: no tool call id in the response")
                     return None

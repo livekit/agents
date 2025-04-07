@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
@@ -50,6 +51,7 @@ class TTS(tts.TTS):
         pitch: int = 0,
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
+        location: str = "global",
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -63,6 +65,7 @@ class TTS(tts.TTS):
         Args:
             voice (texttospeech.VoiceSelectionParams, optional): Voice selection parameters.
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
+            location (str, optional): Location for the TTS client. Default is "global".
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
             effects_profile_id (str): Optional identifier for selecting audio effects profiles to apply to the synthesized speech.
             speaking_rate (float, optional): Speed of speech. Default is 1.0.
@@ -81,7 +84,7 @@ class TTS(tts.TTS):
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
-
+        self._location = location
         if not is_given(voice):
             voice = texttospeech.VoiceSelectionParams(
                 name="",
@@ -119,18 +122,24 @@ class TTS(tts.TTS):
             self._opts.audio_config.speaking_rate = speaking_rate
 
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
+        api_endpoint = "texttospeech.googleapis.com"
+        if self._location != "global":
+            api_endpoint = f"{self._location}-texttospeech.googleapis.com"
+
         if self._client is None:
             if self._credentials_info:
                 self._client = texttospeech.TextToSpeechAsyncClient.from_service_account_info(
-                    self._credentials_info
+                    self._credentials_info, client_options=ClientOptions(api_endpoint=api_endpoint)
                 )
 
             elif self._credentials_file:
                 self._client = texttospeech.TextToSpeechAsyncClient.from_service_account_file(
-                    self._credentials_file
+                    self._credentials_file, client_options=ClientOptions(api_endpoint=api_endpoint)
                 )
             else:
-                self._client = texttospeech.TextToSpeechAsyncClient()
+                self._client = texttospeech.TextToSpeechAsyncClient(
+                    client_options=ClientOptions(api_endpoint=api_endpoint)
+                )
 
         assert self._client is not None
         return self._client
