@@ -40,9 +40,6 @@ def _esc(*codes: int) -> str:
 
 
 def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
-    global CLI_ARGUMENTS
-    CLI_ARGUMENTS = args
-
     setup_logging(args.log_level, args.devmode, args.console)
     args.opts.validate_config(args.devmode)
 
