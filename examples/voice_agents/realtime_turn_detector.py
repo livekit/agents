@@ -21,13 +21,6 @@ class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are Alloy.",
-            llm=openai.realtime.RealtimeModel(
-                # it's necessary to turn off turn detection in the Realtime API in order to use
-                # LiveKit's turn detection model
-                voice="alloy",
-                turn_detection=None,
-                input_audio_transcription=None,
-            ),
         )
 
     async def on_enter(self):
@@ -48,10 +41,17 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(
+        allow_interruptions=True,
         turn_detection=EOUModel(),
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
-        allow_interruptions=True,
+        llm=openai.realtime.RealtimeModel(
+            # it's necessary to turn off turn detection in the Realtime API in order to use
+            # LiveKit's turn detection model
+            voice="alloy",
+            turn_detection=None,
+            input_audio_transcription=None,
+        ),
     )
     await session.start(agent=MyAgent(), room=ctx.room)
 
