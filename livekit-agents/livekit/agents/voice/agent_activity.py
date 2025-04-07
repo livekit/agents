@@ -1029,8 +1029,8 @@ class AgentActivity(RecognitionHooks):
             for py_out in tool_output.output:
                 sanitized_out = py_out.sanitize()
 
+                new_calls.append(sanitized_out.fnc_call)
                 if sanitized_out.fnc_call_out is not None:
-                    new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
                 # add the function call and output to the event, including the None outputs
