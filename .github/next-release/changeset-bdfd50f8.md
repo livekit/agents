@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-add audio output node (#1910)
+add realtime audio node (#1910)

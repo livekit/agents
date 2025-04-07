@@ -5,7 +5,16 @@ import numpy as np
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, utils
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    JobProcess,
+    ModelSettings,
+    WorkerOptions,
+    cli,
+    utils,
+)
 from livekit.plugins import deepgram, openai, silero
 
 try:
@@ -33,7 +42,21 @@ class MyAgent(Agent):
         )
         self.speed_factor = speed_factor
 
-    async def audio_output_node(
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        # process for tts output
+        async for frame in super().tts_node(text, model_settings):
+            yield self._process_audio(frame)
+
+    async def realtime_audio_node(
+        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        # process for realtime audio output
+        async for frame in super().realtime_audio_node(audio, model_settings):
+            yield self._process_audio(frame)
+
+    async def _process_audio_stream(
         self, audio: AsyncIterable[rtc.AudioFrame]
     ) -> AsyncIterable[rtc.AudioFrame]:
         stream: utils.audio.AudioByteStream | None = None
@@ -88,13 +111,13 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(model="nova-3"),
         tts=openai.TTS(voice="ash"),
+        # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
     await session.start(agent=MyAgent(), room=ctx.room)
-    session.say("Hello, how can I help you today?")
+    # session.say("Hello, how can I help you today?")
 
 
 if __name__ == "__main__":
