@@ -20,7 +20,7 @@ import dataclasses
 import json
 import os
 import weakref
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import aiohttp
 from livekit.agents import (
@@ -30,6 +30,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.stt import SpeechData
 from livekit.agents.utils import AudioBuffer
 
 from .log import logger
@@ -47,18 +48,12 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        transcription_config: TranscriptionConfig = TranscriptionConfig(
-            language="en",
-            operating_point="enhanced",
-            enable_partials=True,
-            max_delay=0.7,
-        ),
-        connection_settings: ConnectionSettings = ConnectionSettings(
-            url="wss://eu2.rt.speechmatics.com/v2",
-        ),
+        transcription_config: TranscriptionConfig = TranscriptionConfig(),
+        connection_settings: ConnectionSettings = ConnectionSettings(),
         audio_settings: AudioSettings = AudioSettings(),
         http_session: Optional[aiohttp.ClientSession] = None,
         extra_headers: Optional[Dict] = None,
+        min_endpointing_delay: Optional[float] = None,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -70,6 +65,7 @@ class STT(stt.STT):
         self._audio_settings = audio_settings
         self._connection_settings = connection_settings
         self._extra_headers = extra_headers or {}
+        self._min_endpointing_delay = min_endpointing_delay
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -103,6 +99,7 @@ class STT(stt.STT):
             conn_options=conn_options,
             http_session=self.session,
             extra_headers=self._extra_headers,
+            min_endpointing_delay=self._min_endpointing_delay,
         )
         self._streams.add(stream)
         return stream
@@ -119,6 +116,7 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         http_session: aiohttp.ClientSession,
         extra_headers: Optional[Dict] = None,
+        min_endpointing_delay: Optional[float] = None,
     ) -> None:
         super().__init__(
             stt=stt, conn_options=conn_options, sample_rate=audio_settings.sample_rate
@@ -133,6 +131,11 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._recognition_started = asyncio.Event()
         self._seq_no = 0
+
+        self._transcript_buffer: Dict[float, SpeechData] = {}
+        self._min_endpointing_delay = min_endpointing_delay
+        self._endpointing_delay_task: Optional[asyncio.Task] = None
+        self._last_final_transcript: str = ""
 
     async def _run(self):
         closing_ws = False
@@ -253,50 +256,131 @@ class SpeechStream(stt.SpeechStream):
             headers=headers,
         )
 
-    def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
-        message_type = data["message"]
+    def _process_stream_event(self, data: Dict, closing_ws: bool) -> None:
+        message_type = data.get("message")
 
         if message_type == ServerMessageType.RecognitionStarted:
             self._recognition_started.set()
+            return
 
-        elif message_type == ServerMessageType.AddPartialTranscript:
-            alts = live_transcription_to_speech_data(data)
-            if len(alts) > 0 and alts[0].text:
-                interim_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=alts,
-                )
-                self._event_ch.send_nowait(interim_event)
+        if message_type in {
+            ServerMessageType.AddPartialTranscript,
+            ServerMessageType.AddTranscript,
+        }:
+            alts, is_eos = live_transcription_to_speech_data(data)
+            if not alts:
+                return
 
-        elif message_type == ServerMessageType.AddTranscript:
-            alts = live_transcription_to_speech_data(data)
-            if len(alts) > 0 and alts[0].text:
-                final_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=alts,
-                )
-                self._event_ch.send_nowait(final_event)
-
-            if self._speech_duration > 0:
-                usage_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    alternatives=[],
-                    recognition_usage=stt.RecognitionUsage(
-                        audio_duration=self._speech_duration
-                    ),
-                )
-                self._event_ch.send_nowait(usage_event)
-                self._speech_duration = 0
-
-        elif message_type == ServerMessageType.EndOfTranscript:
-            if closing_ws:
-                pass
+            if self._min_endpointing_delay:
+                self._reset_silence_timer()
+                self._update_transcript_buffer(alts, is_eos)
             else:
-                raise Exception("Speechmatics connection closed unexpectedly")
+                if message_type == ServerMessageType.AddPartialTranscript:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                            alternatives=alts,
+                        )
+                    )
+                else:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                            alternatives=alts,
+                        )
+                    )
+                    self._emit_recognition_usage_event()
+
+        if message_type == ServerMessageType.EndOfTranscript and not closing_ws:
+            raise Exception("Speechmatics connection closed unexpectedly")
+
+    def _update_transcript_buffer(
+        self, speech_data: List[SpeechData], is_eos: bool
+    ) -> None:
+        for sd in speech_data:
+            self._transcript_buffer[sd.start_time] = sd
+
+        transcript = self._get_transcript()
+
+        if not transcript or not is_eos:
+            return
+
+        if len(transcript) == 1 or self._is_old_transcript(transcript):
+            self._remove_speech_data(speech_data)
+            return
+
+        self._cancel_delay_task()
+        self._flush_transcript_buffer()
+
+    def _get_transcript(self) -> str:
+        return " ".join(sd.text.strip() for sd in self._transcript_buffer.values())
+
+    def _is_old_transcript(self, new_transcript: str) -> bool:
+        if self._last_final_transcript.endswith(new_transcript):
+            return True
+        return False
+
+    def _remove_speech_data(self, speech_data: List[SpeechData]) -> None:
+        for sd in speech_data:
+            self._transcript_buffer.pop(sd.start_time, None)
+
+    def _cancel_delay_task(self) -> None:
+        if self._endpointing_delay_task:
+            self._endpointing_delay_task.cancel()
+
+    def _reset_silence_timer(self) -> None:
+        self._cancel_delay_task()
+
+        loop = asyncio.get_running_loop()
+        self._endpointing_delay_task = loop.create_task(
+            self._init_endpointing_delay_task()
+        )
+
+    async def _init_endpointing_delay_task(self) -> None:
+        try:
+            await asyncio.sleep(self._min_endpointing_delay or 0)
+            self._flush_transcript_buffer()
+        except asyncio.CancelledError:
+            pass  # Task was reset before timeout
+
+    def _flush_transcript_buffer(self) -> None:
+        if not self._transcript_buffer:
+            return
+
+        alts = list(self._transcript_buffer.values())
+        self._last_final_transcript = self._get_transcript()
+
+        final_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[
+                SpeechData(
+                    language=alts[0].language,
+                    text=self._last_final_transcript,
+                    start_time=alts[0].start_time,
+                    end_time=alts[-1].end_time,
+                )
+            ],
+        )
+        self._event_ch.send_nowait(final_event)
+        self._emit_recognition_usage_event()
+        self._transcript_buffer.clear()
+
+    def _emit_recognition_usage_event(self) -> None:
+        if self._speech_duration > 0:
+            usage_event = stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                alternatives=[],
+                recognition_usage=stt.RecognitionUsage(
+                    audio_duration=self._speech_duration
+                ),
+            )
+            self._event_ch.send_nowait(usage_event)
+            self._speech_duration = 0
 
 
-def live_transcription_to_speech_data(data: dict) -> List[stt.SpeechData]:
+def live_transcription_to_speech_data(data: Dict) -> Tuple[List[stt.SpeechData], bool]:
     speech_data: List[stt.SpeechData] = []
+    is_eos = False
 
     for result in data.get("results", []):
         start_time, end_time, is_eos = (
@@ -325,4 +409,4 @@ def live_transcription_to_speech_data(data: dict) -> List[stt.SpeechData]:
                     stt.SpeechData(language, content, start_time, end_time, confidence)
                 )
 
-    return speech_data
+    return speech_data, is_eos
