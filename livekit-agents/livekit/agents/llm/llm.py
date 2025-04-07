@@ -129,16 +129,16 @@ class LLMStream(ABC):
                 return await self._run()
             except APIError as e:
                 if self._conn_options.max_retry == 0 or not e.retryable:
-                    self._emit_error(e, attempts_remaining=0)
+                    self._emit_error(e, recoverable=False)
                     raise
                 elif i == self._conn_options.max_retry:
-                    self._emit_error(e, attempts_remaining=0)
+                    self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
 
                 else:
-                    self._emit_error(e, attempts_remaining=self._conn_options.max_retry - i)
+                    self._emit_error(e, recoverable=True)
                     logger.warning(
                         f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
@@ -152,13 +152,12 @@ class LLMStream(ABC):
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
 
-    def _emit_error(self, api_error: APIError, attempts_remaining: int):
+    def _emit_error(self, api_error: APIError, recoverable: bool):
         error_metrics = LLMError(
             timestamp=time.time(),
             label=self._llm._label,
             error=api_error.message,
-            retryable=api_error.retryable,
-            attempts_remaining=attempts_remaining,
+            recoverable=recoverable,
         )
         self._current_attempt_has_error = True
         self._llm.emit("error", error_metrics)

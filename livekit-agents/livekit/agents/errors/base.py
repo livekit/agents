@@ -10,8 +10,7 @@ class _Error(BaseModel):
     timestamp: float
     label: str
     error: str
-    retryable: bool
-    attempts_remaining: int
+    recoverable: bool
 
 
 class LLMError(_Error):
