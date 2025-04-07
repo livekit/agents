@@ -1193,7 +1193,7 @@ class AgentActivity(RecognitionHooks):
                     if audio_output is not None:
                         forward_task, audio_out = perform_audio_forwarding(
                             audio_output=audio_output,
-                            tts_output=self._agent.realtime_audio_node(
+                            tts_output=self._agent.realtime_audio_output_node(
                                 msg.audio_stream, model_settings
                             ),
                         )

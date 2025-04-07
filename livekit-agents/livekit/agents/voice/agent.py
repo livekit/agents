@@ -420,7 +420,7 @@ class Agent:
             finally:
                 await utils.aio.cancel_and_wait(forward_task)
 
-    async def realtime_audio_node(
+    async def realtime_audio_output_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
         """A node processing the audio from the realtime LLM session before it is played out."""

@@ -46,17 +46,15 @@ class MyAgent(Agent):
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
         # process for tts output
-        async for frame in self._process_audio_stream(
-            super().tts_node(text, model_settings)
-        ):
+        async for frame in self._process_audio_stream(super().tts_node(text, model_settings)):
             yield frame
 
-    async def realtime_audio_node(
+    async def realtime_audio_output_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
         # process for realtime audio output
         async for frame in self._process_audio_stream(
-            super().realtime_audio_node(audio, model_settings)
+            super().realtime_audio_output_node(audio, model_settings)
         ):
             yield frame
 
