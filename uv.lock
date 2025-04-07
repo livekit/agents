@@ -20,7 +20,6 @@ members = [
     "livekit-plugins-deepgram",
     "livekit-plugins-elevenlabs",
     "livekit-plugins-fal",
-    "livekit-plugins-gladia",
     "livekit-plugins-google",
     "livekit-plugins-groq",
     "livekit-plugins-llama-index",
@@ -1166,7 +1165,6 @@ dependencies = [
     { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "protobuf" },
     { name = "psutil" },
-    { name = "pydantic" },
     { name = "pyjwt" },
     { name = "sounddevice" },
     { name = "types-protobuf" },
@@ -1206,9 +1204,6 @@ elevenlabs = [
 ]
 fal = [
     { name = "livekit-plugins-fal" },
-]
-gladia = [
-    { name = "livekit-plugins-gladia" },
 ]
 google = [
     { name = "livekit-plugins-google" },
@@ -1260,7 +1255,7 @@ requires-dist = [
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
     { name = "livekit", specifier = ">=1.0.1,<2" },
-    { name = "livekit-api", specifier = ">=1.0.2,<2" },
+    { name = "livekit-api", specifier = "~=1.0" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
@@ -1270,7 +1265,6 @@ requires-dist = [
     { name = "livekit-plugins-deepgram", marker = "extra == 'deepgram'", editable = "livekit-plugins/livekit-plugins-deepgram" },
     { name = "livekit-plugins-elevenlabs", marker = "extra == 'elevenlabs'", editable = "livekit-plugins/livekit-plugins-elevenlabs" },
     { name = "livekit-plugins-fal", marker = "extra == 'fal'", editable = "livekit-plugins/livekit-plugins-fal" },
-    { name = "livekit-plugins-gladia", marker = "extra == 'gladia'", editable = "livekit-plugins/livekit-plugins-gladia" },
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
     { name = "livekit-plugins-llama-index", marker = "extra == 'llama-index'", editable = "livekit-plugins/livekit-plugins-llama-index" },
@@ -1289,18 +1283,17 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'images'", specifier = ">=10.3.0" },
     { name = "protobuf", specifier = ">=3" },
     { name = "psutil", specifier = ">=7.0" },
-    { name = "pydantic", specifier = ">=2.0,<3" },
     { name = "pyjwt", specifier = ">=2.0" },
     { name = "sounddevice", specifier = ">=0.5" },
     { name = "types-protobuf", specifier = ">=4,<5" },
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "llama-index", "neuphonic", "nltk", "openai", "playai", "rag", "rime", "silero", "speechmatics", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "google", "groq", "images", "llama-index", "neuphonic", "nltk", "openai", "playai", "rag", "rime", "silero", "speechmatics", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
-version = "1.0.2"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1309,9 +1302,9 @@ dependencies = [
     { name = "pyjwt" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ee/58/19b21a9bf9011a870be0aa7cccf9188f2ae644247d7da8f20935bbb2aa5b/livekit_api-1.0.2.tar.gz", hash = "sha256:5a6726a24761af046bdb4ae32b572d28df728a0e6824805d86783fa94c59574f", size = 14803 }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/65/1e00545f4ef236f3f2ecb1c123fc2fe5ee71fdb0824ea78346bae573d8b2/livekit_api-1.0.1.tar.gz", hash = "sha256:d5a8851680696c75e612972bc2c96cb2563afdbde8538f2bb78b3aa6073f8937", size = 14752 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7b/a3/d7eda9924316fcc0b9287ae671094f241c25fa13bc24f18e9c708e58d6b2/livekit_api-1.0.2-py3-none-any.whl", hash = "sha256:81ea2b330a7182c77f3cf307dfcff7df7d0d70524055bfb02be23ac8a45b8c6a", size = 17251 },
+    { url = "https://files.pythonhosted.org/packages/4e/a6/234e1bfa3d1ce60b72dfdb66c1f9966e1d20376cb20cf305a58d831c456d/livekit_api-1.0.1-py3-none-any.whl", hash = "sha256:7e503437a54a5cab8e84b605dab4b03dc5a5b227222df31fc94334707143e2b2", size = 17203 },
 ]
 
 [[package]]
@@ -1431,23 +1424,6 @@ dependencies = [
 requires-dist = [
     { name = "fal-client" },
     { name = "livekit-agents", editable = "livekit-agents" },
-]
-
-[[package]]
-name = "livekit-plugins-gladia"
-source = { editable = "livekit-plugins/livekit-plugins-gladia" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "livekit-agents", extra = ["codecs"] },
-    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.8.0" },
-    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
-    { name = "numpy", specifier = ">=1.26" },
 ]
 
 [[package]]
