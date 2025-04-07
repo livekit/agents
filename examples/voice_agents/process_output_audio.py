@@ -5,17 +5,7 @@ import numpy as np
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    JobContext,
-    JobProcess,
-    RoomInputOptions,
-    RoomOutputOptions,
-    WorkerOptions,
-    cli,
-    utils,
-)
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, utils
 from livekit.plugins import deepgram, openai, silero
 
 try:
@@ -25,14 +15,13 @@ except ImportError:
         "librosa is required to run this example, install it with `pip install librosa`"
     ) from None
 
-# uncomment to enable Krisp background voice/noise cancellation
-# currently supported on Linux and MacOS
-# from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")
 logging.getLogger("numba").setLevel(logging.WARNING)
 
 load_dotenv()
+
+## This example demonstrates how to add post-processing to the output audio of the agent.
 
 
 class MyAgent(Agent):
@@ -104,15 +93,8 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(model="nova-3"),
         tts=openai.TTS(voice="ash"),
     )
-    await session.start(
-        agent=MyAgent(),
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # uncomment to enable Krisp BVC noise cancellation
-            # noise_cancellation=noise_cancellation.BVC(),
-        ),
-        room_output_options=RoomOutputOptions(transcription_enabled=True),
-    )
+    await session.start(agent=MyAgent(), room=ctx.room)
+    session.say("Hello, how can I help you today?")
 
 
 if __name__ == "__main__":
