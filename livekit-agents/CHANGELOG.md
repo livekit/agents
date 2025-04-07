@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.20
+
+### Patch Changes
+
+- fix decoder: if no data was pushed, close the output channel - [#1881](https://github.com/livekit/agents/pull/1881) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.12.19
 
 ### Patch Changes

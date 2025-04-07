@@ -1,5 +1,11 @@
 # livekit-plugins-eou
 
+## 0.4.4
+
+### Patch Changes
+
+- added a multilingual turn detector option - [#1736](https://github.com/livekit/agents/pull/1736) ([@jeradf](https://github.com/jeradf))
+
 ## 0.4.3
 
 ### Patch Changes
