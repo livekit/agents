@@ -349,11 +349,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions=allow_interruptions,
         )
 
-    def interrupt(self) -> None:
+    def interrupt(self) -> asyncio.Future:
+        """Interrupt the current speech generation.
+
+        Returns:
+            An asyncio.Future that completes when the interruption is fully processed
+            and chat context has been updated.
+
+        Example:
+            ```python
+            await session.interrupt()
+            ```
+        """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.interrupt()
+        return self._activity.interrupt()
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
