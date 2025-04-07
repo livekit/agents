@@ -420,6 +420,14 @@ class Agent:
             finally:
                 await utils.aio.cancel_and_wait(forward_task)
 
+    async def audio_output_node(
+        self, audio: AsyncIterable[rtc.AudioFrame]
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        self.__get_activity_or_raise()
+        async for frame in audio:
+            yield frame
+        # flush the buffer if any
+
     def __get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:

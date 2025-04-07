@@ -809,13 +809,14 @@ class AgentActivity(RecognitionHooks):
                 tasks.append(tts_task)
 
                 forward_task, audio_out = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=tts_gen_data.audio_ch
+                    audio_output=audio_output,
+                    tts_output=self._agent.audio_output_node(tts_gen_data.audio_ch),
                 )
                 tasks.append(forward_task)
             else:
                 # use the provided audio
                 forward_task, audio_out = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=audio
+                    audio_output=audio_output, tts_output=self._agent.audio_output_node(audio)
                 )
                 tasks.append(forward_task)
 
@@ -928,7 +929,8 @@ class AgentActivity(RecognitionHooks):
             assert tts_gen_data is not None
             # TODO(theomonnom): should the audio be added to the chat_context too?
             forward_task, audio_out = perform_audio_forwarding(
-                audio_output=audio_output, tts_output=tts_gen_data.audio_ch
+                audio_output=audio_output,
+                tts_output=self._agent.audio_output_node(tts_gen_data.audio_ch),
             )
             tasks.append(forward_task)
 
@@ -1192,7 +1194,8 @@ class AgentActivity(RecognitionHooks):
                     audio_out = None
                     if audio_output is not None:
                         forward_task, audio_out = perform_audio_forwarding(
-                            audio_output=audio_output, tts_output=msg.audio_stream
+                            audio_output=audio_output,
+                            tts_output=self._agent.audio_output_node(msg.audio_stream),
                         )
                         forward_tasks.append(forward_task)
                         audio_out.first_frame_fut.add_done_callback(_on_first_frame)
