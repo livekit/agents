@@ -85,7 +85,6 @@ async def entrypoint(ctx: JobContext):
 
     @session.on("error")
     def on_error(ev: ErrorEvent):
-        global drain_task
         logger.info(f"Session is closing due to error in {ev.source.__class__.__name__}")
         logger.info(f"Playing error audio file from: {error_wav_path}")
         session.say(
@@ -93,10 +92,9 @@ async def entrypoint(ctx: JobContext):
             # If you define a custom audio file, it will play out even if the TTS provider is down
             audio=audio_frames_from_file(error_wav_path),
         )
-        drain_task = asyncio.create_task(session.drain())
 
     @session.on("session_close")
-    def on_session_close(ev: SessionCloseEvent):
+    def on_session_close(_: SessionCloseEvent):
         global room_close_task
         # Delete the room and disconnect all participants
         room_close_task = asyncio.create_task(ctx.delete_room())

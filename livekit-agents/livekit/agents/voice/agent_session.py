@@ -281,8 +281,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
-            if self._activity is not None:
-                await self._activity.aclose()
+            await self._aclose_current_activity()
 
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
@@ -376,10 +375,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
 
-    async def drain(self) -> None:
-        if self._activity is not None:
-            await self._activity.drain()
-
     def _create_session_close_task(self, cause: ErrorEvent | None = None) -> None:
         self._closing_task = asyncio.create_task(self.aclose(cause=cause))
 
@@ -388,13 +383,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         async with self._activity_lock:
             self._next_activity = AgentActivity(task, self)
 
-            if self._activity is not None:
-                await self._activity.drain()
-                await self._activity.aclose()
+            await self._aclose_current_activity()
 
             self._activity = self._next_activity
             self._next_activity = None
             await self._activity.start()
+
+    async def _aclose_current_activity(self) -> None:
+        if self._activity is not None:
+            await self._activity.drain()
+            await self._activity.aclose()
 
     @utils.log_exceptions(logger=logger)
     async def _forward_audio_task(self) -> None:
