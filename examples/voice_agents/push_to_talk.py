@@ -56,7 +56,7 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.local_participant.register_rpc_method("start_turn")
     async def start_turn(data: rtc.RpcInvocationData):
-        session.start_user_turn()
+        session.mark_turn_start()
 
         # listen to the caller if multi-user
         room_io.set_participant(data.caller_identity)
@@ -65,12 +65,12 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.local_participant.register_rpc_method("end_turn")
     async def end_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
-        await session.end_user_turn()
+        await session.mark_turn_end()
 
     @ctx.room.local_participant.register_rpc_method("cancel_turn")
     async def cancel_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
-        await session.end_user_turn(cancelled=True)
+        await session.mark_turn_end(cancelled=True)
 
 
 if __name__ == "__main__":

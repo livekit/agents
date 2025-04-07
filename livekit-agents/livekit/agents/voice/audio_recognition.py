@@ -126,11 +126,11 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             self._vad_atask = None
             self._vad_ch = None
 
-    def start_user_turn(self) -> None:
+    def mark_turn_start(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
 
-    async def end_user_turn(self, *, cancelled: bool) -> None:
+    async def mark_turn_end(self, *, cancelled: bool) -> None:
         if not cancelled:
             user_transcript = f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
             await self._hooks.on_end_of_turn(user_transcript)

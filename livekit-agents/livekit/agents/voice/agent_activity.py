@@ -529,13 +529,13 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.interrupt()
 
-    def start_user_turn(self) -> None:
+    def mark_turn_start(self) -> None:
         if self._audio_recognition:
-            self._audio_recognition.start_user_turn()
+            self._audio_recognition.mark_turn_start()
 
-    async def end_user_turn(self, *, cancelled: bool) -> None:
+    async def mark_turn_end(self, *, cancelled: bool) -> None:
         if self._audio_recognition:
-            await self._audio_recognition.end_user_turn(cancelled=cancelled)
+            await self._audio_recognition.mark_turn_end(cancelled=cancelled)
         elif not cancelled:
             await self.on_end_of_turn(new_transcript="")
 

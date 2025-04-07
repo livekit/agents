@@ -368,15 +368,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.interrupt()
 
-    def start_user_turn(self) -> None:
+    def mark_turn_start(self) -> None:
         # interrupt the agent and reset the audio recognition
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
         self._activity.interrupt()
-        self._activity.start_user_turn()
+        self._activity.mark_turn_start()
 
-    async def end_user_turn(self, *, cancelled: bool = False) -> None:
+    async def mark_turn_end(self, *, cancelled: bool = False) -> None:
         """End the user turn manually and trigger the on_end_of_turn hook if not cancelled.
 
         Args:
@@ -390,7 +390,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        await self._activity.end_user_turn(cancelled=cancelled)
+        await self._activity.mark_turn_end(cancelled=cancelled)
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
