@@ -25,7 +25,7 @@ except ImportError:
     ) from None
 
 
-logger = logging.getLogger("basic-agent")
+logger = logging.getLogger("speedup-output-audio")
 logging.getLogger("numba").setLevel(logging.WARNING)
 
 load_dotenv()
