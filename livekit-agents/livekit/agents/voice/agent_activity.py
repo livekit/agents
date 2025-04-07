@@ -542,6 +542,9 @@ class AgentActivity(RecognitionHooks):
         else:
 
             def on_playout_done(sh: SpeechHandle) -> None:
+                if future.done():
+                    return
+
                 future.set_result(None)
 
             current_speech.add_done_callback(on_playout_done)
