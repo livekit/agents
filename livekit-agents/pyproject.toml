@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "click~=8.1",
-    "livekit>=1.0.1,<2",
+    "livekit>=1.0.2,<2",
     "livekit-api>=1.0.2,<2",
     "livekit-protocol~=1.0",
     "protobuf>=3",
