@@ -221,7 +221,9 @@ def is_typed_dict(cls) -> bool:
 # and https://github.com/instructor-ai/instructor/blob/be7821e34fb10f7dabf658d684135297a2e40ef3/instructor/process_response.py#L812C1-L816C10
 
 
-def to_response_format_param(response_format: type | dict) -> dict:
+def to_response_format_param(
+    response_format: type | dict,
+) -> tuple[str, type[BaseModel] | TypeAdapter[Any]]:
     if isinstance(response_format, dict):
         # TODO(theomonnom): better type validation, copy TypedDict from OpenAI
         if response_format.get("type", "") not in ("text", "json_schema", "json_object"):
@@ -246,6 +248,12 @@ def to_response_format_param(response_format: type | dict) -> dict:
         json_schema_type = TypeAdapter(response_format)
     else:
         raise TypeError(f"Unsupported response_format type - {response_format}")
+
+    return name, json_schema_type
+
+
+def to_openai_response_format(response_format: type | dict) -> dict:
+    name, json_schema_type = to_response_format_param(response_format)
 
     schema = _strict.to_strict_json_schema(json_schema_type)
     return {

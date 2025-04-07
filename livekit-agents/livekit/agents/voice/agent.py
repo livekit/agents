@@ -508,9 +508,20 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         return self.__await_impl().__await__()
 
 
-def _authorize_inline_task(task: asyncio.Task) -> None:
-    setattr(task, "__livekit_agents_inline_task", True)
+@dataclass
+class _InlineTaskInfo:
+    function_call: llm.FunctionCall | None
+
+
+def _authorize_inline_task(
+    task: asyncio.Task, *, function_call: llm.FunctionCall | None = None
+) -> None:
+    setattr(task, "__livekit_agents_inline_task", _InlineTaskInfo(function_call=function_call))
+
+
+def _get_inline_task_info(task: asyncio.Task) -> _InlineTaskInfo | None:
+    return getattr(task, "__livekit_agents_inline_task", None)
 
 
 def _is_inline_task_authorized(task: asyncio.Task) -> bool:
-    return getattr(task, "__livekit_agents_inline_task", False)
+    return getattr(task, "__livekit_agents_inline_task", None) is not None

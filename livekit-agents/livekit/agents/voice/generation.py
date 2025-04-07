@@ -358,7 +358,7 @@ async def _execute_tools_task(
                 name=f"function_tool_{fnc_call.name}",
             )
             tasks.append(task)
-            _authorize_inline_task(task)
+            _authorize_inline_task(task, function_call=fnc_call)
 
             def _log_exceptions(task: asyncio.Task) -> None:
                 if task.exception() is not None:
@@ -567,7 +567,8 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
     Raises:
         ValueError: If an existing instruction message is not of type "message".
     """
-    if idx := chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID):
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is not None:
         if chat_ctx.items[idx].type == "message":
             # create a new instance to avoid mutating the original
             chat_ctx.items[idx] = llm.ChatMessage(
