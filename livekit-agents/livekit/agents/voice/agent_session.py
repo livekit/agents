@@ -369,12 +369,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity.interrupt()
 
     def start_user_turn(self) -> None:
+        # interrupt the agent and reset the audio recognition
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
+        self._activity.interrupt()
         self._activity.start_user_turn()
 
     async def end_user_turn(self) -> None:
+        # trigger agent.on_end_of_turn with user transcript, even if it's empty
+        # (including interim transcript if any)
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 

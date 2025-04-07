@@ -27,12 +27,17 @@ class MyAgent(Agent):
             tts=cartesia.TTS(),
             # llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
         )
+        self.should_reply = False
 
     async def on_end_of_turn(
         self, chat_ctx: ChatContext, new_message: ChatMessage, generating_reply: bool
     ) -> None:
-        # callback when `session.end_user_turn` is called in manual turn detection mode
+        if not self.should_reply:
+            logger.info("ignore user message", extra={"content": new_message.content})
+            return
+
         if not isinstance(self.llm, llm.RealtimeModel) and new_message.text_content:
+            # skip for realtime model, it manages conversation items with audio internally
             chat_ctx = chat_ctx.copy()
             chat_ctx.items.append(new_message)
             await self.update_chat_ctx(chat_ctx)
@@ -47,14 +52,15 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(turn_detection="manual")
     room_io = RoomIO(session, room=ctx.room)
     await room_io.start()
-    await session.start(agent=MyAgent())
+
+    agent = MyAgent()
+    await session.start(agent=agent)
 
     # disable input audio at the start
     session.input.set_audio_enabled(False)
 
     @ctx.room.local_participant.register_rpc_method("start_turn")
     async def start_turn(data: rtc.RpcInvocationData):
-        session.interrupt()
         session.start_user_turn()
 
         # listen to the caller if multi-user
@@ -64,6 +70,13 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.local_participant.register_rpc_method("end_turn")
     async def end_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
+        agent.should_reply = True
+        await session.end_user_turn()
+
+    @ctx.room.local_participant.register_rpc_method("cancel_turn")
+    async def cancel_turn(data: rtc.RpcInvocationData):
+        session.input.set_audio_enabled(False)
+        agent.should_reply = False
         await session.end_user_turn()
 
 
