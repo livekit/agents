@@ -130,12 +130,14 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
 
-    async def end_user_turn(self) -> None:
-        # TODO(long): is there a way to flush the STT buffer?
-        user_transcript = f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
-        await self._hooks.on_end_of_turn(user_transcript)
+    async def end_user_turn(self, *, cancelled: bool) -> None:
+        if not cancelled:
+            user_transcript = f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
+            await self._hooks.on_end_of_turn(user_transcript)
+
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        # TODO(long): is there a way to flush the STT buffer?
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
