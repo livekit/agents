@@ -44,7 +44,7 @@ from .version import __version__
 from .voice import Agent, AgentEvent, AgentSession, ModelSettings, RunContext, io
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
-from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType, SimulateJobInfo
+from .worker import SimulateJobInfo, Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
     "__version__",
