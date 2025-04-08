@@ -20,9 +20,9 @@ logger = logging.getLogger("background-audio")
 
 load_dotenv()
 
-## NOTE: this example relies on an unreleased version of livekit-agents.
-## To test it out, you'll need to install the package from source.
-## It'll be part of 1.0.0rc7 release.
+## Example demonstrates how to play background audio / sound effects in an agent session.
+## It uses the BackgroundAudioPlayer class to manage audio playback to the room.
+## Background audio could make the agent feel more realistic, versus perfect silence in the background.
 
 
 class FakeWebSearchAgent(Agent):
