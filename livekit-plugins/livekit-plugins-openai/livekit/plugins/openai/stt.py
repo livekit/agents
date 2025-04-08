@@ -470,7 +470,6 @@ class SpeechStream(stt.SpeechStream):
 
                 except Exception:
                     logger.exception("failed to process OpenAI message")
-                    raise
 
         while True:
             async with self._pool.connection() as ws:

@@ -21,7 +21,13 @@ from dataclasses import dataclass
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    stt,
+    utils,
+)
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -210,7 +216,7 @@ class SpeechStream(stt.SpeechStream):
                             task.result()
 
                     if wait_stopped_task in done:
-                        raise RuntimeError("SpeechRecognition session stopped")
+                        raise APIConnectionError("SpeechRecognition session stopped")
 
                     if wait_reconnect_task not in done:
                         break
