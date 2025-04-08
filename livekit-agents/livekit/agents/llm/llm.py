@@ -194,7 +194,7 @@ class LLMStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration  # noqa: B904
+            raise StopAsyncIteration from None
 
         return val
 

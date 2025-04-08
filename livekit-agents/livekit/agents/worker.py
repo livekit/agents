@@ -654,14 +654,16 @@ class Worker(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._opts.max_retry:
-                    raise RuntimeError(  # noqa: B904
+                    raise RuntimeError(
                         f"failed to connect to livekit after {retry_count} attempts",
-                    )
+                    ) from None
 
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
 
-                logger.warning(f"failed to connect to livekit, retrying in {retry_delay}s: {e}")
+                logger.warning(
+                    f"failed to connect to livekit, retrying in {retry_delay}s", exc_info=e
+                )
                 await asyncio.sleep(retry_delay)
             finally:
                 if ws is not None:
@@ -814,7 +816,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     f"assignment for job {job_req.id} timed out",
                     extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
-                raise AssignmentTimeoutError()  # noqa: B904
+                raise AssignmentTimeoutError() from None
 
             job_assign = wait_assignment.result()
             running_info = RunningJobInfo(
