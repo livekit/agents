@@ -85,6 +85,8 @@ async def entrypoint(ctx: JobContext):
 
     @session.on("error")
     def on_error(ev: ErrorEvent):
+        if ev.error.recoverable:
+            return
         logger.info(f"Session is closing due to error in {ev.source.__class__.__name__}")
         logger.info(f"Playing error audio file from: {error_wav_path}")
         session.say(
