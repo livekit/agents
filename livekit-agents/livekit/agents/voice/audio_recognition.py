@@ -25,7 +25,7 @@ class _EndOfTurnInfo:
 
 class _TurnDetector(Protocol):
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    def unlikely_threshold(self) -> float: ...
+    def unlikely_threshold(self, language: str | None) -> float: ...
     def supports_language(self, language: str | None) -> bool: ...
 
     async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float: ...
@@ -229,13 +229,16 @@ class AudioRecognition:
         async def _bounce_eou_task(last_speaking_time: float) -> None:
             endpointing_delay = self._min_endpointing_delay
 
-            if turn_detector is not None and turn_detector.supports_language(self._last_language):
-                end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
-                tracing.Tracing.log_event(
-                    "end of user turn probability",
-                    {"probability": end_of_turn_probability},
-                )
-                unlikely_threshold = turn_detector.unlikely_threshold()
+            if turn_detector is not None:
+                if not turn_detector.supports_language(self._last_language):
+                    logger.debug("Turn detector does not support language %s", self._last_language)
+                else:
+                    end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
+                    tracing.Tracing.log_event(
+                        "end of user turn probability",
+                        {"probability": end_of_turn_probability},
+                    )
+                unlikely_threshold = turn_detector.unlikely_threshold(self._last_language)
                 if end_of_turn_probability < unlikely_threshold:
                     endpointing_delay = self._max_endpointing_delay
 
