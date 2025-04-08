@@ -22,7 +22,8 @@ load_dotenv()
 
 ## Example demonstrates how to play background audio / sound effects in an agent session.
 ## It uses the BackgroundAudioPlayer class to manage audio playback to the room.
-## Background audio could make the agent feel more realistic, versus perfect silence in the background.
+## Background audio could make the agent feel more realistic, versus perfect silence
+## in the background.
 
 
 class FakeWebSearchAgent(Agent):
