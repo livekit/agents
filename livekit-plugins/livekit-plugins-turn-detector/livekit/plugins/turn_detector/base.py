@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
-from livekit.agents.job import get_current_job_context
+from livekit.agents.job import get_job_context
 
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
@@ -123,7 +123,7 @@ class EOUModelBase(ABC):
         inference_executor: InferenceExecutor | None = None,
     ) -> None:
         self._model_type = model_type
-        self._executor = inference_executor or get_current_job_context().inference_executor
+        self._executor = inference_executor or get_job_context().inference_executor
 
         config_fname = _download_from_hf_hub(
             HG_MODEL,
