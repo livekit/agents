@@ -5,9 +5,11 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from pydantic import TypeAdapter
+
 from google.genai import types
 from livekit.agents import llm
-from livekit.agents.llm import FunctionTool
+from livekit.agents.llm import FunctionTool, utils as llm_utils
 
 from .log import logger
 
@@ -48,7 +50,7 @@ def to_chat_ctx(
         if msg.type == "message" and msg.role == "system":
             sys_parts = []
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     sys_parts.append(types.Part(text=content))
             system_instruction = types.Content(parts=sys_parts)
             continue
@@ -69,9 +71,9 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     parts.append(types.Part(text=content))
-                elif isinstance(content, dict):
+                elif content and isinstance(content, dict):
                     parts.append(types.Part(text=json.dumps(content)))
                 elif isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content, cache_key))
@@ -96,6 +98,10 @@ def to_chat_ctx(
 
     if current_role is not None and parts:
         turns.append(types.Content(role=current_role, parts=parts))
+
+    if not turns:
+        # if no turns, add a user message with a placeholder
+        turns = [types.Content(role="user", parts=[types.Part(text=".")])]
     return turns, system_instruction
 
 
@@ -121,6 +127,16 @@ def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
         description=fnc["description"],
         parameters=json_schema,
     )
+
+
+def to_response_format(response_format: type | dict) -> types.SchemaUnion:
+    _, json_schema_type = llm_utils.to_response_format_param(response_format)
+    if isinstance(json_schema_type, TypeAdapter):
+        schema = json_schema_type.json_schema()
+    else:
+        schema = json_schema_type.model_json_schema()
+
+    return _GeminiJsonSchema(schema).simplify()
 
 
 class _GeminiJsonSchema:
@@ -154,6 +170,7 @@ class _GeminiJsonSchema:
     def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
         schema.pop("title", None)
         schema.pop("default", None)
+        schema.pop("additionalProperties", None)
         if ref := schema.pop("$ref", None):
             key = re.sub(r"^#/\$defs/", "", ref)
             if key in refs_stack:
@@ -214,7 +231,6 @@ class _GeminiJsonSchema:
             "maxItems": "max_items",
             "minProperties": "min_properties",
             "maxProperties": "max_properties",
-            "additionalProperties": "additional_properties",
         }
 
         for json_name, gemini_name in mappings.items():
@@ -222,11 +238,6 @@ class _GeminiJsonSchema:
                 schema[gemini_name] = schema.pop(json_name)
 
     def _object(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
-        # Gemini doesn't support additionalProperties
-        ad_props = schema.pop("additional_properties", None)
-        if ad_props:
-            raise ValueError("Additional properties in JSON Schema are not supported by Gemini")
-
         if properties := schema.get("properties"):
             for value in properties.values():
                 self._simplify(value, refs_stack)

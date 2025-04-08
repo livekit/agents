@@ -1,43 +1,44 @@
 from __future__ import annotations
 
 import json
-import os
-from typing import Any, cast
+from typing import Any
 
+import aioboto3
 import boto3
+from botocore.exceptions import NoCredentialsError
 
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
-from livekit.agents.types import NotGivenOr
-from livekit.agents.utils import is_given
 
-__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_credentials"]
-
+__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session"]
 DEFAULT_REGION = "us-east-1"
 
 
-def get_aws_credentials(
-    api_key: NotGivenOr[str],
-    api_secret: NotGivenOr[str],
-    region: NotGivenOr[str],
-):
-    aws_region = region if is_given(region) else os.environ.get("AWS_DEFAULT_REGION")
-    if not aws_region:
-        aws_region = DEFAULT_REGION
+def get_aws_async_session(
+    region: str | None = None,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+) -> aioboto3.Session:
+    _validate_aws_credentials(api_key, api_secret)
+    session = aioboto3.Session(
+        aws_access_key_id=api_key,
+        aws_secret_access_key=api_secret,
+        region_name=region or DEFAULT_REGION,
+    )
+    return session
 
-    if is_given(api_key) and is_given(api_secret):
-        session = boto3.Session(
-            aws_access_key_id=api_key,
-            aws_secret_access_key=api_secret,
-            region_name=aws_region,
-        )
-    else:
-        session = boto3.Session(region_name=aws_region)
 
-    credentials = session.get_credentials()
-    if not credentials or not credentials.access_key or not credentials.secret_key:
-        raise ValueError("No valid AWS credentials found.")
-    return cast(tuple[str, str, str], (credentials.access_key, credentials.secret_key, region))
+def _validate_aws_credentials(
+    api_key: str | None = None,
+    api_secret: str | None = None,
+) -> None:
+    try:
+        session = boto3.Session(aws_access_key_id=api_key, aws_secret_access_key=api_secret)
+        creds = session.get_credentials()
+        if not creds:
+            raise ValueError("No credentials found")
+    except (NoCredentialsError, Exception) as e:
+        raise ValueError(f"Unable to locate valid AWS credentials: {str(e)}") from e
 
 
 def to_fnc_ctx(fncs: list[FunctionTool]) -> list[dict]:
@@ -53,7 +54,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
     for msg in chat_ctx.items:
         if msg.type == "message" and msg.role == "system":
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     system_message = {"text": content}
             continue
 
@@ -73,7 +74,7 @@ def to_chat_ctx(chat_ctx: ChatContext, cache_key: Any) -> tuple[list[dict], dict
 
         if msg.type == "message":
             for content in msg.content:
-                if isinstance(content, str):
+                if content and isinstance(content, str):
                     current_content.append({"text": content})
                 elif isinstance(content, ImageContent):
                     current_content.append(_build_image(content, cache_key))

@@ -18,14 +18,14 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from google import genai
 from google.auth._default_async import default_async
 from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import FunctionTool, ToolChoice
+from livekit.agents.llm import FunctionTool, ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -36,14 +36,14 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .utils import to_chat_ctx, to_fnc_ctx
+from .utils import to_chat_ctx, to_fnc_ctx, to_response_format
 
 
 @dataclass
 class _LLMOptions:
     model: ChatModels | str
     temperature: NotGivenOr[float]
-    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
+    tool_choice: NotGivenOr[ToolChoice]
     vertexai: NotGivenOr[bool]
     project: NotGivenOr[str]
     location: NotGivenOr[str]
@@ -69,7 +69,7 @@ class LLM(llm.LLM):
         top_k: NotGivenOr[float] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -93,7 +93,7 @@ class LLM(llm.LLM):
             top_k (int, optional): The top-k sampling value for response generation. Defaults to None.
             presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
-            tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
+            tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -147,7 +147,10 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[
+            types.SchemaUnion | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
@@ -158,7 +161,7 @@ class LLM(llm.LLM):
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             gemini_tool_choice: types.ToolConfig
-            if isinstance(tool_choice, ToolChoice):
+            if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode="ANY",
@@ -188,6 +191,10 @@ class LLM(llm.LLM):
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice
+
+        if is_given(response_format):
+            extra["response_schema"] = to_response_format(response_format)
+            extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
@@ -237,10 +244,11 @@ class LLMStream(llm.LLMStream):
 
         try:
             turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm))
-
-            self._extra_kwargs["tools"] = [
-                types.Tool(function_declarations=to_fnc_ctx(self._tools))
-            ]
+            function_declarations = to_fnc_ctx(self._tools)
+            if function_declarations:
+                self._extra_kwargs["tools"] = [
+                    types.Tool(function_declarations=function_declarations)
+                ]
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 **self._extra_kwargs,
@@ -299,7 +307,7 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: client error",
                 status_code=e.code,
-                body=e.message,
+                body=e.message + e.status,
                 request_id=request_id,
                 retryable=False if e.code != 429 else True,
             ) from e
@@ -307,7 +315,7 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: server error",
                 status_code=e.code,
-                body=e.message,
+                body=e.message + e.status,
                 request_id=request_id,
                 retryable=retryable,
             ) from e
@@ -315,13 +323,13 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: api error",
                 status_code=e.code,
-                body=e.message,
+                body=e.message + e.status,
                 request_id=request_id,
                 retryable=retryable,
             ) from e
         except Exception as e:
             raise APIConnectionError(
-                "gemini llm: error generating content",
+                f"gemini llm: error generating content {str(e)}",
                 retryable=retryable,
             ) from e
 

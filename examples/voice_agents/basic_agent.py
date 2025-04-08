@@ -30,7 +30,7 @@ load_dotenv()
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="Your name is Jenna. You would interact with users via voice."
+            instructions="Your name is Kelly. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
             "You are curious and friendly, and have a sense of humor.",
         )
@@ -75,6 +75,11 @@ def prewarm(proc: JobProcess):
 
 
 async def entrypoint(ctx: JobContext):
+    # each log entry will include these fields
+    ctx.log_context_fields = {
+        "room": ctx.room.name,
+        "user_id": "your user_id",
+    }
     await ctx.connect()
 
     session = AgentSession(

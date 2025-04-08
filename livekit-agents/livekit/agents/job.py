@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import logging
 import multiprocessing as mp
 from collections.abc import Coroutine
 from dataclasses import dataclass
@@ -28,11 +29,12 @@ from livekit.protocol import agent, models
 
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
+from .utils import http_context
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
-def get_current_job_context() -> JobContext:
+def get_job_context() -> JobContext:
     ctx = _JobContextVar.get(None)
     if ctx is None:
         raise RuntimeError(
@@ -40,6 +42,9 @@ def get_current_job_context() -> JobContext:
         )
 
     return ctx
+
+
+get_current_job_context = get_job_context
 
 
 @unique
@@ -107,13 +112,38 @@ class JobContext:
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
+        self._init_log_factory()
+        self._log_fields = {}
+
+    def _init_log_factory(self) -> None:
+        old_factory = logging.getLogRecordFactory()
+
+        def record_factory(*args, **kwargs) -> logging.LogRecord:
+            record = old_factory(*args, **kwargs)
+
+            if self.proc.executor_type != JobExecutorType.PROCESS:
+                try:
+                    ctx = get_job_context()
+                except RuntimeError:
+                    return record
+                else:
+                    if ctx != self:
+                        return record
+
+            for key, value in self._log_fields.items():
+                setattr(record, key, value)
+
+            return record
+
+        logging.setLogRecordFactory(record_factory)
+
     @property
     def inference_executor(self) -> InferenceExecutor:
         return self._inf_executor
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
-        return api.LiveKitAPI()
+        return api.LiveKitAPI(session=http_context.http_session())
 
     @property
     def proc(self) -> JobProcess:
@@ -142,6 +172,31 @@ class JobContext:
     @property
     def agent(self) -> rtc.LocalParticipant:
         return self._room.local_participant
+
+    @property
+    def log_context_fields(self) -> dict[str, Any]:
+        """
+        Returns the current dictionary of log fields that will be injected into log records.
+
+        These fields enable enriched structured logging and can include job metadata,
+        worker ID, trace IDs, or other diagnostic context.
+
+        The returned dictionary can be directly edited, or entirely replaced via assignment
+        (e.g., `job_context.log_context_fields = {...}`)
+        """
+        return self._log_fields
+
+    @log_context_fields.setter
+    def log_context_fields(self, fields: dict[str, Any]) -> None:
+        """
+        Sets the log fields to be injected into future log records.
+
+        Args:
+            fields (dict[str, Any]): A dictionary of key-value pairs representing
+                structured data to attach to each log entry. Typically includes contextual
+                information like job ID, trace information, or worker metadata.
+        """
+        self._log_fields = fields
 
     def add_tracing_callback(
         self,
@@ -298,11 +353,17 @@ class JobProcess:
     def __init__(
         self,
         *,
+        executor_type: JobExecutorType,
         user_arguments: Any | None = None,
     ) -> None:
+        self._executor_type = executor_type
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
         self._user_arguments = user_arguments
+
+    @property
+    def executor_type(self) -> JobExecutorType:
+        return self._executor_type
 
     @property
     def pid(self) -> int | None:

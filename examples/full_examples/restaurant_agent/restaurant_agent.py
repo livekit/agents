@@ -113,7 +113,11 @@ class BaseAgent(Agent):
         chat_ctx = self.chat_ctx.copy()
 
         # add the previous agent's chat history to the current agent
-        if userdata.prev_agent:
+        llm_model = self.llm or self.session.llm
+        if userdata.prev_agent and not isinstance(llm_model, llm.RealtimeModel):
+            # only add chat history for non-realtime models for now
+            # OpenAI realtime model may response in text mode when text chat context loaded
+            # https://community.openai.com/t/trouble-loading-previous-messages-with-realtime-api
             items_copy = self._truncate_chat_ctx(
                 userdata.prev_agent.chat_ctx.items, keep_function_call=True
             )
@@ -179,21 +183,21 @@ class Greeter(BaseAgent):
                 "Your jobs are to greet the caller and understand if they want to "
                 "make a reservation or order takeaway. Guide them to the right agent using tools."
             ),
-            llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
+            llm=openai.LLM(parallel_tool_calls=False),
             tts=cartesia.TTS(voice=voices["greeter"]),
         )
         self.menu = menu
 
     @function_tool()
-    async def to_reservation(self, context: RunContext_T) -> Agent:
-        """Called when user wants to make a reservation.
+    async def to_reservation(self, context: RunContext_T) -> tuple[Agent, str]:
+        """Called when user wants to make or update a reservation.
         This function handles transitioning to the reservation agent
         who will collect the necessary details like reservation time,
         customer name and phone number."""
         return await self._transfer_to_agent("reservation", context)
 
     @function_tool()
-    async def to_takeaway(self, context: RunContext_T) -> Agent:
+    async def to_takeaway(self, context: RunContext_T) -> tuple[Agent, str]:
         """Called when the user wants to place a takeaway order.
         This includes handling orders for pickup, delivery, or when the user wants to
         proceed to checkout with their existing order."""
@@ -347,10 +351,11 @@ async def entrypoint(ctx: JobContext):
     agent = AgentSession[UserData](
         userdata=userdata,
         stt=deepgram.STT(),
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
         max_tool_steps=5,
+        # to use realtime model, replace the stt, llm, tts and vad with the following
         # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 

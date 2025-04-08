@@ -44,7 +44,9 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import TTSEncoding, TTSModels
 
-_DefaultEncoding: TTSEncoding = "mp3_44100"
+# by default, use 22.05kHz sample rate at 32kbps
+# in our testing,  reduce TTFB by about ~110ms
+_DefaultEncoding: TTSEncoding = "mp3_22050_32"
 
 
 def _sample_rate_from_format(output_format: TTSEncoding) -> int:
@@ -109,6 +111,7 @@ class TTS(tts.TTS):
         *,
         voice: Voice = DEFAULT_VOICE,
         model: TTSModels | str = "eleven_flash_v2_5",
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         streaming_latency: NotGivenOr[int] = NOT_GIVEN,
@@ -138,11 +141,15 @@ class TTS(tts.TTS):
 
         if not is_given(chunk_length_schedule):
             chunk_length_schedule = [80, 120, 200, 260]
+
+        if not is_given(encoding):
+            encoding = _DefaultEncoding
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
             ),
-            sample_rate=_sample_rate_from_format(_DefaultEncoding),
+            sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
         )
 
@@ -162,7 +169,7 @@ class TTS(tts.TTS):
             model=model,
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
-            encoding=_DefaultEncoding,
+            encoding=encoding,
             sample_rate=self.sample_rate,
             streaming_latency=streaming_latency,
             word_tokenizer=word_tokenizer,

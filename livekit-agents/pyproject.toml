@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-agents"
 dynamic = ["version"]
-description = "LiveKit Python Agents"
+description = "A powerful framework for building realtime voice AI agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9"
-authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -24,9 +24,9 @@ classifiers = [
 ]
 dependencies = [
     "click~=8.1",
-    "livekit>=1.0.0",
-    "livekit-api>=0.8.2",
-    "livekit-protocol>=0.8.2",
+    "livekit>=1.0.2,<2",
+    "livekit-api>=1.0.2,<2",
+    "livekit-protocol~=1.0",
     "protobuf>=3",
     "pyjwt>=2.0",
     "types-protobuf>=4,<5",
@@ -40,32 +40,35 @@ dependencies = [
     "colorama>=0.4.6",
     "av>=12.0.0",
     "numpy>=1.26.0",
+    "pydantic>=2.0,<3",
+    "nest-asyncio>=1.6.0",
 ]
 
 [project.optional-dependencies]
 codecs = ["av>=12.0.0", "numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
-aws = ["livekit-plugins-aws>=1.0.0.rc4"]
-neuphonic = ["livekit-plugins-neuphonic>=1.0.0.rc4"]
-playai = ["livekit-plugins-playai>=1.0.0.rc4"]
-turn-detector = ["livekit-plugins-turn-detector>=1.0.0.rc4"]
-llama-index = ["livekit-plugins-llama-index>=1.0.0.rc4"]
-assemblyai = ["livekit-plugins-assemblyai>=1.0.0.rc4"]
-rime = ["livekit-plugins-rime>=1.0.0.rc4"]
-nltk = ["livekit-plugins-nltk>=1.0.0.rc4"]
-anthropic = ["livekit-plugins-anthropic>=1.0.0.rc4"]
-openai = ["livekit-plugins-openai>=1.0.0.rc4"]
-groq = ["livekit-plugins-groq>=1.0.0.rc4"]
-elevenlabs = ["livekit-plugins-elevenlabs>=1.0.0.rc4"]
-azure = ["livekit-plugins-azure>=1.0.0.rc4"]
-fal = ["livekit-plugins-fal>=1.0.0.rc4"]
-clova = ["livekit-plugins-clova>=1.0.0.rc4"]
-deepgram = ["livekit-plugins-deepgram>=1.0.0.rc4"]
-rag = ["livekit-plugins-rag>=1.0.0.rc4"]
-silero = ["livekit-plugins-silero>=1.0.0.rc4"]
-cartesia = ["livekit-plugins-cartesia>=1.0.0.rc4"]
-speechmatics = ["livekit-plugins-speechmatics>=1.0.0.rc4"]
-google = ["livekit-plugins-google>=1.0.0.rc4"]
+aws = ["livekit-plugins-aws>=1.0.0.rc9"]
+neuphonic = ["livekit-plugins-neuphonic>=1.0.0.rc9"]
+playai = ["livekit-plugins-playai>=1.0.0.rc9"]
+turn-detector = ["livekit-plugins-turn-detector>=1.0.0.rc9"]
+llama-index = ["livekit-plugins-llama-index>=1.0.0.rc9"]
+assemblyai = ["livekit-plugins-assemblyai>=1.0.0.rc9"]
+rime = ["livekit-plugins-rime>=1.0.0.rc9"]
+nltk = ["livekit-plugins-nltk>=1.0.0.rc9"]
+anthropic = ["livekit-plugins-anthropic>=1.0.0.rc9"]
+openai = ["livekit-plugins-openai>=1.0.0.rc9"]
+groq = ["livekit-plugins-groq>=1.0.0.rc9"]
+elevenlabs = ["livekit-plugins-elevenlabs>=1.0.0.rc9"]
+azure = ["livekit-plugins-azure>=1.0.0.rc9"]
+fal = ["livekit-plugins-fal>=1.0.0.rc9"]
+clova = ["livekit-plugins-clova>=1.0.0.rc9"]
+deepgram = ["livekit-plugins-deepgram>=1.0.0.rc9"]
+rag = ["livekit-plugins-rag>=1.0.0.rc9"]
+silero = ["livekit-plugins-silero>=1.0.0.rc9"]
+cartesia = ["livekit-plugins-cartesia>=1.0.0.rc9"]
+speechmatics = ["livekit-plugins-speechmatics>=1.0.0.rc9"]
+google = ["livekit-plugins-google>=1.0.0.rc9"]
+gladia = ["livekit-plugins-gladia>=1.0.0.rc9"]
 
 
 [project.urls]

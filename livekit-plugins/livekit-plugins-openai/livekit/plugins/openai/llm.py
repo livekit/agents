@@ -20,11 +20,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from typing_extensions import Literal
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import FunctionTool
 from livekit.agents.types import (
@@ -34,7 +33,11 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types.chat import ChatCompletionChunk, ChatCompletionToolChoiceOptionParam
+from openai.types.chat import (
+    ChatCompletionChunk,
+    ChatCompletionToolChoiceOptionParam,
+    completion_create_params,
+)
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .models import (
@@ -56,7 +59,7 @@ class _LLMOptions:
     user: NotGivenOr[str]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
-    tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
+    tool_choice: NotGivenOr[ToolChoice]
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
 
@@ -72,7 +75,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
@@ -126,7 +129,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> LLM:
         """
@@ -174,7 +177,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> LLM:
         """
         Create a new instance of Cerebras LLM.
@@ -211,7 +214,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
+        tool_choice: ToolChoice = "auto",
     ) -> LLM:
         """
         Create a new instance of Fireworks LLM.
@@ -247,7 +250,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
+        tool_choice: ToolChoice = "auto",
     ):
         """
         Create a new instance of XAI LLM.
@@ -282,7 +285,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
+        tool_choice: ToolChoice = "auto",
     ) -> LLM:
         """
         Create a new instance of DeepSeek LLM.
@@ -318,7 +321,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
+        tool_choice: ToolChoice = "auto",
     ) -> LLM:
         """
         Create a new instance of OctoAI LLM.
@@ -352,7 +355,7 @@ class LLM(llm.LLM):
         client: openai.AsyncClient | None = None,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
+        tool_choice: ToolChoice = "auto",
     ) -> LLM:
         """
         Create a new instance of Ollama LLM.
@@ -378,7 +381,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
+        tool_choice: ToolChoice = "auto",
     ) -> LLM:
         """
         Create a new instance of PerplexityAI LLM.
@@ -414,7 +417,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
+        tool_choice: ToolChoice = "auto",
     ) -> LLM:
         """
         Create a new instance of TogetherAI LLM.
@@ -450,7 +453,7 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice | Literal["auto", "required", "none"] = "auto",
+        tool_choice: ToolChoice = "auto",
     ) -> LLM:
         """
         Create a new instance of Telnyx LLM.
@@ -483,11 +486,13 @@ class LLM(llm.LLM):
         tools: list[FunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[
+            completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
-
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
@@ -515,6 +520,9 @@ class LLM(llm.LLM):
             elif tool_choice in ("auto", "required", "none"):
                 oai_tool_choice = tool_choice
                 extra["tool_choice"] = oai_tool_choice
+
+        if is_given(response_format):
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format)
 
         return LLMStream(
             self,
@@ -556,9 +564,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            stream: openai.AsyncStream[
-                ChatCompletionChunk
-            ] = await self._client.chat.completions.create(
+            self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=to_chat_ctx(self._chat_ctx, id(self._llm)),
                 tools=to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN,
                 model=self._model,
@@ -588,15 +594,15 @@ class LLMStream(llm.LLMStream):
                         self._event_ch.send_nowait(chunk)
 
         except openai.APITimeoutError:
-            raise APITimeoutError(retryable=retryable)  # noqa: B904
+            raise APITimeoutError(retryable=retryable) from None
         except openai.APIStatusError as e:
-            raise APIStatusError(  # noqa: B904
+            raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
                 retryable=retryable,
-            )
+            ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 

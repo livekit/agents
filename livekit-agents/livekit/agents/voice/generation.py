@@ -358,7 +358,7 @@ async def _execute_tools_task(
                 name=f"function_tool_{fnc_call.name}",
             )
             tasks.append(task)
-            _authorize_inline_task(task)
+            _authorize_inline_task(task, function_call=fnc_call)
 
             def _log_exceptions(task: asyncio.Task) -> None:
                 if task.exception() is not None:
@@ -439,6 +439,7 @@ class _SanitizedOutput:
     fnc_call: llm.FunctionCall
     fnc_call_out: llm.FunctionCallOutput | None
     agent_task: Agent | None
+    reply_required: bool = field(default=True)
 
 
 @dataclass
@@ -541,12 +542,11 @@ class _PythonOutput:
                 llm.FunctionCallOutput(
                     name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
-                    output=str(fnc_out),  # take the string representation of the output
+                    output=str(fnc_out or ""),  # take the string representation of the output
                     is_error=False,
                 )
-                if fnc_out is not None
-                else None
             ),
+            reply_required=fnc_out is not None,  # require a reply if the tool returned an output
             agent_task=task,
         )
 
@@ -567,7 +567,8 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
     Raises:
         ValueError: If an existing instruction message is not of type "message".
     """
-    if idx := chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID):
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is not None:
         if chat_ctx.items[idx].type == "message":
             # create a new instance to avoid mutating the original
             chat_ctx.items[idx] = llm.ChatMessage(

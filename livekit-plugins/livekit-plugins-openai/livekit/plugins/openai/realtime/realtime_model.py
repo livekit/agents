@@ -39,11 +39,13 @@ from openai.types.beta.realtime import (
     ResponseAudioDoneEvent,
     ResponseAudioTranscriptDoneEvent,
     ResponseCancelEvent,
+    ResponseContentPartAddedEvent,
     ResponseCreatedEvent,
     ResponseCreateEvent,
     ResponseDoneEvent,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
     SessionUpdateEvent,
     session_update_event,
 )
@@ -157,7 +159,12 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
     def update_options(
-        self, *, voice: NotGivenOr[str] = NOT_GIVEN, temperature: NotGivenOr[float] = NOT_GIVEN
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
@@ -165,8 +172,19 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(temperature):
             self._opts.temperature = temperature
 
+        if is_given(turn_detection):
+            self._opts.turn_detection = turn_detection
+
+        if is_given(tool_choice):
+            self._opts.tool_choice = tool_choice
+
         for sess in self._sessions:
-            sess.update_options(voice=self._opts.voice, temperature=self._opts.temperature)
+            sess.update_options(
+                voice=voice,
+                temperature=temperature,
+                turn_detection=turn_detection,
+                tool_choice=tool_choice,
+            )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if not self._http_session:
@@ -226,6 +244,7 @@ class RealtimeSession(
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
+        self._initial_session_update()
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
@@ -349,6 +368,12 @@ class RealtimeSession(
                         self._handle_conversion_item_input_audio_transcription_failed(
                             ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
                         )
+                    elif event["type"] == "response.content_part.added":
+                        self._handle_response_content_part_added(
+                            ResponseContentPartAddedEvent.construct(**event)
+                        )
+                    elif event["type"] == "response.text.delta":
+                        self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
                     elif event["type"] == "response.audio_transcript.delta":
                         self._handle_response_audio_transcript_delta(event)
                     elif event["type"] == "response.audio.delta":
@@ -372,6 +397,17 @@ class RealtimeSession(
                 except Exception:
                     logger.exception("failed to handle event", extra={"event": event})
 
+        tasks = [
+            asyncio.create_task(_recv_task(), name="_recv_task"),
+            asyncio.create_task(_send_task(), name="_send_task"),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+            await ws_conn.close()
+
+    def _initial_session_update(self) -> None:
         input_audio_transcription = self._realtime_model._opts.input_audio_transcription
         input_audio_transcription = (
             session_update_event.SessionInputAudioTranscription.model_validate(
@@ -418,16 +454,6 @@ class RealtimeSession(
             )
         )
 
-        tasks = [
-            asyncio.create_task(_recv_task(), name="_recv_task"),
-            asyncio.create_task(_send_task(), name="_send_task"),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
-            await ws_conn.close()
-
     @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._remote_chat_ctx.to_chat_ctx()
@@ -442,6 +468,7 @@ class RealtimeSession(
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
@@ -449,6 +476,8 @@ class RealtimeSession(
             oai_tool_choice = tool_choice
             if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
                 oai_tool_choice = tool_choice["function"]
+            if oai_tool_choice is None:
+                oai_tool_choice = "auto"
 
             kwargs["tool_choice"] = oai_tool_choice
 
@@ -457,6 +486,9 @@ class RealtimeSession(
 
         if is_given(temperature):
             kwargs["temperature"] = temperature
+
+        if is_given(turn_detection):
+            kwargs["turn_detection"] = turn_detection
 
         if kwargs:
             self.send_event(
@@ -745,6 +777,34 @@ class RealtimeSession(
             "OpenAI Realtime API failed to transcribe input audio",
             extra={"error": event.error},
         )
+
+    def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+
+        if event.part.type == "text":
+            # TODO(long): try to recover to audio mode or raise an error?
+            logger.warning("text-only response received from OpenAI Realtime API")
+            item_id = event.item_id
+            item_generation = self._current_generation.messages[item_id]
+
+            # put a dummy audio frame to send playback finished event
+            data = b"\x00\x00" * int(SAMPLE_RATE * 0.01) * NUM_CHANNELS
+            item_generation.audio_ch.send_nowait(
+                rtc.AudioFrame(
+                    data=data,
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    samples_per_channel=len(data) // 2,
+                )
+            )
+
+    def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+
+        item_id = event.item_id
+        delta = event.delta
+        item_generation = self._current_generation.messages[item_id]
+        item_generation.text_ch.send_nowait(delta)
 
     def _handle_response_audio_transcript_delta(self, event: dict) -> None:
         assert self._current_generation is not None, "current_generation is None"
