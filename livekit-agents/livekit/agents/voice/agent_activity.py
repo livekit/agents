@@ -1058,7 +1058,7 @@ class AgentActivity(RecognitionHooks):
                 if sanitized_out.fnc_call_out is not None:
                     new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    if sanitized_out.generate_reply:
+                    if sanitized_out.reply_required:
                         generate_tool_reply = True
 
                 # add the function call and output to the event, including the None outputs
@@ -1328,7 +1328,7 @@ class AgentActivity(RecognitionHooks):
 
                 if sanitized_out.fnc_call_out is not None:
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    if sanitized_out.generate_reply:
+                    if sanitized_out.reply_required:
                         generate_tool_reply = True
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:

@@ -439,7 +439,7 @@ class _SanitizedOutput:
     fnc_call: llm.FunctionCall
     fnc_call_out: llm.FunctionCallOutput | None
     agent_task: Agent | None
-    generate_reply: bool = field(default=True)
+    reply_required: bool = field(default=True)
 
 
 @dataclass
@@ -546,7 +546,7 @@ class _PythonOutput:
                     is_error=False,
                 )
             ),
-            generate_reply=fnc_out is not None,
+            reply_required=fnc_out is not None,  # require a reply if the tool returned an output
             agent_task=task,
         )
 
