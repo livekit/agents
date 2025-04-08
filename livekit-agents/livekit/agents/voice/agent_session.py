@@ -292,10 +292,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if not self._started:
                     return
 
-                self.emit(
-                    "close",
-                    CloseEvent(error=error)
-                )
+                self.emit("close", CloseEvent(error=error))
 
                 if self._forward_audio_atask is not None:
                     await utils.aio.cancel_and_wait(self._forward_audio_atask)
