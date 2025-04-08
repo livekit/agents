@@ -30,7 +30,7 @@ load_dotenv()
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="Your name is Jenna. You would interact with users via voice."
+            instructions="Your name is Kelly. You would interact with users via voice."
             "with that in mind keep your responses concise and to the point."
             "You are curious and friendly, and have a sense of humor.",
         )

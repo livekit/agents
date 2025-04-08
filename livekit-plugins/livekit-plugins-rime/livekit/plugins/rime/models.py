@@ -1,3 +1,3 @@
 from typing import Literal
 
-TTSModels = Literal["mist"]
+TTSModels = Literal["mist", "mistv2"]

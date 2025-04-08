@@ -63,6 +63,8 @@ def run_app(
             watch=False,
             drain_timeout=drain_timeout,
         )
+        global CLI_ARGUMENTS
+        CLI_ARGUMENTS = args
         _run.run_worker(args)
 
     @cli.command(help="Start the worker in development mode")
@@ -117,7 +119,8 @@ def run_app(
             drain_timeout=0,
             register=True,
         )
-
+        global CLI_ARGUMENTS
+        CLI_ARGUMENTS = args
         _run.run_dev(args)
 
     @cli.command(help="Start a new chat")
@@ -158,6 +161,8 @@ def run_app(
             register=False,
             simulate_job=SimulateJobInfo(room="mock-console"),
         )
+        global CLI_ARGUMENTS
+        CLI_ARGUMENTS = args
         _run.run_worker(args)
 
     @cli.command(help="Connect to a specific room")
@@ -217,7 +222,8 @@ def run_app(
             drain_timeout=0,
             simulate_job=SimulateJobInfo(room=room, participant_identity=participant_identity),
         )
-
+        global CLI_ARGUMENTS
+        CLI_ARGUMENTS = args
         _run.run_dev(args)
 
     @cli.command(help="Download plugin dependency files")
