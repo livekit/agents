@@ -1,15 +1,13 @@
 import logging
-from typing import Annotated
 
 import aiohttp
 from dotenv import load_dotenv
-from pydantic import Field
 
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
-from livekit.plugins import google
+from livekit.plugins import openai
 
 logger = logging.getLogger("weather-example")
 logger.setLevel(logging.INFO)
@@ -21,23 +19,22 @@ class WeatherAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a weather agent.",
-            llm=google.beta.realtime.RealtimeModel(),
+            llm=openai.realtime.RealtimeModel(),
         )
 
     @function_tool
     async def get_weather(
         self,
-        location: Annotated[str, Field(description="The location to get the weather for")],
-        latitude: Annotated[
-            str, Field(description="The latitude of location to get the weather for")
-        ],
-        longitude: Annotated[
-            str, Field(description="The longitude of location to get the weather for")
-        ],
+        latitude: str,
+        longitude: str,
     ):
         """Called when the user asks about the weather. This function will return the weather for
         the given location. When given a location, please estimate the latitude and longitude of the
         location and do not ask the user for them.
+
+        Args:
+            latitude: The latitude of the location
+            longitude: The longitude of the location
         """
 
         logger.info(f"getting weather for {latitude}, {longitude}")
@@ -60,6 +57,11 @@ class WeatherAgent(Agent):
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
+    # each log entry will include these fields
+    ctx.log_context_fields = {
+        "room_name": ctx.room.name,
+        "user_id": "your user_id",
+    }
 
     session = AgentSession()
 
