@@ -31,8 +31,12 @@ class STTMetrics(BaseModel):
     request_id: str
     timestamp: float
     duration: float
+    """The request duration in seconds, 0.0 if the STT is streaming."""
     audio_duration: float
+    """The duration of the pushed audio in seconds."""
     streamed: bool
+    """Whether the STT is streaming (e.g using websocket)."""
+
     speech_id: str | None = None
     error: Error | None = None
 
