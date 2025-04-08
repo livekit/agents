@@ -1049,6 +1049,7 @@ class AgentActivity(RecognitionHooks):
 
             new_calls: list[llm.FunctionCall] = []
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
+            generate_tool_reply: bool = False
             new_agent_task: Agent | None = None
             ignore_task_switch = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
@@ -1061,6 +1062,8 @@ class AgentActivity(RecognitionHooks):
                 if sanitized_out.fnc_call_out is not None:
                     new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
+                    if sanitized_out.reply_required:
+                        generate_tool_reply = True
 
                 # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
@@ -1081,7 +1084,7 @@ class AgentActivity(RecognitionHooks):
                 self._session.update_agent(new_agent_task)
                 draining = True
 
-            if len(new_fnc_outputs) > 0:
+            if generate_tool_reply:
                 chat_ctx.items.extend(new_calls)
                 chat_ctx.items.extend(new_fnc_outputs)
 
@@ -1114,6 +1117,10 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, bypass_draining=True
                 )
+            elif len(new_fnc_outputs) > 0:
+                # add the tool calls and outputs to the chat context even no reply is generated
+                self._agent._chat_ctx.items.extend(new_calls)
+                self._agent._chat_ctx.items.extend(new_fnc_outputs)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -1308,6 +1315,7 @@ class AgentActivity(RecognitionHooks):
 
         if len(tool_output.output) > 0:
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
+            generate_tool_reply: bool = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
                 function_calls=[],
                 function_call_outputs=[],
@@ -1324,6 +1332,8 @@ class AgentActivity(RecognitionHooks):
 
                 if sanitized_out.fnc_call_out is not None:
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
+                    if sanitized_out.reply_required:
+                        generate_tool_reply = True
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
@@ -1350,6 +1360,7 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
+            if generate_tool_reply:
                 self._rt_session.interrupt()
 
                 handle = SpeechHandle.create(
