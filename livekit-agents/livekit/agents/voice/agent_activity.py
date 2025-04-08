@@ -11,11 +11,12 @@ from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..log import logger
-from ..metrics import AgentMetrics
+from ..metrics import STTMetrics, TTSMetrics, VADMetrics, LLMMetrics, EOUMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
+from ..llm.tool_context import StopResponse
 from .agent import Agent, ModelSettings
-from .audio_recognition import AudioRecognition, RecognitionHooks
+from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
 from .events import (
     AgentStartedSpeakingEvent,
     AgentStoppedSpeakingEvent,
@@ -353,7 +354,6 @@ class AgentActivity(RecognitionHooks):
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
             )
-            self._audio_recognition.on("metrics_collected", self._on_metrics_collected)
             self._audio_recognition.start()
             self._started = True
 
@@ -602,8 +602,10 @@ class AgentActivity(RecognitionHooks):
 
     # -- Realtime Session events --
 
-    def _on_metrics_collected(self, ev: AgentMetrics) -> None:
-        if speech_handle := _SpeechHandleContextVar.get(None):
+    def _on_metrics_collected(self, ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics) -> None:
+        if (speech_handle := _SpeechHandleContextVar.get(None)) and (
+            isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
+        ):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
@@ -710,7 +712,7 @@ class AgentActivity(RecognitionHooks):
             UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
         )
 
-    async def on_end_of_turn(self, new_transcript: str) -> None:
+    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> None:
         # When the audio recognition detects the end of a user turn:
         #  - check if the turn detection mode is set to "manual"
         #  - check if realtime model server-side turn detection is enabled
@@ -719,11 +721,9 @@ class AgentActivity(RecognitionHooks):
         #  turn)
         #  - generate a reply to the user input
 
+        new_transcript = info.new_transcript
         user_message = llm.ChatMessage(role="user", content=[new_transcript])
         if self._turn_detection_mode == "manual":
-            await self._agent.on_end_of_turn(
-                self._agent.chat_ctx, user_message, generating_reply=False
-            )
             return
 
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
@@ -738,10 +738,6 @@ class AgentActivity(RecognitionHooks):
                 logger.warning(
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"user_input": new_transcript},
-                )
-                # in agent.on_end_of_turn user can ignore the message or save it for later
-                await self._agent.on_end_of_turn(
-                    self._agent.chat_ctx, user_message, generating_reply=False
                 )
                 return
 
@@ -764,18 +760,31 @@ class AgentActivity(RecognitionHooks):
             )
             return
 
-        await self._agent.on_end_of_turn(
-            self._agent.chat_ctx,
-            new_message=user_message,  # TODO(theomonnom): This doesn't allow edits yet
-            generating_reply=True,
-        )
-
         if self.draining:
-            # TODO(theomonnom): should we "forward" this new turn to the next agent?
+            # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             logger.warning("ignoring new user turn, the agent is draining")
             return
 
-        self.generate_reply(user_input=new_transcript)
+        start_time = time.time()
+        try:
+            await self._agent.on_user_turn_completed(
+                self._agent.chat_ctx,
+                new_message=user_message,  # TODO(theomonnom): This doesn't allow edits yet
+            )
+        except StopResponse:
+            return  # ignore this turn
+
+        callback_duration = time.time() - start_time
+
+        speech_handle = self.generate_reply(user_input=new_transcript)
+        eou_metrics = EOUMetrics(
+            timestamp=time.time(),
+            end_of_utterance_delay=info.end_of_utterance_delay,
+            transcription_delay=info.transcription_delay,
+            on_user_turn_completed_delay=callback_duration,
+            speech_id=speech_handle.id,
+        )
+        self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
     # AudioRecognition is calling this method to retrieve the chat context before running the TurnDetector model  # noqa: E501
     def retrieve_chat_ctx(self) -> llm.ChatContext:
@@ -1104,9 +1113,7 @@ class AgentActivity(RecognitionHooks):
                 self._session.emit(
                     "speech_created",
                     SpeechCreatedEvent(
-                        speech_handle=handle,
-                        user_initiated=False,
-                        source="tool_response",
+                        speech_handle=handle, user_initiated=False, source="tool_response"
                     ),
                 )
                 self._create_speech_task(

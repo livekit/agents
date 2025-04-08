@@ -27,9 +27,7 @@ class MyAgent(Agent):
             tts=cartesia.TTS(),
         )
 
-    async def on_end_of_turn(
-        self, chat_ctx: ChatContext, new_message: ChatMessage, generating_reply: bool
-    ) -> None:
+    async def on_user_turn_completed(self, chat_ctx: ChatContext, new_message: ChatMessage) -> None:
         # callback when user input is transcribed
         chat_ctx = chat_ctx.copy()
         chat_ctx.items.append(new_message)
