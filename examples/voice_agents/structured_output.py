@@ -18,7 +18,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-from livekit.plugins import openai, silero, turn_detector
+from livekit.plugins import openai, silero
+from livekit.plugins.turn_detector.english import EnglishModel
 
 logger = logging.getLogger("structured-output")
 load_dotenv()
@@ -125,7 +126,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
     session = AgentSession(
         vad=silero.VAD.load(),
-        turn_detection=turn_detector.EOUModel(),
+        turn_detection=EnglishModel(),
     )
     await session.start(agent=MyAgent(), room=ctx.room)
 

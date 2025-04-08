@@ -119,7 +119,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: DeepgramModels | str = "nova-2-general",
+        model: DeepgramModels | str = "nova-3",
         language: DeepgramLanguages | str = "en-US",
         detect_language: bool = False,
         interim_results: bool = True,

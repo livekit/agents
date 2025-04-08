@@ -14,11 +14,10 @@
 
 from livekit.agents import Plugin
 
-from .english import EnglishModel
 from .log import logger
 from .version import __version__
 
-__all__ = ["EOUModel", "english", "multilingual", "__version__"]
+__all__ = ["english", "multilingual", "__version__"]
 
 
 class EOUPlugin(Plugin):
@@ -38,4 +37,3 @@ class EOUPlugin(Plugin):
 
 
 Plugin.register_plugin(EOUPlugin())
-EOUModel = EnglishModel

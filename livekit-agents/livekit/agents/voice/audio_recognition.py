@@ -158,7 +158,7 @@ class AudioRecognition:
 
             logger.debug(
                 "received user transcript",
-                extra={"user_transcript": transcript},
+                extra={"user_transcript": transcript, "language": self._last_language},
             )
 
             tracing.Tracing.log_event(
@@ -238,9 +238,9 @@ class AudioRecognition:
                         "end of user turn probability",
                         {"probability": end_of_turn_probability},
                     )
-                unlikely_threshold = turn_detector.unlikely_threshold(self._last_language)
-                if end_of_turn_probability < unlikely_threshold:
-                    endpointing_delay = self._max_endpointing_delay
+                    unlikely_threshold = turn_detector.unlikely_threshold(self._last_language)
+                    if end_of_turn_probability < unlikely_threshold:
+                        endpointing_delay = self._max_endpointing_delay
 
             extra_sleep = last_speaking_time + endpointing_delay - time.time()
             await asyncio.sleep(max(extra_sleep, 0))
