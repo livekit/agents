@@ -379,6 +379,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt()
 
+    def clear_user_turn(self) -> None:
+        # clear the transcription or input audio buffer of the user turn
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        self._activity.clear_user_turn()
+
+    def commit_user_turn(self) -> None:
+        # commit the user turn and generate a reply
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        self._activity.commit_user_turn()
+
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
 

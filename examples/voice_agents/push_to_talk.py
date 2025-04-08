@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli
-from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents.llm import ChatContext, ChatMessage, StopResponse
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("push-to-talk")
@@ -25,14 +25,15 @@ class MyAgent(Agent):
             stt=deepgram.STT(),
             llm=openai.LLM(model="gpt-4o-mini"),
             tts=cartesia.TTS(),
+            # llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
         )
 
     async def on_user_turn_completed(self, chat_ctx: ChatContext, new_message: ChatMessage) -> None:
-        # callback when user input is transcribed
-        chat_ctx = chat_ctx.copy()
-        chat_ctx.items.append(new_message)
-        await self.update_chat_ctx(chat_ctx)
-        logger.info("add user message to chat context", extra={"content": new_message.content})
+        # callback before generating a reply after user turn committed
+        if not new_message.text_content:
+            # for example, raise StopResponse to stop the agent from generating a reply
+            logger.info("ignore empty user turn")
+            raise StopResponse()
 
 
 async def entrypoint(ctx: JobContext):
@@ -41,7 +42,9 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(turn_detection="manual")
     room_io = RoomIO(session, room=ctx.room)
     await room_io.start()
-    await session.start(agent=MyAgent())
+
+    agent = MyAgent()
+    await session.start(agent=agent)
 
     # disable input audio at the start
     session.input.set_audio_enabled(False)
@@ -49,6 +52,7 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.local_participant.register_rpc_method("start_turn")
     async def start_turn(data: rtc.RpcInvocationData):
         session.interrupt()
+        session.clear_user_turn()
 
         # listen to the caller if multi-user
         room_io.set_participant(data.caller_identity)
@@ -57,7 +61,13 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.local_participant.register_rpc_method("end_turn")
     async def end_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
-        session.generate_reply()
+        session.commit_user_turn()
+
+    @ctx.room.local_participant.register_rpc_method("cancel_turn")
+    async def cancel_turn(data: rtc.RpcInvocationData):
+        session.input.set_audio_enabled(False)
+        session.clear_user_turn()
+        logger.info("cancel turn")
 
 
 if __name__ == "__main__":

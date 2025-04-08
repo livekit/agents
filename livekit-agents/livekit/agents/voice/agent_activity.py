@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING, Any
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
+from ..llm.tool_context import StopResponse
 from ..log import logger
-from ..metrics import STTMetrics, TTSMetrics, VADMetrics, LLMMetrics, EOUMetrics
+from ..metrics import EOUMetrics, LLMMetrics, STTMetrics, TTSMetrics, VADMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
-from ..llm.tool_context import StopResponse
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
 from .events import (
@@ -353,6 +353,7 @@ class AgentActivity(RecognitionHooks):
                 ),
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
+                manual_turn_detection=self._turn_detection_mode == "manual",
             )
             self._audio_recognition.start()
             self._started = True
@@ -565,6 +566,17 @@ class AgentActivity(RecognitionHooks):
 
         return future
 
+    def clear_user_turn(self) -> None:
+        if self._audio_recognition:
+            self._audio_recognition.clear_user_turn()
+
+        if self._rt_session is not None:
+            self._rt_session.clear_audio()
+
+    def commit_user_turn(self) -> None:
+        assert self._audio_recognition is not None
+        self._audio_recognition.commit_user_turn()
+
     def _schedule_speech(
         self, speech: SpeechHandle, priority: int, bypass_draining: bool = False
     ) -> None:
@@ -714,24 +726,19 @@ class AgentActivity(RecognitionHooks):
 
     async def on_end_of_turn(self, info: _EndOfTurnInfo) -> None:
         # When the audio recognition detects the end of a user turn:
-        #  - check if the turn detection mode is set to "manual"
         #  - check if realtime model server-side turn detection is enabled
         #  - check if there is no current generation happening
         #  - cancel the current generation if it allows interruptions (otherwise skip this current
         #  turn)
         #  - generate a reply to the user input
 
-        new_transcript = info.new_transcript
-        user_message = llm.ChatMessage(role="user", content=[new_transcript])
-        if self._turn_detection_mode == "manual":
-            return
-
-        if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
+        if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
                 return
-            # ignore stt transcription for realtime model and commit the audio buffer
-            new_transcript = ""
-            self._rt_session.commit_audio()
+            if self._rt_session is not None:
+                self._rt_session.commit_audio()
+
+        new_transcript = info.new_transcript
 
         if self._current_speech is not None:
             if not self._current_speech.allow_interruptions:
@@ -765,6 +772,7 @@ class AgentActivity(RecognitionHooks):
             logger.warning("ignoring new user turn, the agent is draining")
             return
 
+        user_message = llm.ChatMessage(role="user", content=[new_transcript])
         start_time = time.time()
         try:
             await self._agent.on_user_turn_completed(
@@ -776,6 +784,9 @@ class AgentActivity(RecognitionHooks):
 
         callback_duration = time.time() - start_time
 
+        if isinstance(self.llm, llm.RealtimeModel):
+            # ignore stt transcription for realtime model
+            new_transcript = ""
         speech_handle = self.generate_reply(user_input=new_transcript)
         eou_metrics = EOUMetrics(
             timestamp=time.time(),
