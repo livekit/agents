@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import pathlib
@@ -75,7 +76,7 @@ async def entrypoint(ctx: JobContext):
     # Create session
     session = AgentSession(
         stt=deepgram.STT(),
-        llm=ErrorLLM(fail_after=2),  # pass in a custom LLM that raises an error
+        llm=ErrorLLM(fail_after=0),  # pass in a custom LLM that raises an error
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
@@ -91,6 +92,7 @@ async def entrypoint(ctx: JobContext):
             # If you define a custom audio file, it will play out even if the TTS provider is down.
             audio=audio_frames_from_file(error_wav_path),
         )
+        session.drain()
 
     # wait for a participant to join the room
     await ctx.wait_for_participant()

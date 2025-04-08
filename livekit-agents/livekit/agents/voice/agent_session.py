@@ -115,6 +115,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task | None = None
+        self._draining_task: asyncio.Task | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -276,12 +277,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = True
             self._update_agent_state(AgentState.LISTENING)
 
-    async def aclose(self, cause: ErrorEvent | None = None) -> None:
+    def drain(self) -> None:
+        self._draining_task = asyncio.create_task(self._drain_impl())
+        def _on_drain_done(_: asyncio.Task) -> None:
+            self._draining_task = None
+        self._draining_task.add_done_callback(_on_drain_done)
+
+    async def _drain_impl(self) -> None:
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        await self._activity.drain()
+
+    async def _aclose_impl(self, cause: ErrorEvent | None = None) -> None:
         async with self._lock:
             if not self._started:
                 return
 
-            await self._aclose_current_activity()
+            if self._draining_task is not None:
+                await self._draining_task
 
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
@@ -295,6 +309,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
 
         logger.debug("AgentSession closed")
+
+    async def aclose(self) -> None:
+        await self._aclose_impl()
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
@@ -400,23 +417,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
 
     def _create_session_close_task(self, cause: ErrorEvent | None = None) -> None:
-        self._closing_task = asyncio.create_task(self.aclose(cause=cause))
+        self._closing_task = asyncio.create_task(self._aclose_impl(cause=cause))
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
         async with self._activity_lock:
             self._next_activity = AgentActivity(task, self)
 
-            await self._aclose_current_activity()
+            if self._activity is not None:
+                await self._activity.drain()
+                await self._activity.aclose()
 
             self._activity = self._next_activity
             self._next_activity = None
             await self._activity.start()
-
-    async def _aclose_current_activity(self) -> None:
-        if self._activity is not None:
-            await self._activity.drain()
-            await self._activity.aclose()
 
     @utils.log_exceptions(logger=logger)
     async def _forward_audio_task(self) -> None:
