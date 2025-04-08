@@ -558,7 +558,11 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
-                ws = await self._connect_ws()
+                try:
+                    ws = await self._connect_ws()
+                except aiohttp.ClientConnectorError as e:
+                    # Propagate connection errors immediately to trigger fallback
+                    raise APIConnectionError(f"Failed to connect to STT service: {e}") from e
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
