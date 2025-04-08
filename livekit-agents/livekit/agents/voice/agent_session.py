@@ -427,7 +427,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
-        async def close_and_drain() -> None:
+        async def drain_and_close() -> None:
             logger.info("Closing task started")
             await self.drain()
             if self._activity is not None:
@@ -438,7 +438,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             logger.info("Closing task done")
             self._closing_task = None
 
-        self._closing_task = asyncio.create_task(close_and_drain())
+        self._closing_task = asyncio.create_task(drain_and_close())
         self._closing_task.add_done_callback(_on_close_done)
 
     @utils.log_exceptions(logger=logger)
