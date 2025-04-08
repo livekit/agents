@@ -384,7 +384,9 @@ async def _execute_tools_task(
                 tasks.remove(task)
 
             task.add_done_callback(
-                lambda task: _log_exceptions(task, py_out=py_out, fnc_call=fnc_call)
+                lambda task, py_out=py_out, fnc_call=fnc_call: _log_exceptions(
+                    task, py_out=py_out, fnc_call=fnc_call
+                )
             )
 
         await asyncio.shield(asyncio.gather(*tasks))
