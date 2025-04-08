@@ -62,8 +62,8 @@ class EOUMetrics(BaseModel):
     transcription_delay: float
     """Time taken to obtain the transcript after the end of the user's speech."""
 
-    on_end_of_turn_delay: float
-    """Time taken to invoke the user's `Agent.on_end_of_turn` callback."""
+    on_user_turn_completed_delay: float
+    """Time taken to invoke the user's `Agent.on_user_turn_completed` callback."""
 
     speech_id: str | None = None
 
