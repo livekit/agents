@@ -73,6 +73,12 @@ class WorkerType(Enum):
     PUBLISHER = agent.JobType.JT_PUBLISHER
 
 
+@dataclass
+class SimulateJobInfo:
+    room: str
+    participant_identity: str | None = None
+
+
 class _DefaultLoadCalc:
     _instance = None
 
@@ -475,37 +481,57 @@ class Worker(utils.EventEmitter[EventTypes]):
         else:
             await _join_jobs()
 
-    async def simulate_job(self, room: str, participant_identity: str | None = None) -> None:
+    async def simulate_job(
+        self,
+        info: SimulateJobInfo | str,
+    ) -> None:
+        """
+        Simulate a job by creating a room and participant.
+
+        Args:
+            info: SimulateJobInfo or a join token for an existing room
+        """
         assert self._api is not None
+        # TODO(theomonnom): some fake information can still be found in the token
 
         from livekit.protocol.models import Room
 
-        from .cli import cli
-
-        participant = None
-        if cli.CLI_ARGUMENTS is None or not cli.CLI_ARGUMENTS.console:
-            room_obj = await self._api.room.create_room(api.CreateRoomRequest(name=room))
-            if participant_identity:
-                participant = await self._api.room.get_participant(
-                    api.RoomParticipantIdentity(room=room, identity=participant_identity)
-                )
-        else:
-            room_obj = Room(sid=utils.shortuuid("RM_"), name=room)
-
-        agent_id = utils.shortuuid("simulated-agent-")
-        token = (
-            api.AccessToken(self._opts.api_key, self._opts.api_secret)
-            .with_identity(agent_id)
-            .with_kind("agent")
-            .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-            .to_jwt()
+        room = info.room if isinstance(info, SimulateJobInfo) else "unknown-room"
+        participant_identity = (
+            info.participant_identity
+            if isinstance(info, SimulateJobInfo)
+            else "unknown-participant"
         )
+        agent_id = utils.shortuuid("simulated-agent-")
+
+        room_info = Room(sid=utils.shortuuid("RM_"), name=room)
+        participant_info = None
+
+        if isinstance(info, SimulateJobInfo):
+            from .cli import cli
+
+            if cli.CLI_ARGUMENTS is None or not cli.CLI_ARGUMENTS.console:
+                room_info = await self._api.room.create_room(api.CreateRoomRequest(name=room))
+                if participant_identity:
+                    participant_info = await self._api.room.get_participant(
+                        api.RoomParticipantIdentity(room=room, identity=participant_identity)
+                    )
+
+            token = (
+                api.AccessToken(self._opts.api_key, self._opts.api_secret)
+                .with_identity(agent_id)
+                .with_kind("agent")
+                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                .to_jwt()
+            )
+        else:
+            token = info
 
         job = agent.Job(
             id=utils.shortuuid("simulated-job-"),
-            room=room_obj,
+            room=room_info,
             type=agent.JobType.JT_ROOM,
-            participant=participant,
+            participant=participant_info,
         )
 
         running_info = RunningJobInfo(
