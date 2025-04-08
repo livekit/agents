@@ -434,12 +434,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._activity.aclose()
             await self._aclose_impl(error=error)
 
-        def _on_close_done(_: asyncio.Task) -> None:
+        def on_close_done(_: asyncio.Task) -> None:
             logger.info("Closing task done")
             self._closing_task = None
 
         self._closing_task = asyncio.create_task(drain_and_close())
-        self._closing_task.add_done_callback(_on_close_done)
+        self._closing_task.add_done_callback(on_close_done)
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
