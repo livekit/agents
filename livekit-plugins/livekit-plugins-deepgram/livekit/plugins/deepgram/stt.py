@@ -779,9 +779,6 @@ def _validate_model(
         "nova-2-medical",
         "nova-2-drivethru",
         "nova-2-automotive",
-        # nova-3 will support more languages, but english-only for now
-        "nova-3",
-        "nova-3-general",
     }
     if is_given(language) and language not in ("en-US", "en") and model in en_only_models:
         logger.warning(
