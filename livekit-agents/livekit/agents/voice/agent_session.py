@@ -21,10 +21,10 @@ from .audio_recognition import _TurnDetector
 from .events import (
     AgentEvent,
     AgentStateChangedEvent,
+    CloseEvent,
     ConversationItemAddedEvent,
     ErrorEvent,
     EventTypes,
-    SessionCloseEvent,
 )
 from .speech_handle import SpeechHandle
 
@@ -294,6 +294,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
+            self.emit(
+                "close",
+                CloseEvent(cause=cause),
+            )
+
             if self._draining_task is not None:
                 await self._draining_task
 
@@ -302,11 +307,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._room_io:
                 await self._room_io.aclose()
-
-            self.emit(
-                "session_close",
-                SessionCloseEvent(cause=cause),
-            )
 
         logger.debug("AgentSession closed")
 
@@ -416,7 +416,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
 
-    def _create_session_close_task(self, cause: ErrorEvent | None = None) -> None:
+    def _create_close_task(self, cause: ErrorEvent | None = None) -> None:
         self._closing_task = asyncio.create_task(self._aclose_impl(cause=cause))
 
     @utils.log_exceptions(logger=logger)

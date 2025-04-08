@@ -60,7 +60,7 @@ EventTypes = Literal[
     "metrics_collected",
     "speech_created",
     "error",
-    "session_close",
+    "close",
 ]
 
 
@@ -126,8 +126,8 @@ class ErrorEvent(BaseModel):
     source: LLM | STT | TTS
 
 
-class SessionCloseEvent(BaseModel):
-    type: Literal["session_close"] = "session_close"
+class CloseEvent(BaseModel):
+    type: Literal["close"] = "close"
     cause: ErrorEvent | None = None
 
 
@@ -142,5 +142,5 @@ AgentEvent = Union[
     ConversationItemAddedEvent,
     SpeechCreatedEvent,
     ErrorEvent,
-    SessionCloseEvent,
+    CloseEvent,
 ]
