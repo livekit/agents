@@ -30,7 +30,7 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.tool_context import FunctionTool, function_tool
+from .llm.tool_context import FunctionTool, function_tool, StopResponse, ToolError
 from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -72,6 +72,8 @@ __all__ = [
     "io",
     "FunctionCall",
     "FunctionCallOutput",
+    "StopResponse",
+    "ToolError",
     "RunContext",
     "Plugin",
     "AgentSession",

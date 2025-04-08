@@ -380,7 +380,7 @@ async def _execute_tools_task(
 
             task.add_done_callback(_log_exceptions)
 
-        await asyncio.shield(asyncio.gather(*tasks))
+        await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
     except asyncio.CancelledError:
         if len(tasks) > 0:
