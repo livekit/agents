@@ -32,6 +32,7 @@ class MyAgent(Agent):
         # callback before generating a reply after user turn committed
         if not new_message.text_content:
             # for example, raise StopResponse to stop the agent from generating a reply
+            logger.info("ignore empty user turn")
             raise StopResponse()
 
 
@@ -66,6 +67,7 @@ async def entrypoint(ctx: JobContext):
     async def cancel_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
         session.clear_user_turn()
+        logger.info("cancel turn")
 
 
 if __name__ == "__main__":
