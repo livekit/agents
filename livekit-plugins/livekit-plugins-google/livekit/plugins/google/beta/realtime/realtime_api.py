@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import weakref
 from dataclasses import dataclass
 
 from google import genai
@@ -173,8 +174,24 @@ class RealtimeModel(llm.RealtimeModel):
             instructions=instructions,
         )
 
+        self._sessions = weakref.WeakSet[RealtimeSession]()
+
     def session(self) -> RealtimeSession:
-        return RealtimeSession(self)
+        sess = RealtimeSession(self)
+        self._sessions.add(sess)
+        return sess
+
+    def update_options(
+        self, *, voice: NotGivenOr[str] = NOT_GIVEN, temperature: NotGivenOr[float] = NOT_GIVEN
+    ) -> None:
+        if is_given(voice):
+            self._opts.voice = voice
+
+        if is_given(temperature):
+            self._opts.temperature = temperature
+
+        for sess in self._sessions:
+            sess.update_options(voice=self._opts.voice, temperature=self._opts.temperature)
 
     async def aclose(self) -> None: ...
 
@@ -208,10 +225,11 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._reconnect_event = asyncio.Event()
         self._session_lock = asyncio.Lock()
+        self._gemini_close_task: asyncio.Task | None = None
 
     def _schedule_gemini_session_close(self) -> None:
         if self._session is not None:
-            asyncio.create_task(self._close_gemini_session())
+            self._gemini_close_task = asyncio.create_task(self._close_gemini_session())
 
     async def _close_gemini_session(self) -> None:
         async with self._session_lock:
@@ -226,11 +244,16 @@ class RealtimeSession(llm.RealtimeSession):
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
+
+        if is_given(temperature):
+            self._opts.temperature = temperature
+
         if self._session:
-            logger.warning("Updating voice; triggering Gemini session reconnect.")
+            logger.warning("Updating options; triggering Gemini session reconnect.")
             self._reconnect_event.set()
             self._schedule_gemini_session_close()
 
@@ -246,11 +269,10 @@ class RealtimeSession(llm.RealtimeSession):
             self._chat_ctx = chat_ctx
             turns, _ = to_chat_ctx(self._chat_ctx, id(self))
             tool_results = get_tool_results_for_realtime(self._chat_ctx)
-            # giving priority to tool results
+            if turns:
+                self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=False))
             if tool_results:
                 self._msg_ch.send_nowait(tool_results)
-            elif turns:
-                self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=True))
 
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
         async with self._update_fnc_ctx_lock:
@@ -264,7 +286,7 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._tools = llm.ToolContext(retained_tools)
             self._gemini_tools = [Tool(function_declarations=gemini_function_declarations)]
-            if self._session:
+            if self._session and gemini_function_declarations:
                 logger.warning("Updating tools; triggering Gemini session reconnect.")
                 self._reconnect_event.set()
                 self._schedule_gemini_session_close()
@@ -323,6 +345,9 @@ class RealtimeSession(llm.RealtimeSession):
 
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
+
+        if self._gemini_close_task:
+            await utils.aio.cancel_and_wait(self._gemini_close_task)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
