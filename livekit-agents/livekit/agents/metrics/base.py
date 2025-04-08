@@ -31,7 +31,6 @@ class STTMetrics(BaseModel):
     """The duration of the pushed audio in seconds."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
-    speech_id: str | None = None
 
 
 class TTSMetrics(BaseModel):
