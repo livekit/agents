@@ -36,7 +36,7 @@ class Plugin(ABC):  # noqa: B024
         cls.emitter.emit("plugin_registered", plugin)
 
     # plugin can implement an optional download_files method
-    def download_files(self) -> None:
+    def download_files(self) -> None:  # noqa: B027
         pass
 
     @property

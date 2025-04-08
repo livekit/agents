@@ -203,14 +203,11 @@ class ChunkedStream(tts.ChunkedStream):
                 await decoder.aclose()
 
         except DeadlineExceeded:
-            raise APITimeoutError()  # noqa: B904
+            raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(  # noqa: B904
-                e.message,
-                status_code=e.code or -1,
-                request_id=None,
-                body=None,
-            )
+            raise APIStatusError(
+                e.message, status_code=e.code or -1, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 

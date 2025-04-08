@@ -75,9 +75,7 @@ class TTS(tts.TTS):
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
         if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
-                ignore_punctuation=False
-            )
+            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
             model=model,
