@@ -267,19 +267,16 @@ class RecognizeStream(ABC):
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         """Task used to collect metrics"""
 
-        start_time = time.perf_counter()
-
         async for ev in event_aiter:
             if ev.type == SpeechEventType.RECOGNITION_USAGE:
                 assert ev.recognition_usage is not None, (
                     "recognition_usage must be provided for RECOGNITION_USAGE event"
                 )
 
-                duration = time.perf_counter() - start_time
                 stt_metrics = STTMetrics(
                     request_id=ev.request_id,
                     timestamp=time.time(),
-                    duration=duration,
+                    duration=0.0,
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
                     streamed=True,
