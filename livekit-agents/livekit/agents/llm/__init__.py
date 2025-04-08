@@ -17,6 +17,7 @@ from .llm import (
     ChoiceDelta,
     CompletionUsage,
     FunctionToolCall,
+    LLMError,
     LLMStream,
 )
 from .realtime import (
@@ -82,4 +83,5 @@ __all__ = [
     "GenerationCreatedEvent",
     "ErrorEvent",
     "MessageGeneration",
+    "LLMError",
 ]

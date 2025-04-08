@@ -20,6 +20,7 @@ from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInf
 from .events import (
     AgentStartedSpeakingEvent,
     AgentStoppedSpeakingEvent,
+    ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
@@ -330,15 +331,18 @@ class AgentActivity(RecognitionHooks):
                 except ValueError:
                     logger.exception("failed to update the instructions")
 
-            # metrics
+            # metrics and error handling
             if isinstance(self.llm, llm.LLM):
                 self.llm.on("metrics_collected", self._on_metrics_collected)
+                self.llm.on("error", self._on_error)
 
             if isinstance(self.stt, stt.STT):
                 self.stt.on("metrics_collected", self._on_metrics_collected)
+                self.stt.on("error", self._on_error)
 
             if isinstance(self.tts, tts.TTS):
                 self.tts.on("metrics_collected", self._on_metrics_collected)
+                self.tts.on("error", self._on_error)
 
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)
@@ -620,6 +624,19 @@ class AgentActivity(RecognitionHooks):
         ):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
+
+    def _on_error(self, error: llm.LLMError | stt.STTError | tts.TTSError) -> None:
+        if isinstance(error, llm.LLMError):
+            error_event = ErrorEvent(error=error, source=self.llm)
+            self._session.emit("error", error_event)
+        elif isinstance(error, stt.STTError):
+            error_event = ErrorEvent(error=error, source=self.stt)
+            self._session.emit("error", error_event)
+        elif isinstance(error, tts.TTSError):
+            error_event = ErrorEvent(error=error, source=self.tts)
+            self._session.emit("error", error_event)
+
+        self._session._on_error(error)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")

@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
@@ -53,12 +53,21 @@ class ChatChunk(BaseModel):
     usage: CompletionUsage | None = None
 
 
+class LLMError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["llm_error"] = "llm_error"
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool
+
+
 TEvent = TypeVar("TEvent")
 
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
@@ -111,6 +120,7 @@ class LLMStream(ABC):
 
         self._event_ch = aio.Chan[ChatChunk]()
         self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._current_attempt_has_error = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -127,12 +137,16 @@ class LLMStream(ABC):
                 return await self._run()
             except APIError as e:
                 if self._conn_options.max_retry == 0 or not e.retryable:
+                    self._emit_error(e, recoverable=False)
                     raise
                 elif i == self._conn_options.max_retry:
+                    self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
                         f"failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
                     ) from e
+
                 else:
+                    self._emit_error(e, recoverable=True)
                     logger.warning(
                         f"failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s",  # noqa: E501
                         exc_info=e,
@@ -143,6 +157,20 @@ class LLMStream(ABC):
                     )
 
                 await asyncio.sleep(self._conn_options.retry_interval)
+                # Reset the flag when retrying
+                self._current_attempt_has_error = False
+
+    def _emit_error(self, api_error: APIError, recoverable: bool):
+        self._current_attempt_has_error = True
+        self._llm.emit(
+            "error",
+            LLMError(
+                timestamp=time.time(),
+                label=self._llm._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
 
     @utils.log_exceptions(logger=logger)
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
@@ -160,6 +188,10 @@ class LLMStream(ABC):
                 usage = ev.usage
 
         duration = time.perf_counter() - start_time
+
+        if self._current_attempt_has_error:
+            return
+
         metrics = LLMMetrics(
             timestamp=time.time(),
             request_id=request_id,

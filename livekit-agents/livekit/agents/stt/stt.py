@@ -9,6 +9,8 @@ from enum import Enum, unique
 from types import TracebackType
 from typing import Generic, Literal, TypeVar, Union
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
@@ -63,12 +65,21 @@ class STTCapabilities:
     interim_results: bool
 
 
+class STTError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["stt_error"] = "stt_error"
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool
+
+
 TEvent = TypeVar("TEvent")
 
 
 class STT(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
@@ -218,12 +229,16 @@ class RecognizeStream(ABC):
                 return await self._run()
             except APIError as e:
                 if max_retries == 0:
+                    self._emit_error(e, recoverable=False)
                     raise
                 elif num_retries == max_retries:
+                    self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
                         f"failed to recognize speech after {num_retries} attempts",
                     ) from e
                 else:
+                    self._emit_error(e, recoverable=True)
+
                     retry_interval = self._conn_options._interval_for_retry(num_retries)
                     logger.warning(
                         f"failed to recognize speech, retrying in {retry_interval}s",
@@ -237,6 +252,17 @@ class RecognizeStream(ABC):
                     await asyncio.sleep(retry_interval)
 
                 num_retries += 1
+
+    def _emit_error(self, api_error: APIError, recoverable: bool):
+        self._stt.emit(
+            "error",
+            STTError(
+                timestamp=time.time(),
+                label=self._stt._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         """Task used to collect metrics"""

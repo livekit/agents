@@ -21,6 +21,7 @@ from .audio_recognition import _TurnDetector
 from .events import (
     AgentEvent,
     AgentStateChangedEvent,
+    CloseEvent,
     ConversationItemAddedEvent,
     EventTypes,
 )
@@ -112,6 +113,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_state: AgentState | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
+        self._closing_task: asyncio.Task | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -273,16 +275,34 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = True
             self._update_agent_state(AgentState.LISTENING)
 
-    async def aclose(self) -> None:
+    async def drain(self) -> None:
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        await self._activity.drain()
+
+    async def _aclose_impl(
+        self,
+        *,
+        error: llm.LLMError | stt.STTError | tts.TTSError | None = None,
+    ) -> None:
         async with self._lock:
             if not self._started:
                 return
+
+            self.emit("close", CloseEvent(error=error))
+
+            if self._activity is not None:
+                await self._activity.aclose()
 
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
             if self._room_io:
                 await self._room_io.aclose()
+
+    async def aclose(self) -> None:
+        await self._aclose_impl()
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
@@ -400,6 +420,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._update_activity_atask = asyncio.create_task(
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
+
+    def _on_error(
+        self,
+        error: llm.LLMError | stt.STTError | tts.TTSError,
+    ) -> None:
+        if self._closing_task or error.recoverable:
+            return
+
+        async def drain_and_close() -> None:
+            await self.drain()
+            await self._aclose_impl(error=error)
+
+        def on_close_done(_: asyncio.Task) -> None:
+            self._closing_task = None
+
+        self._closing_task = asyncio.create_task(drain_and_close())
+        self._closing_task.add_done_callback(on_close_done)
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
