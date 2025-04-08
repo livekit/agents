@@ -205,6 +205,10 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
+        else:
+            update_instructions(
+                self._agent._chat_ctx, instructions=instructions, add_if_missing=True
+            )
 
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
         tools = list(set(tools))
