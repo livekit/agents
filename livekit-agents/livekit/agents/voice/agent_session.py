@@ -287,19 +287,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         error: llm.LLMError | stt.STTError | tts.TTSError | None = None,
     ) -> None:
         async with self._lock:
-            try:
-                if not self._started:
-                    return
+            if not self._started:
+                return
 
-                self.emit("close", CloseEvent(error=error))
+            self.emit("close", CloseEvent(error=error))
 
-                if self._forward_audio_atask is not None:
-                    await utils.aio.cancel_and_wait(self._forward_audio_atask)
+            if self._forward_audio_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
-                if self._room_io:
-                    await self._room_io.aclose()
-            except Exception as e:
-                raise RuntimeError("Error closing AgentSession") from e
+            if self._room_io:
+                await self._room_io.aclose()
 
         logger.debug("AgentSession closed")
 
