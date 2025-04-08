@@ -360,25 +360,34 @@ async def _execute_tools_task(
             tasks.append(task)
             _authorize_inline_task(task, function_call=fnc_call)
 
-            def _log_exceptions(task: asyncio.Task) -> None:
+            def _log_exceptions(
+                task: asyncio.Task,
+                *,
+                py_out: _PythonOutput,
+                fnc_call: llm.FunctionCall,
+            ) -> None:
                 if task.exception() is not None:
                     logger.error(
                         "exception occurred while executing tool",
                         extra={
-                            "function": fnc_call.name,  # noqa: B023
+                            "function": fnc_call.name,
                             "speech_id": speech_handle.id,
                         },
                         exc_info=task.exception(),
                     )
-                    py_out.exception = task.exception()  # noqa: B023
-                    tool_output.output.append(py_out)  # noqa: B023
+                    py_out.exception = task.exception()
+                    tool_output.output.append(py_out)
                     return
 
-                py_out.output = task.result()  # noqa: B023
-                tool_output.output.append(py_out)  # noqa: B023
+                py_out.output = task.result()
+                tool_output.output.append(py_out)
                 tasks.remove(task)
 
-            task.add_done_callback(_log_exceptions)
+            task.add_done_callback(
+                lambda task, py_out=py_out, fnc_call=fnc_call: _log_exceptions(
+                    task, py_out=py_out, fnc_call=fnc_call
+                )
+            )
 
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 

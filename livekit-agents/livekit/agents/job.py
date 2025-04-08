@@ -327,7 +327,9 @@ class JobContext:
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
-            task.add_done_callback(lambda _: self._participant_tasks.pop((p.identity, coro)))  # noqa: B023
+            task.add_done_callback(
+                lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))
+            )
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
