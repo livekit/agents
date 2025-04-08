@@ -292,13 +292,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self.emit("close", CloseEvent(error=error))
 
+            if self._activity is not None:
+                await self._activity.aclose()
+
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
             if self._room_io:
                 await self._room_io.aclose()
-
-        logger.debug("AgentSession closed")
 
     async def aclose(self) -> None:
         await self._aclose_impl()
@@ -428,14 +429,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         async def drain_and_close() -> None:
-            logger.info("Closing task started")
             await self.drain()
-            if self._activity is not None:
-                await self._activity.aclose()
             await self._aclose_impl(error=error)
 
         def on_close_done(_: asyncio.Task) -> None:
-            logger.info("Closing task done")
             self._closing_task = None
 
         self._closing_task = asyncio.create_task(drain_and_close())
