@@ -41,6 +41,14 @@ from .generation import (
 )
 from .speech_handle import SpeechHandle
 
+try:
+    from livekit.plugins.google.beta.realtime.realtime_api import (
+        RealtimeModel as GoogleRealtimeModel,
+    )
+
+except ImportError:
+    GoogleRealtimeModel = None
+
 
 def log_event(event: str, **kwargs) -> None:
     debug.Tracing.log_event(event, kwargs)
@@ -1273,7 +1281,7 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-                if self.llm.capabilities.explicit_reply_after_tool_response:
+                if not isinstance(self.llm, GoogleRealtimeModel):
                     self._rt_session.interrupt()
 
                     handle = SpeechHandle.create(

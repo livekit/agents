@@ -134,7 +134,6 @@ class RealtimeModel(llm.RealtimeModel):
                 message_truncation=False,
                 turn_detection=True,
                 user_transcription=False,
-                explicit_reply_after_tool_response=False,
             )
         )
 
