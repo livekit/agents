@@ -23,7 +23,6 @@ from .events import (
     AgentStateChangedEvent,
     CloseEvent,
     ConversationItemAddedEvent,
-    ErrorEvent,
     EventTypes,
 )
 from .speech_handle import SpeechHandle
@@ -279,8 +278,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def drain(self) -> None:
         self._draining_task = asyncio.create_task(self._drain_impl())
+
         def _on_drain_done(_: asyncio.Task) -> None:
             self._draining_task = None
+
         self._draining_task.add_done_callback(_on_drain_done)
 
     async def _drain_impl(self) -> None:
@@ -289,7 +290,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         await self._activity.drain()
 
-    async def _aclose_impl(self, cause: ErrorEvent | None = None) -> None:
+    async def _aclose_impl(
+        self,
+        *,
+        cause: llm.LLMError | stt.STTError | tts.TTSError | None = None,
+    ) -> None:
         async with self._lock:
             if not self._started:
                 return
@@ -416,7 +421,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
 
-    def _create_close_task(self, cause: ErrorEvent | None = None) -> None:
+    def _create_close_task(
+        self,
+        *,
+        cause: llm.LLMError | stt.STTError | tts.TTSError | None = None,
+    ) -> None:
         self._closing_task = asyncio.create_task(self._aclose_impl(cause=cause))
 
     @utils.log_exceptions(logger=logger)

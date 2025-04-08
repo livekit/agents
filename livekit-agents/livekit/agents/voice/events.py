@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -122,13 +122,13 @@ class SpeechCreatedEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError
+    error: LLMError | STTError | TTSError | Any
     source: LLM | STT | TTS
 
 
 class CloseEvent(BaseModel):
     type: Literal["close"] = "close"
-    cause: ErrorEvent | None = None
+    cause: LLMError | STTError | TTSError | None = None
 
 
 AgentEvent = Union[

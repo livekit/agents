@@ -599,19 +599,19 @@ class AgentActivity(RecognitionHooks):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
-    def _on_error(self, ev: llm.LLMError | stt.STTError | tts.TTSError) -> None:
-        if isinstance(ev, llm.LLMError):
-            error_event = ErrorEvent(error=ev, source=self.llm)
+    def _on_error(self, error: llm.LLMError | stt.STTError | tts.TTSError) -> None:
+        if isinstance(error, llm.LLMError):
+            error_event = ErrorEvent(error=error, source=self.llm)
             self._session.emit("error", error_event)
-        elif isinstance(ev, stt.STTError):
-            error_event = ErrorEvent(error=ev, source=self.stt)
+        elif isinstance(error, stt.STTError):
+            error_event = ErrorEvent(error=error, source=self.stt)
             self._session.emit("error", error_event)
-        elif isinstance(ev, tts.TTSError):
-            error_event = ErrorEvent(error=ev, source=self.tts)
+        elif isinstance(error, tts.TTSError):
+            error_event = ErrorEvent(error=error, source=self.tts)
             self._session.emit("error", error_event)
 
-        if not ev.recoverable:
-            self._session._create_close_task(error_event)
+        if not error.recoverable:
+            self._session._create_close_task(cause=error)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")

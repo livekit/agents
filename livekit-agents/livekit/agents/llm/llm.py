@@ -53,8 +53,6 @@ class ChatChunk(BaseModel):
     usage: CompletionUsage | None = None
 
 
-
-
 class LLMError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["llm_error"] = "llm_error"
