@@ -141,7 +141,6 @@ class FunctionCallOutput(BaseModel):
     call_id: str
     output: str
     is_error: bool
-    generate_reply: bool = Field(default=True)
 
 
 ChatItem = Annotated[

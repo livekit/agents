@@ -439,6 +439,7 @@ class _SanitizedOutput:
     fnc_call: llm.FunctionCall
     fnc_call_out: llm.FunctionCallOutput | None
     agent_task: Agent | None
+    generate_reply: bool = field(default=True)
 
 
 @dataclass
@@ -543,9 +544,9 @@ class _PythonOutput:
                     call_id=self.fnc_call.call_id,
                     output=str(fnc_out or ""),  # take the string representation of the output
                     is_error=False,
-                    generate_reply=fnc_out is not None,
                 )
             ),
+            generate_reply=fnc_out is not None,
             agent_task=task,
         )
 
