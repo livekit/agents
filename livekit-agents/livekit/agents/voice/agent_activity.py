@@ -610,8 +610,7 @@ class AgentActivity(RecognitionHooks):
             error_event = ErrorEvent(error=error, source=self.tts)
             self._session.emit("error", error_event)
 
-        if not error.recoverable:
-            self._session._create_close_task(cause=error)
+        self._session._on_error(error)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")

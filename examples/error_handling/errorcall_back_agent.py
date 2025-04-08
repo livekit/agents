@@ -47,7 +47,6 @@ async def entrypoint(ctx: JobContext):
             # If you define a custom audio file, it will play out even if the TTS provider is down.
             audio=audio_frames_from_file(custor_error_audio),
         )
-        session.drain()
 
     # wait for a participant to join the room
     await ctx.wait_for_participant()

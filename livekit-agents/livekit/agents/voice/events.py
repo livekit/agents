@@ -128,7 +128,7 @@ class ErrorEvent(BaseModel):
 
 class CloseEvent(BaseModel):
     type: Literal["close"] = "close"
-    cause: LLMError | STTError | TTSError | None = None
+    error: LLMError | STTError | TTSError | None = None
 
 
 AgentEvent = Union[

@@ -276,15 +276,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = True
             self._update_agent_state(AgentState.LISTENING)
 
-    def drain(self) -> None:
-        self._draining_task = asyncio.create_task(self._drain_impl())
-
-        def _on_drain_done(_: asyncio.Task) -> None:
-            self._draining_task = None
-
-        self._draining_task.add_done_callback(_on_drain_done)
-
-    async def _drain_impl(self) -> None:
+    async def drain(self) -> None:
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -293,25 +285,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _aclose_impl(
         self,
         *,
-        cause: llm.LLMError | stt.STTError | tts.TTSError | None = None,
+        error: llm.LLMError | stt.STTError | tts.TTSError | None = None,
     ) -> None:
         async with self._lock:
-            if not self._started:
-                return
+            try:
+                if not self._started:
+                    return
 
-            self.emit(
-                "close",
-                CloseEvent(cause=cause),
-            )
+                self.emit(
+                    "close",
+                    CloseEvent(error=error)
+                )
 
-            if self._draining_task is not None:
-                await self._draining_task
+                if self._forward_audio_atask is not None:
+                    await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
-            if self._forward_audio_atask is not None:
-                await utils.aio.cancel_and_wait(self._forward_audio_atask)
-
-            if self._room_io:
-                await self._room_io.aclose()
+                if self._room_io:
+                    await self._room_io.aclose()
+            except Exception as e:
+                raise RuntimeError("Error closing AgentSession") from e
 
         logger.debug("AgentSession closed")
 
@@ -421,12 +413,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_activity_task(self._agent), name="_update_activity_task"
             )
 
-    def _create_close_task(
+    def _on_error(
         self,
-        *,
-        cause: llm.LLMError | stt.STTError | tts.TTSError | None = None,
+        error: llm.LLMError | stt.STTError | tts.TTSError,
     ) -> None:
-        self._closing_task = asyncio.create_task(self._aclose_impl(cause=cause))
+        if self._draining_task or error.recoverable:
+            return
+
+        async def close_and_drain() -> None:
+            logger.info("Closing task started")
+            await self.drain()
+            if self._activity is not None:
+                await self._activity.aclose()
+            await self._aclose_impl(error=error)
+
+        def _on_close_done(_: asyncio.Task) -> None:
+            logger.info("Closing task done")
+            self._closing_task = None
+
+        self._closing_task = asyncio.create_task(close_and_drain())
+        self._closing_task.add_done_callback(_on_close_done)
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
