@@ -35,11 +35,9 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .langs import TTSLangs
 from .log import logger
-from .models import (
-    TTSModels,
-    TTSLang,
-)
+from .models import TTSModels
 
 
 @dataclass
@@ -165,7 +163,7 @@ class ChunkedStream(tts.ChunkedStream):
             "speaker": self._opts.speaker,
             "text": self._input_text,
             "modelId": self._opts.model,
-            "lang":self._opts.lang,
+            "lang": self._opts.lang,
             "samplingRate": self._opts.sample_rate,
             "speedAlpha": self._opts.speed_alpha,
             "reduceLatency": self._opts.reduce_latency,
