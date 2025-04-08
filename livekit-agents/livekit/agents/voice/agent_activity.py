@@ -14,6 +14,7 @@ from ..log import logger
 from ..metrics import STTMetrics, TTSMetrics, VADMetrics, LLMMetrics, EOUMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
 from ..utils.misc import is_given
+from ..llm.tool_context import StopResponse
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
 from .events import (
@@ -765,10 +766,14 @@ class AgentActivity(RecognitionHooks):
             return
 
         start_time = time.time()
-        await self._agent.on_user_turn_completed(
-            self._agent.chat_ctx,
-            new_message=user_message,  # TODO(theomonnom): This doesn't allow edits yet
-        )
+        try:
+            await self._agent.on_user_turn_completed(
+                self._agent.chat_ctx,
+                new_message=user_message,  # TODO(theomonnom): This doesn't allow edits yet
+            )
+        except StopResponse:
+            return  # ignore this turn
+
         callback_duration = time.time() - start_time
 
         speech_handle = self.generate_reply(user_input=new_transcript)
