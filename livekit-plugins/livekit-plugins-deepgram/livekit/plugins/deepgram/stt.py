@@ -119,7 +119,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: DeepgramModels | str = "nova-2-general",
+        model: DeepgramModels | str = "nova-3",
         language: DeepgramLanguages | str = "en-US",
         detect_language: bool = False,
         interim_results: bool = True,
@@ -705,16 +705,19 @@ class SpeechStream(stt.SpeechStream):
 def live_transcription_to_speech_data(language: str, data: dict) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
-    return [
-        stt.SpeechData(
+    speech_data = []
+    for alt in dg_alts:
+        sd = stt.SpeechData(
             language=language,
             start_time=alt["words"][0]["start"] if alt["words"] else 0,
             end_time=alt["words"][-1]["end"] if alt["words"] else 0,
             confidence=alt["confidence"],
             text=alt["transcript"],
         )
-        for alt in dg_alts
-    ]
+        if language == "multi" and "languages" in alt:
+            sd.language = alt["languages"][0]  # TODO: handle multiple languages
+        speech_data.append(sd)
+    return speech_data
 
 
 def prerecorded_transcription_to_speech_event(

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, llm
 from livekit.plugins import deepgram, openai, silero
-from livekit.plugins.turn_detector import EOUModel
+from livekit.plugins.turn_detector.english import EnglishModel
 
 logger = logging.getLogger("realtime-turn-detector")
 logger.setLevel(logging.INFO)
@@ -42,7 +42,7 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         allow_interruptions=True,
-        turn_detection=EOUModel(),
+        turn_detection=EnglishModel(),
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
         llm=openai.realtime.RealtimeModel(
