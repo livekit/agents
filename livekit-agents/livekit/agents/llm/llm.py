@@ -69,7 +69,7 @@ TEvent = TypeVar("TEvent")
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"], Literal["error"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self) -> None:

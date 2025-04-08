@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import pathlib
@@ -11,7 +10,7 @@ from livekit.agents.llm import LLMStream
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
-from livekit.agents.voice.events import ErrorEvent, SessionCloseEvent
+from livekit.agents.voice.events import ErrorEvent
 from livekit.plugins import cartesia, deepgram, silero
 from livekit.plugins.openai import LLM
 
@@ -92,13 +91,6 @@ async def entrypoint(ctx: JobContext):
             # If you define a custom audio file, it will play out even if the TTS provider is down.
             audio=audio_frames_from_file(error_wav_path),
         )
-
-    @session.on("session_close")
-    def on_session_close(_: SessionCloseEvent):
-        global room_close_task
-        # Delete the room and disconnect all participants
-        room_close_task = asyncio.create_task(ctx.delete_room())
-        room_close_task.add_done_callback(lambda _: logger.info("Room closed!"))
 
     # wait for a participant to join the room
     await ctx.wait_for_participant()

@@ -79,7 +79,7 @@ TEvent = TypeVar("TEvent")
 
 class STT(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"], Literal["error"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
