@@ -307,7 +307,8 @@ class RecognizeStream(ABC):
                 )
 
         if self._resampler:
-            for frame in self._resampler.push(frame):  # noqa: B020
+            frames = self._resampler.push(frame)
+            for frame in frames:
                 self._input_ch.send_nowait(frame)
         else:
             self._input_ch.send_nowait(frame)
@@ -343,7 +344,7 @@ class RecognizeStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration  # noqa: B904
+            raise StopAsyncIteration from None
 
         return val
 

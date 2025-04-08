@@ -43,9 +43,7 @@ class TTS(tts.TTS):
         language: str = "english",
         sample_rate: int = 24000,
         model: TTSModel | str = "Play3.0-mini",
-        word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(  # noqa: B008
-            ignore_punctuation=False
-        ),
+        word_tokenizer: tokenize.WordTokenizer | None = None,
         **kwargs,
     ) -> None:
         """
@@ -69,6 +67,9 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=1,
         )
+
+        if not word_tokenizer:
+            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
         pyht_api_key = api_key if is_given(api_key) else os.environ.get("PLAYHT_API_KEY")
         pyht_user_id = user_id if is_given(user_id) else os.environ.get("PLAYHT_USER_ID")

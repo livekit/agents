@@ -333,14 +333,11 @@ class STT(stt.STT):
             )
 
         except openai.APITimeoutError:
-            raise APITimeoutError()  # noqa: B904
+            raise APITimeoutError() from None
         except openai.APIStatusError as e:
-            raise APIStatusError(  # noqa: B904
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-            )
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 

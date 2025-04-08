@@ -132,11 +132,11 @@ class STT(stt.STT):
             try:
                 gauth_default()
             except DefaultCredentialsError:
-                raise ValueError(  # noqa: B904
+                raise ValueError(
                     "Application default credentials must be available "
                     "when using Google STT without explicitly passing "
                     "credentials through credentials_info or credentials_file."
-                )
+                ) from None
 
         if isinstance(languages, str):
             languages = [languages]
@@ -244,12 +244,9 @@ class STT(stt.STT):
 
                 return _recognize_response_to_speech_event(raw)
         except DeadlineExceeded:
-            raise APITimeoutError()  # noqa: B904
+            raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(  # noqa: B904
-                e.message,
-                status_code=e.code or -1,
-            )
+            raise APIStatusError(e.message, status_code=e.code or -1) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -495,12 +492,9 @@ class SpeechStream(stt.SpeechStream):
                         await utils.aio.gracefully_cancel(process_stream_task, wait_reconnect_task)
                         should_stop.set()
             except DeadlineExceeded:
-                raise APITimeoutError()  # noqa: B904
+                raise APITimeoutError() from None
             except GoogleAPICallError as e:
-                raise APIStatusError(  # noqa: B904
-                    e.message,
-                    status_code=e.code or -1,
-                )
+                raise APIStatusError(e.message, status_code=e.code or -1) from None
             except Exception as e:
                 raise APIConnectionError() from e
 

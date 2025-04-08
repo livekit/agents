@@ -18,7 +18,9 @@ async def get_access_token(api_key: str) -> str:
                     data = await resp.json()
                     return data["key_value"]
                 except (ValueError, KeyError) as e:
-                    raise Exception(f"Failed to parse Speechmatics access token response: {e}")  # noqa: B904
+                    raise Exception(
+                        f"Failed to parse Speechmatics access token response: {e}"
+                    ) from None
             else:
                 error_message = await resp.text()
                 raise Exception(
