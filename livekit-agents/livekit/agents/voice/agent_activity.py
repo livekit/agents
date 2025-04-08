@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
+from ..llm.tool_context import StopResponse
 from ..log import logger
 from ..metrics import EOUMetrics, LLMMetrics, STTMetrics, TTSMetrics, VADMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
@@ -734,8 +735,8 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
                 return
-            assert self._rt_session is not None
-            self._rt_session.commit_audio()
+            if self._rt_session is not None:
+                self._rt_session.commit_audio()
 
         new_transcript = info.new_transcript
 
@@ -773,10 +774,14 @@ class AgentActivity(RecognitionHooks):
 
         user_message = llm.ChatMessage(role="user", content=[new_transcript])
         start_time = time.time()
-        await self._agent.on_user_turn_completed(
-            self._agent.chat_ctx,
-            new_message=user_message,  # TODO(theomonnom): This doesn't allow edits yet
-        )
+        try:
+            await self._agent.on_user_turn_completed(
+                self._agent.chat_ctx,
+                new_message=user_message,  # TODO(theomonnom): This doesn't allow edits yet
+            )
+        except StopResponse:
+            return  # ignore this turn
+
         callback_duration = time.time() - start_time
 
         if isinstance(self.llm, llm.RealtimeModel):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Protocol
