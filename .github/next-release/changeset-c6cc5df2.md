@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-add tool messages to chat ctx but not generate reply when tool returns a None (#1911)
+skip reply but add the tool call/output to the chat ctx when the tool returns None (#1911)
