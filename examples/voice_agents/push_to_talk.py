@@ -3,8 +3,8 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli, llm
-from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli
+from livekit.agents.llm import ChatContext, ChatMessage, StopResponse
 from livekit.plugins import cartesia, deepgram, openai
 
 logger = logging.getLogger("push-to-talk")
@@ -29,12 +29,10 @@ class MyAgent(Agent):
         )
 
     async def on_user_turn_completed(self, chat_ctx: ChatContext, new_message: ChatMessage) -> None:
-        # # callback when user input is transcribed
-        # chat_ctx = chat_ctx.copy()
-        # chat_ctx.items.append(new_message)
-        # await self.update_chat_ctx(chat_ctx)
-        # logger.info("add user message to chat context", extra={"content": new_message.content})
-        pass
+        # callback before generating a reply after user turn committed
+        if not new_message.text_content:
+            # for example, raise StopResponse to stop the agent from generating a reply
+            raise StopResponse()
 
 
 async def entrypoint(ctx: JobContext):
@@ -52,7 +50,8 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.local_participant.register_rpc_method("start_turn")
     async def start_turn(data: rtc.RpcInvocationData):
-        session.mark_turn_start()
+        session.interrupt()
+        session.clear_user_turn()
 
         # listen to the caller if multi-user
         room_io.set_participant(data.caller_identity)
@@ -61,12 +60,12 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.local_participant.register_rpc_method("end_turn")
     async def end_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
-        await session.mark_turn_end()
+        session.commit_user_turn()
 
     @ctx.room.local_participant.register_rpc_method("cancel_turn")
     async def cancel_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
-        await session.mark_turn_end(cancelled=True)
+        session.clear_user_turn()
 
 
 if __name__ == "__main__":
