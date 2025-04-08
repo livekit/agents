@@ -123,7 +123,7 @@ class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
     error: LLMError | STTError | TTSError | Any
-    source: LLM | STT | TTS
+    source: LLM | STT | TTS | Any
 
 
 class CloseEvent(BaseModel):
