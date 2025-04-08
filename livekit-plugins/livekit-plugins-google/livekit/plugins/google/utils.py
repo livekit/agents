@@ -39,7 +39,7 @@ def get_tool_results_for_realtime(chat_ctx: llm.ChatContext) -> types.LiveClient
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, cache_key: Any
+    chat_ctx: llm.ChatContext, cache_key: Any, ignore_functions: bool = False
 ) -> tuple[list[types.Content], types.Content | None]:
     turns: list[types.Content] = []
     system_instruction: types.Content | None = None
@@ -77,7 +77,7 @@ def to_chat_ctx(
                     parts.append(types.Part(text=json.dumps(content)))
                 elif isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content, cache_key))
-        elif msg.type == "function_call":
+        elif msg.type == "function_call" and not ignore_functions:
             parts.append(
                 types.Part(
                     function_call=types.FunctionCall(
@@ -86,7 +86,7 @@ def to_chat_ctx(
                     )
                 )
             )
-        elif msg.type == "function_call_output":
+        elif msg.type == "function_call_output" and not ignore_functions:
             parts.append(
                 types.Part(
                     function_response=types.FunctionResponse(

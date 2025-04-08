@@ -266,7 +266,7 @@ class RealtimeSession(llm.RealtimeSession):
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
             self._chat_ctx = chat_ctx
-            turns, _ = to_chat_ctx(self._chat_ctx, id(self))
+            turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
             tool_results = get_tool_results_for_realtime(self._chat_ctx)
             if turns:
                 self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=False))
