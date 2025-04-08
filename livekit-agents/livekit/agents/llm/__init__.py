@@ -17,8 +17,8 @@ from .llm import (
     ChoiceDelta,
     CompletionUsage,
     FunctionToolCall,
-    LLMStream,
     LLMError,
+    LLMStream,
 )
 from .realtime import (
     ErrorEvent,
