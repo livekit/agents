@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Protocol
@@ -256,7 +255,8 @@ class AudioRecognition:
             self._audio_transcript = ""
 
         if self._end_of_turn_task is not None:
-            self._end_of_turn_task.cancel()  # TODO(theomonnom): disallow cancel if the extra sleep is done
+            # TODO(theomonnom): disallow cancel if the extra sleep is done
+            self._end_of_turn_task.cancel()
 
         # copy the last_speaking_time before awaiting (the value can change)
         self._end_of_turn_task = asyncio.create_task(_bounce_eou_task(self._last_speaking_time))
