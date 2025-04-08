@@ -776,7 +776,7 @@ class AgentActivity(RecognitionHooks):
             timestamp=time.time(),
             end_of_utterance_delay=info.end_of_utterance_delay,
             transcription_delay=info.transcription_delay,
-            on_end_of_turn_delay=callback_duration,
+            on_user_turn_completed_delay=callback_duration,
             speech_id=speech_handle.id,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
