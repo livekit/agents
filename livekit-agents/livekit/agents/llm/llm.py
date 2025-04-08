@@ -7,13 +7,12 @@ from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
 
 from .. import utils
-from ..errors import LLMError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..types import (
@@ -52,6 +51,17 @@ class ChatChunk(BaseModel):
     id: str
     delta: ChoiceDelta | None = None
     usage: CompletionUsage | None = None
+
+
+
+
+class LLMError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["llm_error"] = "llm_error"
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool
 
 
 TEvent = TypeVar("TEvent")
@@ -159,7 +169,7 @@ class LLMStream(ABC):
             LLMError(
                 timestamp=time.time(),
                 label=self._llm._label,
-                error=api_error.message,
+                error=api_error,
                 recoverable=recoverable,
             ),
         )

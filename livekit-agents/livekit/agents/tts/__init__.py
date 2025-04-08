@@ -11,6 +11,7 @@ from .tts import (
     SynthesizedAudio,
     SynthesizedAudioEmitter,
     SynthesizeStream,
+    TTSError,
     TTSCapabilities,
 )
 

@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
-from ..errors import Error, LLMError, STTError, TTSError
 from ..log import logger
 from ..metrics import AgentMetrics
 from ..types import NOT_GIVEN, AgentState, NotGivenOr
@@ -334,7 +333,7 @@ class AgentActivity(RecognitionHooks):
 
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)
-                self.vad.on("error", self._on_error)
+
             self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
             self._audio_recognition = AudioRecognition(
                 hooks=self,
@@ -600,14 +599,14 @@ class AgentActivity(RecognitionHooks):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
-    def _on_error(self, ev: Error) -> None:
-        if isinstance(ev, LLMError):
+    def _on_error(self, ev: llm.LLMError | stt.STTError | tts.TTSError) -> None:
+        if isinstance(ev, llm.LLMError):
             error_event = ErrorEvent(error=ev, source=self.llm)
             self._session.emit("error", error_event)
-        elif isinstance(ev, STTError):
+        elif isinstance(ev, stt.STTError):
             error_event = ErrorEvent(error=ev, source=self.stt)
             self._session.emit("error", error_event)
-        elif isinstance(ev, TTSError):
+        elif isinstance(ev, tts.TTSError):
             error_event = ErrorEvent(error=ev, source=self.tts)
             self._session.emit("error", error_event)
 

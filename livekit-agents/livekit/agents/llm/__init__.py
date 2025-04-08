@@ -18,6 +18,7 @@ from .llm import (
     CompletionUsage,
     FunctionToolCall,
     LLMStream,
+    LLMError,
 )
 from .realtime import (
     ErrorEvent,
@@ -82,4 +83,5 @@ __all__ = [
     "GenerationCreatedEvent",
     "ErrorEvent",
     "MessageGeneration",
+    "LLMError",
 ]

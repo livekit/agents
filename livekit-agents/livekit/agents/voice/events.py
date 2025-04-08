@@ -4,11 +4,10 @@ from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..errors import Error
-from ..llm import LLM, ChatMessage, FunctionCall, FunctionCallOutput
+from ..llm import LLM, ChatMessage, FunctionCall, FunctionCallOutput, LLMError
 from ..metrics import AgentMetrics
-from ..stt import STT
-from ..tts import TTS
+from ..stt import STT, STTError
+from ..tts import TTS, TTSError
 from ..types import AgentState
 from .speech_handle import SpeechHandle
 
@@ -123,7 +122,7 @@ class SpeechCreatedEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: Error
+    error: LLMError | STTError | TTSError
     source: LLM | STT | TTS
 
 

@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Generic, Literal, TypeVar, Union
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
-from ..errors import TTSError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
@@ -36,6 +37,15 @@ class SynthesizedAudio:
 class TTSCapabilities:
     streaming: bool
     """Whether this TTS supports streaming (generally using websockets)"""
+
+
+class TTSError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["tts_error"] = "tts_error"
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool
 
 
 TEvent = TypeVar("TEvent")
@@ -225,7 +235,7 @@ class ChunkedStream(ABC):
             TTSError(
                 timestamp=time.time(),
                 label=self._tts._label,
-                error=api_error.message,
+                error=api_error,
                 recoverable=recoverable,
             ),
         )
@@ -323,7 +333,7 @@ class SynthesizeStream(ABC):
             TTSError(
                 timestamp=time.time(),
                 label=self._tts._label,
-                error=api_error.message,
+                error=api_error,
                 recoverable=recoverable,
             ),
         )

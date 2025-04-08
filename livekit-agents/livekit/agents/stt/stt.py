@@ -9,10 +9,11 @@ from enum import Enum, unique
 from types import TracebackType
 from typing import Generic, Literal, TypeVar, Union
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
-from ..errors import STTError
 from ..log import logger
 from ..metrics import STTMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -62,6 +63,15 @@ class SpeechEvent:
 class STTCapabilities:
     streaming: bool
     interim_results: bool
+
+
+class STTError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["stt_error"] = "stt_error"
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool
 
 
 TEvent = TypeVar("TEvent")
@@ -249,7 +259,7 @@ class RecognizeStream(ABC):
             STTError(
                 timestamp=time.time(),
                 label=self._stt._label,
-                error=api_error.message,
+                error=api_error,
                 recoverable=recoverable,
             ),
         )
