@@ -28,17 +28,13 @@ class MyAgent(Agent):
             # llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
         )
 
-    async def on_end_of_turn(
-        self, chat_ctx: ChatContext, new_message: ChatMessage, generating_reply: bool
-    ) -> None:
-        if not isinstance(self.llm, llm.RealtimeModel) and new_message.text_content:
-            # skip for realtime model, it manages conversation items with audio internally
-            chat_ctx = chat_ctx.copy()
-            chat_ctx.items.append(new_message)
-            await self.update_chat_ctx(chat_ctx)
-            logger.info("add user message to chat context", extra={"content": new_message.content})
-
-        self.session.generate_reply()
+    async def on_user_turn_completed(self, chat_ctx: ChatContext, new_message: ChatMessage) -> None:
+        # # callback when user input is transcribed
+        # chat_ctx = chat_ctx.copy()
+        # chat_ctx.items.append(new_message)
+        # await self.update_chat_ctx(chat_ctx)
+        # logger.info("add user message to chat context", extra={"content": new_message.content})
+        pass
 
 
 async def entrypoint(ctx: JobContext):

@@ -3,21 +3,22 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterable
+import weakref
 from dataclasses import dataclass
-from typing import Literal
 
 from google import genai
 from google.genai._api_client import HttpOptions
 from google.genai.types import (
     Blob,
     Content,
-    FunctionResponse,
+    FunctionDeclaration,
     GenerationConfig,
     LiveClientContent,
     LiveClientRealtimeInput,
-    LiveClientToolResponse,
     LiveConnectConfig,
+    LiveServerContent,
+    LiveServerToolCall,
+    LiveServerToolCallCancellation,
     Modality,
     Part,
     PrebuiltVoiceConfig,
@@ -27,44 +28,16 @@ from google.genai.types import (
 )
 from livekit import rtc
 from livekit.agents import llm, utils
-from livekit.agents.utils import images
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from ...log import logger
-from .api_proto import (
-    ClientEvents,
-    LiveAPIModels,
-    Voice,
-)
+from ...utils import _build_gemini_fnc, get_tool_results_for_realtime, to_chat_ctx
+from .api_proto import ClientEvents, LiveAPIModels, Voice
 
-# temporary placeholders
-from .temp import _build_gemini_ctx, _build_tools, _create_ai_function_info
-from .transcriber import ModelTranscriber, TranscriberSession, TranscriptionContent
-
-EventTypes = Literal[
-    "start_session",
-    "input_speech_started",
-    "response_content_added",
-    "response_content_done",
-    "function_calls_collected",
-    "function_calls_finished",
-    "function_calls_cancelled",
-    "input_speech_transcription_completed",
-    "agent_speech_transcription_completed",
-    "agent_speech_stopped",
-]
-
-
-@dataclass
-class GeminiContent:
-    response_id: str
-    item_id: str
-    output_index: int
-    content_index: int
-    text: str
-    audio: list[rtc.AudioFrame]
-    text_stream: AsyncIterable[str]
-    audio_stream: AsyncIterable[rtc.AudioFrame]
-    content_type: Literal["text", "audio"]
+INPUT_AUDIO_SAMPLE_RATE = 16000
+OUTPUT_AUDIO_SAMPLE_RATE = 24000
+NUM_CHANNELS = 1
 
 
 @dataclass
@@ -74,55 +47,59 @@ class InputTranscription:
 
 
 @dataclass
-class Capabilities:
-    supports_truncate: bool
-    input_audio_sample_rate: int | None = None
-
-
-@dataclass
-class ModelOptions:
+class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
-    response_modalities: list[Modality] | None
+    response_modalities: NotGivenOr[list[Modality]]
     vertexai: bool
     project: str | None
     location: str | None
     candidate_count: int
-    temperature: float | None
-    max_output_tokens: int | None
-    top_p: float | None
-    top_k: int | None
-    presence_penalty: float | None
-    frequency_penalty: float | None
-    instructions: Content | None
-    enable_user_audio_transcription: bool
-    enable_agent_audio_transcription: bool
+    temperature: NotGivenOr[float]
+    max_output_tokens: NotGivenOr[int]
+    top_p: NotGivenOr[float]
+    top_k: NotGivenOr[int]
+    presence_penalty: NotGivenOr[float]
+    frequency_penalty: NotGivenOr[float]
+    instructions: NotGivenOr[str]
 
 
-class RealtimeModel:
+@dataclass
+class _MessageGeneration:
+    message_id: str
+    text_ch: utils.aio.Chan[str]
+    audio_ch: utils.aio.Chan[rtc.AudioFrame]
+
+
+@dataclass
+class _ResponseGeneration:
+    message_ch: utils.aio.Chan[llm.MessageGeneration]
+    function_ch: utils.aio.Chan[llm.FunctionCall]
+
+    messages: dict[str, _MessageGeneration]
+
+
+class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
-        instructions: str | None = None,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
         model: LiveAPIModels | str = "gemini-2.0-flash-exp",
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: Voice | str = "Puck",
-        modalities: list[Modality] = None,
-        enable_user_audio_transcription: bool = True,
-        enable_agent_audio_transcription: bool = True,
+        modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
         vertexai: bool = False,
-        project: str | None = None,
-        location: str | None = None,
+        project: NotGivenOr[str] = NOT_GIVEN,
+        location: NotGivenOr[str] = NOT_GIVEN,
         candidate_count: int = 1,
-        temperature: float | None = None,
-        max_output_tokens: int | None = None,
-        top_p: float | None = None,
-        top_k: int | None = None,
-        presence_penalty: float | None = None,
-        frequency_penalty: float | None = None,
-        loop: asyncio.AbstractEventLoop | None = None,
-    ):
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        top_k: NotGivenOr[int] = NOT_GIVEN,
+        presence_penalty: NotGivenOr[float] = NOT_GIVEN,
+        frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
+    ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
 
@@ -135,66 +112,57 @@ class RealtimeModel:
 
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
-            api_key (str or None, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
+            api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str or None, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
+            model (str, optional): The name of the model to use. Defaults to "gemini-2.0-flash-exp".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
-            enable_user_audio_transcription (bool, optional): Whether to enable user audio transcription. Defaults to True
-            enable_agent_audio_transcription (bool, optional): Whether to enable agent audio transcription. Defaults to True
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
-                project (str or None, optional): The project id to use for the API. Defaults to None. (for vertexai)
-                location (str or None, optional): The location to use for the API. Defaults to None. (for vertexai)
+                project (str, optional): The project id to use for the API. Defaults to None. (for vertexai)
+                location (str, optional): The location to use for the API. Defaults to None. (for vertexai)
             candidate_count (int, optional): The number of candidate responses to generate. Defaults to 1.
             top_p (float, optional): The top-p value for response generation
             top_k (int, optional): The top-k value for response generation
             presence_penalty (float, optional): The presence penalty for response generation
             frequency_penalty (float, optional): The frequency penalty for response generation
-            loop (asyncio.AbstractEventLoop or None, optional): Event loop to use for async operations. If None, the current event loop is used.
 
         Raises:
-            ValueError: If the API key is not provided and cannot be found in environment variables.
+            ValueError: If the API key is required but not found.
         """  # noqa: E501
-        if modalities is None:
-            modalities = ["AUDIO"]
-        super().__init__()
-        self._capabilities = Capabilities(
-            supports_truncate=False,
-            input_audio_sample_rate=16000,
+        super().__init__(
+            capabilities=llm.RealtimeCapabilities(
+                message_truncation=False,
+                turn_detection=True,
+                user_transcription=False,
+            )
         )
-        self._model = model
-        self._loop = loop or asyncio.get_event_loop()
-        self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
-        self._project = project or os.environ.get("GOOGLE_CLOUD_PROJECT")
-        self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION")
+
+        gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
+        gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+        gcp_location = location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION")
         if vertexai:
-            if not self._project or not self._location:
+            if not gcp_project or not gcp_location:
                 raise ValueError(
                     "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"  # noqa: E501
                 )
-            self._api_key = None  # VertexAI does not require an API key
+            gemini_api_key = None  # VertexAI does not require an API key
 
         else:
-            self._project = None
-            self._location = None
-            if not self._api_key:
+            gcp_project = None
+            gcp_location = None
+            if not gemini_api_key:
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
-        instructions_content = Content(parts=[Part(text=instructions)]) if instructions else None
-
-        self._rt_sessions: list[GeminiRealtimeSession] = []
-        self._opts = ModelOptions(
+        self._opts = _RealtimeOptions(
             model=model,
-            api_key=self._api_key,
+            api_key=gemini_api_key,
             voice=voice,
-            enable_user_audio_transcription=enable_user_audio_transcription,
-            enable_agent_audio_transcription=enable_agent_audio_transcription,
             response_modalities=modalities,
             vertexai=vertexai,
-            project=self._project,
-            location=self._location,
+            project=gcp_project,
+            location=gcp_location,
             candidate_count=candidate_count,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
@@ -202,88 +170,39 @@ class RealtimeModel:
             top_k=top_k,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
-            instructions=instructions_content,
+            instructions=instructions,
         )
 
-    @property
-    def sessions(self) -> list[GeminiRealtimeSession]:
-        return self._rt_sessions
+        self._sessions = weakref.WeakSet[RealtimeSession]()
 
-    @property
-    def capabilities(self) -> Capabilities:
-        return self._capabilities
+    def session(self) -> RealtimeSession:
+        sess = RealtimeSession(self)
+        self._sessions.add(sess)
+        return sess
 
-    def session(
-        self,
-        *,
-        chat_ctx: llm.ChatContext | None = None,
-        fnc_ctx: llm.FunctionContext | None = None,
-    ) -> GeminiRealtimeSession:
-        session = GeminiRealtimeSession(
-            opts=self._opts,
-            chat_ctx=chat_ctx or llm.ChatContext(),
-            fnc_ctx=fnc_ctx,
-            loop=self._loop,
-        )
-        self._rt_sessions.append(session)
+    def update_options(
+        self, *, voice: NotGivenOr[str] = NOT_GIVEN, temperature: NotGivenOr[float] = NOT_GIVEN
+    ) -> None:
+        if is_given(voice):
+            self._opts.voice = voice
 
-        return session
+        if is_given(temperature):
+            self._opts.temperature = temperature
 
-    async def aclose(self) -> None:
-        for session in self._rt_sessions:
-            await session.aclose()
+        for sess in self._sessions:
+            sess.update_options(voice=self._opts.voice, temperature=self._opts.temperature)
+
+    async def aclose(self) -> None: ...
 
 
-class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
-    def __init__(
-        self,
-        *,
-        opts: ModelOptions,
-        chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.FunctionContext | None,
-        loop: asyncio.AbstractEventLoop,
-    ):
-        """
-        Initializes a GeminiRealtimeSession instance for interacting with Google's Realtime API.
-
-        Args:
-            opts (ModelOptions): The model options for the session.
-            chat_ctx (llm.ChatContext): The chat context for the session.
-            fnc_ctx (llm.FunctionContext or None): The function context for the session.
-            loop (asyncio.AbstractEventLoop): The event loop for the session.
-        """
-        super().__init__()
-        self._loop = loop
-        self._opts = opts
-        self._chat_ctx = chat_ctx
-        self._fnc_ctx = fnc_ctx
-        self._fnc_tasks = utils.aio.TaskSet()
-        self._is_interrupted = False
-
-        tools = []
-        if self._fnc_ctx is not None:
-            functions = _build_tools(self._fnc_ctx)
-            tools.append(Tool(function_declarations=functions))
-
-        self._config = LiveConnectConfig(
-            response_modalities=self._opts.response_modalities,
-            generation_config=GenerationConfig(
-                candidate_count=self._opts.candidate_count,
-                temperature=self._opts.temperature,
-                max_output_tokens=self._opts.max_output_tokens,
-                top_p=self._opts.top_p,
-                top_k=self._opts.top_k,
-                presence_penalty=self._opts.presence_penalty,
-                frequency_penalty=self._opts.frequency_penalty,
-            ),
-            system_instruction=self._opts.instructions,
-            speech_config=SpeechConfig(
-                voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
-                )
-            ),
-            tools=tools,
-        )
+class RealtimeSession(llm.RealtimeSession):
+    def __init__(self, realtime_model: RealtimeModel) -> None:
+        super().__init__(realtime_model)
+        self._opts = realtime_model._opts
+        self._tools = llm.ToolContext.empty()
+        self._chat_ctx = llm.ChatContext.empty()
+        self._msg_ch = utils.aio.Chan[ClientEvents]()
+        self._gemini_tools: list[Tool] = []
         self._client = genai.Client(
             http_options=HttpOptions(api_version="v1alpha"),
             api_key=self._opts.api_key,
@@ -292,278 +211,340 @@ class GeminiRealtimeSession(utils.EventEmitter[EventTypes]):
             location=self._opts.location,
         )
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
-        if self._opts.enable_user_audio_transcription:
-            self._transcriber = TranscriberSession(client=self._client, model=self._opts.model)
-            self._transcriber.on("input_speech_done", self._on_input_speech_done)
-        if self._opts.enable_agent_audio_transcription:
-            self._agent_transcriber = ModelTranscriber(client=self._client, model=self._opts.model)
-            self._agent_transcriber.on("input_speech_done", self._on_agent_speech_done)
-        # init dummy task
-        self._init_sync_task = asyncio.create_task(asyncio.sleep(0))
-        self._send_ch = utils.aio.Chan[ClientEvents]()
+
+        self._current_generation: _ResponseGeneration | None = None
+
+        self._is_interrupted = False
         self._active_response_id = None
+        self._session = None
+        self._update_chat_ctx_lock = asyncio.Lock()
+        self._update_fnc_ctx_lock = asyncio.Lock()
+        self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        self._pending_generation_event_id = None
 
-    async def aclose(self) -> None:
-        if self._send_ch.closed:
-            return
+        self._reconnect_event = asyncio.Event()
+        self._session_lock = asyncio.Lock()
+        self._gemini_close_task: asyncio.Task | None = None
 
-        self._send_ch.close()
-        await self._main_atask
+    def _schedule_gemini_session_close(self) -> None:
+        if self._session is not None:
+            self._gemini_close_task = asyncio.create_task(self._close_gemini_session())
+
+    async def _close_gemini_session(self) -> None:
+        async with self._session_lock:
+            if self._session:
+                try:
+                    await self._session.close()
+                finally:
+                    self._session = None
+
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+    ) -> None:
+        if is_given(voice):
+            self._opts.voice = voice
+
+        if is_given(temperature):
+            self._opts.temperature = temperature
+
+        if self._session:
+            logger.warning("Updating options; triggering Gemini session reconnect.")
+            self._reconnect_event.set()
+            self._schedule_gemini_session_close()
+
+    async def update_instructions(self, instructions: str) -> None:
+        self._opts.instructions = instructions
+        if self._session:
+            logger.warning("Updating instructions; triggering Gemini session reconnect.")
+            self._reconnect_event.set()
+            self._schedule_gemini_session_close()
+
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        async with self._update_chat_ctx_lock:
+            self._chat_ctx = chat_ctx
+            turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
+            tool_results = get_tool_results_for_realtime(self._chat_ctx)
+            if turns:
+                self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=False))
+            if tool_results:
+                self._msg_ch.send_nowait(tool_results)
+
+    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
+        async with self._update_fnc_ctx_lock:
+            retained_tools: list[llm.FunctionTool] = []
+            gemini_function_declarations: list[FunctionDeclaration] = []
+
+            for tool in tools:
+                gemini_function = _build_gemini_fnc(tool)
+                gemini_function_declarations.append(gemini_function)
+                retained_tools.append(tool)
+
+            self._tools = llm.ToolContext(retained_tools)
+            self._gemini_tools = [Tool(function_declarations=gemini_function_declarations)]
+            if self._session and gemini_function_declarations:
+                logger.warning("Updating tools; triggering Gemini session reconnect.")
+                self._reconnect_event.set()
+                self._schedule_gemini_session_close()
 
     @property
-    def fnc_ctx(self) -> llm.FunctionContext | None:
-        return self._fnc_ctx
+    def chat_ctx(self) -> llm.ChatContext:
+        return self._chat_ctx
 
-    @fnc_ctx.setter
-    def fnc_ctx(self, value: llm.FunctionContext | None) -> None:
-        self._fnc_ctx = value
+    @property
+    def tools(self) -> llm.ToolContext:
+        return self._tools
 
-    def _push_media_chunk(self, data: bytes, mime_type: str) -> None:
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
         realtime_input = LiveClientRealtimeInput(
-            media_chunks=[Blob(data=data, mime_type=mime_type)],
+            media_chunks=[Blob(data=frame.data.tobytes(), mime_type="audio/pcm")],
         )
-        self._queue_msg(realtime_input)
+        self._msg_ch.send_nowait(realtime_input)
 
-    DEFAULT_ENCODE_OPTIONS = images.EncodeOptions(
-        format="JPEG",
-        quality=75,
-        resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
-    )
+    def generate_reply(
+        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        fut = asyncio.Future()
 
-    def push_video(
-        self,
-        frame: rtc.VideoFrame,
-        encode_options: images.EncodeOptions = DEFAULT_ENCODE_OPTIONS,
-    ) -> None:
-        """Push a video frame to the Gemini Multimodal Live session.
+        event_id = utils.shortuuid("gemini-response-")
+        self._response_created_futures[event_id] = fut
+        self._pending_generation_event_id = event_id
 
-        Args:
-            frame (rtc.VideoFrame): The video frame to push.
-            encode_options (images.EncodeOptions, optional): The encode options for the video frame. Defaults to 1024x1024 JPEG.
+        instructions_content = instructions if is_given(instructions) else "."
+        ctx = [Content(parts=[Part(text=instructions_content)], role="user")]
+        self._msg_ch.send_nowait(LiveClientContent(turns=ctx, turn_complete=True))
 
-        Notes:
-        - This will be sent immediately so you should use a sampling frame rate that makes sense for your application and Gemini's constraints. 1 FPS is a good starting point.
-        """  # noqa: E501
-        encoded_data = images.encode(
-            frame,
-            encode_options,
-        )
-        mime_type = (
-            "image/jpeg"
-            if encode_options.format == "JPEG"
-            else "image/png"
-            if encode_options.format == "PNG"
-            else "image/jpeg"
-        )
-        self._push_media_chunk(encoded_data, mime_type)
+        def _on_timeout() -> None:
+            if event_id in self._response_created_futures and not fut.done():
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+                self._response_created_futures.pop(event_id, None)
+                if self._pending_generation_event_id == event_id:
+                    self._pending_generation_event_id = None
 
-    def _push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._opts.enable_user_audio_transcription:
-            self._transcriber._push_audio(frame)
+        handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        fut.add_done_callback(lambda _: handle.cancel())
 
-        self._push_media_chunk(frame.data.tobytes(), "audio/pcm")
+        return fut
 
-    def _queue_msg(self, msg: ClientEvents) -> None:
-        self._send_ch.send_nowait(msg)
+    def interrupt(self) -> None:
+        logger.warning("interrupt() - no direct cancellation in Gemini")
 
-    def chat_ctx_copy(self) -> llm.ChatContext:
-        return self._chat_ctx.copy()
+    def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
+        logger.warning(f"truncate(...) called for {message_id}, ignoring for Gemini")
 
-    async def set_chat_ctx(self, ctx: llm.ChatContext) -> None:
-        self._chat_ctx = ctx.copy()
+    async def aclose(self) -> None:
+        self._msg_ch.close()
 
-    def cancel_response(self) -> None:
-        raise NotImplementedError("cancel_response is not supported yet")
+        for fut in self._response_created_futures.values():
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError("Session closed"))
 
-    def create_response(
-        self,
-        on_duplicate: Literal["cancel_existing", "cancel_new", "keep_both"] = "keep_both",
-    ) -> None:
-        turns, _ = _build_gemini_ctx(self._chat_ctx, id(self))
-        ctx = [self._opts.instructions] + turns if self._opts.instructions else turns
+        if self._main_atask:
+            await utils.aio.cancel_and_wait(self._main_atask)
 
-        if not ctx:
-            logger.warning(
-                "gemini-realtime-session: No chat context to send, sending dummy content."
-            )
-            ctx = [Content(parts=[Part(text=".")])]
-
-        self._queue_msg(LiveClientContent(turns=ctx, turn_complete=True))
-
-    def commit_audio_buffer(self) -> None:
-        raise NotImplementedError("commit_audio_buffer is not supported yet")
-
-    def server_vad_enabled(self) -> bool:
-        return True
-
-    def _on_input_speech_done(self, content: TranscriptionContent) -> None:
-        if content.response_id and content.text:
-            self.emit(
-                "input_speech_transcription_completed",
-                InputTranscription(
-                    item_id=content.response_id,
-                    transcript=content.text,
-                ),
-            )
-
-        # self._chat_ctx.append(text=content.text, role="user")
-        # TODO: implement sync mechanism to make sure the transcribed user speech is inside the chat_ctx and always before the generated agent speech  # noqa: E501
-
-    def _on_agent_speech_done(self, content: TranscriptionContent) -> None:
-        if content.response_id and content.text:
-            self.emit(
-                "agent_speech_transcription_completed",
-                InputTranscription(
-                    item_id=content.response_id,
-                    transcript=content.text,
-                ),
-            )
-            # self._chat_ctx.append(text=content.text, role="assistant")
+        if self._gemini_close_task:
+            await utils.aio.cancel_and_wait(self._gemini_close_task)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
-        @utils.log_exceptions(logger=logger)
-        async def _send_task():
-            async for msg in self._send_ch:
-                await self._session.send(input=msg)
+        while True:
+            config = LiveConnectConfig(
+                response_modalities=self._opts.response_modalities
+                if is_given(self._opts.response_modalities)
+                else [Modality.AUDIO],
+                generation_config=GenerationConfig(
+                    candidate_count=self._opts.candidate_count,
+                    temperature=self._opts.temperature
+                    if is_given(self._opts.temperature)
+                    else None,
+                    max_output_tokens=self._opts.max_output_tokens
+                    if is_given(self._opts.max_output_tokens)
+                    else None,
+                    top_p=self._opts.top_p if is_given(self._opts.top_p) else None,
+                    top_k=self._opts.top_k if is_given(self._opts.top_k) else None,
+                    presence_penalty=self._opts.presence_penalty
+                    if is_given(self._opts.presence_penalty)
+                    else None,
+                    frequency_penalty=self._opts.frequency_penalty
+                    if is_given(self._opts.frequency_penalty)
+                    else None,
+                ),
+                system_instruction=Content(parts=[Part(text=self._opts.instructions)])
+                if is_given(self._opts.instructions)
+                else None,
+                speech_config=SpeechConfig(
+                    voice_config=VoiceConfig(
+                        prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
+                    )
+                ),
+                tools=self._gemini_tools,
+            )
 
-            await self._session.send(input=".", end_of_turn=True)
+            async with self._client.aio.live.connect(
+                model=self._opts.model, config=config
+            ) as session:
+                async with self._session_lock:
+                    self._session = session
 
-        @utils.log_exceptions(logger=logger)
-        async def _recv_task():
-            while True:
-                async for response in self._session.receive():
-                    if self._active_response_id is None:
-                        self._is_interrupted = False
-                        self._active_response_id = utils.shortuuid()
-                        text_stream = utils.aio.Chan[str]()
-                        audio_stream = utils.aio.Chan[rtc.AudioFrame]()
-                        content = GeminiContent(
-                            response_id=self._active_response_id,
-                            item_id=self._active_response_id,
-                            output_index=0,
-                            content_index=0,
-                            text="",
-                            audio=[],
-                            text_stream=text_stream,
-                            audio_stream=audio_stream,
-                            content_type="audio",
-                        )
-                        self.emit("response_content_added", content)
+                @utils.log_exceptions(logger=logger)
+                async def _send_task():
+                    async for msg in self._msg_ch:
+                        if isinstance(msg, LiveClientContent):
+                            await session.send(input=msg, end_of_turn=True)
 
-                    server_content = response.server_content
-                    if server_content:
-                        model_turn = server_content.model_turn
-                        if model_turn:
-                            for part in model_turn.parts:
-                                if part.text:
-                                    content.text_stream.send_nowait(part.text)
-                                if part.inline_data:
-                                    frame = rtc.AudioFrame(
-                                        data=part.inline_data.data,
-                                        sample_rate=24000,
-                                        num_channels=1,
-                                        samples_per_channel=len(part.inline_data.data) // 2,
-                                    )
-                                    if self._opts.enable_agent_audio_transcription:
-                                        content.audio.append(frame)
-                                    content.audio_stream.send_nowait(frame)
+                        await session.send(input=msg)
+                    await session.send(input=".", end_of_turn=True)
 
-                        if server_content.interrupted or server_content.turn_complete:
-                            if self._opts.enable_agent_audio_transcription:
-                                self._agent_transcriber._push_audio(content.audio)
-                            for stream in (content.text_stream, content.audio_stream):
-                                if isinstance(stream, utils.aio.Chan):
-                                    stream.close()
+                @utils.log_exceptions(logger=logger)
+                async def _recv_task():
+                    while True:
+                        async for response in session.receive():
+                            if self._active_response_id is None:
+                                self._start_new_generation()
+                            if response.server_content:
+                                self._handle_server_content(response.server_content)
+                            if response.tool_call:
+                                self._handle_tool_calls(response.tool_call)
+                            if response.tool_call_cancellation:
+                                self._handle_tool_call_cancellation(response.tool_call_cancellation)
 
-                            self.emit("agent_speech_stopped")
-                            self._is_interrupted = True
+                send_task = asyncio.create_task(_send_task(), name="gemini-realtime-send")
+                recv_task = asyncio.create_task(_recv_task(), name="gemini-realtime-recv")
+                reconnect_task = asyncio.create_task(
+                    self._reconnect_event.wait(), name="reconnect-wait"
+                )
 
-                            self._active_response_id = None
+                try:
+                    done, _ = await asyncio.wait(
+                        [send_task, recv_task, reconnect_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in done:
+                        if task != reconnect_task:
+                            task.result()
 
-                    if response.tool_call:
-                        if self._fnc_ctx is None:
-                            raise ValueError("Function context is not set")
-                        fnc_calls = []
-                        for fnc_call in response.tool_call.function_calls:
-                            fnc_call_info = _create_ai_function_info(
-                                self._fnc_ctx,
-                                fnc_call.id,
-                                fnc_call.name,
-                                json.dumps(fnc_call.args),
-                            )
-                            fnc_calls.append(fnc_call_info)
+                    if reconnect_task not in done:
+                        break
 
-                        self.emit("function_calls_collected", fnc_calls)
+                    self._reconnect_event.clear()
+                finally:
+                    await utils.aio.cancel_and_wait(send_task, recv_task, reconnect_task)
 
-                        for fnc_call_info in fnc_calls:
-                            self._fnc_tasks.create_task(
-                                self._run_fnc_task(fnc_call_info, content.item_id)
-                            )
-
-                    # Handle function call cancellations
-                    if response.tool_call_cancellation:
-                        logger.warning(
-                            "function call cancelled",
-                            extra={
-                                "function_call_ids": response.tool_call_cancellation.function_call_ids,  # noqa: E501
-                            },
-                        )
-                        self.emit(
-                            "function_calls_cancelled",
-                            response.tool_call_cancellation.function_call_ids,
-                        )
-
-        async with self._client.aio.live.connect(
-            model=self._opts.model, config=self._config
-        ) as session:
-            self._session = session
-            tasks = [
-                asyncio.create_task(_send_task(), name="gemini-realtime-send"),
-                asyncio.create_task(_recv_task(), name="gemini-realtime-recv"),
-            ]
-
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
-                await self._session.close()
-                if self._opts.enable_user_audio_transcription:
-                    await self._transcriber.aclose()
-                if self._opts.enable_agent_audio_transcription:
-                    await self._agent_transcriber.aclose()
-
-    @utils.log_exceptions(logger=logger)
-    async def _run_fnc_task(self, fnc_call_info: llm.FunctionCallInfo, item_id: str):
-        logger.debug(
-            "executing ai function",
-            extra={
-                "function": fnc_call_info.function_info.name,
-            },
+    def _start_new_generation(self):
+        self._is_interrupted = False
+        self._active_response_id = utils.shortuuid("gemini-turn-")
+        self._current_generation = _ResponseGeneration(
+            message_ch=utils.aio.Chan[llm.MessageGeneration](),
+            function_ch=utils.aio.Chan[llm.FunctionCall](),
+            messages={},
         )
 
-        called_fnc = fnc_call_info.execute()
-        try:
-            await called_fnc.task
-        except Exception as e:
-            logger.exception(
-                "error executing ai function",
-                extra={
-                    "function": fnc_call_info.function_info.name,
-                },
-                exc_info=e,
-            )
-        tool_call = llm.ChatMessage.create_tool_from_called_function(called_fnc)
-        if tool_call.content is not None:
-            tool_response = LiveClientToolResponse(
-                function_responses=[
-                    FunctionResponse(
-                        name=tool_call.name,
-                        id=tool_call.tool_call_id,
-                        response={"result": tool_call.content},
-                    )
-                ]
-            )
-            await self._session.send(input=tool_response)
+        # We'll assume each chunk belongs to a single message ID self._active_response_id
+        item_generation = _MessageGeneration(
+            message_id=self._active_response_id,
+            text_ch=utils.aio.Chan[str](),
+            audio_ch=utils.aio.Chan[rtc.AudioFrame](),
+        )
 
-            self.emit("function_calls_finished", [called_fnc])
+        self._current_generation.message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id=self._active_response_id,
+                text_stream=item_generation.text_ch,
+                audio_stream=item_generation.audio_ch,
+            )
+        )
+
+        generation_event = llm.GenerationCreatedEvent(
+            message_stream=self._current_generation.message_ch,
+            function_stream=self._current_generation.function_ch,
+            user_initiated=False,
+        )
+
+        # Resolve any pending future from generate_reply()
+        if self._pending_generation_event_id and (
+            fut := self._response_created_futures.pop(self._pending_generation_event_id, None)
+        ):
+            fut.set_result(generation_event)
+
+        self._pending_generation_event_id = None
+        self.emit("generation_created", generation_event)
+
+        self._current_generation.messages[self._active_response_id] = item_generation
+
+    def _handle_server_content(self, server_content: LiveServerContent):
+        if not self._current_generation or not self._active_response_id:
+            logger.warning(
+                "gemini-realtime-session: No active response ID, skipping server content"
+            )
+            return
+
+        item_generation = self._current_generation.messages[self._active_response_id]
+
+        model_turn = server_content.model_turn
+        if model_turn:
+            for part in model_turn.parts:
+                if part.text:
+                    item_generation.text_ch.send_nowait(part.text)
+                if part.inline_data:
+                    frame_data = part.inline_data.data
+                    frame = rtc.AudioFrame(
+                        data=frame_data,
+                        sample_rate=OUTPUT_AUDIO_SAMPLE_RATE,
+                        num_channels=NUM_CHANNELS,
+                        samples_per_channel=len(frame_data) // 2,
+                    )
+                    item_generation.audio_ch.send_nowait(frame)
+
+        if server_content.interrupted or server_content.turn_complete:
+            self._finalize_response()
+
+    def _finalize_response(self) -> None:
+        if not self._current_generation:
+            return
+
+        for item_generation in self._current_generation.messages.values():
+            item_generation.text_ch.close()
+            item_generation.audio_ch.close()
+
+        self._current_generation.function_ch.close()
+        self._current_generation.message_ch.close()
+        self._current_generation = None
+        self._is_interrupted = True
+        self._active_response_id = None
+        self.emit("agent_speech_stopped")
+
+    def _handle_tool_calls(self, tool_call: LiveServerToolCall):
+        if not self._current_generation:
+            return
+        for fnc_call in tool_call.function_calls:
+            self._current_generation.function_ch.send_nowait(
+                llm.FunctionCall(
+                    call_id=fnc_call.id,
+                    name=fnc_call.name,
+                    arguments=json.dumps(fnc_call.args),
+                )
+            )
+        self._finalize_response()
+
+    def _handle_tool_call_cancellation(
+        self, tool_call_cancellation: LiveServerToolCallCancellation
+    ):
+        logger.warning(
+            "function call cancelled",
+            extra={
+                "function_call_ids": tool_call_cancellation.ids,
+            },
+        )
+        self.emit("function_calls_cancelled", tool_call_cancellation.ids)
+
+    def commit_audio(self) -> None:
+        raise NotImplementedError("commit_audio_buffer is not supported yet")
+
+    def clear_audio(self) -> None:
+        raise NotImplementedError("clear_audio is not supported yet")
+
+    def server_vad_enabled(self) -> bool:
+        return True
