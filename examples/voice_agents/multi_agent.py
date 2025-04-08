@@ -120,7 +120,7 @@ class StoryAgent(Agent):
         """When you are fininshed telling the story (and the user confirms they don't
         want anymore), call this function to end the conversation."""
         # interrupt any existing generation
-        self.session.interrupt()
+        await self.session.interrupt()
 
         # generate a goodbye message and hang up
         # awaiting it will ensure the message is played out before returning

@@ -51,7 +51,7 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.local_participant.register_rpc_method("start_turn")
     async def start_turn(data: rtc.RpcInvocationData):
-        session.interrupt()
+        await session.interrupt()
         session.clear_user_turn()
 
         # listen to the caller if multi-user
