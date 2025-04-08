@@ -114,7 +114,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task | None = None
-        self._draining_task: asyncio.Task | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -428,7 +427,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         error: llm.LLMError | stt.STTError | tts.TTSError,
     ) -> None:
-        if self._draining_task or error.recoverable:
+        if self._closing_task or error.recoverable:
             return
 
         async def close_and_drain() -> None:
