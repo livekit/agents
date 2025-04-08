@@ -5,10 +5,6 @@ from typing import Literal, Union
 from pydantic import BaseModel
 
 
-class Error(BaseModel):
-    error: str
-
-
 class LLMMetrics(BaseModel):
     type: Literal["llm_metrics"] = "llm_metrics"
     label: str
@@ -22,7 +18,6 @@ class LLMMetrics(BaseModel):
     total_tokens: int
     tokens_per_second: float
     speech_id: str | None = None
-    error: Error | None = None
 
 
 class STTMetrics(BaseModel):
@@ -36,9 +31,7 @@ class STTMetrics(BaseModel):
     """The duration of the pushed audio in seconds."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
-
     speech_id: str | None = None
-    error: Error | None = None
 
 
 class TTSMetrics(BaseModel):
@@ -53,7 +46,6 @@ class TTSMetrics(BaseModel):
     characters_count: int
     streamed: bool
     speech_id: str | None = None
-    error: Error | None = None
 
 
 class VADMetrics(BaseModel):
@@ -63,8 +55,6 @@ class VADMetrics(BaseModel):
     idle_time: float
     inference_duration_total: float
     inference_count: int
-    speech_id: str | None = None
-    error: Error | None = None
 
 
 class EOUMetrics(BaseModel):
@@ -76,8 +66,10 @@ class EOUMetrics(BaseModel):
     transcription_delay: float
     """Time taken to obtain the transcript after the end of the user's speech."""
 
+    on_user_turn_completed_delay: float
+    """Time taken to invoke the user's `Agent.on_user_turn_completed` callback."""
+
     speech_id: str | None = None
-    error: Error | None = None
 
 
 AgentMetrics = Union[
@@ -87,47 +79,3 @@ AgentMetrics = Union[
     VADMetrics,
     EOUMetrics,
 ]
-
-# @dataclass
-# class MultimodalLLMError(Error):
-#     type: str | None
-#     reason: str | None = None
-#     code: str | None = None
-#     message: str | None = None
-
-
-# @dataclass
-# class MultimodalLLMMetrics(LLMMetrics):
-#     @dataclass
-#     class CachedTokenDetails:
-#         text_tokens: int
-#         audio_tokens: int
-
-#     @dataclass
-#     class InputTokenDetails:
-#         cached_tokens: int
-#         text_tokens: int
-#         audio_tokens: int
-#         cached_tokens_details: MultimodalLLMMetrics.CachedTokenDetails
-
-#     @dataclass
-#     class OutputTokenDetails:
-#         text_tokens: int
-#         audio_tokens: int
-
-#     input_token_details: InputTokenDetails
-#     output_token_details: OutputTokenDetails
-
-
-# AgentMetrics = Union[
-#     STTMetrics,
-#     LLMMetrics,
-#     TTSMetrics,
-#     VADMetrics,
-#     PipelineSTTMetrics,
-#     PipelineEOUMetrics,
-#     PipelineLLMMetrics,
-#     PipelineTTSMetrics,
-#     PipelineVADMetrics,
-#     # MultimodalLLMMetrics,
-# ]

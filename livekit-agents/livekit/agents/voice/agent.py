@@ -253,8 +253,8 @@ class Agent:
         """Called when the task is exited"""
         pass
 
-    async def on_end_of_turn(
-        self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage, generating_reply: bool
+    async def on_user_turn_completed(
+        self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
         """Called when the user has finished speaking, and the LLM is about to respond
 
