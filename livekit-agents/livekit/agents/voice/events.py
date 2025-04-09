@@ -59,7 +59,7 @@ EventTypes = Literal[
     "close",
 ]
 
-UserState = Literal["speaking", "idle", "inactive"]
+UserState = Literal["speaking", "listening", "away"]
 AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking"]
 
 

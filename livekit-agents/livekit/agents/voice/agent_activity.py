@@ -686,7 +686,7 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("speaking")
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        self._session._update_user_state("idle")
+        self._session._update_user_state("listening")
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection_mode not in ("vad", None):
