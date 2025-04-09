@@ -14,7 +14,6 @@ from livekit.rtc import ParticipantKind
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
-os.environ["OPENAI_API_KEY"] = "BAD_KEY"
 load_dotenv()
 
 
@@ -59,10 +58,13 @@ async def entrypoint(ctx: JobContext):
             ctx.transfer_sip_participant(participant, "tel:+18003310500")
         ctx.delete_room()
 
-    # wait for a participant to join the room
-    await ctx.wait_for_participant()
-
     await session.start(agent=MyTask(), room=ctx.room)
+    await ctx.add_sip_participant(
+        sip_trunk_id ="ST_x6cbVeRC7RAo",
+        sip_call_to = "+14088939416",
+        participant_identity = "shubhra_phone",
+        participant_name = "Shubhra Phone",
+    )
 
 
 if __name__ == "__main__":

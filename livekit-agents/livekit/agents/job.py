@@ -109,7 +109,7 @@ class JobContext:
             ]
         ] = []
         self._pending_tasks: dict[str, asyncio.Future[None]] = {}
-        self._participant_tasks = dict[tuple[str, Callable], asyncio.Task]()
+        self._participant_tasks = dict[tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
@@ -312,13 +312,37 @@ class JobContext:
     def delete_room(self) -> asyncio.Future[None]:
         """Deletes the room and disconnects all participants."""
         async def delete_room_task():
-            await asyncio.gather(*self._pending_tasks.values())
+            await self._pending_tasks.get("transfer_sip_participant", asyncio.sleep(0))
             await self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         return self._create_task_with_future(
             "delete_room",
             delete_room_task()
         )
-    
+
+    def add_sip_participant(
+        self,
+        sip_call_to: str,
+        sip_trunk_id: str,
+        participant_identity: str,
+        participant_name: str,
+    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        """
+        Add a SIP participant to the room.
+        
+        Make sure you have an outbound SIP trunk created in LiveKit.
+        See https://docs.livekit.io/sip/trunk-outbound/ for more information.
+        """
+        return self._create_task_with_future(
+            "add_sip_participant", 
+            self.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
+            room_name = self._room.name,
+            participant_identity = participant_identity,
+            sip_trunk_id = sip_trunk_id,
+            sip_call_to = sip_call_to,
+            participant_name = participant_name,
+        ))
+        )
+
     def transfer_sip_participant(
         self,
         participant: rtc.RemoteParticipant,
