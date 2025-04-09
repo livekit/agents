@@ -78,11 +78,6 @@ class UserInputTranscribedEvent(BaseModel):
     is_final: bool
 
 
-class UserActivityChangedEvent(BaseModel):
-    type: Literal["user_activity_changed"] = "user_activity_changed"
-    is_inactive: bool
-
-
 class AgentStartedSpeakingEvent(BaseModel):
     type: Literal["agent_started_speaking"] = "agent_started_speaking"
 
