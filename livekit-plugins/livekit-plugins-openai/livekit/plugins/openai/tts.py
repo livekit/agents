@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 
@@ -46,12 +47,16 @@ DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "ash"
 
 
+_RESPONSE_FORMATS = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] | str
+
+
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     speed: float
     instructions: str | None
+    response_format: _RESPONSE_FORMATS
 
 
 class TTS(tts.TTS):
@@ -65,6 +70,7 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
+        response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI TTS.
@@ -86,6 +92,7 @@ class TTS(tts.TTS):
             voice=voice,
             speed=speed,
             instructions=instructions if is_given(instructions) else None,
+            response_format=response_format if is_given(response_format) else "opus",
         )
 
         self._client = client or openai.AsyncClient(
@@ -202,7 +209,7 @@ class ChunkedStream(tts.ChunkedStream):
             input=self.input_text,
             model=self._opts.model,
             voice=self._opts.voice,
-            response_format="opus",
+            response_format=self._opts.response_format,
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.NOT_GIVEN,
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
