@@ -1,6 +1,5 @@
 ---
 "livekit-agents": patch
-"livekit-plugins-llama-index": patch
 ---
 
-fix llama index plugin (#1857)
+remove llama index plugin and update examples to use llm_node (#1857)
