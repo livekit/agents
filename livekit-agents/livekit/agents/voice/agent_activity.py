@@ -460,7 +460,8 @@ class AgentActivity(RecognitionHooks):
     def generate_reply(
         self,
         *,
-        user_input: NotGivenOr[str] = NOT_GIVEN,
+        user_message: NotGivenOr[llm.ChatMessage] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -477,9 +478,7 @@ class AgentActivity(RecognitionHooks):
             allow_interruptions = NOT_GIVEN
 
         log_event(
-            "generate_reply",
-            user_input=user_input or None,
-            instructions=instructions or None,
+            "generate_reply", new_message=user_message or None, instructions=instructions or None
         )
 
         from .agent import _get_inline_task_info
@@ -505,7 +504,8 @@ class AgentActivity(RecognitionHooks):
             self._create_speech_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
-                    user_input=user_input or None,
+                    # TODO(theomonnom): support llm.ChatMessage for the realtime model
+                    user_input=user_message.text_content if user_message else None,
                     instructions=instructions or None,
                     model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
@@ -517,9 +517,9 @@ class AgentActivity(RecognitionHooks):
             self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
-                    chat_ctx=self._agent._chat_ctx,
+                    chat_ctx=chat_ctx or self._agent._chat_ctx,
                     tools=self._agent.tools,
-                    user_input=user_input or None,
+                    new_message=user_message.model_copy() if user_message else None,
                     instructions=instructions or None,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice
@@ -789,12 +789,16 @@ class AgentActivity(RecognitionHooks):
             logger.warning("ignoring new user turn, the agent is draining")
             return
 
-        user_message = llm.ChatMessage(role="user", content=[new_transcript])
+        user_message = llm.ChatMessage(role="user", content=[new_transcript])  # id is generated
+
+        # create a temporary mutable chat context to pass to on_user_turn_completed
+        # the user can edit it for the current generation, but changes will not be kept inside the
+        # Agent.chat_ctx
+        temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
         start_time = time.time()
         try:
             await self._agent.on_user_turn_completed(
-                self._agent.chat_ctx,
-                new_message=user_message,  # TODO(theomonnom): This doesn't allow edits yet
+                temp_mutable_chat_ctx, new_message=user_message
             )
         except StopResponse:
             return  # ignore this turn
@@ -804,7 +808,12 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
             new_transcript = ""
-        speech_handle = self.generate_reply(user_input=new_transcript)
+
+        # Ensure the new message is passed to generate_reply
+        # This preserves the original message_id, making it easier for users to track responses
+        speech_handle = self.generate_reply(
+            new_message=user_message, chat_ctx=temp_mutable_chat_ctx
+        )
         eou_metrics = EOUMetrics(
             timestamp=time.time(),
             end_of_utterance_delay=info.end_of_utterance_delay,
@@ -925,7 +934,7 @@ class AgentActivity(RecognitionHooks):
         chat_ctx: llm.ChatContext,
         tools: list[llm.FunctionTool],
         model_settings: ModelSettings,
-        user_input: str | None = None,
+        new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
         _tools_messages: list[llm.ChatItem] | None = None,
     ) -> None:
@@ -948,10 +957,9 @@ class AgentActivity(RecognitionHooks):
         chat_ctx = chat_ctx.copy()
         tool_ctx = llm.ToolContext(tools)
 
-        if user_input is not None:
-            user_msg = chat_ctx.add_message(role="user", content=user_input)
-            self._agent._chat_ctx.items.append(user_msg)
-            self._session._conversation_item_added(user_msg)
+        if new_message is not None:
+            self._agent._chat_ctx.items.append(new_message)
+            self._session._conversation_item_added(new_message)
 
         if instructions is not None:
             try:
