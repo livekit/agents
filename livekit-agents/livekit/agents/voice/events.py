@@ -91,9 +91,13 @@ class AgentStoppedSpeakingEvent(BaseModel):
     type: Literal["agent_stopped_speaking"] = "agent_stopped_speaking"
 
 
+class _TypeDiscriminator(BaseModel):
+    type: Literal["unknown"] = "unknown"
+
+
 class AgentStateChangedEvent(BaseModel):
     type: Literal["agent_state_changed"] = "agent_state_changed"
-    state: AgentState
+    state: AgentState | _TypeDiscriminator
 
 
 class MetricsCollectedEvent(BaseModel):
