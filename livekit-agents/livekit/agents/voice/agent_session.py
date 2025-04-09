@@ -272,6 +272,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._forward_audio_task(), name="_forward_audio_task"
                 )
 
+            if self.input.video is not None:
+                self._forward_video_atask = asyncio.create_task(
+                    self._forward_video_task(), name="_forward_video_task"
+                )
+
             self._started = True
             self._update_agent_state(AgentState.LISTENING)
 
@@ -461,6 +466,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._activity is not None:
                 self._activity.push_audio(frame)
 
+    @utils.log_exceptions(logger=logger)
+    async def _forward_video_task(self) -> None:
+        video_input = self.input.video
+        if video_input is None:
+            return
+
+        async for frame in video_input:
+            if self._activity is not None:
+                self._activity.push_video(frame)
+
     def _update_agent_state(self, state: AgentState) -> None:
         if self._agent_state == state:
             return
@@ -489,7 +504,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_video_output_changed(self) -> None:
-        pass
+        if not self._started:
+            return
+
+        if self._forward_video_atask is not None:
+            self._forward_video_atask.cancel()
+
+        self._forward_video_atask = asyncio.create_task(
+            self._forward_video_task(), name="_forward_video_task"
+        )
 
     def _on_audio_output_changed(self) -> None:
         pass

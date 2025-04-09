@@ -32,7 +32,7 @@ from google.genai.types import (
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import images, is_given
 
 from ...log import logger
 from ...utils import _build_gemini_fnc, get_tool_results_for_realtime, to_chat_ctx
@@ -41,6 +41,12 @@ from .api_proto import ClientEvents, LiveAPIModels, Voice
 INPUT_AUDIO_SAMPLE_RATE = 16000
 OUTPUT_AUDIO_SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
+
+DEFAULT_ENCODE_OPTIONS = images.EncodeOptions(
+    format="JPEG",
+    quality=75,
+    resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
+)
 
 
 @dataclass
@@ -314,8 +320,15 @@ class RealtimeSession(llm.RealtimeSession):
         return self._tools
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.push_media(frame.data.tobytes(), "audio/pcm")
+
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        encoded_data = images.encode(frame, DEFAULT_ENCODE_OPTIONS)
+        self.push_media(encoded_data, "image/jpeg")
+
+    def push_media(self, bytes: bytes, mime_type: str) -> None:
         realtime_input = LiveClientRealtimeInput(
-            media_chunks=[Blob(data=frame.data.tobytes(), mime_type="audio/pcm")],
+            media_chunks=[Blob(data=bytes, mime_type=mime_type)]
         )
         self._msg_ch.send_nowait(realtime_input)
 

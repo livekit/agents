@@ -838,7 +838,7 @@ wheels = [
 
 [[package]]
 name = "google-genai"
-version = "1.5.0"
+version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -849,9 +849,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/21/6f164fcb13293f520e016171be92611126d6bd2e9ceb246b32451c4ef51b/google_genai-1.5.0.tar.gz", hash = "sha256:83fcfc4956ad32ecea1fda37d8f3f7cbadbdeebd2310f2a55bc7564a2f1d459f", size = 135903 }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/7a/224e2f70c835202042969685ee3da00a6475508d1b64f0f1e90144f96beb/google_genai-1.10.0.tar.gz", hash = "sha256:f59423e0f155dc66b7792c8a0e6724c75c72dc699d1eb7907d4d0006d4f6186f", size = 156355 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/2a/a55da0c959326a7cf3c13398fc93c8e2af624b054ef3fa85b4cb6d0e2c96/google_genai-1.5.0-py3-none-any.whl", hash = "sha256:0ad433836a402957a967ccd57cbab7768325d28966a8556771974ae1c018be59", size = 142404 },
+    { url = "https://files.pythonhosted.org/packages/ba/a0/56839a2e202d79c773edd1c1db124da8eb2a7b657267a888080b678d0369/google_genai-1.10.0-py3-none-any.whl", hash = "sha256:41b105a2fcf8a027fc45cc16694cd559b8cd1272eab7345ad58cfa2c353bf34f", size = 154705 },
 ]
 
 [[package]]
@@ -1485,7 +1485,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2,<3" },
     { name = "google-cloud-speech", specifier = ">=2,<3" },
     { name = "google-cloud-texttospeech", specifier = ">=2,<3" },
-    { name = "google-genai", specifier = "==1.5.0" },
+    { name = "google-genai", specifier = ">=1.10.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
