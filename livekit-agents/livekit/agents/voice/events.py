@@ -106,6 +106,9 @@ class FunctionToolsExecutedEvent(BaseModel):
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput]
 
+    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
+        return list(zip(self.function_calls, self.function_call_outputs))
+
 
 class SpeechCreatedEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
