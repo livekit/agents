@@ -7,7 +7,6 @@ import weakref
 from dataclasses import dataclass
 
 from google import genai
-from google.genai._api_client import HttpOptions
 from google.genai.types import (
     AudioTranscriptionConfig,
     Blob,
@@ -225,7 +224,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._gemini_tools: list[Tool] = []
         self._client = genai.Client(
-            http_options=HttpOptions(api_version="v1alpha"),
             api_key=self._opts.api_key,
             vertexai=self._opts.vertexai,
             project=self._opts.project,
@@ -533,6 +531,14 @@ class RealtimeSession(llm.RealtimeSession):
                         samples_per_channel=len(frame_data) // 2,
                     )
                     item_generation.audio_ch.send_nowait(frame)
+        input_transcription = server_content.input_transcription
+        if input_transcription and input_transcription.text:
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=self._active_response_id, transcript=input_transcription.text
+                ),
+            )
         output_transcription = server_content.output_transcription
         if output_transcription and output_transcription.text:
             item_generation.text_ch.send_nowait(output_transcription.text)

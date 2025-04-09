@@ -23,11 +23,12 @@ class GeminiAgent(Agent):
         super().__init__(
             instructions="you are gemini, a helpful assistant",
             llm=google.beta.realtime.RealtimeModel(
-                input_audio_transcription=False,
+                input_audio_transcription=True,
                 output_audio_transcription=True,
+                vertexai=True,
+                project="project-id",
+                location="us-central1",
             ),
-            # for input transcription
-            stt=google.STT(),
         )
 
     async def on_enter(self):
