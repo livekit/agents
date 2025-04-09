@@ -72,8 +72,8 @@ class _RealtimeOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     instructions: NotGivenOr[str]
-    input_audio_transcription: bool
-    output_audio_transcription: bool
+    input_audio_transcription: AudioTranscriptionConfig | None
+    output_audio_transcription: AudioTranscriptionConfig | None
 
 
 @dataclass
@@ -169,10 +169,10 @@ class RealtimeModel(llm.RealtimeModel):
                 )
 
         input_audio_transcription = (
-            input_audio_transcription if is_given(input_audio_transcription) else False
+            AudioTranscriptionConfig() if input_audio_transcription is True else None
         )
         output_audio_transcription = (
-            output_audio_transcription if is_given(output_audio_transcription) else False
+            AudioTranscriptionConfig() if output_audio_transcription is True else None
         )
         self._opts = _RealtimeOptions(
             model=model,
@@ -409,12 +409,8 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                 ),
                 tools=self._gemini_tools,
-                input_audio_transcription=AudioTranscriptionConfig()
-                if self._opts.input_audio_transcription
-                else None,
-                output_audio_transcription=AudioTranscriptionConfig()
-                if self._opts.output_audio_transcription
-                else None,
+                input_audio_transcription=self._opts.input_audio_transcription,
+                output_audio_transcription=self._opts.output_audio_transcription,
             )
 
             async with self._client.aio.live.connect(
