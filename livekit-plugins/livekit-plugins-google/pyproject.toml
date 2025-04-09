@@ -26,7 +26,7 @@ dependencies = [
     "google-auth >= 2, < 3",
     "google-cloud-speech >= 2, < 3",
     "google-cloud-texttospeech >= 2, < 3",
-    "google-genai == 1.5.0",
+    "google-genai >= 1.10.0",
     "livekit-agents>=1.0.0.rc9",
 ]
 
