@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -78,6 +78,11 @@ class UserInputTranscribedEvent(BaseModel):
     is_final: bool
 
 
+class UserActivityChangedEvent(BaseModel):
+    type: Literal["user_activity_changed"] = "user_activity_changed"
+    is_inactive: bool
+
+
 class AgentStartedSpeakingEvent(BaseModel):
     type: Literal["agent_started_speaking"] = "agent_started_speaking"
 
@@ -98,7 +103,7 @@ class MetricsCollectedEvent(BaseModel):
 
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
-    message: ChatMessage
+    item: ChatMessage
 
 
 class FunctionToolsExecutedEvent(BaseModel):
@@ -131,16 +136,20 @@ class CloseEvent(BaseModel):
     error: LLMError | STTError | TTSError | None = None
 
 
-AgentEvent = Union[
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
-    UserInputTranscribedEvent,
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
-    AgentStateChangedEvent,
-    MetricsCollectedEvent,
-    ConversationItemAddedEvent,
-    SpeechCreatedEvent,
-    ErrorEvent,
-    CloseEvent,
+AgentEvent = Annotated[
+    Union[
+        UserStartedSpeakingEvent,
+        UserStoppedSpeakingEvent,
+        UserInputTranscribedEvent,
+        UserActivityChangedEvent,
+        AgentStartedSpeakingEvent,
+        AgentStoppedSpeakingEvent,
+        AgentStateChangedEvent,
+        MetricsCollectedEvent,
+        ConversationItemAddedEvent,
+        SpeechCreatedEvent,
+        ErrorEvent,
+        CloseEvent,
+    ],
+    Field(discriminator="type"),
 ]

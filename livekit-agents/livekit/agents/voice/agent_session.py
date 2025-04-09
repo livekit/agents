@@ -70,6 +70,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
+        user_inactivity_timeout: float = 10.0,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
@@ -470,7 +471,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.items.append(message)
-        self.emit("conversation_item_added", ConversationItemAddedEvent(message=message))
+        self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     # -- User changed input/output streams/sinks --
 
