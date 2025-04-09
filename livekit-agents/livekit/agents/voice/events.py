@@ -91,13 +91,9 @@ class AgentStoppedSpeakingEvent(BaseModel):
     type: Literal["agent_stopped_speaking"] = "agent_stopped_speaking"
 
 
-class _TypeDiscriminator(BaseModel):
-    type: Literal["unknown"] = "unknown"
-
-
 class AgentStateChangedEvent(BaseModel):
     type: Literal["agent_state_changed"] = "agent_state_changed"
-    state: AgentState | _TypeDiscriminator
+    state: AgentState
 
 
 class MetricsCollectedEvent(BaseModel):
@@ -105,9 +101,13 @@ class MetricsCollectedEvent(BaseModel):
     metrics: AgentMetrics
 
 
+class _TypeDiscriminator(BaseModel):
+    type: Literal["unknown"] = "unknown"
+
+
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
-    item: ChatMessage
+    item: ChatMessage | _TypeDiscriminator
 
 
 class FunctionToolsExecutedEvent(BaseModel):
