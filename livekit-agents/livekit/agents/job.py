@@ -297,6 +297,7 @@ class JobContext:
     ) -> asyncio.Future[Any]:
         """Create a task and return a future that resolves when the task completes."""
         if task_id in self._pending_tasks:
+            logger.warning(f"Task {task_id} already exists, returning existing future")
             return self._pending_tasks[task_id]
 
         fut = asyncio.Future[Any]()
