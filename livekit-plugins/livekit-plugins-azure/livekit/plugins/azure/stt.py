@@ -21,7 +21,13 @@ from dataclasses import dataclass
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    stt,
+    utils,
+)
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -65,12 +71,15 @@ class STT(stt.STT):
         # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
         language: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
+        speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
     ):
         """
         Create a new instance of Azure STT.
 
         Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
-        ``speech_auth_token`` and ``speech_region`` must be set using arguments.
+        ``speech_auth_token`` and ``speech_region`` or
+        ``speech_key`` and ``speech_endpoint``
+        must be set using arguments.
          Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
         and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
         ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
@@ -96,9 +105,10 @@ class STT(stt.STT):
             is_given(speech_host)
             or (is_given(speech_key) and is_given(speech_region))
             or (is_given(speech_auth_token) and is_given(speech_region))
+            or (is_given(speech_key) and is_given(speech_endpoint))
         ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and speech_endpoint must be set"  # noqa: E501
             )
 
         self._config = STTOptions(
@@ -113,6 +123,7 @@ class STT(stt.STT):
             segmentation_max_time_ms=segmentation_max_time_ms,
             segmentation_strategy=segmentation_strategy,
             profanity=profanity,
+            speech_endpoint=speech_endpoint,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -193,15 +204,20 @@ class SpeechStream(stt.SpeechStream):
 
                 process_input_task = asyncio.create_task(process_input())
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
-                        [process_input_task, wait_reconnect_task],
+                        [process_input_task, wait_reconnect_task, wait_stopped_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
-                        if task != wait_reconnect_task:
+                        if task not in [wait_reconnect_task, wait_stopped_task]:
                             task.result()
+
+                    if wait_stopped_task in done:
+                        raise APIConnectionError("SpeechRecognition session stopped")
+
                     if wait_reconnect_task not in done:
                         break
                     self._reconnect_event.clear()

@@ -183,13 +183,13 @@ class Greeter(BaseAgent):
                 "Your jobs are to greet the caller and understand if they want to "
                 "make a reservation or order takeaway. Guide them to the right agent using tools."
             ),
-            llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
+            llm=openai.LLM(parallel_tool_calls=False),
             tts=cartesia.TTS(voice=voices["greeter"]),
         )
         self.menu = menu
 
     @function_tool()
-    async def to_reservation(self, context: RunContext_T) -> Agent:
+    async def to_reservation(self, context: RunContext_T) -> tuple[Agent, str]:
         """Called when user wants to make or update a reservation.
         This function handles transitioning to the reservation agent
         who will collect the necessary details like reservation time,
@@ -197,7 +197,7 @@ class Greeter(BaseAgent):
         return await self._transfer_to_agent("reservation", context)
 
     @function_tool()
-    async def to_takeaway(self, context: RunContext_T) -> Agent:
+    async def to_takeaway(self, context: RunContext_T) -> tuple[Agent, str]:
         """Called when the user wants to place a takeaway order.
         This includes handling orders for pickup, delivery, or when the user wants to
         proceed to checkout with their existing order."""
@@ -351,7 +351,7 @@ async def entrypoint(ctx: JobContext):
     agent = AgentSession[UserData](
         userdata=userdata,
         stt=deepgram.STT(),
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(),
         tts=cartesia.TTS(),
         vad=silero.VAD.load(),
         max_tool_steps=5,

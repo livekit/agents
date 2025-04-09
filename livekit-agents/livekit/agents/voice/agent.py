@@ -253,8 +253,8 @@ class Agent:
         """Called when the task is exited"""
         pass
 
-    async def on_end_of_turn(
-        self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage, generating_reply: bool
+    async def on_user_turn_completed(
+        self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
         """Called when the user has finished speaking, and the LLM is about to respond
 
@@ -316,7 +316,7 @@ class Agent:
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool],
         model_settings: ModelSettings,
-    ) -> AsyncIterable[llm.ChatChunk] | None | AsyncIterable[str] | None | str | None:
+    ) -> AsyncIterable[llm.ChatChunk] | AsyncIterable[str] | str | None:
         """
         A node in the processing pipeline that processes text generation with an LLM.
 
@@ -420,6 +420,15 @@ class Agent:
             finally:
                 await utils.aio.cancel_and_wait(forward_task)
 
+    async def realtime_audio_output_node(
+        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        """A node processing the audio from the realtime LLM session before it is played out."""
+        self.__get_activity_or_raise()
+        async for frame in audio:
+            yield frame
+        # flush the buffer if any
+
     def __get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:
@@ -508,9 +517,20 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         return self.__await_impl().__await__()
 
 
-def _authorize_inline_task(task: asyncio.Task) -> None:
-    setattr(task, "__livekit_agents_inline_task", True)
+@dataclass
+class _InlineTaskInfo:
+    function_call: llm.FunctionCall | None
+
+
+def _authorize_inline_task(
+    task: asyncio.Task, *, function_call: llm.FunctionCall | None = None
+) -> None:
+    setattr(task, "__livekit_agents_inline_task", _InlineTaskInfo(function_call=function_call))
+
+
+def _get_inline_task_info(task: asyncio.Task) -> _InlineTaskInfo | None:
+    return getattr(task, "__livekit_agents_inline_task", None)
 
 
 def _is_inline_task_authorized(task: asyncio.Task) -> bool:
-    return getattr(task, "__livekit_agents_inline_task", False)
+    return getattr(task, "__livekit_agents_inline_task", None) is not None

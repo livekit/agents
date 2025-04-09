@@ -83,7 +83,7 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
-        use_realtime: bool = True,
+        use_realtime: bool = False,
     ):
         """
         Create a new instance of OpenAI STT.
@@ -100,6 +100,7 @@ class STT(stt.STT):
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
+            use_realtime: Whether to use the realtime transcription API. (default: False)
         """  # noqa: E501
 
         super().__init__(
@@ -195,6 +196,7 @@ class STT(stt.STT):
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
+            conn_options=conn_options,
         )
         self._streams.add(stream)
         return stream
@@ -332,14 +334,11 @@ class STT(stt.STT):
             )
 
         except openai.APITimeoutError:
-            raise APITimeoutError()  # noqa: B904
+            raise APITimeoutError() from None
         except openai.APIStatusError as e:
-            raise APIStatusError(  # noqa: B904
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-            )
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -349,9 +348,10 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         stt: STT,
+        conn_options: APIConnectOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ) -> None:
-        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS, sample_rate=SAMPLE_RATE)
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
 
         self._pool = pool
         self._language = stt._opts.language

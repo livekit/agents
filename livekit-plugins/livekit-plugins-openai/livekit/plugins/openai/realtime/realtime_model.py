@@ -163,7 +163,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetection] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
@@ -468,7 +468,7 @@ class RealtimeSession(
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetection] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
@@ -588,14 +588,15 @@ class RealtimeSession(
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
-            for f in self._bstream.write(f.data.tobytes()):  # noqa: B020
+            data = f.data.tobytes()
+            for nf in self._bstream.write(data):
                 self.send_event(
                     InputAudioBufferAppendEvent(
                         type="input_audio_buffer.append",
-                        audio=base64.b64encode(f.data).decode("utf-8"),
+                        audio=base64.b64encode(nf.data).decode("utf-8"),
                     )
                 )
-                self._pushed_duration_s += f.duration
+                self._pushed_duration_s += nf.duration
 
     def commit_audio(self) -> None:
         if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio

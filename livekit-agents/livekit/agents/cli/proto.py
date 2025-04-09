@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import io
 import socket
@@ -9,13 +9,7 @@ from livekit.protocol import agent
 
 from ..ipc import channel
 from ..job import JobAcceptArguments, RunningJobInfo
-from ..worker import WorkerOptions
-
-
-@dataclass
-class SimulateJobArgs:
-    room: str = ""
-    participant_identity: str = ""
+from ..worker import WorkerOptions, SimulateJobInfo
 
 
 @dataclass
@@ -33,7 +27,7 @@ class CliArgs:
     # register the worker to the worker pool
     register: bool = True
 
-    simulate_job: SimulateJobArgs | None = None
+    simulate_job: SimulateJobInfo | str | None = None
 
     # amount of time this worker has been reloaded
     reload_count: int = 0

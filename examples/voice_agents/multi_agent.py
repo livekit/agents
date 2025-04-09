@@ -18,7 +18,7 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit.agents.job import get_current_job_context
+from livekit.agents.job import get_job_context
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
@@ -128,7 +128,7 @@ class StoryAgent(Agent):
             instructions=f"say goodbye to {context.userdata.name}", allow_interruptions=False
         )
 
-        job_ctx = get_current_job_context()
+        job_ctx = get_job_context()
         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
 
 

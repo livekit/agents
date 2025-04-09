@@ -9,6 +9,8 @@ from enum import Enum, unique
 from types import TracebackType
 from typing import Generic, Literal, TypeVar, Union
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
@@ -63,12 +65,21 @@ class STTCapabilities:
     interim_results: bool
 
 
+class STTError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["stt_error"] = "stt_error"
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool
+
+
 TEvent = TypeVar("TEvent")
 
 
 class STT(
     ABC,
-    rtc.EventEmitter[Union[Literal["metrics_collected"], TEvent]],
+    rtc.EventEmitter[Union[Literal["metrics_collected", "error"], TEvent]],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
@@ -218,12 +229,16 @@ class RecognizeStream(ABC):
                 return await self._run()
             except APIError as e:
                 if max_retries == 0:
+                    self._emit_error(e, recoverable=False)
                     raise
                 elif num_retries == max_retries:
+                    self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
                         f"failed to recognize speech after {num_retries} attempts",
                     ) from e
                 else:
+                    self._emit_error(e, recoverable=True)
+
                     retry_interval = self._conn_options._interval_for_retry(num_retries)
                     logger.warning(
                         f"failed to recognize speech, retrying in {retry_interval}s",
@@ -238,10 +253,19 @@ class RecognizeStream(ABC):
 
                 num_retries += 1
 
+    def _emit_error(self, api_error: APIError, recoverable: bool):
+        self._stt.emit(
+            "error",
+            STTError(
+                timestamp=time.time(),
+                label=self._stt._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         """Task used to collect metrics"""
-
-        start_time = time.perf_counter()
 
         async for ev in event_aiter:
             if ev.type == SpeechEventType.RECOGNITION_USAGE:
@@ -249,11 +273,10 @@ class RecognizeStream(ABC):
                     "recognition_usage must be provided for RECOGNITION_USAGE event"
                 )
 
-                duration = time.perf_counter() - start_time
                 stt_metrics = STTMetrics(
                     request_id=ev.request_id,
                     timestamp=time.time(),
-                    duration=duration,
+                    duration=0.0,
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
                     streamed=True,
@@ -281,7 +304,8 @@ class RecognizeStream(ABC):
                 )
 
         if self._resampler:
-            for frame in self._resampler.push(frame):  # noqa: B020
+            frames = self._resampler.push(frame)
+            for frame in frames:
                 self._input_ch.send_nowait(frame)
         else:
             self._input_ch.send_nowait(frame)
@@ -317,7 +341,7 @@ class RecognizeStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
 
-            raise StopAsyncIteration  # noqa: B904
+            raise StopAsyncIteration from None
 
         return val
 
