@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar, Coroutine, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
 
@@ -391,7 +391,7 @@ class Agent:
     class default:
         @staticmethod
         async def stt_node(
-            agent: "Agent", audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+            agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
         ) -> AsyncGenerator[stt.SpeechEvent, None]:
             """Default implementation for `Agent.stt_node`"""
             activity = agent.__get_activity_or_raise()
@@ -424,7 +424,7 @@ class Agent:
 
         @staticmethod
         async def llm_node(
-            agent: "Agent",
+            agent: Agent,
             chat_ctx: llm.ChatContext,
             tools: list[FunctionTool],
             model_settings: ModelSettings,
@@ -447,7 +447,7 @@ class Agent:
 
         @staticmethod
         async def tts_node(
-            agent: "Agent", text: AsyncIterable[str], model_settings: ModelSettings
+            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent.__get_activity_or_raise()
@@ -477,7 +477,7 @@ class Agent:
 
         @staticmethod
         async def transcription_node(
-            agent: "Agent", text: AsyncIterable[str], model_settings: ModelSettings
+            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
         ) -> AsyncGenerator[str, None]:
             """Default implementation for `Agent.transcription_node`"""
             async for delta in text:
@@ -485,7 +485,7 @@ class Agent:
 
         @staticmethod
         async def realtime_audio_output_node(
-            agent: "Agent", audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+            agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.realtime_audio_output_node`"""
             activity = agent.__get_activity_or_raise()
