@@ -30,7 +30,7 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.tool_context import FunctionTool, function_tool, StopResponse, ToolError
+from .llm.tool_context import FunctionTool, StopResponse, ToolError, function_tool
 from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
