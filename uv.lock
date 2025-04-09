@@ -23,7 +23,6 @@ members = [
     "livekit-plugins-gladia",
     "livekit-plugins-google",
     "livekit-plugins-groq",
-    "livekit-plugins-llama-index",
     "livekit-plugins-minimal",
     "livekit-plugins-neuphonic",
     "livekit-plugins-nltk",
@@ -1237,9 +1236,6 @@ groq = [
 images = [
     { name = "pillow" },
 ]
-llama-index = [
-    { name = "livekit-plugins-llama-index" },
-]
 neuphonic = [
     { name = "livekit-plugins-neuphonic" },
 ]
@@ -1291,7 +1287,6 @@ requires-dist = [
     { name = "livekit-plugins-gladia", marker = "extra == 'gladia'", editable = "livekit-plugins/livekit-plugins-gladia" },
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
-    { name = "livekit-plugins-llama-index", marker = "extra == 'llama-index'", editable = "livekit-plugins/livekit-plugins-llama-index" },
     { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
@@ -1315,7 +1310,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "llama-index", "neuphonic", "nltk", "openai", "playai", "rag", "rime", "silero", "speechmatics", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "rag", "rime", "silero", "speechmatics", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1506,16 +1501,6 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "livekit-plugins-openai", editable = "livekit-plugins/livekit-plugins-openai" },
 ]
-
-[[package]]
-name = "livekit-plugins-llama-index"
-source = { editable = "livekit-plugins/livekit-plugins-llama-index" }
-dependencies = [
-    { name = "livekit-agents" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-minimal"
