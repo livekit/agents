@@ -332,8 +332,13 @@ class JobContext:
             number: The number to transfer the participant to
             play_dialtone: Whether to play a dialtone during transfer. Defaults to True.
 
+
         Returns:
             Future that completes when the transfer is complete
+
+        
+        Make sure you have enabled call transfer on your provider SIP trunk.
+        See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
         assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, "Participant must be a SIP participant"
         return self._create_task_with_future(
