@@ -102,7 +102,7 @@ class MetricsCollectedEvent(BaseModel):
 
 
 class _TypeDiscriminator(BaseModel):
-    type: Literal["unknown"] = "unknown"
+    type: Literal["unknown"] = "unknown"  # force user to use the type discriminator
 
 
 class ConversationItemAddedEvent(BaseModel):
