@@ -140,7 +140,6 @@ AgentEvent = Annotated[
         UserStartedSpeakingEvent,
         UserStoppedSpeakingEvent,
         UserInputTranscribedEvent,
-        UserActivityChangedEvent,
         AgentStartedSpeakingEvent,
         AgentStoppedSpeakingEvent,
         AgentStateChangedEvent,
