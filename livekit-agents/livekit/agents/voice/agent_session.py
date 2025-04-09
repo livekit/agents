@@ -70,7 +70,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
-        user_inactivity_timeout: float = 10.0,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
