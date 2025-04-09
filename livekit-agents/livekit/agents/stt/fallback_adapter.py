@@ -261,20 +261,22 @@ class FallbackRecognizeStream(RecognizeStream):
         forward_input_task: asyncio.Task | None = None
 
         async def _forward_input_task() -> None:
-            with contextlib.suppress(RuntimeError):  # stream might be closed
-                async for data in self._input_ch:
-                    for stream in self._recovering_streams:
-                        if isinstance(data, rtc.AudioFrame):
-                            stream.push_frame(data)
-                        elif isinstance(data, self._FlushSentinel):
-                            stream.flush()
+            try:
+                while True:
+                    with contextlib.suppress(RuntimeError):  # stream might be closed
+                        async for data in self._input_ch:
+                            for stream in self._recovering_streams:
+                                if isinstance(data, rtc.AudioFrame):
+                                    stream.push_frame(data)
+                                elif isinstance(data, self._FlushSentinel):
+                                    stream.flush()
 
-                    if main_stream is not None:
-                        if isinstance(data, rtc.AudioFrame):
-                            main_stream.push_frame(data)
-                        elif isinstance(data, self._FlushSentinel):
-                            main_stream.flush()
-
+                            if main_stream is not None:
+                                if isinstance(data, rtc.AudioFrame):
+                                    main_stream.push_frame(data)
+                                elif isinstance(data, self._FlushSentinel):
+                                    main_stream.flush()
+            finally:
                 if main_stream is not None:
                     main_stream.end_input()
 
