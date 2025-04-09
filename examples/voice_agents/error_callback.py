@@ -9,6 +9,7 @@ from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import CloseEvent, ErrorEvent
 from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.rtc import ParticipantKind
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -53,6 +54,9 @@ async def entrypoint(ctx: JobContext):
     @session.on("close")
     def on_close(_: CloseEvent):
         logger.info("Session is closing")
+        participant = list(ctx.room.remote_participants.values())[0]
+        if participant.kind == ParticipantKind.PARTICIPANT_KIND_SIP:
+            ctx.transfer_sip_participant(participant, "tel:+18003310500")
         ctx.delete_room()
 
     # wait for a participant to join the room
@@ -62,4 +66,5 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    # Set agent_name to enable explicit dispatch
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="inbound-agent"))

@@ -108,7 +108,7 @@ class JobContext:
                 list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
             ]
         ] = []
-        self._room_tasks: dict[str, asyncio.Future[None]] = {}
+        self._pending_tasks: dict[str, asyncio.Future[None]] = {}
         self._participant_tasks = dict[tuple[str, Callable], asyncio.Task]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
@@ -294,15 +294,15 @@ class JobContext:
 
     def _create_task_with_future(
         self, task_name: str, coro: Coroutine[Any, Any, Any]
-    ) -> asyncio.Future[None]:
+    ) -> asyncio.Future[Any]:
         """Create a task and return a future that resolves when the task completes."""
-        if task_name in self._room_tasks:
-            return self._room_tasks[task_name]
+        if task_name in self._pending_tasks:
+            return self._pending_tasks[task_name]
 
-        fut = asyncio.Future[None]()
+        fut = asyncio.Future[Any]()
         task = asyncio.create_task(coro, name=task_name)
-        task.add_done_callback(lambda _: fut.set_result(None))
-        self._room_tasks[task_name] = fut
+        task.add_done_callback(lambda t: fut.set_result(t.result()))
+        self._pending_tasks[task_name] = fut
         return fut
 
     def disconnect(self) -> asyncio.Future[None]:
@@ -311,10 +311,43 @@ class JobContext:
 
     def delete_room(self) -> asyncio.Future[None]:
         """Deletes the room and disconnects all participants."""
+        async def delete_room_task():
+            await asyncio.gather(*self._pending_tasks.values())
+            await self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         return self._create_task_with_future(
             "delete_room",
-            self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+            delete_room_task()
         )
+    
+    def transfer_sip_participant(
+        self,
+        participant: rtc.RemoteParticipant,
+        number: str,
+        play_dialtone: bool = False,
+    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        """Transfer a SIP participant to another number.
+
+        Args:
+            participant: The participant to transfer
+            number: The number to transfer the participant to
+            play_dialtone: Whether to play a dialtone during transfer. Defaults to True.
+
+        Returns:
+            Future that completes when the transfer is complete
+        """
+        assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, "Participant must be a SIP participant"
+        return self._create_task_with_future(
+            "transfer_sip_participant",
+            self.api.sip.transfer_sip_participant(
+                api.TransferSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=participant.identity,
+                    transfer_to=number,
+                    play_dialtone=play_dialtone,
+                )
+            ),
+        )
+
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
