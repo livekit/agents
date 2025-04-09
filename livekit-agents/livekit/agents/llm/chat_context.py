@@ -30,6 +30,7 @@ from ..log import logger
 if TYPE_CHECKING:
     from ..llm import FunctionTool
 
+
 class ImageContent(BaseModel):
     """
     ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.
