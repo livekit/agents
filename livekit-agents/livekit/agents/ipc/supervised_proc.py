@@ -167,9 +167,6 @@ class SupervisedProc(ABC):
             )
 
             if init_res.error:
-                self._initialize_fut.set_exception(
-                    RuntimeError(f"process initialization failed: {init_res.error}")
-                )
                 logger.error(
                     f"process initialization failed: {init_res.error}",
                     extra=self.logging_extra(),
@@ -185,7 +182,8 @@ class SupervisedProc(ABC):
             logger.error("initialization timed out, killing process", extra=self.logging_extra())
             self._send_kill_signal()
             raise
-        except Exception as e:  # should be channel.ChannelClosed most of the time
+        except Exception as e:
+            # should be channel.ChannelClosed most of the time (or init_res error)
             self._initialize_fut.set_exception(e)
             raise
 
