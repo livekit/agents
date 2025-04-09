@@ -7,12 +7,13 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
-from livekit.agents.voice.events import ErrorEvent
+from livekit.agents.voice.events import CloseEvent, ErrorEvent
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
+os.environ["OPENAI_API_KEY"] = "BAD_KEY"
 load_dotenv()
 
 
@@ -46,7 +47,13 @@ async def entrypoint(ctx: JobContext):
             "I'm having trouble connecting right now. Let me transfer your call.",
             # If you define a custom audio file, it will play out even if the TTS provider is down.
             audio=audio_frames_from_file(custom_error_audio),
+            allow_interruptions=False,
         )
+
+    @session.on("close")
+    def on_close(_: CloseEvent):
+        logger.info("Session is closing")
+        ctx.delete_room()
 
     # wait for a participant to join the room
     await ctx.wait_for_participant()

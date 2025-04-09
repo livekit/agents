@@ -108,6 +108,7 @@ class JobContext:
                 list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
             ]
         ] = []
+        self._room_tasks: dict[str, asyncio.Future] = {}
         self._participant_tasks = dict[tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
@@ -290,6 +291,24 @@ class JobContext:
             self._participant_available(p)
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
+
+    def delete_room(self) -> asyncio.Future[None]:
+        if "delete_room" in self._room_tasks:
+            return self._room_tasks["delete_room"]
+
+        fut = asyncio.Future[None]()
+        task = asyncio.create_task(
+            self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name)),
+            name="delete_room",
+        )
+
+        def _on_delete_room_done(_: asyncio.Task[None]) -> None:
+            self._room_tasks.pop("delete_room")
+            fut.set_result(None)
+
+        task.add_done_callback(_on_delete_room_done)
+        self._room_tasks["delete_room"] = task
+        return fut
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
