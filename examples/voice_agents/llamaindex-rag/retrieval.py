@@ -76,7 +76,7 @@ class RetrievalAgent(Agent):
         print(f"update instructions: {instructions[:100].replace('\n', '\\n')}...")
         await self.update_instructions(instructions)
 
-        return Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+        return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
 
 async def entrypoint(ctx: JobContext):
