@@ -311,6 +311,7 @@ class JobContext:
         task.add_done_callback(_on_task_done)
         self._pending_tasks[task_id] = fut
         return fut
+    
 
     def disconnect(self) -> asyncio.Future[None]:
         """Disconnects the agent from the room, but does not delete the room."""
@@ -322,6 +323,9 @@ class JobContext:
             "delete_room",
             self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         )
+    
+    def get_sip_participants(self) -> list[rtc.RemoteParticipant]:
+        return [p for p in self._room.remote_participants.values() if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
 
     def add_sip_participant(
         self,

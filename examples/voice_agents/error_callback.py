@@ -53,7 +53,10 @@ async def entrypoint(ctx: JobContext):
     @session.on("close")
     def on_close(_: CloseEvent):
         logger.info("Session is closing")
-        participant = list(ctx.room.remote_participants.values())[0]
+
+        # Assume there is only one caller in the room
+        participant = ctx.get_sip_participants()[0]
+
         # See https://docs.livekit.io/sip/ on how to set up SIP participants
         if participant.kind == ParticipantKind.PARTICIPANT_KIND_SIP:
             ctx.transfer_sip_participant(participant, "tel:+18003310500")
