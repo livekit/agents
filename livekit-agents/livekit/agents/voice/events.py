@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import Self
 
 from ..llm import LLM, ChatMessage, FunctionCall, FunctionCallOutput, LLMError
 from ..metrics import AgentMetrics
@@ -108,6 +109,13 @@ class FunctionToolsExecutedEvent(BaseModel):
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
         return list(zip(self.function_calls, self.function_call_outputs))
+
+    @model_validator(mode="after")
+    def verify_lists_length(self) -> Self:
+        if len(self.function_calls) != len(self.function_call_outputs):
+            raise ValueError("The number of function_calls and function_call_outputs must match.")
+
+        return self
 
 
 class SpeechCreatedEvent(BaseModel):
