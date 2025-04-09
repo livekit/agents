@@ -13,20 +13,16 @@ from .. import debug, llm, stt, tts, utils, vad
 from ..llm.tool_context import StopResponse
 from ..log import logger
 from ..metrics import EOUMetrics, LLMMetrics, STTMetrics, TTSMetrics, VADMetrics
-from ..types import NOT_GIVEN, AgentState, NotGivenOr
+from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
 from .events import (
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
 )
 from .generation import (
     _AudioOutput,
@@ -42,14 +38,6 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
-
-try:
-    from livekit.plugins.google.beta.realtime.realtime_api import (
-        RealtimeModel as GoogleRealtimeModel,
-    )
-
-except ImportError:
-    GoogleRealtimeModel = None
 
 
 def log_event(event: str, **kwargs) -> None:
@@ -695,10 +683,10 @@ class AgentActivity(RecognitionHooks):
     # region recognition hooks
 
     def on_start_of_speech(self, ev: vad.VADEvent) -> None:
-        self._session.emit("user_started_speaking", UserStartedSpeakingEvent())
+        self._session._update_user_state("speaking")
 
     def on_end_of_speech(self, ev: vad.VADEvent) -> None:
-        self._session.emit("user_stopped_speaking", UserStoppedSpeakingEvent())
+        self._session._update_user_state("idle")
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection_mode not in ("vad", None):
@@ -866,8 +854,7 @@ class AgentActivity(RecognitionHooks):
         tasks.append(forward_text)
 
         def _on_first_frame(_: asyncio.Future) -> None:
-            self._session.emit("agent_started_speaking", AgentStartedSpeakingEvent())
-            self._session._update_agent_state(AgentState.SPEAKING)
+            self._session._update_agent_state("speaking")
 
         if audio_output is None:
             # update the agent state based on text if no audio output
@@ -915,7 +902,7 @@ class AgentActivity(RecognitionHooks):
             )
             self._session._conversation_item_added(msg)
 
-        self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
+        self._session._update_agent_state("listening")
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -959,7 +946,7 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        self._session._update_agent_state(AgentState.THINKING)
+        self._session._update_agent_state("thinking")
         tasks = []
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
@@ -995,8 +982,7 @@ class AgentActivity(RecognitionHooks):
         tasks.append(forward_task)
 
         def _on_first_frame(_: asyncio.Future) -> None:
-            self._session.emit("agent_started_speaking", AgentStartedSpeakingEvent())
-            self._session._update_agent_state(AgentState.SPEAKING)
+            self._session._update_agent_state("speaking")
 
         if audio_output is not None:
             assert tts_gen_data is not None
@@ -1027,7 +1013,7 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
             if not speech_handle.interrupted:
-                self._session._update_agent_state(AgentState.LISTENING)
+                self._session._update_agent_state("listening")
 
         # add the tools messages that triggers this reply to the chat context
         if _tools_messages:
@@ -1054,7 +1040,7 @@ class AgentActivity(RecognitionHooks):
                     role="assistant", content=truncated_text, id=llm_gen_data.id, interrupted=True
                 )
                 self._agent._chat_ctx.items.append(msg)
-                self._session._update_agent_state(AgentState.LISTENING)
+                self._session._update_agent_state("listening")
                 self._session._conversation_item_added(msg)
 
             speech_handle._mark_playout_done()
@@ -1068,13 +1054,13 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)
 
-        self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
+        self._session._update_agent_state("listening")
         log_event("playout completed", speech_id=speech_handle.id)
 
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
         tool_output.first_tool_fut.add_done_callback(
-            lambda _: self._session._update_agent_state(AgentState.THINKING)
+            lambda _: self._session._update_agent_state("thinking")
         )
         await exe_task
 
@@ -1246,8 +1232,7 @@ class AgentActivity(RecognitionHooks):
             return  # TODO(theomonnom): remove the message from the serverside history
 
         def _on_first_frame(_: asyncio.Future) -> None:
-            self._session.emit("agent_started_speaking", AgentStartedSpeakingEvent())
-            self._session._update_agent_state(AgentState.SPEAKING)
+            self._session._update_agent_state("speaking")
 
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
@@ -1310,7 +1295,7 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
             if not speech_handle.interrupted:
-                self._session._update_agent_state(AgentState.LISTENING)
+                self._session._update_agent_state("listening")
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1324,7 +1309,7 @@ class AgentActivity(RecognitionHooks):
                     playback_position=playback_ev.playback_position,
                     speech_id=speech_handle.id,
                 )
-                self._session._update_agent_state(AgentState.LISTENING)
+                self._session._update_agent_state("listening")
 
             speech_handle._mark_playout_done()
             await utils.aio.cancel_and_wait(exe_task)
@@ -1339,7 +1324,7 @@ class AgentActivity(RecognitionHooks):
                 self._session._conversation_item_added(msg)
             return
 
-        self._session.emit("agent_stopped_speaking", AgentStoppedSpeakingEvent())
+        self._session._update_agent_state("speaking")
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
         for msg_id, text_out, _ in message_outputs:
@@ -1350,7 +1335,7 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
         tool_output.first_tool_fut.add_done_callback(
-            lambda _: self._session._update_agent_state(AgentState.THINKING)
+            lambda _: self._session._update_agent_state("thinking")
         )
         await exe_task
 
@@ -1402,6 +1387,14 @@ class AgentActivity(RecognitionHooks):
                         "failed to update chat context before generating the function calls results",  # noqa: E501
                         extra={"error": str(e)},
                     )
+
+            try:
+                from livekit.plugins.google.beta.realtime.realtime_api import (
+                    RealtimeModel as GoogleRealtimeModel,
+                )
+
+            except ImportError:
+                GoogleRealtimeModel = None
 
             if generate_tool_reply and not isinstance(self.llm, GoogleRealtimeModel):
                 self._rt_session.interrupt()

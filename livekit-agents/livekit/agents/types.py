@@ -5,13 +5,6 @@ from typing import Literal, TypeVar, Union
 from typing_extensions import TypeAlias
 
 
-class AgentState(str, Enum):
-    INITIALIZING = "initializing"
-    LISTENING = "listening"
-    THINKING = "thinking"
-    SPEAKING = "speaking"
-
-
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"

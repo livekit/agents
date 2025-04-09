@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -8,7 +8,6 @@ from ..llm import LLM, ChatMessage, FunctionCall, FunctionCallOutput, LLMError
 from ..metrics import AgentMetrics
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
-from ..types import AgentState
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -49,12 +48,9 @@ class RunContext(Generic[Userdata_T]):
 
 
 EventTypes = Literal[
-    "user_started_speaking",
-    "user_stopped_speaking",
-    "user_input_transcribed",
-    "agent_started_speaking",
-    "agent_stopped_speaking",
+    "user_state_changed",
     "agent_state_changed",
+    "user_input_transcribed",
     "conversation_item_added",
     "function_tools_executed",
     "metrics_collected",
@@ -63,32 +59,26 @@ EventTypes = Literal[
     "close",
 ]
 
+UserState = Literal["speaking", "idle", "inactive"]
+AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking"]
 
-class UserStartedSpeakingEvent(BaseModel):
-    type: Literal["user_started_speaking"] = "user_started_speaking"
+
+class UserStateChangedEvent(BaseModel):
+    type: Literal["user_state_changed"] = "user_state_changed"
+    old_state: UserState
+    new_state: UserState
 
 
-class UserStoppedSpeakingEvent(BaseModel):
-    type: Literal["user_stopped_speaking"] = "user_stopped_speaking"
+class AgentStateChangedEvent(BaseModel):
+    type: Literal["agent_state_changed"] = "agent_state_changed"
+    old_state: AgentState
+    new_state: AgentState
 
 
 class UserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
-
-
-class AgentStartedSpeakingEvent(BaseModel):
-    type: Literal["agent_started_speaking"] = "agent_started_speaking"
-
-
-class AgentStoppedSpeakingEvent(BaseModel):
-    type: Literal["agent_stopped_speaking"] = "agent_stopped_speaking"
-
-
-class AgentStateChangedEvent(BaseModel):
-    type: Literal["agent_state_changed"] = "agent_state_changed"
-    state: AgentState
 
 
 class MetricsCollectedEvent(BaseModel):
@@ -131,16 +121,16 @@ class CloseEvent(BaseModel):
     error: LLMError | STTError | TTSError | None = None
 
 
-AgentEvent = Union[
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
-    UserInputTranscribedEvent,
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
-    AgentStateChangedEvent,
-    MetricsCollectedEvent,
-    ConversationItemAddedEvent,
-    SpeechCreatedEvent,
-    ErrorEvent,
-    CloseEvent,
+AgentEvent = Annotated[
+    Union[
+        UserInputTranscribedEvent,
+        UserStateChangedEvent,
+        AgentStateChangedEvent,
+        MetricsCollectedEvent,
+        ConversationItemAddedEvent,
+        SpeechCreatedEvent,
+        ErrorEvent,
+        CloseEvent,
+    ],
+    Field(discriminator="type"),
 ]
