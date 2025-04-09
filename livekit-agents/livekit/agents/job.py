@@ -293,16 +293,23 @@ class JobContext:
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
     def _create_task_with_future(
-        self, task_name: str, coro: Coroutine[Any, Any, Any]
+        self, task_id: str, coro: Coroutine[Any, Any, Any]
     ) -> asyncio.Future[Any]:
         """Create a task and return a future that resolves when the task completes."""
-        if task_name in self._pending_tasks:
-            return self._pending_tasks[task_name]
+        if task_id in self._pending_tasks:
+            return self._pending_tasks[task_id]
 
         fut = asyncio.Future[Any]()
-        task = asyncio.create_task(coro, name=task_name)
-        task.add_done_callback(lambda t: fut.set_result(t.result()))
-        self._pending_tasks[task_name] = fut
+        task = asyncio.create_task(coro, name=task_id)
+        def _on_task_done(t: asyncio.Task[Any]):
+            self._pending_tasks.pop(task_id)
+            if t.exception():
+                fut.set_exception(t.exception())
+            else:
+                fut.set_result(t.result())
+
+        task.add_done_callback(_on_task_done)
+        self._pending_tasks[task_id] = fut
         return fut
 
     def disconnect(self) -> asyncio.Future[None]:
@@ -311,12 +318,9 @@ class JobContext:
 
     def delete_room(self) -> asyncio.Future[None]:
         """Deletes the room and disconnects all participants."""
-        async def delete_room_task():
-            await self._pending_tasks.get("transfer_sip_participant", asyncio.sleep(0))
-            await self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         return self._create_task_with_future(
             "delete_room",
-            delete_room_task()
+            self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         )
 
     def add_sip_participant(
@@ -333,7 +337,7 @@ class JobContext:
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
         """
         return self._create_task_with_future(
-            "add_sip_participant", 
+            f"add_sip_participant-{sip_call_to}", 
             self.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
             room_name = self._room.name,
             participant_identity = participant_identity,
@@ -346,7 +350,7 @@ class JobContext:
     def transfer_sip_participant(
         self,
         participant: rtc.RemoteParticipant,
-        number: str,
+        transfer_to: str,
         play_dialtone: bool = False,
     ) -> asyncio.Future[api.SIPParticipantInfo]:
         """Transfer a SIP participant to another number.
@@ -366,12 +370,12 @@ class JobContext:
         """
         assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, "Participant must be a SIP participant"
         return self._create_task_with_future(
-            "transfer_sip_participant",
+            f"transfer_sip_participant-{transfer_to}",
             self.api.sip.transfer_sip_participant(
                 api.TransferSIPParticipantRequest(
                     room_name=self._room.name,
                     participant_identity=participant.identity,
-                    transfer_to=number,
+                    transfer_to=transfer_to,
                     play_dialtone=play_dialtone,
                 )
             ),
