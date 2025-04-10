@@ -7,8 +7,9 @@ from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
-from livekit.agents.voice.events import ErrorEvent
+from livekit.agents.voice.events import CloseEvent, ErrorEvent
 from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.rtc import ParticipantKind
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -46,13 +47,24 @@ async def entrypoint(ctx: JobContext):
             "I'm having trouble connecting right now. Let me transfer your call.",
             # If you define a custom audio file, it will play out even if the TTS provider is down.
             audio=audio_frames_from_file(custom_error_audio),
+            allow_interruptions=False,
         )
 
-    # wait for a participant to join the room
-    await ctx.wait_for_participant()
+    @session.on("close")
+    def on_close(_: CloseEvent):
+        logger.info("Session is closing")
+
+        # Assume there is only one caller in the room
+        participant = ctx.get_sip_participants()[0]
+
+        # See https://docs.livekit.io/sip/ on how to set up SIP participants
+        if participant.kind == ParticipantKind.PARTICIPANT_KIND_SIP:
+            ctx.transfer_sip_participant(participant, "tel:+18003310500")
+        ctx.delete_room()
 
     await session.start(agent=MyTask(), room=ctx.room)
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    # Set agent_name to enable explicit dispatch
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="inbound-agent"))

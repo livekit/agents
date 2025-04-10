@@ -108,6 +108,7 @@ class JobContext:
                 list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
             ]
         ] = []
+        self._pending_tasks: dict[str, asyncio.Future[None]] = {}
         self._participant_tasks = dict[tuple[str, Callable], asyncio.Task[None]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
@@ -290,6 +291,106 @@ class JobContext:
             self._participant_available(p)
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
+
+    def _create_task_with_future(
+        self, task_id: str, coro: Coroutine[Any, Any, Any]
+    ) -> asyncio.Future[Any]:
+        """Create a task and return a future that resolves when the task completes."""
+        if task_id in self._pending_tasks:
+            logger.warning(f"Task {task_id} already exists, returning existing future")
+            return self._pending_tasks[task_id]
+
+        fut = asyncio.Future[Any]()
+        task = asyncio.create_task(coro, name=task_id)
+
+        def _on_task_done(t: asyncio.Task[Any]):
+            self._pending_tasks.pop(task_id)
+            if t.exception():
+                fut.set_exception(t.exception())
+            else:
+                fut.set_result(t.result())
+
+        task.add_done_callback(_on_task_done)
+        self._pending_tasks[task_id] = fut
+        return fut
+
+    def disconnect(self) -> asyncio.Future[None]:
+        """Disconnects the agent from the room, but does not delete the room."""
+        return self._create_task_with_future("disconnect", self._room.disconnect())
+
+    def delete_room(self) -> asyncio.Future[None]:
+        """Deletes the room and disconnects all participants."""
+        return self._create_task_with_future(
+            "delete_room", self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+        )
+
+    def get_sip_participants(self) -> list[rtc.RemoteParticipant]:
+        return [
+            p
+            for p in self._room.remote_participants.values()
+            if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        ]
+
+    def add_sip_participant(
+        self,
+        sip_call_to: str,
+        sip_trunk_id: str,
+        participant_identity: str,
+        participant_name: str,
+    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        """
+        Add a SIP participant to the room.
+
+        Make sure you have an outbound SIP trunk created in LiveKit.
+        See https://docs.livekit.io/sip/trunk-outbound/ for more information.
+        """
+        return self._create_task_with_future(
+            f"add_sip_participant-{sip_call_to}",
+            self.api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=participant_identity,
+                    sip_trunk_id=sip_trunk_id,
+                    sip_call_to=sip_call_to,
+                    participant_name=participant_name,
+                )
+            ),
+        )
+
+    def transfer_sip_participant(
+        self,
+        participant: rtc.RemoteParticipant,
+        transfer_to: str,
+        play_dialtone: bool = False,
+    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        """Transfer a SIP participant to another number.
+
+        Args:
+            participant: The participant to transfer
+            transfer_to: The number or SIP destination to transfer the participant to
+            play_dialtone: Whether to play a dialtone during transfer. Defaults to True.
+
+
+        Returns:
+            Future that completes when the transfer is complete
+
+        Make sure you have enabled call transfer on your provider SIP trunk.
+        See https://docs.livekit.io/sip/transfer-cold/ for more information.
+        """
+        assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
+            "Participant must be a SIP participant"
+        )
+        return self._create_task_with_future(
+            f"transfer_sip_participant-{transfer_to}",
+            self.api.sip.transfer_sip_participant(
+                api.TransferSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=participant.identity,
+                    transfer_to=transfer_to,
+                    play_dialtone=play_dialtone,
+                )
+            ),
+        )
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
