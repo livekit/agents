@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, llm
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.english import EnglishModel
 

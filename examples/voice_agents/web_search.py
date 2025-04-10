@@ -1,21 +1,21 @@
-from dotenv import load_dotenv
-
-
-import logging
 import asyncio
+import logging
 from dataclasses import dataclass
+
+from dotenv import load_dotenv
+from duckduckgo_search import DDGS
+
 from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
+    RunContext,
+    ToolError,
     WorkerOptions,
     cli,
     function_tool,
-    ToolError,
-    RunContext,
 )
 from livekit.plugins import openai
-from duckduckgo_search import DDGS
 
 load_dotenv()
 
