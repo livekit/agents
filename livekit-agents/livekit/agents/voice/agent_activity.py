@@ -448,8 +448,8 @@ class AgentActivity(RecognitionHooks):
     def generate_reply(
         self,
         *,
-        user_message: NotGivenOr[llm.ChatMessage] = NOT_GIVEN,
-        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        user_message: NotGivenOr[llm.ChatMessage | None] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -795,7 +795,7 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
-            new_transcript = ""
+            user_message = None
 
         # Ensure the new message is passed to generate_reply
         # This preserves the original message_id, making it easier for users to track responses
