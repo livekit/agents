@@ -388,8 +388,11 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        if self._current_speech and not self._current_speech.allow_interruptions:
-            # TODO(long): make this optional if user want to save the transcript for later response?
+        if (
+            self._current_speech
+            and not self._current_speech.allow_interruptions
+            and self._session.options.drop_audio_on_uninterruptible
+        ):
             # drop the audio if the current speech is not interruptable
             return
 
