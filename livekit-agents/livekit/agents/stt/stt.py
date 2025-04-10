@@ -125,7 +125,6 @@ class STT(
                     label=self._label,
                     audio_duration=calculate_audio_duration(buffer),
                     streamed=False,
-                    error=None,
                 )
                 self.emit("metrics_collected", stt_metrics)
                 return event
@@ -280,7 +279,6 @@ class RecognizeStream(ABC):
                     label=self._stt._label,
                     audio_duration=ev.recognition_usage.audio_duration,
                     streamed=True,
-                    error=None,
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)
