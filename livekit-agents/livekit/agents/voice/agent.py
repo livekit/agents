@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
 
@@ -226,7 +226,7 @@ class Agent:
         Raises:
             RuntimeError: If the agent is not running or the realtime LLM session is not available
         """
-        if (rt_session := self.__get_activity_or_raise().realtime_llm_session) is None:
+        if (rt_session := self._get_activity_or_raise().realtime_llm_session) is None:
             raise RuntimeError("no realtime LLM session")
 
         return rt_session
@@ -239,7 +239,7 @@ class Agent:
         Raises:
             RuntimeError: If the agent is not running
         """
-        return self.__get_activity_or_raise().agent
+        return self._get_activity_or_raise().agent
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -263,15 +263,19 @@ class Agent:
         """
         pass
 
-    async def stt_node(
+    def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
-    ) -> AsyncIterable[stt.SpeechEvent] | None:
+    ) -> (
+        AsyncIterable[stt.SpeechEvent | str]
+        | Coroutine[Any, Any, AsyncIterable[stt.SpeechEvent | str]]
+        | Coroutine[Any, Any, None]
+    ):
         """
         A node in the processing pipeline that transcribes audio frames into speech events.
 
-        By default, this node uses a Speech-To-Text (STT) capability from the current agent. If the STT
-        implementation does not support streaming natively, a VAD (Voice Activity Detection)
-        mechanism is required to wrap the STT.
+        By default, this node uses a Speech-To-Text (STT) capability from the current agent.
+        If the STT implementation does not support streaming natively, a VAD (Voice Activity
+        Detection) mechanism is required to wrap the STT.
 
         You can override this node with your own implementation for more flexibility (e.g.,
         custom pre-processing of audio, additional buffering, or alternative STT strategies).
@@ -282,41 +286,21 @@ class Agent:
 
         Yields:
             stt.SpeechEvent: An event containing transcribed text or other STT-related data.
-        """  # noqa: E501
-        activity = self.__get_activity_or_raise()
-        assert activity.stt is not None, "stt_node called but no STT node is available"
+        """
+        return Agent.default.stt_node(self, audio, model_settings)
 
-        wrapped_stt = activity.stt
-
-        if not activity.stt.capabilities.streaming:
-            if not activity.vad:
-                raise RuntimeError(
-                    f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"  # noqa: E501
-                    "Or manually wrap your STT in a stt.StreamAdapter"
-                )
-
-            wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
-
-        async with wrapped_stt.stream() as stream:
-
-            @utils.log_exceptions(logger=logger)
-            async def _forward_input():
-                async for frame in audio:
-                    stream.push_frame(frame)
-
-            forward_task = asyncio.create_task(_forward_input())
-            try:
-                async for event in stream:
-                    yield event
-            finally:
-                await utils.aio.cancel_and_wait(forward_task)
-
-    async def llm_node(
+    def llm_node(
         self,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool],
         model_settings: ModelSettings,
-    ) -> AsyncIterable[llm.ChatChunk] | AsyncIterable[str] | str | None:
+    ) -> (
+        AsyncIterable[llm.ChatChunk | str]
+        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str]]
+        | Coroutine[Any, Any, str]
+        | Coroutine[Any, Any, llm.ChatChunk]
+        | Coroutine[Any, Any, None]
+    ):
         """
         A node in the processing pipeline that processes text generation with an LLM.
 
@@ -329,37 +313,25 @@ class Agent:
         and responses are handled.
 
         Args:
-            chat_ctx (llm.ChatContext): The context for the LLM (including conversation history, etc.).
+            chat_ctx (llm.ChatContext): The context for the LLM (the conversation history).
             tools (list[FunctionTool]): A list of callable tools that the LLM may invoke.
             model_settings (ModelSettings): Configuration and parameters for model execution.
 
-        Yields:
+        Yields/Returns:
             str: Plain text output from the LLM.
             llm.ChatChunk: An object that can contain both text and optional tool calls.
-        """  # noqa: E501
-        activity = self.__get_activity_or_raise()
-        assert activity.llm is not None, "llm_node called but no LLM node is available"
-        assert isinstance(activity.llm, llm.LLM), (
-            "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
-        )
+        """
+        return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
-        tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
-
-        async with activity.llm.chat(
-            chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice
-        ) as stream:
-            async for chunk in stream:
-                yield chunk
-
-    async def transcription_node(
+    def transcription_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[str]:
+    ) -> AsyncIterable[str] | Coroutine[Any, Any, AsyncIterable[str]] | Coroutine[Any, Any, None]:
         """
         A node in the processing pipeline that finalizes transcriptions from text segments.
 
-        This node can be used to adjust or post-process text coming from an LLM (or any other source)
-        into a final transcribed form. For instance, you might clean up formatting, fix punctuation,
-        or perform any other text transformations here.
+        This node can be used to adjust or post-process text coming from an LLM (or any other
+        source) into a final transcribed form. For instance, you might clean up formatting, fix
+        punctuation, or perform any other text transformations here.
 
         You can override this node to customize post-processing logic according to your needs.
 
@@ -369,18 +341,20 @@ class Agent:
 
         Yields:
             str: Finalized or post-processed text segments.
-        """  # noqa: E501
-        self.__get_activity_or_raise()
-        async for delta in text:
-            yield delta
+        """
+        return Agent.default.transcription_node(self, text, model_settings)
 
-    async def tts_node(
+    def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[rtc.AudioFrame] | None:
+    ) -> (
+        AsyncGenerator[rtc.AudioFrame, None]
+        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
+        | Coroutine[Any, Any, None]
+    ):
         """
         A node in the processing pipeline that synthesizes audio from text segments.
 
-        By default, this node converts incoming text into audio frames using the Text-To-Speech (TTS)
+        By default, this node converts incoming text into audio frames using the Text-To-Speech
         from the agent.
         If the TTS implementation does not support streaming natively, it uses a sentence tokenizer
         to split text for incremental synthesis.
@@ -394,47 +368,133 @@ class Agent:
 
         Yields:
             rtc.AudioFrame: Audio frames synthesized from the provided text.
-        """  # noqa: E501
-        activity = self.__get_activity_or_raise()
-        assert activity.tts is not None, "tts_node called but no TTS node is available"
+        """
+        return Agent.default.tts_node(self, text, model_settings)
 
-        wrapped_tts = activity.tts
-
-        if not activity.tts.capabilities.streaming:
-            wrapped_tts = tts.StreamAdapter(
-                tts=wrapped_tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
-            )
-
-        async with wrapped_tts.stream() as stream:
-
-            async def _forward_input():
-                async for chunk in text:
-                    stream.push_text(chunk)
-
-                stream.end_input()
-
-            forward_task = asyncio.create_task(_forward_input())
-            try:
-                async for ev in stream:
-                    yield ev.frame
-            finally:
-                await utils.aio.cancel_and_wait(forward_task)
-
-    async def realtime_audio_output_node(
+    def realtime_audio_output_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
-    ) -> AsyncIterable[rtc.AudioFrame]:
+    ) -> (
+        AsyncIterable[rtc.AudioFrame]
+        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
+        | Coroutine[Any, Any, None]
+    ):
         """A node processing the audio from the realtime LLM session before it is played out."""
-        self.__get_activity_or_raise()
-        async for frame in audio:
-            yield frame
-        # flush the buffer if any
+        return Agent.default.realtime_audio_output_node(self, audio, model_settings)
 
-    def __get_activity_or_raise(self) -> AgentActivity:
+    def _get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:
             raise RuntimeError("no activity context found, this task is not running")
 
         return self._activity
+
+    class default:
+        @staticmethod
+        async def stt_node(
+            agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+        ) -> AsyncGenerator[stt.SpeechEvent, None]:
+            """Default implementation for `Agent.stt_node`"""
+            activity = agent._get_activity_or_raise()
+            assert activity.stt is not None, "stt_node called but no STT node is available"
+
+            wrapped_stt = activity.stt
+
+            if not activity.stt.capabilities.streaming:
+                if not activity.vad:
+                    raise RuntimeError(
+                        f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"  # noqa: E501
+                        "Or manually wrap your STT in a stt.StreamAdapter"
+                    )
+
+                wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+
+            async with wrapped_stt.stream() as stream:
+
+                @utils.log_exceptions(logger=logger)
+                async def _forward_input():
+                    async for frame in audio:
+                        stream.push_frame(frame)
+
+                forward_task = asyncio.create_task(_forward_input())
+                try:
+                    async for event in stream:
+                        yield event
+                finally:
+                    await utils.aio.cancel_and_wait(forward_task)
+
+        @staticmethod
+        async def llm_node(
+            agent: Agent,
+            chat_ctx: llm.ChatContext,
+            tools: list[FunctionTool],
+            model_settings: ModelSettings,
+        ) -> AsyncGenerator[llm.ChatChunk | str, None]:
+            """Default implementation for `Agent.llm_node`"""
+            activity = agent._get_activity_or_raise()
+            assert activity.llm is not None, "llm_node called but no LLM node is available"
+            assert isinstance(activity.llm, llm.LLM), (
+                "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
+            )
+
+            tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
+            activity_llm = activity.llm
+
+            async with activity_llm.chat(
+                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
+
+        @staticmethod
+        async def tts_node(
+            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+        ) -> AsyncGenerator[rtc.AudioFrame, None]:
+            """Default implementation for `Agent.tts_node`"""
+            activity = agent._get_activity_or_raise()
+            assert activity.tts is not None, "tts_node called but no TTS node is available"
+
+            wrapped_tts = activity.tts
+
+            if not activity.tts.capabilities.streaming:
+                wrapped_tts = tts.StreamAdapter(
+                    tts=wrapped_tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+                )
+
+            async with wrapped_tts.stream() as stream:
+
+                async def _forward_input():
+                    async for chunk in text:
+                        stream.push_text(chunk)
+
+                    stream.end_input()
+
+                forward_task = asyncio.create_task(_forward_input())
+                try:
+                    async for ev in stream:
+                        yield ev.frame
+                finally:
+                    await utils.aio.cancel_and_wait(forward_task)
+
+        @staticmethod
+        async def transcription_node(
+            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+        ) -> AsyncGenerator[str, None]:
+            """Default implementation for `Agent.transcription_node`"""
+            async for delta in text:
+                yield delta
+
+        @staticmethod
+        async def realtime_audio_output_node(
+            agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+        ) -> AsyncGenerator[rtc.AudioFrame, None]:
+            """Default implementation for `Agent.realtime_audio_output_node`"""
+            activity = agent._get_activity_or_raise()
+            assert activity.realtime_llm_session is not None, (
+                "realtime_audio_output_node called but no realtime LLM session is available"
+            )
+
+            async for frame in audio:
+                yield frame
 
 
 TaskResult_T = TypeVar("TaskResult_T")
