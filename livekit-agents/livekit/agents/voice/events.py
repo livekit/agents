@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -96,9 +96,13 @@ class MetricsCollectedEvent(BaseModel):
     metrics: AgentMetrics
 
 
+class _TypeDiscriminator(BaseModel):
+    type: Literal["unknown"] = "unknown"  # force user to use the type discriminator
+
+
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
-    message: ChatMessage
+    item: ChatMessage | _TypeDiscriminator
 
 
 class FunctionToolsExecutedEvent(BaseModel):
@@ -131,16 +135,19 @@ class CloseEvent(BaseModel):
     error: LLMError | STTError | TTSError | None = None
 
 
-AgentEvent = Union[
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
-    UserInputTranscribedEvent,
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
-    AgentStateChangedEvent,
-    MetricsCollectedEvent,
-    ConversationItemAddedEvent,
-    SpeechCreatedEvent,
-    ErrorEvent,
-    CloseEvent,
+AgentEvent = Annotated[
+    Union[
+        UserStartedSpeakingEvent,
+        UserStoppedSpeakingEvent,
+        UserInputTranscribedEvent,
+        AgentStartedSpeakingEvent,
+        AgentStoppedSpeakingEvent,
+        AgentStateChangedEvent,
+        MetricsCollectedEvent,
+        ConversationItemAddedEvent,
+        SpeechCreatedEvent,
+        ErrorEvent,
+        CloseEvent,
+    ],
+    Field(discriminator="type"),
 ]
