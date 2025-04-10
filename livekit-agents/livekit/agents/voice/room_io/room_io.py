@@ -96,6 +96,7 @@ class RoomIO:
         self._video_input: _ParticipantVideoInputStream | None = None
         self._audio_output: _ParticipantAudioOutput | None = None
         self._user_tr_output: _ParallelTextOutput | None = None
+        self._user_tr_buffer: str = ""
         self._agent_tr_output: _ParallelTextOutput | None = None
         self._tr_synchronizer: TranscriptSynchronizer | None = None
 
@@ -296,12 +297,23 @@ class RoomIO:
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         async def _capture_text():
             if self._user_tr_output is None:
+                self._user_tr_buffer = ""
                 return
 
-            await self._user_tr_output.capture_text(ev.transcript)
+            user_transcript = ev.transcript
+            if self._user_tr_buffer:
+                user_transcript = f"{self._user_tr_buffer}\n{user_transcript}"
+
+            await self._user_tr_output.capture_text(user_transcript)
+
             if ev.is_final:
-                # TODO(theomonnom): should we wait for the end of turn before sending the final transcript?  # noqa: E501
+                # TODO(longc): ideally we want to send the final and end_of_turn flags separately
+                # buffer the finalized transcript before end of turn
+                self._user_tr_buffer = user_transcript.lstrip()
+
+            if ev.is_end_of_turn:
                 self._user_tr_output.flush()
+                self._user_tr_buffer = ""
 
         task = asyncio.create_task(_capture_text())
         self._tasks.add(task)
