@@ -367,7 +367,7 @@ class JobContext:
 
         Args:
             participant: The participant to transfer
-            number: The number to transfer the participant to
+            transfer_to: The number or SIP destination to transfer the participant to
             play_dialtone: Whether to play a dialtone during transfer. Defaults to True.
 
 
