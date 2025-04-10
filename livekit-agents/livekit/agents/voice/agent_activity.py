@@ -1264,14 +1264,17 @@ class AgentActivity(RecognitionHooks):
 
                     audio_out = None
                     if audio_output is not None:
-                        forward_task, audio_out = perform_audio_forwarding(
-                            audio_output=audio_output,
-                            tts_output=self._agent.realtime_audio_output_node(
-                                msg.audio_stream, model_settings
-                            ),
+                        realtime_audio = self._agent.realtime_audio_output_node(
+                            msg.audio_stream, model_settings
                         )
-                        forward_tasks.append(forward_task)
-                        audio_out.first_frame_fut.add_done_callback(_on_first_frame)
+                        if asyncio.iscoroutine(realtime_audio):
+                            realtime_audio = await realtime_audio
+                        if realtime_audio is not None:
+                            forward_task, audio_out = perform_audio_forwarding(
+                                audio_output=audio_output, tts_output=realtime_audio
+                            )
+                            forward_tasks.append(forward_task)
+                            audio_out.first_frame_fut.add_done_callback(_on_first_frame)
                     else:
                         text_out.first_text_fut.add_done_callback(_on_first_frame)
 
