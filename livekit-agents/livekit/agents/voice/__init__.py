@@ -3,15 +3,15 @@ from .agent_session import AgentSession
 from .chat_cli import ChatCLI
 from .events import (
     AgentEvent,
+    AgentStateChangedEvent,
+    CloseEvent,
     ConversationItemAddedEvent,
+    ErrorEvent,
     MetricsCollectedEvent,
     RunContext,
+    SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
-    AgentStateChangedEvent,
-    SpeechCreatedEvent,
-    ErrorEvent,
-    CloseEvent,
 )
 from .speech_handle import SpeechHandle
 

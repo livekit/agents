@@ -163,7 +163,7 @@ class BackgroundAudioPlayer:
         audio: Union[AudioSource, AudioConfig, list[AudioConfig]],
         *,
         loop: bool = False,
-    ) -> "PlayHandle":
+    ) -> PlayHandle:
         """
         Plays an audio once or in a loop.
 
@@ -312,7 +312,7 @@ class BackgroundAudioPlayer:
 
     @log_exceptions(logger=logger)
     async def _play_task(
-        self, play_handle: "PlayHandle", sound: AudioSource, volume: float, loop: bool
+        self, play_handle: PlayHandle, sound: AudioSource, volume: float, loop: bool
     ) -> None:
         if isinstance(sound, BuiltinAudioClip):
             sound = sound.path()

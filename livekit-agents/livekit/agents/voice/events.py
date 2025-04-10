@@ -107,9 +107,7 @@ class FunctionToolsExecutedEvent(BaseModel):
     @model_validator(mode="after")
     def verify_lists_length(self) -> Self:
         if len(self.function_calls) != len(self.function_call_outputs):
-            raise ValueError(
-                "The number of function_calls and function_call_outputs must match."
-            )
+            raise ValueError("The number of function_calls and function_call_outputs must match.")
 
         return self
 

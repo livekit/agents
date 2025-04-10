@@ -12,7 +12,6 @@ from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
 from ..llm import ChatContext
 from ..log import logger
-
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
@@ -20,14 +19,14 @@ from .agent import Agent
 from .agent_activity import AgentActivity
 from .audio_recognition import _TurnDetector
 from .events import (
-    UserState,
-    AgentState,
     AgentEvent,
+    AgentState,
     AgentStateChangedEvent,
-    UserStateChangedEvent,
     CloseEvent,
     ConversationItemAddedEvent,
     EventTypes,
+    UserState,
+    UserStateChangedEvent,
 )
 from .speech_handle import SpeechHandle
 

@@ -989,15 +989,11 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             return
 
-
         tr_node = self._agent.transcription_node(llm_output, model_settings)
         if asyncio.iscoroutine(tr_node):
             tr_node = await tr_node
 
-        forward_task, text_out = perform_text_forwarding(
-            text_output=text_output,
-            source=tr_node
-        )
+        forward_task, text_out = perform_text_forwarding(text_output=text_output, source=tr_node)
         tasks.append(forward_task)
 
         def _on_first_frame(_: asyncio.Future) -> None:
@@ -1266,15 +1262,13 @@ class AgentActivity(RecognitionHooks):
                         )
                         break
 
-
-                
-                    tr_node = self._agent.transcription_node(text_source, model_settings)
+                    tr_node = self._agent.transcription_node(msg.text_stream, model_settings)
                     if asyncio.iscoroutine(tr_node):
                         tr_node = await tr_node
 
                     forward_task, text_out = perform_text_forwarding(
                         text_output=text_output,
-                        source=self._agent.transcription_node(msg.text_stream, model_settings),
+                        source=tr_node,
                     )
                     forward_tasks.append(forward_task)
 

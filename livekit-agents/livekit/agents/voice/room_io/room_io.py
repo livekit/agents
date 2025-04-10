@@ -335,7 +335,9 @@ class RoomIO:
         @utils.log_exceptions(logger=logger)
         async def _set_state() -> None:
             if self._room.isconnected():
-                await self._room.local_participant.set_attributes({ATTRIBUTE_AGENT_STATE: ev.new_state})
+                await self._room.local_participant.set_attributes(
+                    {ATTRIBUTE_AGENT_STATE: ev.new_state}
+                )
 
         if self._update_state_task is not None:
             self._update_state_task.cancel()
