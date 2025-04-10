@@ -254,7 +254,7 @@ class Agent:
         pass
 
     async def on_user_turn_completed(
-        self, chat_ctx: llm.ChatContext, new_message: llm.ChatMessage
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
         """Called when the user has finished speaking, and the LLM is about to respond
 
