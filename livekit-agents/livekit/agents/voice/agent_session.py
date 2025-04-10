@@ -490,7 +490,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     # -- User changed input/output streams/sinks --
 
     def _on_video_input_changed(self) -> None:
-        pass
+        if not self._started:
+            return
+
+        if self._forward_video_atask is not None:
+            self._forward_video_atask.cancel()
+
+        self._forward_video_atask = asyncio.create_task(
+            self._forward_video_task(), name="_forward_video_task"
+        )
 
     def _on_audio_input_changed(self) -> None:
         if not self._started:
@@ -504,15 +512,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_video_output_changed(self) -> None:
-        if not self._started:
-            return
-
-        if self._forward_video_atask is not None:
-            self._forward_video_atask.cancel()
-
-        self._forward_video_atask = asyncio.create_task(
-            self._forward_video_task(), name="_forward_video_task"
-        )
+        pass
 
     def _on_audio_output_changed(self) -> None:
         pass
