@@ -1,4 +1,3 @@
-from collections.abc import AsyncIterable
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -59,7 +58,7 @@ class RetrievalAgent(Agent):
         chat_ctx: llm.ChatContext,
         tools: list[llm.FunctionTool],
         model_settings: ModelSettings,
-    ) -> AsyncIterable[llm.ChatChunk] | AsyncIterable[str] | str | None:
+    ):
         user_msg = chat_ctx.items[-1]
         assert isinstance(user_msg, llm.ChatMessage) and user_msg.role == "user"
         user_query = user_msg.text_content
@@ -76,7 +75,7 @@ class RetrievalAgent(Agent):
         print(f"update instructions: {instructions[:100].replace('\n', '\\n')}...")
         await self.update_instructions(instructions)
 
-        return super().llm_node(chat_ctx, tools, model_settings)
+        return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
 
 async def entrypoint(ctx: JobContext):

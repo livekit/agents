@@ -112,14 +112,15 @@ class MyAgent(Agent):
 
         # process_structured_output strips the TTS instructions and only synthesizes the verbal part
         # of the LLM output
-        return super().tts_node(
-            process_structured_output(text, callback=output_processed), model_settings
+        return Agent.default.tts_node(
+            self, process_structured_output(text, callback=output_processed), model_settings
         )
 
     async def transcription_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         # transcription_node needs to return what the agent would say, minus the TTS instructions
-        async for delta in process_structured_output(text):
-            yield delta
+        return Agent.default.transcription_node(
+            self, process_structured_output(text), model_settings
+        )
 
 
 async def entrypoint(ctx: JobContext):

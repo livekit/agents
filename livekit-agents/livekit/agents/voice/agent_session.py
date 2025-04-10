@@ -369,19 +369,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
+        user_message = (
+            llm.ChatMessage(role="user", content=[user_input])
+            if is_given(user_input)
+            else NOT_GIVEN
+        )
+
         if self._activity.draining:
             if self._next_activity is None:
                 raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
             return self._next_activity.generate_reply(
-                user_input=user_input,
+                user_message=user_message,
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
             )
 
         return self._activity.generate_reply(
-            user_input=user_input,
+            user_message=user_message,
             instructions=instructions,
             tool_choice=tool_choice,
             allow_interruptions=allow_interruptions,
@@ -486,7 +492,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.items.append(message)
-        self.emit("conversation_item_added", ConversationItemAddedEvent(message=message))
+        self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     # -- User changed input/output streams/sinks --
 
