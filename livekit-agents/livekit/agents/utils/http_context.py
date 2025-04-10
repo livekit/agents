@@ -14,7 +14,6 @@ _ContextVar = contextvars.ContextVar("agent_http_session")  # type: ignore
 def _new_session_ctx() -> _ClientFactory:
     g_session: aiohttp.ClientSession | None = None
 
-
     def _new_session() -> aiohttp.ClientSession:
         nonlocal g_session
         if g_session is None:
