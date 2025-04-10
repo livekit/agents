@@ -263,7 +263,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             )
 
         if not is_given(opts.http_proxy):
-            opts.http_proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+            opts.http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._opts = opts
         self._loop = loop or asyncio.get_event_loop()
