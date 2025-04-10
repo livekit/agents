@@ -1,17 +1,30 @@
 import asyncio
+import logging
 import os
+import sys
 from dataclasses import dataclass
 from itertools import cycle
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from livekit import api, rtc
+from livekit.agents import utils
 from livekit.agents.types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
     TOPIC_TRANSCRIPTION,
 )
 
-tasks = set()
+logger = logging.getLogger("text-only")
+logger.setLevel(logging.INFO)
+
+load_dotenv()
+
+## This example demonstrates a text-only agent.
+## Send text input using TextStream to topic `lk.chat` (https://docs.livekit.io/home/client/data/text-streams)
+## The agent output is sent through TextStream to the `lk.transcription` topic
+
 
 # Add color constants
 COLORS = [
@@ -25,61 +38,112 @@ RESET = "\033[0m"  # Reset color
 
 
 @dataclass
-class StreamMessage:
+class Chunk:
+    stream_id: str
     participant_identity: str
     track_id: Optional[str]
-    stream_id: str
+    segment_id: str
     content: str
     final: Optional[bool] = None
 
 
-class StreamPrinter:
+class TextStreamPrinter:
     def __init__(self):
-        self.queue = asyncio.Queue[StreamMessage | None]()
+        self._text_chunk_queue = asyncio.Queue[Chunk | None]()
         self.running = True
 
-        self.color_cycle = cycle(COLORS)
+        self._color_cycle = cycle(COLORS)
         self._color_map: dict[str, str] = {}
-        self._current_stream_id: str | None = None
+        self._current_segment_id: str | None = None
+        # track the stream id for each segment id, overwrite if new stream with the same segment id
+        self._segment_to_stream: dict[str, str] = {}
 
-        self.printer_task = asyncio.create_task(self.printer_loop())
+        self._tasks = set[asyncio.Task]()
+        self._main_atask = asyncio.create_task(self._main_task())
 
-    def get_color(self, identity: str) -> str:
+    def _get_color(self, identity: str) -> str:
         if identity not in self._color_map:
-            self._color_map[identity] = next(self.color_cycle)
+            self._color_map[identity] = next(self._color_cycle)
         return self._color_map[identity]
 
-    async def printer_loop(self):
+    async def _main_task(self):
+        header = "[{participant_identity}][{type}][{segment_id}][{overwrite}]"
+
         while self.running:
-            msg = await self.queue.get()
-            if not msg:
+            chunk = await self._text_chunk_queue.get()
+            if chunk is None:
                 break
 
-            if self._current_stream_id != msg.stream_id:
-                # print a new line if the stream id has changed
-                color = self.get_color(msg.participant_identity)
-                type = "transcript" if msg.track_id else "chat"
-                print(
-                    f"\n{color}[{msg.participant_identity}][{type}][{msg.stream_id}]: {RESET}",
-                    end="",
-                    flush=True,
+            color = self._get_color(chunk.participant_identity)
+            if self._current_segment_id != chunk.segment_id:
+                # in cli we don't actually overwrite the line, just add a flag
+                overwrite = (
+                    "overwrite"
+                    if chunk.segment_id in self._segment_to_stream
+                    and self._segment_to_stream[chunk.segment_id] != chunk.stream_id
+                    else "new"
                 )
-                self._current_stream_id = msg.stream_id
+                type = "transcript" if chunk.track_id else "chat"
 
-            if msg.final is not None:
-                print(f" [final={msg.final}]", end="", flush=True)
-                self._current_stream_id = None
+                # header: [participant_identity][type][segment_id]
+                line_header = header.format(
+                    participant_identity=chunk.participant_identity,
+                    type=type,
+                    segment_id=chunk.segment_id,
+                    overwrite=overwrite,
+                )
+                print(f"\n{color}{line_header}:{RESET} ", end="", flush=True)
+                self._current_segment_id = chunk.segment_id
+
+            if chunk.final is not None:
+                print(f" {color}[final={chunk.final}]{RESET}", end="", flush=True)
+                self._current_segment_id = None
             else:
-                print(msg.content, end="", flush=True)
+                print(chunk.content, end="", flush=True)
 
-    async def stop(self):
+            self._segment_to_stream[chunk.segment_id] = chunk.stream_id
+
+    def on_text_received(self, reader: rtc.TextStreamReader, participant_identity: str):
+        async def _on_text_received():
+            stream_id = reader.info.stream_id
+            segment_id = reader.info.attributes.get("segment_id", None)
+            # new stream with the same segment_id should overwrite the previous one
+            if not segment_id:
+                logger.warning("No segment id found for text stream")
+                return
+
+            track_id = reader.info.attributes.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID, None)
+            async for chunk in reader:
+                await self._text_chunk_queue.put(
+                    Chunk(stream_id, participant_identity, track_id, segment_id, content=chunk)
+                )
+
+            # update the final flag
+            final = reader.info.attributes.get(ATTRIBUTE_TRANSCRIPTION_FINAL, "null")
+            await self._text_chunk_queue.put(
+                Chunk(
+                    stream_id, participant_identity, track_id, segment_id, content="", final=final
+                )
+            )
+
+        task = asyncio.create_task(_on_text_received())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def aclose(self):
         self.running = False
-        await self.queue.put(None)
-        await self.printer_task
+        await self._text_chunk_queue.put(None)
+        await self._main_atask
+        await utils.aio.cancel_and_wait(self._tasks)
 
 
-async def main(room: rtc.Room, room_name: str):
-    # Create access token with the API
+async def main(room_name: str):
+    url = os.getenv("LIVEKIT_URL")
+    if not url:
+        print("Please set LIVEKIT_URL environment variable")
+        return
+
+    room = rtc.Room()
     token = (
         api.AccessToken()
         .with_identity("chat-listener")
@@ -92,79 +156,27 @@ async def main(room: rtc.Room, room_name: str):
         )
         .to_jwt()
     )
+    print(f"Connecting to room: {room_name}")
+    await room.connect(url, token)
 
-    url = os.getenv("LIVEKIT_URL")
-    if not url:
-        print("Please set LIVEKIT_URL environment variable")
-        return
+    stop_event = asyncio.Event()
 
-    stream_printer = StreamPrinter()
-
-    def on_text_received(reader: rtc.TextStreamReader, participant_identity: str):
-        async def _on_text_received():
-            stream_id = reader.info.stream_id
-            track_id = reader.info.attributes.get(ATTRIBUTE_TRANSCRIPTION_TRACK_ID, None)
-
-            async for chunk in reader:
-                await stream_printer.queue.put(
-                    StreamMessage(participant_identity, track_id, stream_id, content=chunk)
-                )
-
-            final = reader.info.attributes.get(ATTRIBUTE_TRANSCRIPTION_FINAL, "null")
-            await stream_printer.queue.put(
-                StreamMessage(participant_identity, track_id, stream_id, content="", final=final)
-            )
-
-        task = asyncio.create_task(_on_text_received())
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
-
-    # Connect to the room
     try:
-        print("Connecting to LiveKit room...")
-        await room.connect(url, token)
-        print(f"Connected to room: {room.name}")
-
-        # Register handler for text messages on lk.chat topic
-        room.register_text_stream_handler(TOPIC_TRANSCRIPTION, on_text_received)
-
+        text_printer = TextStreamPrinter()
+        room.register_text_stream_handler(
+            topic=TOPIC_TRANSCRIPTION, handler=text_printer.on_text_received
+        )
         print("Listening for chat messages. Press Ctrl+C to exit...")
-        # Instead of running the loop forever here, we'll use an Event to keep the connection alive
-        stop_event = asyncio.Event()
-        await stop_event.wait()
 
-    except KeyboardInterrupt:
-        print("\nDisconnecting...")
-    except Exception as e:
-        print(f"Error: {e}")
+        await stop_event.wait()  # run forever
     finally:
-        await stream_printer.stop()  # Clean up the printer
-        await room.disconnect()
-        print("Disconnected from room")
+        await text_printer.aclose()
 
 
 if __name__ == "__main__":
-    import sys
-
     if len(sys.argv) != 2:
         print("Usage: python datastream-chat-listener.py <room-name>")
         sys.exit(1)
 
     room_name = sys.argv[1]
-
-    # Use asyncio.new_event_loop() instead of get_event_loop()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    room = rtc.Room(loop=loop)
-
-    async def cleanup():
-        await room.disconnect()
-        loop.stop()
-
-    try:
-        loop.run_until_complete(main(room, room_name))
-    except KeyboardInterrupt:
-        pass
-    finally:
-        loop.run_until_complete(room.disconnect())
-        loop.close()
+    asyncio.run(main(room_name=room_name))
