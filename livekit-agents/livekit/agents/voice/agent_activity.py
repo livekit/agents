@@ -654,14 +654,15 @@ class AgentActivity(RecognitionHooks):
         if ev.user_transcription_enabled:
             self._session.emit(
                 "user_input_transcribed",
-                UserInputTranscribedEvent(transcript="", is_final=False),
+                UserInputTranscribedEvent(transcript="", is_final=False, is_end_of_turn=False),
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
         log_event("input_audio_transcription_completed")
+        # TODO(longc): do we have an "end_of_turn" event synced with user transcription for realtime model?  # noqa: E501
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=True, is_end_of_turn=True),
         )
         msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
         self._agent._chat_ctx.items.append(msg)
@@ -728,7 +729,9 @@ class AgentActivity(RecognitionHooks):
 
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=False),
+            UserInputTranscribedEvent(
+                transcript=ev.alternatives[0].text, is_final=False, is_end_of_turn=False
+            ),
         )
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
@@ -738,7 +741,9 @@ class AgentActivity(RecognitionHooks):
 
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
+            UserInputTranscribedEvent(
+                transcript=ev.alternatives[0].text, is_final=True, is_end_of_turn=False
+            ),
         )
 
     async def on_end_of_turn(self, info: _EndOfTurnInfo) -> None:
@@ -754,6 +759,12 @@ class AgentActivity(RecognitionHooks):
                 return
             if self._rt_session is not None:
                 self._rt_session.commit_audio()
+
+        # update the is_end_of_turn for user transcription
+        self._session.emit(
+            "user_input_transcribed",
+            UserInputTranscribedEvent(transcript="", is_final=True, is_end_of_turn=True),
+        )
 
         new_transcript = info.new_transcript
 
