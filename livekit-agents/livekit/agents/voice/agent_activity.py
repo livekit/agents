@@ -856,9 +856,14 @@ class AgentActivity(RecognitionHooks):
             audio_source = _read_text()
 
         tasks = []
+
+        tr_node = self._agent.transcription_node(text_source, model_settings)
+        if asyncio.iscoroutine(tr_node):
+            tr_node = await tr_node
+
         forward_text, text_out = perform_text_forwarding(
             text_output=tr_output,
-            source=self._agent.transcription_node(text_source, model_settings),
+            source=tr_node,
         )
         tasks.append(forward_text)
 
@@ -984,9 +989,14 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             return
 
+
+        tr_node = self._agent.transcription_node(llm_output, model_settings)
+        if asyncio.iscoroutine(tr_node):
+            tr_node = await tr_node
+
         forward_task, text_out = perform_text_forwarding(
             text_output=text_output,
-            source=self._agent.transcription_node(llm_output, model_settings),
+            source=tr_node
         )
         tasks.append(forward_task)
 
@@ -1255,6 +1265,12 @@ class AgentActivity(RecognitionHooks):
                             "expected to receive only one message generation from the realtime API"
                         )
                         break
+
+
+                
+                    tr_node = self._agent.transcription_node(text_source, model_settings)
+                    if asyncio.iscoroutine(tr_node):
+                        tr_node = await tr_node
 
                     forward_task, text_out = perform_text_forwarding(
                         text_output=text_output,
