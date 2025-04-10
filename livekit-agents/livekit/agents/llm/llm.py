@@ -203,7 +203,6 @@ class LLMStream(ABC):
             prompt_tokens=usage.prompt_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
-            error=None,
         )
         self._llm.emit("metrics_collected", metrics)
 
