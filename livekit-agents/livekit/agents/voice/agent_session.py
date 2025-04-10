@@ -114,7 +114,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
-        self._user_state: UserState = "idle"
+        self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None

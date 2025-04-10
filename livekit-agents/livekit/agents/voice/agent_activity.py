@@ -800,7 +800,7 @@ class AgentActivity(RecognitionHooks):
         # Ensure the new message is passed to generate_reply
         # This preserves the original message_id, making it easier for users to track responses
         speech_handle = self.generate_reply(
-            new_message=user_message, chat_ctx=temp_mutable_chat_ctx
+            user_message=user_message, chat_ctx=temp_mutable_chat_ctx
         )
         eou_metrics = EOUMetrics(
             timestamp=time.time(),
@@ -945,6 +945,7 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(tools)
 
         if new_message is not None:
+            chat_ctx.items.append(new_message)
             self._agent._chat_ctx.items.append(new_message)
             self._session._conversation_item_added(new_message)
 

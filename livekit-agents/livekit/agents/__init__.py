@@ -35,7 +35,6 @@ from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    AgentState,
     APIConnectOptions,
     NotGiven,
     NotGivenOr,
@@ -58,7 +57,6 @@ __all__ = [
     "get_job_context",
     "JobExecutorType",
     "AutoSubscribe",
-    "AgentState",
     "FunctionTool",
     "function_tool",
     "ChatContext",
@@ -86,7 +84,6 @@ __all__ = [
     "APIStatusError",
     "APITimeoutError",
     "APIConnectOptions",
-    "AgentState",
     "NotGiven",
     "NOT_GIVEN",
     "NotGivenOr",
