@@ -31,6 +31,7 @@ class ProcJobExecutor(SupervisedProc):
         ping_interval: float,
         ping_timeout: float,
         high_ping_threshold: float,
+        http_proxy: str | None,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
@@ -44,6 +45,7 @@ class ProcJobExecutor(SupervisedProc):
             high_ping_threshold=high_ping_threshold,
             mp_ctx=mp_ctx,
             loop=loop,
+            http_proxy=http_proxy,
         )
 
         self._user_args: Any | None = None

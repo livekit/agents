@@ -294,6 +294,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 high_ping_threshold=2.5,
                 mp_ctx=mp_ctx,
                 loop=self._loop,
+                http_proxy=opts.http_proxy or None,
             )
 
         self._proc_pool = ipc.proc_pool.ProcPool(
@@ -308,6 +309,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             close_timeout=opts.shutdown_process_timeout,
             memory_warn_mb=opts.job_memory_warn_mb,
             memory_limit_mb=opts.job_memory_limit_mb,
+            http_proxy=opts.http_proxy or None,
         )
 
         self._previous_status = agent.WorkerStatus.WS_AVAILABLE
@@ -403,8 +405,10 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._proc_pool.on("process_job_launched", _update_job_status)
         await self._proc_pool.start()
 
-        self._api = api.LiveKitAPI(self._opts.ws_url, self._opts.api_key, self._opts.api_secret)
-        self._http_session = aiohttp.ClientSession()
+        self._http_session = aiohttp.ClientSession(proxy=self._opts.http_proxy or None)
+        self._api = api.LiveKitAPI(
+            self._opts.ws_url, self._opts.api_key, self._opts.api_secret, session=self._http_session
+        )
         self._close_future = asyncio.Future(loop=self._loop)
 
         @utils.log_exceptions(logger=logger)
