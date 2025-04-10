@@ -1,0 +1,3 @@
+livekit-agents[openai, cartesia, elevenlabs, deepgram, silero, turn-detector]>=1.0
+python-dotenv>=1.0
+duckduckgo-search>=8.0

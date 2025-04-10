@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, llm
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.english import EnglishModel
 
@@ -17,26 +17,6 @@ load_dotenv()
 ## In this example, speech is being processed in parallel by both the STT and the realtime API
 
 
-class MyAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="You are Alloy.",
-        )
-
-    async def on_enter(self):
-        self.session.generate_reply()
-
-    @llm.function_tool
-    async def fetch_weather_today(self) -> str:
-        """Called when the user asks for the weather today"""
-        return "The weather today is sunny and 70 degrees."
-
-    @llm.function_tool
-    async def fetch_weather_tomorrow(self) -> str:
-        """Called when the user asks for the weather tomorrow"""
-        return "The weather tomorrow is rainy and 60 degrees."
-
-
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
@@ -46,14 +26,14 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
         llm=openai.realtime.RealtimeModel(
-            # it's necessary to turn off turn detection in the Realtime API in order to use
-            # LiveKit's turn detection model
             voice="alloy",
+            # it's necessary to turn off turn detection in the OpenAI Realtime API in order to use
+            # LiveKit's turn detection model
             turn_detection=None,
-            input_audio_transcription=None,
+            input_audio_transcription=None,  # we use Deepgram STT instead
         ),
     )
-    await session.start(agent=MyAgent(), room=ctx.room)
+    await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
 
 
 def prewarm(proc: JobProcess):
