@@ -39,6 +39,14 @@ from .generation import (
 )
 from .speech_handle import SpeechHandle
 
+try:
+    from livekit.plugins.google.beta.realtime.realtime_api import (
+        RealtimeModel as GoogleRealtimeModel,
+    )
+
+except ImportError:
+    GoogleRealtimeModel = None
+
 
 def log_event(event: str, **kwargs) -> None:
     debug.Tracing.log_event(event, kwargs)
@@ -1409,14 +1417,6 @@ class AgentActivity(RecognitionHooks):
                         "failed to update chat context before generating the function calls results",  # noqa: E501
                         extra={"error": str(e)},
                     )
-
-            try:
-                from livekit.plugins.google.beta.realtime.realtime_api import (
-                    RealtimeModel as GoogleRealtimeModel,
-                )
-
-            except ImportError:
-                GoogleRealtimeModel = None
 
             if generate_tool_reply and not isinstance(self.llm, GoogleRealtimeModel):
                 self._rt_session.interrupt()

@@ -22,13 +22,13 @@ class MyAgent(Agent):
         self.light_on = False
 
     @function_tool()
-    async def turn_on_light(self) -> str:
+    async def turn_on_light(self):
         """Called when user asks to turn on the light."""
         self.light_on = True
         logger.info("Light is now on")
 
     @function_tool()
-    async def turn_off_light(self) -> str:
+    async def turn_off_light(self):
         """Called when user asks to turn off the light."""
         self.light_on = False
         logger.info("Light is now off")
