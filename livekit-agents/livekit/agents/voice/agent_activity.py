@@ -474,7 +474,9 @@ class AgentActivity(RecognitionHooks):
             allow_interruptions = NOT_GIVEN
 
         log_event(
-            "generate_reply", new_message=user_message or None, instructions=instructions or None
+            "generate_reply",
+            new_message=user_message.text_content if user_message else None,
+            instructions=instructions or None,
         )
 
         from .agent import _get_inline_task_info
