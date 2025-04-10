@@ -18,7 +18,15 @@ def _new_session_ctx() -> _ClientFactory:
         nonlocal g_session
         if g_session is None:
             logger.debug("http_session(): creating a new httpclient ctx")
-            g_session = aiohttp.ClientSession()
+
+            from ..job import get_job_context
+
+            try:
+                http_proxy = get_job_context().proc.http_proxy
+            except RuntimeError:
+                http_proxy = None
+
+            g_session = aiohttp.ClientSession(proxy=http_proxy)
         return g_session
 
     _ContextVar.set(_new_session)  # type: ignore

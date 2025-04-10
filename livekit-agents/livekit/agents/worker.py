@@ -52,6 +52,8 @@ from .job import (
     RunningJobInfo,
 )
 from .log import DEV_LEVEL, logger
+from .types import NOT_GIVEN, NotGivenOr
+from .utils import is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
@@ -207,6 +209,12 @@ class WorkerOptions:
     The HTTP server is used as a health check endpoint.
     """
 
+    http_proxy: NotGivenOr[str | None] = NOT_GIVEN
+    """HTTP proxy used to connect to the LiveKit server.
+
+    By default it uses ``HTTP_PROXY`` or ``HTTPS_PROXY`` from environment
+    """
+
     def validate_config(self, devmode: bool):
         load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
         if load_threshold > 1 and not devmode:
@@ -254,6 +262,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                 "ignoring max_job_memory_usage"
             )
 
+        if not is_given(opts.http_proxy):
+            opts.http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+
         self._opts = opts
         self._loop = loop or asyncio.get_event_loop()
 
@@ -283,6 +294,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 high_ping_threshold=2.5,
                 mp_ctx=mp_ctx,
                 loop=self._loop,
+                http_proxy=opts.http_proxy or None,
             )
 
         self._proc_pool = ipc.proc_pool.ProcPool(
@@ -297,6 +309,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             close_timeout=opts.shutdown_process_timeout,
             memory_warn_mb=opts.job_memory_warn_mb,
             memory_limit_mb=opts.job_memory_limit_mb,
+            http_proxy=opts.http_proxy or None,
         )
 
         self._previous_status = agent.WorkerStatus.WS_AVAILABLE
@@ -392,8 +405,10 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._proc_pool.on("process_job_launched", _update_job_status)
         await self._proc_pool.start()
 
-        self._api = api.LiveKitAPI(self._opts.ws_url, self._opts.api_key, self._opts.api_secret)
-        self._http_session = aiohttp.ClientSession()
+        self._http_session = aiohttp.ClientSession(proxy=self._opts.http_proxy or None)
+        self._api = api.LiveKitAPI(
+            self._opts.ws_url, self._opts.api_key, self._opts.api_secret, session=self._http_session
+        )
         self._close_future = asyncio.Future(loop=self._loop)
 
         @utils.log_exceptions(logger=logger)
@@ -615,7 +630,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                 path_parts = [f"{scheme}://{parse.netloc}", parse.path, "/agent"]
                 agent_url = reduce(urljoin, path_parts)
 
-                ws = await self._http_session.ws_connect(agent_url, headers=headers, autoping=True)
+                ws = await self._http_session.ws_connect(
+                    agent_url, headers=headers, autoping=True, proxy=self._opts.http_proxy or None
+                )
 
                 retry_count = 0
 

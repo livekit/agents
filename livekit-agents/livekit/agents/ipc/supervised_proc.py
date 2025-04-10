@@ -30,6 +30,7 @@ class _ProcOpts:
     ping_interval: float
     ping_timeout: float
     high_ping_threshold: float
+    http_proxy: str | None
 
 
 class SupervisedProc(ABC):
@@ -43,6 +44,7 @@ class SupervisedProc(ABC):
         ping_interval: float,
         ping_timeout: float,
         high_ping_threshold: float,
+        http_proxy: str | None,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
@@ -56,6 +58,7 @@ class SupervisedProc(ABC):
             ping_interval=ping_interval,
             ping_timeout=ping_timeout,
             high_ping_threshold=high_ping_threshold,
+            http_proxy=http_proxy,
         )
 
         self._exitcode: int | None = None
@@ -153,6 +156,7 @@ class SupervisedProc(ABC):
                 ping_interval=self._opts.ping_interval,
                 ping_timeout=self._opts.ping_timeout,
                 high_ping_threshold=self._opts.high_ping_threshold,
+                http_proxy=self._opts.http_proxy or "",
             ),
         )
 
