@@ -302,6 +302,7 @@ class JobContext:
 
         fut = asyncio.Future[Any]()
         task = asyncio.create_task(coro, name=task_id)
+
         def _on_task_done(t: asyncio.Task[Any]):
             self._pending_tasks.pop(task_id)
             if t.exception():
@@ -312,7 +313,6 @@ class JobContext:
         task.add_done_callback(_on_task_done)
         self._pending_tasks[task_id] = fut
         return fut
-    
 
     def disconnect(self) -> asyncio.Future[None]:
         """Disconnects the agent from the room, but does not delete the room."""
@@ -321,12 +321,15 @@ class JobContext:
     def delete_room(self) -> asyncio.Future[None]:
         """Deletes the room and disconnects all participants."""
         return self._create_task_with_future(
-            "delete_room",
-            self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+            "delete_room", self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         )
-    
+
     def get_sip_participants(self) -> list[rtc.RemoteParticipant]:
-        return [p for p in self._room.remote_participants.values() if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP]
+        return [
+            p
+            for p in self._room.remote_participants.values()
+            if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        ]
 
     def add_sip_participant(
         self,
@@ -337,19 +340,21 @@ class JobContext:
     ) -> asyncio.Future[api.SIPParticipantInfo]:
         """
         Add a SIP participant to the room.
-        
+
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
         """
         return self._create_task_with_future(
-            f"add_sip_participant-{sip_call_to}", 
-            self.api.sip.create_sip_participant(api.CreateSIPParticipantRequest(
-            room_name = self._room.name,
-            participant_identity = participant_identity,
-            sip_trunk_id = sip_trunk_id,
-            sip_call_to = sip_call_to,
-            participant_name = participant_name,
-        ))
+            f"add_sip_participant-{sip_call_to}",
+            self.api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=participant_identity,
+                    sip_trunk_id=sip_trunk_id,
+                    sip_call_to=sip_call_to,
+                    participant_name=participant_name,
+                )
+            ),
         )
 
     def transfer_sip_participant(
@@ -369,11 +374,12 @@ class JobContext:
         Returns:
             Future that completes when the transfer is complete
 
-        
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
-        assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, "Participant must be a SIP participant"
+        assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
+            "Participant must be a SIP participant"
+        )
         return self._create_task_with_future(
             f"transfer_sip_participant-{transfer_to}",
             self.api.sip.transfer_sip_participant(
@@ -385,7 +391,6 @@ class JobContext:
                 )
             ),
         )
-
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
