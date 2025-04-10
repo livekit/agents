@@ -9,7 +9,6 @@ from ..llm import LLM, ChatMessage, FunctionCall, FunctionCallOutput, LLMError
 from ..metrics import AgentMetrics
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
-from ..types import AgentState
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -50,12 +49,9 @@ class RunContext(Generic[Userdata_T]):
 
 
 EventTypes = Literal[
-    "user_started_speaking",
-    "user_stopped_speaking",
-    "user_input_transcribed",
-    "agent_started_speaking",
-    "agent_stopped_speaking",
+    "user_state_changed",
     "agent_state_changed",
+    "user_input_transcribed",
     "conversation_item_added",
     "function_tools_executed",
     "metrics_collected",
@@ -64,32 +60,26 @@ EventTypes = Literal[
     "close",
 ]
 
+UserState = Literal["speaking", "listening", "away"]
+AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking"]
 
-class UserStartedSpeakingEvent(BaseModel):
-    type: Literal["user_started_speaking"] = "user_started_speaking"
+
+class UserStateChangedEvent(BaseModel):
+    type: Literal["user_state_changed"] = "user_state_changed"
+    old_state: UserState
+    new_state: UserState
 
 
-class UserStoppedSpeakingEvent(BaseModel):
-    type: Literal["user_stopped_speaking"] = "user_stopped_speaking"
+class AgentStateChangedEvent(BaseModel):
+    type: Literal["agent_state_changed"] = "agent_state_changed"
+    old_state: AgentState
+    new_state: AgentState
 
 
 class UserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
-
-
-class AgentStartedSpeakingEvent(BaseModel):
-    type: Literal["agent_started_speaking"] = "agent_started_speaking"
-
-
-class AgentStoppedSpeakingEvent(BaseModel):
-    type: Literal["agent_stopped_speaking"] = "agent_stopped_speaking"
-
-
-class AgentStateChangedEvent(BaseModel):
-    type: Literal["agent_state_changed"] = "agent_state_changed"
-    state: AgentState
 
 
 class MetricsCollectedEvent(BaseModel):
@@ -117,7 +107,9 @@ class FunctionToolsExecutedEvent(BaseModel):
     @model_validator(mode="after")
     def verify_lists_length(self) -> Self:
         if len(self.function_calls) != len(self.function_call_outputs):
-            raise ValueError("The number of function_calls and function_call_outputs must match.")
+            raise ValueError(
+                "The number of function_calls and function_call_outputs must match."
+            )
 
         return self
 
@@ -148,11 +140,8 @@ class CloseEvent(BaseModel):
 
 AgentEvent = Annotated[
     Union[
-        UserStartedSpeakingEvent,
-        UserStoppedSpeakingEvent,
         UserInputTranscribedEvent,
-        AgentStartedSpeakingEvent,
-        AgentStoppedSpeakingEvent,
+        UserStateChangedEvent,
         AgentStateChangedEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,

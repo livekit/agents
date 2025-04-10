@@ -3,14 +3,15 @@ from .agent_session import AgentSession
 from .chat_cli import ChatCLI
 from .events import (
     AgentEvent,
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
     ConversationItemAddedEvent,
     MetricsCollectedEvent,
     RunContext,
     UserInputTranscribedEvent,
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
+    UserActivityChangedEvent,
+    AgentActivityChangedEvent,
+    SpeechCreatedEvent,
+    ErrorEvent,
+    CloseEvent,
 )
 from .speech_handle import SpeechHandle
 
@@ -22,12 +23,13 @@ __all__ = [
     "InlineTask",
     "SpeechHandle",
     "RunContext",
-    "UserStartedSpeakingEvent",
-    "UserStoppedSpeakingEvent",
-    "AgentEvent",
     "UserInputTranscribedEvent",
-    "AgentStartedSpeakingEvent",
-    "AgentStoppedSpeakingEvent",
+    "AgentEvent",
     "MetricsCollectedEvent",
     "ConversationItemAddedEvent",
+    "SpeechCreatedEvent",
+    "ErrorEvent",
+    "CloseEvent",
+    "UserActivityChangedEvent",
+    "AgentActivityChangedEvent",
 ]
