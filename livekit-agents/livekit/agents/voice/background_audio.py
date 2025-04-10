@@ -65,11 +65,9 @@ class BackgroundAudioPlayer:
     def __init__(
         self,
         *,
-        ambient_sound: NotGivenOr[
-            Union[AudioSource, AudioConfig, list[AudioConfig], None]
-        ] = NOT_GIVEN,
+        ambient_sound: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         thinking_sound: NotGivenOr[
-            Union[AudioSource, AudioConfig, list[AudioConfig], None]
+            AudioSource | AudioConfig | list[AudioConfig] | None
         ] = NOT_GIVEN,
     ) -> None:
         """
@@ -112,7 +110,7 @@ class BackgroundAudioPlayer:
         self._ambient_handle: PlayHandle | None = None
         self._thinking_handle: PlayHandle | None = None
 
-    def _select_sound_from_list(self, sounds: list[AudioConfig]) -> Union[AudioConfig, None]:
+    def _select_sound_from_list(self, sounds: list[AudioConfig]) -> AudioConfig | None:
         """
         Selects a sound from a list of BackgroundSound based on their probabilities.
         Returns None if no sound is selected (when sum of probabilities < 1.0).
@@ -141,8 +139,8 @@ class BackgroundAudioPlayer:
         return sounds[-1]
 
     def _normalize_sound_source(
-        self, source: Union[AudioSource, AudioConfig, list[AudioConfig], None]
-    ) -> Union[tuple[AudioSource, float], None]:
+        self, source: AudioSource | AudioConfig | list[AudioConfig] | None
+    ) -> tuple[AudioSource, float] | None:
         if source is None:
             return None
 
@@ -160,7 +158,7 @@ class BackgroundAudioPlayer:
 
     def play(
         self,
-        audio: Union[AudioSource, AudioConfig, list[AudioConfig]],
+        audio: AudioSource | AudioConfig | list[AudioConfig],
         *,
         loop: bool = False,
     ) -> PlayHandle:
@@ -301,7 +299,7 @@ class BackgroundAudioPlayer:
         if not self._thinking_sound:
             return
 
-        if ev.state == "thinking":
+        if ev.new_state == "thinking":
             if self._thinking_handle and not self._thinking_handle.done():
                 return
 
