@@ -226,7 +226,7 @@ class Agent:
         Raises:
             RuntimeError: If the agent is not running or the realtime LLM session is not available
         """
-        if (rt_session := self.__get_activity_or_raise().realtime_llm_session) is None:
+        if (rt_session := self._get_activity_or_raise().realtime_llm_session) is None:
             raise RuntimeError("no realtime LLM session")
 
         return rt_session
@@ -239,7 +239,7 @@ class Agent:
         Raises:
             RuntimeError: If the agent is not running
         """
-        return self.__get_activity_or_raise().agent
+        return self._get_activity_or_raise().agent
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -381,7 +381,7 @@ class Agent:
         """A node processing the audio from the realtime LLM session before it is played out."""
         return Agent.default.realtime_audio_output_node(self, audio, model_settings)
 
-    def __get_activity_or_raise(self) -> AgentActivity:
+    def _get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:
             raise RuntimeError("no activity context found, this task is not running")
@@ -394,7 +394,7 @@ class Agent:
             agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
         ) -> AsyncGenerator[stt.SpeechEvent, None]:
             """Default implementation for `Agent.stt_node`"""
-            activity = agent.__get_activity_or_raise()
+            activity = agent._get_activity_or_raise()
             assert activity.stt is not None, "stt_node called but no STT node is available"
 
             wrapped_stt = activity.stt
@@ -430,7 +430,7 @@ class Agent:
             model_settings: ModelSettings,
         ) -> AsyncGenerator[llm.ChatChunk | str, None]:
             """Default implementation for `Agent.llm_node`"""
-            activity = agent.__get_activity_or_raise()
+            activity = agent._get_activity_or_raise()
             assert activity.llm is not None, "llm_node called but no LLM node is available"
             assert isinstance(activity.llm, llm.LLM), (
                 "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
@@ -450,7 +450,7 @@ class Agent:
             agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
-            activity = agent.__get_activity_or_raise()
+            activity = agent._get_activity_or_raise()
             assert activity.tts is not None, "tts_node called but no TTS node is available"
 
             wrapped_tts = activity.tts
@@ -488,7 +488,7 @@ class Agent:
             agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.realtime_audio_output_node`"""
-            activity = agent.__get_activity_or_raise()
+            activity = agent._get_activity_or_raise()
             assert activity.realtime_llm_session is not None, (
                 "realtime_audio_output_node called but no realtime LLM session is available"
             )
