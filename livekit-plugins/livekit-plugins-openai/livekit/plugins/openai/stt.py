@@ -196,6 +196,7 @@ class STT(stt.STT):
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
+            conn_options=conn_options,
         )
         self._streams.add(stream)
         return stream
@@ -347,9 +348,10 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         stt: STT,
+        conn_options: APIConnectOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ) -> None:
-        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS, sample_rate=SAMPLE_RATE)
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
 
         self._pool = pool
         self._language = stt._opts.language

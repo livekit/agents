@@ -42,21 +42,15 @@ class MyAgent(Agent):
         )
         self.speed_factor = speed_factor
 
-    async def tts_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[rtc.AudioFrame]:
-        # process for tts output
-        async for frame in self._process_audio_stream(super().tts_node(text, model_settings)):
-            yield frame
+    async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
+        return self._process_audio_stream(Agent.default.tts_node(self, text, model_settings))
 
     async def realtime_audio_output_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
-        # process for realtime audio output
-        async for frame in self._process_audio_stream(
-            super().realtime_audio_output_node(audio, model_settings)
-        ):
-            yield frame
+        return self._process_audio_stream(
+            Agent.default.realtime_audio_output_node(self, audio, model_settings)
+        )
 
     async def _process_audio_stream(
         self, audio: AsyncIterable[rtc.AudioFrame]
@@ -96,11 +90,8 @@ class MyAgent(Agent):
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
-    # warmup the librosa
-    librosa.effects.time_stretch(
-        np.random.randn(16000).astype(np.float32),
-        rate=1.2,
-    )
+    # warmup the librosa JIT
+    librosa.effects.time_stretch(np.random.randn(16000).astype(np.float32), rate=1.2)
 
 
 async def entrypoint(ctx: JobContext):
@@ -118,8 +109,8 @@ async def entrypoint(ctx: JobContext):
         tts=openai.TTS(voice="ash"),
         # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
+
     await session.start(agent=MyAgent(), room=ctx.room)
-    # session.say("Hello, how can I help you today?")
 
 
 if __name__ == "__main__":

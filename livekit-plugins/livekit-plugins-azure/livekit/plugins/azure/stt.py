@@ -21,7 +21,13 @@ from dataclasses import dataclass
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, utils
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    stt,
+    utils,
+)
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -198,15 +204,20 @@ class SpeechStream(stt.SpeechStream):
 
                 process_input_task = asyncio.create_task(process_input())
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
-                        [process_input_task, wait_reconnect_task],
+                        [process_input_task, wait_reconnect_task, wait_stopped_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
-                        if task != wait_reconnect_task:
+                        if task not in [wait_reconnect_task, wait_stopped_task]:
                             task.result()
+
+                    if wait_stopped_task in done:
+                        raise APIConnectionError("SpeechRecognition session stopped")
+
                     if wait_reconnect_task not in done:
                         break
                     self._reconnect_event.clear()

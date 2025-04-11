@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import Self
 
 from ..llm import LLM, ChatMessage, FunctionCall, FunctionCallOutput, LLMError
 from ..metrics import AgentMetrics
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
-from ..types import AgentState
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -49,12 +49,9 @@ class RunContext(Generic[Userdata_T]):
 
 
 EventTypes = Literal[
-    "user_started_speaking",
-    "user_stopped_speaking",
-    "user_input_transcribed",
-    "agent_started_speaking",
-    "agent_stopped_speaking",
+    "user_state_changed",
     "agent_state_changed",
+    "user_input_transcribed",
     "conversation_item_added",
     "function_tools_executed",
     "metrics_collected",
@@ -63,13 +60,20 @@ EventTypes = Literal[
     "close",
 ]
 
+UserState = Literal["speaking", "listening", "away"]
+AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking"]
 
-class UserStartedSpeakingEvent(BaseModel):
-    type: Literal["user_started_speaking"] = "user_started_speaking"
+
+class UserStateChangedEvent(BaseModel):
+    type: Literal["user_state_changed"] = "user_state_changed"
+    old_state: UserState
+    new_state: UserState
 
 
-class UserStoppedSpeakingEvent(BaseModel):
-    type: Literal["user_stopped_speaking"] = "user_stopped_speaking"
+class AgentStateChangedEvent(BaseModel):
+    type: Literal["agent_state_changed"] = "agent_state_changed"
+    old_state: AgentState
+    new_state: AgentState
 
 
 class UserInputTranscribedEvent(BaseModel):
@@ -78,33 +82,34 @@ class UserInputTranscribedEvent(BaseModel):
     is_final: bool
 
 
-class AgentStartedSpeakingEvent(BaseModel):
-    type: Literal["agent_started_speaking"] = "agent_started_speaking"
-
-
-class AgentStoppedSpeakingEvent(BaseModel):
-    type: Literal["agent_stopped_speaking"] = "agent_stopped_speaking"
-
-
-class AgentStateChangedEvent(BaseModel):
-    type: Literal["agent_state_changed"] = "agent_state_changed"
-    state: AgentState
-
-
 class MetricsCollectedEvent(BaseModel):
     type: Literal["metrics_collected"] = "metrics_collected"
     metrics: AgentMetrics
 
 
+class _TypeDiscriminator(BaseModel):
+    type: Literal["unknown"] = "unknown"  # force user to use the type discriminator
+
+
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
-    message: ChatMessage
+    item: ChatMessage | _TypeDiscriminator
 
 
 class FunctionToolsExecutedEvent(BaseModel):
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput]
+
+    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
+        return list(zip(self.function_calls, self.function_call_outputs))
+
+    @model_validator(mode="after")
+    def verify_lists_length(self) -> Self:
+        if len(self.function_calls) != len(self.function_call_outputs):
+            raise ValueError("The number of function_calls and function_call_outputs must match.")
+
+        return self
 
 
 class SpeechCreatedEvent(BaseModel):
@@ -131,16 +136,16 @@ class CloseEvent(BaseModel):
     error: LLMError | STTError | TTSError | None = None
 
 
-AgentEvent = Union[
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
-    UserInputTranscribedEvent,
-    AgentStartedSpeakingEvent,
-    AgentStoppedSpeakingEvent,
-    AgentStateChangedEvent,
-    MetricsCollectedEvent,
-    ConversationItemAddedEvent,
-    SpeechCreatedEvent,
-    ErrorEvent,
-    CloseEvent,
+AgentEvent = Annotated[
+    Union[
+        UserInputTranscribedEvent,
+        UserStateChangedEvent,
+        AgentStateChangedEvent,
+        MetricsCollectedEvent,
+        ConversationItemAddedEvent,
+        SpeechCreatedEvent,
+        ErrorEvent,
+        CloseEvent,
+    ],
+    Field(discriminator="type"),
 ]

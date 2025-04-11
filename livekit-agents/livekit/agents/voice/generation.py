@@ -315,7 +315,6 @@ async def _execute_tools_task(
                 function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
                 json_args = fnc_call.arguments or "{}"
                 parsed_args = function_model.model_validate_json(json_args)
-
             except ValidationError:
                 logger.exception(
                     f"tried to call AI function `{fnc_call.name}` with invalid arguments",

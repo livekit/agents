@@ -28,7 +28,7 @@ class MyAgent(Agent):
             # llm=openai.realtime.RealtimeModel(voice="alloy", turn_detection=None),
         )
 
-    async def on_user_turn_completed(self, chat_ctx: ChatContext, new_message: ChatMessage) -> None:
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
         # callback before generating a reply after user turn committed
         if not new_message.text_content:
             # for example, raise StopResponse to stop the agent from generating a reply
