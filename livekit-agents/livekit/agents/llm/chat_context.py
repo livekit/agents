@@ -160,6 +160,10 @@ class ChatContext:
     def items(self) -> list[ChatItem]:
         return self._items
 
+    @items.setter
+    def items(self, items: list[ChatItem]):
+        self._items = items
+
     def add_message(
         self,
         *,
@@ -221,6 +225,29 @@ class ChatContext:
             items.append(item)
 
         return ChatContext(items)
+
+    def truncate(self, *, max_items: int, preserve_instructions: bool = True) -> ChatContext:
+        instructions: ChatMessage | None = None
+        if preserve_instructions:
+            from ..voice.generation import INSTRUCTIONS_MESSAGE_ID
+
+            idx = self.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+            if idx is not None:
+                instructions = self._items.pop(idx)
+
+        new_items = self._items[-max_items:]
+        # chat ctx shouldn't start with function_call or function_call_output
+        while new_items and new_items[0].type in [
+            "function_call",
+            "function_call_output",
+        ]:
+            new_items.pop(0)
+
+        if instructions:
+            new_items.insert(0, instructions)
+
+        self._items[:] = new_items
+        return self
 
     def to_dict(
         self,
