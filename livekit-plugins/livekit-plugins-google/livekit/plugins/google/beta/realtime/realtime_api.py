@@ -568,7 +568,7 @@ class RealtimeSession(llm.RealtimeSession):
         for fnc_call in tool_call.function_calls:
             self._current_generation.function_ch.send_nowait(
                 llm.FunctionCall(
-                    call_id=fnc_call.id,
+                    call_id=fnc_call.id or "",
                     name=fnc_call.name,
                     arguments=json.dumps(fnc_call.args),
                 )

@@ -1,6 +1,7 @@
 import logging
 
 from dotenv import load_dotenv
+from google.genai import types
 
 from livekit.agents import (
     Agent,
@@ -23,8 +24,7 @@ class GeminiAgent(Agent):
         super().__init__(
             instructions="you are gemini, a helpful assistant",
             llm=google.beta.realtime.RealtimeModel(
-                input_audio_transcription=True,
-                output_audio_transcription=True,
+                input_audio_transcription=types.AudioTranscriptionConfig(),
                 vertexai=True,
                 project="project-id",
                 location="us-central1",
