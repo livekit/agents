@@ -34,6 +34,7 @@ from .speech_handle import SpeechHandle
 @dataclass
 class VoiceOptions:
     allow_interruptions: bool
+    discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
     min_endpointing_delay: float
     max_endpointing_delay: float
@@ -69,6 +70,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
+        discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
@@ -82,6 +84,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx = ChatContext.empty()
         self._opts = VoiceOptions(
             allow_interruptions=allow_interruptions,
+            discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
@@ -274,6 +277,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self.input.audio is not None:
                 self._forward_audio_atask = asyncio.create_task(
                     self._forward_audio_task(), name="_forward_audio_task"
+                )
+
+            if self.input.video is not None:
+                self._forward_video_atask = asyncio.create_task(
+                    self._forward_video_task(), name="_forward_video_task"
                 )
 
             self._started = True
@@ -471,6 +479,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._activity is not None:
                 self._activity.push_audio(frame)
 
+    @utils.log_exceptions(logger=logger)
+    async def _forward_video_task(self) -> None:
+        video_input = self.input.video
+        if video_input is None:
+            return
+
+        async for frame in video_input:
+            if self._activity is not None:
+                self._activity.push_video(frame)
+
     def _update_agent_state(self, state: AgentState) -> None:
         if self._agent_state == state:
             return
@@ -496,7 +514,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     # -- User changed input/output streams/sinks --
 
     def _on_video_input_changed(self) -> None:
-        pass
+        if not self._started:
+            return
+
+        if self._forward_video_atask is not None:
+            self._forward_video_atask.cancel()
+
+        self._forward_video_atask = asyncio.create_task(
+            self._forward_video_task(), name="_forward_video_task"
+        )
 
     def _on_audio_input_changed(self) -> None:
         if not self._started:

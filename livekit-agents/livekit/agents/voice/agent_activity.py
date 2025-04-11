@@ -396,9 +396,12 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        if self._current_speech and not self._current_speech.allow_interruptions:
-            # TODO(long): make this optional if user want to save the transcript for later response?
-            # drop the audio if the current speech is not interruptable
+        if (
+            self._current_speech
+            and not self._current_speech.allow_interruptions
+            and self._session.options.discard_audio_if_uninterruptible
+        ):
+            # discard the audio if the current speech is not interruptable
             return
 
         if self._rt_session is not None:
@@ -406,6 +409,13 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition is not None:
             self._audio_recognition.push_audio(frame)
+
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        if not self._started:
+            return
+
+        if self._rt_session is not None:
+            self._rt_session.push_video(frame)
 
     def say(
         self,
