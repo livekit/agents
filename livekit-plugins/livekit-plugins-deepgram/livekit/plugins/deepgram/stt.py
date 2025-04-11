@@ -539,7 +539,9 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:  # close is expected, see SpeechStream.aclose
+                    # close is expected, see SpeechStream.aclose
+                    # or when the agent session ends, the http session is closed
+                    if closing_ws or self._session.closed:
                         return
 
                     # this will trigger a reconnection, see the _run loop
