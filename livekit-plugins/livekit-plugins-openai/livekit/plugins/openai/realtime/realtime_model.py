@@ -80,6 +80,7 @@ class _RealtimeOptions:
     model: str
     voice: str
     temperature: float
+    tool_choice: llm.ToolChoice | None
     input_audio_transcription: InputAudioTranscription | None
     turn_detection: TurnDetection | None
     api_key: str
@@ -125,6 +126,7 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -147,6 +149,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._opts = _RealtimeOptions(
             model=model,
             voice=voice,
+            tool_choice=tool_choice if is_given(tool_choice) else "auto",
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             input_audio_transcription=input_audio_transcription
             if is_given(input_audio_transcription)
@@ -157,6 +160,86 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    @classmethod
+    def with_azure(
+        cls,
+        *,
+        azure_deployment: str,
+        azure_endpoint: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        entra_token: str | None = None,
+        base_url: str | None = None,
+        voice: str = "alloy",
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        temperature: float = 0.8,
+        max_response_output_tokens: int | Literal["inf"] = "inf",
+        http_session: aiohttp.ClientSession | None = None,
+    ):
+        """
+        Create a RealtimeClient instance configured for Azure OpenAI Service.
+
+        Args:
+            azure_deployment (str): The name of your Azure OpenAI deployment.
+            azure_endpoint (str or None, optional): The endpoint URL for your Azure OpenAI resource. If None, will attempt to read from the environment variable AZURE_OPENAI_ENDPOINT.
+            api_version (str or None, optional): API version to use with Azure OpenAI Service. If None, will attempt to read from the environment variable OPENAI_API_VERSION.
+            api_key (str or None, optional): Azure OpenAI API key. If None, will attempt to read from the environment variable AZURE_OPENAI_API_KEY.
+            entra_token (str or None, optional): Azure Entra authentication token. Required if not using API key authentication.
+            base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
+            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
+            tool_choice (llm.ToolChoice or None, optional): Tool choice for the model. Defaults to "auto".
+            input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+            turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
+            http_session (aiohttp.ClientSession or None, optional): Async HTTP session to use for requests. If None, a new session will be created.
+
+        Returns:
+            RealtimeClient: An instance of RealtimeClient configured for Azure OpenAI Service.
+
+        Raises:
+            ValueError: If required Azure parameters are missing or invalid.
+        """
+        api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
+        if api_key is None and entra_token is None:
+            raise ValueError(
+                "Missing credentials. Please pass one of `api_key`, `entra_token`, or the `AZURE_OPENAI_API_KEY` environment variable."
+            )
+
+        api_version = api_version or os.getenv("OPENAI_API_VERSION")
+        if api_version is None:
+            raise ValueError(
+                "Must provide either the `api_version` argument or the `OPENAI_API_VERSION` environment variable"
+            )
+
+        if base_url is None:
+            azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
+            if azure_endpoint is None:
+                raise ValueError(
+                    "Missing Azure endpoint. Please pass the `azure_endpoint` parameter or set the `AZURE_OPENAI_ENDPOINT` environment variable."
+                )
+
+            base_url = f"{azure_endpoint.rstrip('/')}/openai"
+        elif azure_endpoint is not None:
+            raise ValueError("base_url and azure_endpoint are mutually exclusive")
+
+        return cls(
+            voice=voice,
+            input_audio_transcription=input_audio_transcription,
+            turn_detection=turn_detection,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_response_output_tokens=max_response_output_tokens,
+            api_key=api_key,
+            http_session=http_session,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            entra_token=entra_token,
+            base_url=base_url,
+        )
 
     def update_options(
         self,
