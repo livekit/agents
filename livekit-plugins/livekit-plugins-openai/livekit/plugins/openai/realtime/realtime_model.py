@@ -320,8 +320,17 @@ class RealtimeSession(
                 msg = await ws_conn.receive()
                 if msg.type == aiohttp.WSMsgType.CLOSED:
                     if not closing:
-                        recoverable = False
-                        raise Exception("OpenAI S2S connection closed unexpectedly")
+                        error = Exception("OpenAI S2S connection closed unexpectedly")
+                        self.emit(
+                            "error",
+                            llm.RealtimeModelError(
+                                timestamp=time.time(),
+                                label=self._realtime_model._label,
+                                error=error,
+                                recoverable=False,
+                            ),
+                        )
+                        raise error
 
                     return
                 elif msg.type != aiohttp.WSMsgType.TEXT:
@@ -895,7 +904,7 @@ class RealtimeSession(
                 type="realtime_model_error",
                 timestamp=time.time(),
                 label=self._realtime_model._label,
-                event_id=event.error.event_id,
+                error=event.error,
                 recoverable=recoverable,
             ),
         )

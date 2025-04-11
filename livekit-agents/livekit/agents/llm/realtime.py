@@ -45,7 +45,7 @@ class RealtimeModelError(BaseModel):
     type: Literal["realtime_model_error"] = "realtime_model_error"
     timestamp: float
     label: str
-    event_id: str | None = None
+    error: any = Field(..., exclude=True)
     recoverable: bool
 
 
