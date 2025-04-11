@@ -15,9 +15,10 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
-## This example demonstrates how to use function calls with type hints and descriptions
+## This example demonstrates how to use function tools with type hints and descriptions
 ## The Args in docstring will be parsed as arg descriptions for the LLM
 ## You can also use enums and pydantic.Field to add descriptions
+## For dynamic tool creation, check out dynamic_tool_creation.py
 
 
 class RoomName(str, Enum):
