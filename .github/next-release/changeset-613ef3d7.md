@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-make drop audio when uninterruptible optional (#1957)
+make discard audio when uninterruptible configurable (#1957)

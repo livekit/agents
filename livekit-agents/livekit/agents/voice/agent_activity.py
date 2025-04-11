@@ -391,9 +391,9 @@ class AgentActivity(RecognitionHooks):
         if (
             self._current_speech
             and not self._current_speech.allow_interruptions
-            and self._session.options.drop_audio_on_uninterruptible
+            and self._session.options.discard_audio_if_uninterruptible
         ):
-            # drop the audio if the current speech is not interruptable
+            # discard the audio if the current speech is not interruptable
             return
 
         if self._rt_session is not None:

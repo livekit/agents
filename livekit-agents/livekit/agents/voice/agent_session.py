@@ -34,7 +34,7 @@ from .speech_handle import SpeechHandle
 @dataclass
 class VoiceOptions:
     allow_interruptions: bool
-    drop_audio_on_uninterruptible: bool
+    discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
     min_endpointing_delay: float
     max_endpointing_delay: float
@@ -70,7 +70,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
-        drop_audio_on_uninterruptible: bool = True,
+        discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
@@ -84,7 +84,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx = ChatContext.empty()
         self._opts = VoiceOptions(
             allow_interruptions=allow_interruptions,
-            drop_audio_on_uninterruptible=drop_audio_on_uninterruptible,
+            discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
