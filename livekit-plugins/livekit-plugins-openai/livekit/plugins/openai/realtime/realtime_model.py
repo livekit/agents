@@ -130,7 +130,6 @@ class RealtimeModel(llm.RealtimeModel):
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
-        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: str | None = None,
@@ -149,7 +148,6 @@ class RealtimeModel(llm.RealtimeModel):
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
-        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None: ...
@@ -162,7 +160,6 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
-        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -185,7 +182,8 @@ class RealtimeModel(llm.RealtimeModel):
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None and not is_azure:
             raise ValueError(
-                "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+                "The api_key client option must be set either by passing api_key "
+                "to the client or by setting the OPENAI_API_KEY environment variable"
             )
 
         if is_given(base_url):
@@ -195,7 +193,8 @@ class RealtimeModel(llm.RealtimeModel):
                 azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
                 if azure_endpoint is None:
                     raise ValueError(
-                        "Missing Azure endpoint. Please pass base_url or set AZURE_OPENAI_ENDPOINT environment variable."
+                        "Missing Azure endpoint. Please pass base_url "
+                        "or set AZURE_OPENAI_ENDPOINT environment variable."
                     )
                 base_url_val = f"{azure_endpoint.rstrip('/')}/openai"
             else:
@@ -204,7 +203,6 @@ class RealtimeModel(llm.RealtimeModel):
         self._opts = _RealtimeOptions(
             model=model,
             voice=voice,
-            tool_choice=tool_choice if is_given(tool_choice) else "auto",
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             input_audio_transcription=input_audio_transcription
             if is_given(input_audio_transcription)
@@ -231,7 +229,6 @@ class RealtimeModel(llm.RealtimeModel):
         entra_token: str | None = None,
         base_url: str | None = None,
         voice: str = "alloy",
-        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: float = 0.8,
@@ -248,7 +245,6 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token (str or None, optional): Azure Entra authentication token. Required if not using API key authentication.
             base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
-            tool_choice (llm.ToolChoice or None, optional): Tool choice for the model. Defaults to "auto".
             input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
             turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
@@ -260,24 +256,27 @@ class RealtimeModel(llm.RealtimeModel):
 
         Raises:
             ValueError: If required Azure parameters are missing or invalid.
-        """
+        """  # noqa: E501
         api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         if api_key is None and entra_token is None:
             raise ValueError(
-                "Missing credentials. Please pass one of `api_key`, `entra_token`, or the `AZURE_OPENAI_API_KEY` environment variable."
+                "Missing credentials. Please pass one of `api_key`, `entra_token`, "
+                "or the `AZURE_OPENAI_API_KEY` environment variable."
             )
 
         api_version = api_version or os.getenv("OPENAI_API_VERSION")
         if api_version is None:
             raise ValueError(
-                "Must provide either the `api_version` argument or the `OPENAI_API_VERSION` environment variable"
+                "Must provide either the `api_version` argument or the "
+                "`OPENAI_API_VERSION` environment variable"
             )
 
         if base_url is None:
             azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
             if azure_endpoint is None:
                 raise ValueError(
-                    "Missing Azure endpoint. Please pass the `azure_endpoint` parameter or set the `AZURE_OPENAI_ENDPOINT` environment variable."
+                    "Missing Azure endpoint. Please pass the `azure_endpoint` "
+                    "parameter or set the `AZURE_OPENAI_ENDPOINT` environment variable."
                 )
 
             base_url = f"{azure_endpoint.rstrip('/')}/openai"
@@ -288,7 +287,6 @@ class RealtimeModel(llm.RealtimeModel):
             voice=voice,
             input_audio_transcription=input_audio_transcription,
             turn_detection=turn_detection,
-            tool_choice=tool_choice,
             temperature=temperature,
             api_key=api_key,
             http_session=http_session,
@@ -341,7 +339,11 @@ class RealtimeModel(llm.RealtimeModel):
 
 
 def process_base_url(
-    url: str, model: str, is_azure: bool, azure_deployment: str | None, api_version: str | None
+    url: str,
+    model: str,
+    is_azure: bool = False,
+    azure_deployment: str | None = None,
+    api_version: str | None = None,
 ) -> str:
     if url.startswith("http"):
         url = url.replace("http", "ws", 1)
@@ -350,16 +352,17 @@ def process_base_url(
     query_params = parse_qs(parsed_url.query)
 
     # ensure "/realtime" is added if the path is empty OR "/v1"
-    if not parsed_url.path or parsed_url.path.rstrip("/") in ["", "/v1"]:
+    if not parsed_url.path or parsed_url.path.rstrip("/") in ["", "/v1", "/openai"]:
         path = parsed_url.path.rstrip("/") + "/realtime"
     else:
         path = parsed_url.path
 
     if is_azure:
-        if azure_deployment:
-            query_params["deployment"] = [azure_deployment]
         if api_version:
             query_params["api-version"] = [api_version]
+        if azure_deployment:
+            query_params["deployment"] = [azure_deployment]
+
     else:
         if "model" not in query_params:
             query_params["model"] = [model]
