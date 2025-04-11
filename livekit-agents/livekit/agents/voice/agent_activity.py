@@ -33,9 +33,7 @@ from .generation import (
     perform_text_forwarding,
     perform_tool_executions,
     perform_tts_inference,
-    remove_instructions,
     truncate_message,
-    update_instructions,
 )
 from .speech_handle import SpeechHandle
 
@@ -212,8 +210,8 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
         else:
-            update_instructions(
-                self._agent._chat_ctx, instructions=instructions, add_if_missing=True
+            self._agent._chat_ctx.update_instructions(
+                instructions=instructions, add_if_missing=True
             )
 
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
@@ -233,11 +231,11 @@ class AgentActivity(RecognitionHooks):
         self._agent._chat_ctx = chat_ctx
 
         if self._rt_session is not None:
-            remove_instructions(chat_ctx)
+            chat_ctx.remove_instructions()
             await self._rt_session.update_chat_ctx(chat_ctx)
         else:
-            update_instructions(
-                chat_ctx, instructions=self._agent.instructions, add_if_missing=True
+            chat_ctx.update_instructions(
+                instructions=self._agent.instructions, add_if_missing=True
             )
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
@@ -300,7 +298,7 @@ class AgentActivity(RecognitionHooks):
                     self._on_input_audio_transcription_completed,
                 )
 
-                remove_instructions(self._agent._chat_ctx)
+                self._agent._chat_ctx.remove_instructions()
 
                 try:
                     await self._rt_session.update_instructions(self._agent.instructions)
@@ -319,8 +317,7 @@ class AgentActivity(RecognitionHooks):
 
             elif isinstance(self.llm, llm.LLM):
                 try:
-                    update_instructions(
-                        self._agent._chat_ctx,
+                    self._agent._chat_ctx.update_instructions(
                         instructions=self._agent.instructions,
                         add_if_missing=True,
                     )
@@ -976,7 +973,7 @@ class AgentActivity(RecognitionHooks):
 
         if instructions is not None:
             try:
-                update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
+                chat_ctx.update_instructions(instructions=instructions, add_if_missing=True)
             except ValueError:
                 logger.exception("failed to update the instructions")
 

@@ -73,7 +73,7 @@ class RetrievalAgent(Agent):
             instructions += f"\n\n{node_content}"
 
         print(f"update instructions: {instructions[:100].replace('\n', '\\n')}...")
-        await self.update_instructions(instructions)
+        chat_ctx.update_instructions(instructions=instructions)
 
         return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 

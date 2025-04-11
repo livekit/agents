@@ -29,6 +29,11 @@ from ..log import logger
 if TYPE_CHECKING:
     from ..llm import FunctionTool
 
+INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
+"""
+The ID of the instructions message in the chat context. (only for stateless LLMs)
+"""
+
 
 class ImageContent(BaseModel):
     """
@@ -229,8 +234,6 @@ class ChatContext:
     def truncate(self, *, max_items: int, preserve_instructions: bool = True) -> ChatContext:
         instructions: ChatMessage | None = None
         if preserve_instructions:
-            from ..voice.generation import INSTRUCTIONS_MESSAGE_ID
-
             idx = self.index_by_id(INSTRUCTIONS_MESSAGE_ID)
             if idx is not None:
                 instructions = self._items.pop(idx)
@@ -247,6 +250,44 @@ class ChatContext:
             new_items.insert(0, instructions)
 
         self._items[:] = new_items
+        return self
+
+    def update_instructions(self, *, instructions: str, add_if_missing: bool = True) -> ChatContext:
+        """
+        Update the instruction message in the chat context or insert a new one if missing.
+
+        This function looks for an existing instruction message in the chat context using
+        the identifier 'INSTRUCTIONS_MESSAGE_ID'.
+
+        Raises:
+            ValueError: If an existing instruction message is not of type "message".
+        """
+        idx = self.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+        if idx is not None:
+            if self.items[idx].type == "message":
+                # create a new instance to avoid mutating the original
+                self.items[idx] = ChatMessage(
+                    id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]
+                )
+            else:
+                raise ValueError(
+                    "expected the instructions inside the chat_ctx to be of type 'message'"
+                )
+        elif add_if_missing:
+            # insert the instructions at the beginning of the chat context
+            self.items.insert(
+                0, ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions])
+            )
+        return self
+
+    def remove_instructions(self) -> ChatContext:
+        # loop in case there are items with the same id (shouldn't happen!)
+        while True:
+            idx = self.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+            if idx is None:
+                break
+
+            self.items.pop(idx)
         return self
 
     def to_dict(

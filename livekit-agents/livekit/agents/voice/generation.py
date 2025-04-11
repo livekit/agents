@@ -559,49 +559,6 @@ class _PythonOutput:
         )
 
 
-INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
-"""
-The ID of the instructions message in the chat context. (only for stateless LLMs)
-"""
-
-
-def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool) -> None:
-    """
-    Update the instruction message in the chat context or insert a new one if missing.
-
-    This function looks for an existing instruction message in the chat context using the identifier
-    'INSTRUCTIONS_MESSAGE_ID'.
-
-    Raises:
-        ValueError: If an existing instruction message is not of type "message".
-    """
-    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
-    if idx is not None:
-        if chat_ctx.items[idx].type == "message":
-            # create a new instance to avoid mutating the original
-            chat_ctx.items[idx] = llm.ChatMessage(
-                id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]
-            )
-        else:
-            raise ValueError(
-                "expected the instructions inside the chat_ctx to be of type 'message'"
-            )
-    elif add_if_missing:
-        # insert the instructions at the beginning of the chat context
-        chat_ctx.items.insert(
-            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions])
-        )
-
-
-def remove_instructions(chat_ctx: ChatContext) -> None:
-    # loop in case there are items with the same id (shouldn't happen!)
-    while True:
-        if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
-            chat_ctx.items.remove(msg)
-        else:
-            break
-
-
 STANDARD_SPEECH_RATE = 0.5  # words per second
 
 
