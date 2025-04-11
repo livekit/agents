@@ -5,6 +5,7 @@ import base64
 import contextlib
 import json
 import os
+import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -318,7 +319,17 @@ class RealtimeSession(
                 msg = await ws_conn.receive()
                 if msg.type == aiohttp.WSMsgType.CLOSED:
                     if not closing:
-                        raise Exception("OpenAI S2S connection closed unexpectedly")
+                        error = Exception("OpenAI S2S connection closed unexpectedly")
+                        self.emit(
+                            "error",
+                            llm.RealtimeModelError(
+                                timestamp=time.time(),
+                                label=self._realtime_model._label,
+                                error=error,
+                                recoverable=False,
+                            ),
+                        )
+                        raise error
 
                     return
                 elif msg.type != aiohttp.WSMsgType.TEXT:
@@ -891,7 +902,13 @@ class RealtimeSession(
         )
         self.emit(
             "error",
-            llm.ErrorEvent(type=event.error.type, message=event.error.message),
+            llm.RealtimeModelError(
+                type="realtime_model_error",
+                timestamp=time.time(),
+                label=self._realtime_model._label,
+                error=event.error,
+                recoverable=True,
+            ),
         )
 
         # if event.error.event_id:
