@@ -109,8 +109,8 @@ class RealtimeModel(llm.RealtimeModel):
         top_k: NotGivenOr[int] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[bool] = NOT_GIVEN,
-        output_audio_transcription: NotGivenOr[bool] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
+        output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -137,6 +137,8 @@ class RealtimeModel(llm.RealtimeModel):
             top_k (int, optional): The top-k value for response generation
             presence_penalty (float, optional): The presence penalty for response generation
             frequency_penalty (float, optional): The frequency penalty for response generation
+            input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
+            output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -167,12 +169,11 @@ class RealtimeModel(llm.RealtimeModel):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
-        input_audio_transcription = (
-            AudioTranscriptionConfig() if input_audio_transcription is True else None
-        )
-        output_audio_transcription = (
-            AudioTranscriptionConfig() if output_audio_transcription is True else None
-        )
+        if not is_given(input_audio_transcription):
+            input_audio_transcription = None
+        if not is_given(output_audio_transcription):
+            output_audio_transcription = AudioTranscriptionConfig()
+
         self._opts = _RealtimeOptions(
             model=model,
             api_key=gemini_api_key,
