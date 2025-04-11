@@ -1,9 +1,9 @@
 import logging
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Literal  # noqa: F401
 
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field  # noqa: F401
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
@@ -51,22 +51,23 @@ class MyAgent(Agent):
         #     "title": "Location"
         #     "type": "string",
         # }
+
+        # Another way to add descriptions to the arguments
+        # location: Annotated[str, Field(description="The location to get the weather for")]
+
         logger.info(f"Getting weather for {location}")
         return f"The weather in {location} is sunny today."
 
     @function_tool
-    async def toggle_light(
-        self,
-        room: Annotated[RoomName, Field(description="The room to turn the light in")],
-        switch_to: Annotated[
-            Literal["on", "off"], Field(description="The state to turn the light to")
-        ],
-    ) -> str:
+    async def toggle_light(self, room: RoomName, switch_to: Literal["on", "off"]) -> str:
         """
         Called when the user asks to turn on or off the light.
+
+        Args:
+            room: The room to turn the light in
+            switch_to: The state to turn the light to
         """
 
-        # The room argument will be parsed as a RoomName enum
         logger.info(f"Turning light to {switch_to} in {room}")
         return f"The light in the {room.value} is now {switch_to}."
 
