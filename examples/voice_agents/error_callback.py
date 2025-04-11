@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import pathlib
@@ -13,6 +14,8 @@ from livekit.plugins import cartesia, deepgram, openai, silero
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
 
+
+os.environ["OPENAI_API_KEY"] = "sk-proj-1234567890"
 load_dotenv()
 
 
@@ -20,16 +23,20 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(
-        stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=cartesia.TTS(),
-        vad=silero.VAD.load(),
+        # stt=deepgram.STT(),
+        # llm=openai.LLM(),
+        # tts=cartesia.TTS(),
+        # vad=silero.VAD.load(),
+        llm=openai.realtime.RealtimeModel(
+            voice="alloy",
+        ),
     )
 
     custom_error_audio = os.path.join(pathlib.Path(__file__).parent.absolute(), "error_message.ogg")
 
     @session.on("error")
     def on_error(ev: ErrorEvent):
+        logger.info(f"+++++++++++++ error event: {ev}")
         if ev.error.recoverable:
             return
 

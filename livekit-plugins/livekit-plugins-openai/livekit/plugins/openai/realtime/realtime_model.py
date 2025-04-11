@@ -5,6 +5,7 @@ import base64
 import contextlib
 import json
 import os
+import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -314,10 +315,12 @@ class RealtimeSession(
 
         @utils.log_exceptions(logger=logger)
         async def _recv_task() -> None:
+            recoverable = True
             while True:
                 msg = await ws_conn.receive()
                 if msg.type == aiohttp.WSMsgType.CLOSED:
                     if not closing:
+                        recoverable = False
                         raise Exception("OpenAI S2S connection closed unexpectedly")
 
                     return
@@ -393,7 +396,7 @@ class RealtimeSession(
                     elif event["type"] == "response.done":
                         self._handle_response_done(ResponseDoneEvent.construct(**event))
                     elif event["type"] == "error":
-                        self._handle_error(ErrorEvent.construct(**event))
+                        self._handle_error(ErrorEvent.construct(**event), recoverable=recoverable)
                 except Exception:
                     logger.exception("failed to handle event", extra={"event": event})
 
@@ -878,7 +881,7 @@ class RealtimeSession(
         self._current_generation.message_ch.close()
         self._current_generation = None
 
-    def _handle_error(self, event: ErrorEvent) -> None:
+    def _handle_error(self, event: ErrorEvent, recoverable: bool) -> None:
         if event.error.message.startswith("Cancellation failed"):
             return
 
@@ -888,7 +891,13 @@ class RealtimeSession(
         )
         self.emit(
             "error",
-            llm.ErrorEvent(type=event.error.type, message=event.error.message),
+            llm.RealtimeModelError(
+                type="realtime_model_error",
+                timestamp=time.time(),
+                label=self._realtime_model._label,
+                event_id=event.error.event_id,
+                recoverable=recoverable,
+            ),
         )
 
         # if event.error.event_id:

@@ -433,7 +433,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_error(
         self,
-        error: llm.LLMError | stt.STTError | tts.TTSError,
+        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError,
     ) -> None:
         if self._closing_task or error.recoverable:
             return

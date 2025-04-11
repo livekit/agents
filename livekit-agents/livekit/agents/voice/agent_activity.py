@@ -299,6 +299,7 @@ class AgentActivity(RecognitionHooks):
                     "input_audio_transcription_completed",
                     self._on_input_audio_transcription_completed,
                 )
+                self._rt_session.on("error", self._on_error)
 
                 remove_instructions(self._agent._chat_ctx)
 
@@ -623,8 +624,11 @@ class AgentActivity(RecognitionHooks):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
-    def _on_error(self, error: llm.LLMError | stt.STTError | tts.TTSError) -> None:
+    def _on_error(self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError) -> None:
         if isinstance(error, llm.LLMError):
+            error_event = ErrorEvent(error=error, source=self.llm)
+            self._session.emit("error", error_event)
+        elif isinstance(error, llm.RealtimeModelError):
             error_event = ErrorEvent(error=error, source=self.llm)
             self._session.emit("error", error_event)
         elif isinstance(error, stt.STTError):

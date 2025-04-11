@@ -5,7 +5,15 @@ from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Uni
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
 
-from ..llm import LLM, ChatMessage, FunctionCall, FunctionCallOutput, LLMError
+from ..llm import (
+    LLM,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    LLMError,
+    RealtimeModelError,
+    RealtimeModel,
+)
 from ..metrics import AgentMetrics
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
@@ -127,13 +135,13 @@ class SpeechCreatedEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError | Any
-    source: LLM | STT | TTS | Any
+    error: LLMError | STTError | TTSError | RealtimeModelError | Any
+    source: LLM | STT | TTS | RealtimeModel | Any
 
 
 class CloseEvent(BaseModel):
     type: Literal["close"] = "close"
-    error: LLMError | STTError | TTSError | None = None
+    error: LLMError | STTError | TTSError | RealtimeModelError | None = None
 
 
 AgentEvent = Annotated[
