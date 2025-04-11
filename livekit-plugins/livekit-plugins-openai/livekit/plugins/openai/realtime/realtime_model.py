@@ -8,7 +8,7 @@ import os
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, Union
+from typing import Literal, Union, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -85,6 +85,10 @@ class _RealtimeOptions:
     turn_detection: TurnDetection | None
     api_key: str
     base_url: str
+    is_azure: bool
+    azure_deployment: str | None
+    entra_token: str | None
+    api_version: str | None
 
 
 @dataclass
@@ -118,6 +122,38 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
 
 
 class RealtimeModel(llm.RealtimeModel):
+    @overload
+    def __init__(
+        self,
+        *,
+        model: str = "gpt-4o-realtime-preview",
+        voice: str = "alloy",
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        *,
+        azure_deployment: str | None = None,
+        entra_token: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
+        base_url: str | None = None,
+        voice: str = "alloy",
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> None: ...
+
     def __init__(
         self,
         *,
@@ -130,6 +166,9 @@ class RealtimeModel(llm.RealtimeModel):
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        azure_deployment: str | None = None,
+        entra_token: str | None = None,
+        api_version: str | None = None,
     ) -> None:
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -139,13 +178,29 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
 
+        is_azure = (
+            api_version is not None or entra_token is not None or azure_deployment is not None
+        )
+
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None:
+        if api_key is None and not is_azure:
             raise ValueError(
-                "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"  # noqa: E501
+                "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
             )
 
-        base_url = base_url if is_given(base_url) else OPENAI_BASE_URL
+        if is_given(base_url):
+            base_url_val = base_url
+        else:
+            if is_azure:
+                azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+                if azure_endpoint is None:
+                    raise ValueError(
+                        "Missing Azure endpoint. Please pass base_url or set AZURE_OPENAI_ENDPOINT environment variable."
+                    )
+                base_url_val = f"{azure_endpoint.rstrip('/')}/openai"
+            else:
+                base_url_val = OPENAI_BASE_URL
+
         self._opts = _RealtimeOptions(
             model=model,
             voice=voice,
@@ -156,7 +211,11 @@ class RealtimeModel(llm.RealtimeModel):
             else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
             turn_detection=turn_detection if is_given(turn_detection) else DEFAULT_TURN_DETECTION,
             api_key=api_key,
-            base_url=base_url,
+            base_url=base_url_val,
+            is_azure=is_azure,
+            azure_deployment=azure_deployment,
+            entra_token=entra_token,
+            api_version=api_version,
         )
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -176,7 +235,6 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: float = 0.8,
-        max_response_output_tokens: int | Literal["inf"] = "inf",
         http_session: aiohttp.ClientSession | None = None,
     ):
         """
@@ -232,7 +290,6 @@ class RealtimeModel(llm.RealtimeModel):
             turn_detection=turn_detection,
             tool_choice=tool_choice,
             temperature=temperature,
-            max_response_output_tokens=max_response_output_tokens,
             api_key=api_key,
             http_session=http_session,
             azure_deployment=azure_deployment,
@@ -283,7 +340,9 @@ class RealtimeModel(llm.RealtimeModel):
     async def aclose(self) -> None: ...
 
 
-def process_base_url(url: str, model: str) -> str:
+def process_base_url(
+    url: str, model: str, is_azure: bool, azure_deployment: str | None, api_version: str | None
+) -> str:
     if url.startswith("http"):
         url = url.replace("http", "ws", 1)
 
@@ -293,11 +352,17 @@ def process_base_url(url: str, model: str) -> str:
     # ensure "/realtime" is added if the path is empty OR "/v1"
     if not parsed_url.path or parsed_url.path.rstrip("/") in ["", "/v1"]:
         path = parsed_url.path.rstrip("/") + "/realtime"
-
-        if "model" not in query_params:
-            query_params["model"] = [model]
     else:
         path = parsed_url.path
+
+    if is_azure:
+        if azure_deployment:
+            query_params["deployment"] = [azure_deployment]
+        if api_version:
+            query_params["api-version"] = [api_version]
+    else:
+        if "model" not in query_params:
+            query_params["model"] = [model]
 
     new_query = urlencode(query_params, doseq=True)
     new_url = urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", new_query, ""))
@@ -351,14 +416,23 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        headers = {
-            "User-Agent": "LiveKit Agents",
-            "Authorization": f"Bearer {self._realtime_model._opts.api_key}",
-            "OpenAI-Beta": "realtime=v1",
-        }
+        headers = {"User-Agent": "LiveKit Agents"}
+        if self._realtime_model._opts.is_azure:
+            if self._realtime_model._opts.entra_token:
+                headers["Authorization"] = f"Bearer {self._realtime_model._opts.entra_token}"
+
+            if self._realtime_model._opts.api_key:
+                headers["api-key"] = self._realtime_model._opts.api_key
+        else:
+            headers["Authorization"] = f"Bearer {self._realtime_model._opts.api_key}"
+            headers["OpenAI-Beta"] = "realtime=v1"
 
         url = process_base_url(
-            self._realtime_model._opts.base_url, self._realtime_model._opts.model
+            self._realtime_model._opts.base_url,
+            self._realtime_model._opts.model,
+            is_azure=self._realtime_model._opts.is_azure,
+            api_version=self._realtime_model._opts.api_version,
+            azure_deployment=self._realtime_model._opts.azure_deployment,
         )
 
         if _log_oai_events:
