@@ -9,7 +9,7 @@ from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.plugins import cartesia, deepgram, openai, silero
 
-logger = logging.getLogger("parallel-functions")
+logger = logging.getLogger("annotated-tool-args")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
@@ -34,7 +34,6 @@ class MyAgent(Agent):
         super().__init__(
             instructions=("You are a helpful assistatn."),
         )
-        self._my_location = "San Francisco"
 
     @function_tool
     async def get_weather(self, location: str) -> str:
@@ -45,7 +44,7 @@ class MyAgent(Agent):
             location: The location to get the weather for
         """
 
-        # the LLM will see location as a string argument with a description
+        # LLM will see location as a string argument with the description defined in docstring
         # {
         #     "description": "The location to get the weather for"
         #     "title": "Location"
@@ -68,7 +67,7 @@ class MyAgent(Agent):
 
         # The room argument will be parsed as a RoomName enum
         logger.info(f"Turning light to {switch_to} in {room}")
-        return f"The light is now {switch_to}."
+        return f"The light in the {room.value} is now {switch_to}."
 
 
 async def entrypoint(ctx: JobContext):
