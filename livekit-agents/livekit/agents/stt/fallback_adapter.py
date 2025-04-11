@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import time
 from dataclasses import dataclass
@@ -261,8 +260,8 @@ class FallbackRecognizeStream(RecognizeStream):
         forward_input_task: asyncio.Task | None = None
 
         async def _forward_input_task() -> None:
-            with contextlib.suppress(RuntimeError):  # stream might be closed
-                async for data in self._input_ch:
+            async for data in self._input_ch:
+                try:
                     for stream in self._recovering_streams:
                         if isinstance(data, rtc.AudioFrame):
                             stream.push_frame(data)
@@ -274,9 +273,13 @@ class FallbackRecognizeStream(RecognizeStream):
                             main_stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             main_stream.flush()
+                except RuntimeError:
+                    pass
+                except Exception:
+                    logger.exception("error happened in forwarding input", extra={"streamed": True})
 
-                if main_stream is not None:
-                    main_stream.end_input()
+            if main_stream is not None:
+                main_stream.end_input()
 
         for i, stt in enumerate(self._fallback_adapter._stt_instances):
             stt_status = self._fallback_adapter._status[i]
