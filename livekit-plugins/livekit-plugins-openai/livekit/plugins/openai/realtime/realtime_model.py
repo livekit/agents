@@ -315,7 +315,6 @@ class RealtimeSession(
 
         @utils.log_exceptions(logger=logger)
         async def _recv_task() -> None:
-            recoverable = True
             while True:
                 msg = await ws_conn.receive()
                 if msg.type == aiohttp.WSMsgType.CLOSED:
@@ -405,7 +404,7 @@ class RealtimeSession(
                     elif event["type"] == "response.done":
                         self._handle_response_done(ResponseDoneEvent.construct(**event))
                     elif event["type"] == "error":
-                        self._handle_error(ErrorEvent.construct(**event), recoverable=recoverable)
+                        self._handle_error(ErrorEvent.construct(**event))
                 except Exception:
                     logger.exception("failed to handle event", extra={"event": event})
 
@@ -890,7 +889,7 @@ class RealtimeSession(
         self._current_generation.message_ch.close()
         self._current_generation = None
 
-    def _handle_error(self, event: ErrorEvent, recoverable: bool) -> None:
+    def _handle_error(self, event: ErrorEvent) -> None:
         if event.error.message.startswith("Cancellation failed"):
             return
 
@@ -905,7 +904,7 @@ class RealtimeSession(
                 timestamp=time.time(),
                 label=self._realtime_model._label,
                 error=event.error,
-                recoverable=recoverable,
+                recoverable=True,
             ),
         )
 
