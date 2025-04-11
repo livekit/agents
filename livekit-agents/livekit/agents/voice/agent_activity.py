@@ -407,6 +407,13 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             self._audio_recognition.push_audio(frame)
 
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        if not self._started:
+            return
+
+        if self._rt_session is not None:
+            self._rt_session.push_video(frame)
+
     def say(
         self,
         text: str | AsyncIterable[str],
