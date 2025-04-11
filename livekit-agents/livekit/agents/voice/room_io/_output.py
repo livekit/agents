@@ -285,10 +285,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             }
             if self._track_id:
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
+        attributes["segment_id"] = self._current_id
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,
-            stream_id=self._current_id,
             sender_identity=self._participant_identity,
             attributes=attributes,
         )
