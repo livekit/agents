@@ -1,10 +1,12 @@
 # based on https://github.com/douglas/toxiproxy-python.
 
-import requests
 import socket
-from contextlib import contextmanager, closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, List, Iterator
+from typing import Any, Optional
+
+import requests
 
 
 class ProxyExists(Exception):
@@ -43,7 +45,7 @@ class APIConsumer:
         return f"http://{cls.host}:{cls.port}"
 
     @classmethod
-    def get(cls, url: str, params: Optional[Dict[str, Any]] = None, **kwargs) -> requests.Response:
+    def get(cls, url: str, params: Optional[dict[str, Any]] = None, **kwargs) -> requests.Response:
         endpoint = cls.get_base_url() + url
         return validate_response(requests.get(url=endpoint, params=params, **kwargs))
 
@@ -64,7 +66,7 @@ class Toxic:
     stream: str = "downstream"
     name: Optional[str] = None
     toxicity: float = 1.0
-    attributes: Dict[str, Any] = field(default_factory=dict)
+    attributes: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.name is None:
@@ -92,10 +94,10 @@ class Proxy:
         finally:
             self.enable()
 
-    def toxics(self) -> Dict[str, Toxic]:
+    def toxics(self) -> dict[str, Toxic]:
         response = APIConsumer.get(f"/proxies/{self.name}/toxics")
         toxics_list = response.json()
-        toxics_dict: Dict[str, Toxic] = {}
+        toxics_dict: dict[str, Toxic] = {}
         for toxic_data in toxics_list:
             toxic_data["proxy"] = self.name  # optionally add proxy info if needed elsewhere
             toxic_name = toxic_data.get(
@@ -114,7 +116,7 @@ class Proxy:
         stream: str = "downstream",
         name: Optional[str] = None,
         toxicity: float = 1.0,
-        attributes: Optional[Dict[str, Any]] = None,
+        attributes: Optional[dict[str, Any]] = None,
     ) -> None:
         if name is None:
             name = f"{type}_{stream}"
@@ -150,10 +152,10 @@ class Proxy:
 
 
 class Toxiproxy:
-    def proxies(self) -> Dict[str, Proxy]:
+    def proxies(self) -> dict[str, Proxy]:
         response = APIConsumer.get("/proxies")
         proxies_data = response.json()
-        proxies_dict: Dict[str, Proxy] = {}
+        proxies_dict: dict[str, Proxy] = {}
         for name, data in proxies_data.items():
             print(data)
             proxies_dict[name] = Proxy(**data)
@@ -196,8 +198,8 @@ class Toxiproxy:
     def destroy(self, proxy: Proxy) -> bool:
         return proxy.destroy()
 
-    def populate(self, proxies: List[Dict[str, Any]]) -> List[Proxy]:
-        populated_proxies: List[Proxy] = []
+    def populate(self, proxies: list[dict[str, Any]]) -> list[Proxy]:
+        populated_proxies: list[Proxy] = []
         for proxy_conf in proxies:
             name = proxy_conf["name"]
             existing = self.get_proxy(name)

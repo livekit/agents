@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import os
 import pathlib
+
 import pytest
 
-from livekit import agents, rtc
+from livekit import rtc
+from livekit.agents import APIConnectOptions
 from livekit.agents.utils import AudioBuffer
 from livekit.plugins import cartesia, openai
-from .utils import wer
+
 from .toxic_proxy import Toxiproxy
+from .utils import wer
 
 WER_THRESHOLD = 0.2
 TEST_AUDIO_SYNTHESIZE = pathlib.Path(os.path.dirname(__file__), "long_synthesize.txt").read_text()
@@ -48,11 +51,14 @@ async def test_synthesize_failure(tts_factory):
     tts = tts_factory()
 
     toxiproxy = Toxiproxy()
-    p = toxiproxy.create("api.cartesia.ai:443", "cartesia-proxy", listen="0.0.0.0:443", enabled=True)
-    #p.add_toxic(type="timeout", attributes={"timeout": 1})
+    p = toxiproxy.create(
+        "api.cartesia.ai:443", "cartesia-proxy", listen="0.0.0.0:443", enabled=True
+    )
+    p.add_toxic(type="timeout", attributes={"timeout": 10})
 
     frames = []
 
-    async for audio in tts.synthesize(text=TEST_AUDIO_SYNTHESIZE):
+    async for audio in tts.synthesize(
+        text=TEST_AUDIO_SYNTHESIZE, conn_options=APIConnectOptions(max_retry=0, timeout=5)
+    ):
         frames.append(audio.frame)
-
