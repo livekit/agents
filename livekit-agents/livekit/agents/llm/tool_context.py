@@ -77,24 +77,13 @@ class StopResponse(Exception):
 
 @dataclass
 class _FunctionToolInfo:
-    name: str | None
+    name: str
     description: str | None
-
-
-class _RawFunctionToolInfo:
-    raw: dict[str, Any]
 
 
 @runtime_checkable
 class FunctionTool(Protocol):
-    __livekit_agents_function_tool: _FunctionToolInfo
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-@runtime_checkable
-class RawFunctionTool(Protocol):
-    __livekit_agents_raw_function_tool: _RawFunctionToolInfo
+    __livekit_agents_ai_callable: _FunctionToolInfo
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -114,31 +103,18 @@ def function_tool(
 ) -> Callable[[F], FunctionTool]: ...
 
 
-@overload
-def function_tool(f: F, *, raw: dict) -> RawFunctionTool: ...
-
-
-@overload
-def function_tool(f: None = None, *, raw: dict) -> Callable[[F], RawFunctionTool]: ...
-
-
 def function_tool(
-    f: F | None = None,
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    raw: dict[str, Any] | None = None,
-) -> FunctionTool | RawFunctionTool | Callable[[F], FunctionTool | RawFunctionTool]:
+    f: F | None = None, *, name: str | None = None, description: str | None = None
+) -> FunctionTool | Callable[[F], FunctionTool]:
     def deco(func: F) -> FunctionTool:
         from docstring_parser import parse_from_object
 
         docstring = parse_from_object(func)
-        if raw is not None:
-            info = _FunctionToolInfo(
-                name=name or func.__name__,
-                description=description or docstring.description,
-            )
-        setattr(func, "__livekit_agents_function_tool", info)
+        info = _FunctionToolInfo(
+            name=name or func.__name__,
+            description=description or docstring.description,
+        )
+        setattr(func, "__livekit_agents_ai_callable", info)
         return cast(FunctionTool, func)
 
     if f is not None:
@@ -148,11 +124,11 @@ def function_tool(
 
 
 def is_function_tool(f: Callable) -> TypeGuard[FunctionTool]:
-    return hasattr(f, "__livekit_agents_function_tool")
+    return hasattr(f, "__livekit_agents_ai_callable")
 
 
 def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
-    return getattr(f, "__livekit_agents_function_tool")
+    return getattr(f, "__livekit_agents_ai_callable")
 
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool]:
