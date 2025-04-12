@@ -6,7 +6,7 @@ import pathlib
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, APITimeoutError
 from livekit.agents.utils import AudioBuffer
 from livekit.plugins import cartesia, openai
 
@@ -54,11 +54,10 @@ async def test_synthesize_failure(tts_factory):
     p = toxiproxy.create(
         "api.cartesia.ai:443", "cartesia-proxy", listen="0.0.0.0:443", enabled=True
     )
-    p.add_toxic(type="timeout", attributes={"timeout": 10})
+    p.add_toxic(type="timeout", attributes={"timeout": 5000})
 
-    frames = []
-
-    async for audio in tts.synthesize(
-        text=TEST_AUDIO_SYNTHESIZE, conn_options=APIConnectOptions(max_retry=0, timeout=5)
-    ):
-        frames.append(audio.frame)
+    with pytest.raises(APITimeoutError):
+        async for audio in tts.synthesize(
+            text=TEST_AUDIO_SYNTHESIZE, conn_options=APIConnectOptions(max_retry=0, timeout=5)
+        ):
+            pass
