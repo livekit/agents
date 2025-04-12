@@ -54,7 +54,7 @@ async def test_synthesize_failure(tts_factory):
     p = toxiproxy.create(
         "api.cartesia.ai:443", "cartesia-proxy", listen="0.0.0.0:443", enabled=True
     )
-    p.add_toxic(type="timeout", attributes={"timeout": 5000})
+    p.add_toxic(type="timeout", attributes={"timeout": 0})
 
     with pytest.raises(APITimeoutError):
         async for audio in tts.synthesize(
