@@ -1,0 +1,19 @@
+FROM golang:1.23-alpine AS builder
+
+RUN apk add --no-cache git make
+
+WORKDIR /build
+
+RUN git clone https://github.com/Shopify/toxiproxy.git .
+
+RUN make build
+
+RUN ls -al dist
+
+FROM alpine:3.18
+
+RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache curl
+
+COPY --from=builder /build/dist/toxiproxy-server /usr/local/bin/toxiproxy-server
+COPY --from=builder /build/dist/toxiproxy-cli /usr/local/bin/toxiproxy-cli

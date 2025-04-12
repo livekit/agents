@@ -10,7 +10,7 @@ SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates
 
 VAD = silero.VAD.load(
     min_speech_duration=0.5,
-    min_silence_duration=0.6,
+    min_silence_duration=0.75,
 )
 
 
@@ -56,7 +56,7 @@ async def test_chunks_vad(sample_rate) -> None:
     assert start_of_speech_i > 0, "no start of speech detected"
     assert start_of_speech_i == end_of_speech_i, "start and end of speech mismatch"
 
-    with open("test_vad.{sample_rate}.inference_frames.wav", "wb") as f:
+    with open(f"test_vad.{sample_rate}.inference_frames.wav", "wb") as f:
         f.write(utils.make_wav_file(inference_frames))
 
 

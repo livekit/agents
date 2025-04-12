@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import io
 import os
 import pathlib
-import wave
 
 import jiwer as tr
 
@@ -12,7 +10,6 @@ from livekit.agents import utils
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "long.mp3")
 TEST_AUDIO_TRANSCRIPT = pathlib.Path(os.path.dirname(__file__), "long_transcript.txt").read_text()
-TEST_AUDIO_SYNTHESIZE = pathlib.Path(os.path.dirname(__file__), "long_synthesize.txt").read_text()
 
 
 def wer(hypothesis: str, reference: str) -> float:
@@ -90,19 +87,3 @@ async def make_test_speech(
     frames = bstream.write(input_audio.data.tobytes())
     frames.extend(bstream.flush())
     return frames, TEST_AUDIO_TRANSCRIPT
-
-
-def make_test_synthesize() -> str:
-    return TEST_AUDIO_SYNTHESIZE
-
-
-def make_wav_file(frames: list[rtc.AudioFrame]) -> bytes:
-    buffer = utils.merge_frames(frames)
-    io_buffer = io.BytesIO()
-    with wave.open(io_buffer, "wb") as wav:
-        wav.setnchannels(buffer.num_channels)
-        wav.setsampwidth(2)  # 16-bit
-        wav.setframerate(buffer.sample_rate)
-        wav.writeframes(buffer.data)
-
-    return io_buffer.getvalue()
