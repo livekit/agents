@@ -196,6 +196,7 @@ class ChatContext:
         self,
         *,
         exclude_function_call: bool = False,
+        exclude_instructions: bool = False,
         tools: NotGivenOr[list[FunctionTool]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
@@ -213,6 +214,13 @@ class ChatContext:
                 "function_call",
                 "function_call_output",
             ]:
+                continue
+
+            if (
+                exclude_instructions
+                and item.type == "message"
+                and item.role in ["system", "developer"]
+            ):
                 continue
 
             if (
