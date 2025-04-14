@@ -16,16 +16,14 @@ from livekit.agents import (
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import (
-    AgentStartedSpeakingEvent,
     AgentStateChangedEvent,
-    AgentStoppedSpeakingEvent,
     ConversationItemAddedEvent,
+    ErrorEvent,
     EventTypes,
     FunctionToolsExecutedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
-    UserStartedSpeakingEvent,
-    UserStoppedSpeakingEvent,
+    UserStateChangedEvent,
 )
 from livekit.plugins import cartesia, deepgram, openai, silero
 
@@ -135,14 +133,13 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         # Listens for emitted events
         self._main_task = asyncio.create_task(self._main_atask())
 
-        @self.session.on("user_started_speaking")
-        def _user_started_speaking(ev: UserStartedSpeakingEvent):
-            event = EventLog(eventname=ev.type)
-            self._log_q.put_nowait(event)
-
-        @self.session.on("user_stopped_speaking")
-        def _user_stopped_speaking(ev: UserStoppedSpeakingEvent):
-            event = EventLog(eventname=ev.type)
+        @self.session.on("user_state_changed")
+        def _user_state_changed(ev: UserStateChangedEvent):
+            """
+            The state is either: "speaking", "listening", or "away"
+            """
+            name = ev.type + " to " + ev.new_state + " from " + ev.old_state
+            event = EventLog(eventname=name)
             self._log_q.put_nowait(event)
 
         @self.session.on("user_input_transcribed")
@@ -155,7 +152,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
 
         @self.session.on("conversation_item_added")
         def _conversation_item_added(ev: ConversationItemAddedEvent):
-            if ev.message.role == "assistant":
+            if ev.item.role == "assistant":
                 transcription = TranscriptionLog(
                     role="assistant", transcription=ev.item.text_content
                 )
@@ -165,19 +162,11 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
 
         @self.session.on("agent_state_changed")
         def _agent_state_changed(ev: AgentStateChangedEvent):
-            """The state is either "initializing", "listening", or "speaking" """
-            name = "agent_state_changed: " + ev.state.value
+            """
+            The state is either: "initializing", "idle", "listening", "thinking", or "speaking"
+            """
+            name = ev.type + " to " + ev.new_state + " from " + ev.old_state
             event = EventLog(eventname=name)
-            self._log_q.put_nowait(event)
-
-        @self.session.on("agent_started_speaking")
-        def _agent_started_speaking(ev: AgentStartedSpeakingEvent):
-            event = EventLog(eventname=ev.type)
-            self._log_q.put_nowait(event)
-
-        @self.session.on("agent_stopped_speaking")
-        def _agent_stopped_speaking(ev: AgentStoppedSpeakingEvent):
-            event = EventLog(eventname=ev.type)
             self._log_q.put_nowait(event)
 
         @self.session.on("speech_created")
@@ -198,6 +187,11 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
                 name = function.call_id + " " + "function_output " + output.output
                 event = EventLog(eventname=name)
                 self._log_q.put_nowait(event)
+
+        @self.session.on("error")
+        def _error_(ev: ErrorEvent):
+            event = EventLog(eventname=ev.error.type)
+            self._log_q.put_nowait(event)
 
 
 class MyAgent(Agent):
