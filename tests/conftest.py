@@ -52,13 +52,6 @@ def safe_is_async_generator(obj):
         return False
 
 
-def safe_is_async_generator(obj):
-    try:
-        return isinstance(obj, types.AsyncGeneratorType)
-    except Exception:
-        return False
-
-
 def live_async_generators_ids() -> set:
     return {
         id(obj)
@@ -111,7 +104,7 @@ def format_async_generator_by_id(gen_id: int) -> str:
                     lineno = frame.f_lineno  # type: ignore[attr-defined]
                     func_name = frame.f_code.co_name  # type: ignore[attr-defined]
                     stack_summary = "\n".join(
-                        f'    File "{frm.f_code.co_filename}", line {frm.f_lineno}, in {frm.f_code.co_name}'
+                        f'    File "{frm.filename}", line {frm.lineno}, in {frm.function}'
                         for frm in inspect.getouterframes(frame)
                     )
                     return (
