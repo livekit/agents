@@ -13,7 +13,6 @@ livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }
 livekit-plugins-google = { workspace = true }
-livekit-plugins-llama-index = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-rag = { workspace = true }
@@ -24,6 +23,8 @@ livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-playai = { workspace = true }
 livekit-plugins-groq = { workspace = true }
+livekit-plugins-gladia = { workspace = true }
+livekit-plugins-resemble = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]

@@ -17,20 +17,17 @@ load_dotenv()
 ## client and the server.
 
 
-class MyAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions="You are a helpful assistant that interfaces with the user via voice.",
-        )
-
-
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(llm=openai.realtime.RealtimeModel())
     room_io = RoomIO(session, room=ctx.room)
     await room_io.start()
-    await session.start(agent=MyAgent())
+    await session.start(
+        agent=Agent(
+            instructions="You are a helpful assistant that interfaces with the user via voice."
+        )
+    )
 
     @ctx.room.local_participant.register_rpc_method("set_participant")
     async def on_set_participant(data: rtc.RpcInvocationData) -> None:
@@ -44,7 +41,6 @@ async def entrypoint(ctx: JobContext):
             },
         )
         room_io.set_participant(target_identity)
-        return "participant set"
 
     @ctx.room.local_participant.register_rpc_method("unset_participant")
     async def on_unset_participant(data: rtc.RpcInvocationData) -> None:
@@ -53,7 +49,6 @@ async def entrypoint(ctx: JobContext):
             extra={"caller_identity": data.caller_identity, "payload": data.payload},
         )
         room_io.unset_participant()
-        return "participant unset"
 
     @ctx.room.local_participant.register_rpc_method("toggle_input")
     async def on_toggle_input(data: rtc.RpcInvocationData) -> None:
@@ -65,9 +60,6 @@ async def entrypoint(ctx: JobContext):
             session.input.set_audio_enabled(True)
         elif data.payload == "audio_off":
             session.input.set_audio_enabled(False)
-        else:
-            return "invalid payload"
-        return "success"
 
     @ctx.room.local_participant.register_rpc_method("toggle_output")
     async def on_toggle_output(data: rtc.RpcInvocationData) -> None:
@@ -83,9 +75,6 @@ async def entrypoint(ctx: JobContext):
             session.output.set_transcription_enabled(True)
         elif data.payload == "transcription_off":
             session.output.set_transcription_enabled(False)
-        else:
-            return "invalid payload"
-        return "success"
 
 
 if __name__ == "__main__":

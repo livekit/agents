@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import time
 from dataclasses import dataclass
@@ -13,7 +12,7 @@ from livekit.agents.utils.audio import AudioBuffer
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
@@ -84,7 +83,7 @@ class FallbackAdapter(
         *,
         stt: STT,
         buffer: utils.AudioBuffer,
-        language: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
         recovering: bool = False,
     ) -> SpeechEvent:
@@ -143,7 +142,7 @@ class FallbackAdapter(
         *,
         stt: STT,
         buffer: utils.AudioBuffer,
-        language: str | None,
+        language: NotGivenOr[str],
         conn_options: APIConnectOptions,
     ) -> None:
         stt_status = self._status[self._stt_instances.index(stt)]
@@ -177,7 +176,7 @@ class FallbackAdapter(
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: str | None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ):
         start_time = time.time()
@@ -215,7 +214,7 @@ class FallbackAdapter(
         self,
         buffer: AudioBuffer,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         return await super().recognize(buffer, language=language, conn_options=conn_options)
@@ -223,7 +222,7 @@ class FallbackAdapter(
     def stream(
         self,
         *,
-        language: str | None = None,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
@@ -242,7 +241,7 @@ class FallbackRecognizeStream(RecognizeStream):
         self,
         *,
         stt: FallbackAdapter,
-        language: str | None,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=None)
@@ -261,8 +260,8 @@ class FallbackRecognizeStream(RecognizeStream):
         forward_input_task: asyncio.Task | None = None
 
         async def _forward_input_task() -> None:
-            with contextlib.suppress(RuntimeError):  # stream might be closed
-                async for data in self._input_ch:
+            async for data in self._input_ch:
+                try:
                     for stream in self._recovering_streams:
                         if isinstance(data, rtc.AudioFrame):
                             stream.push_frame(data)
@@ -274,9 +273,13 @@ class FallbackRecognizeStream(RecognizeStream):
                             main_stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             main_stream.flush()
+                except RuntimeError:
+                    pass
+                except Exception:
+                    logger.exception("error happened in forwarding input", extra={"streamed": True})
 
-                if main_stream is not None:
-                    main_stream.end_input()
+            if main_stream is not None:
+                main_stream.end_input()
 
         for i, stt in enumerate(self._fallback_adapter._stt_instances):
             stt_status = self._fallback_adapter._status[i]
