@@ -598,6 +598,9 @@ class RealtimeSession(
                 )
                 self._pushed_duration_s += nf.duration
 
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        pass
+
     def commit_audio(self) -> None:
         if self._pushed_duration_s > 0.1:  # OpenAI requires at least 100ms of audio
             self.send_event(InputAudioBufferCommitEvent(type="input_audio_buffer.commit"))

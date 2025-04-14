@@ -20,21 +20,23 @@ class InitializeRequest:
     asyncio_debug: bool = False
     ping_interval: float = 0
     ping_timeout: float = 0  # if no response, process is considered dead
-    high_ping_threshold: float = (
-        0  # if ping is higher than this, process is considered unresponsive
-    )
+    # if ping is higher than this, process is considered unresponsive
+    high_ping_threshold: float = 0
+    http_proxy: str = ""  # empty = None
 
     def write(self, b: io.BytesIO) -> None:
         channel.write_bool(b, self.asyncio_debug)
         channel.write_float(b, self.ping_interval)
         channel.write_float(b, self.ping_timeout)
         channel.write_float(b, self.high_ping_threshold)
+        channel.write_string(b, self.http_proxy)
 
     def read(self, b: io.BytesIO) -> None:
         self.asyncio_debug = channel.read_bool(b)
         self.ping_interval = channel.read_float(b)
         self.ping_timeout = channel.read_float(b)
         self.high_ping_threshold = channel.read_float(b)
+        self.http_proxy = channel.read_string(b)
 
 
 @dataclass

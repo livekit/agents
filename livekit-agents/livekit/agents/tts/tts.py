@@ -183,7 +183,6 @@ class ChunkedStream(ABC):
             cancelled=self._synthesize_task.cancelled(),
             label=self._tts._label,
             streamed=False,
-            error=None,
         )
         self._tts.emit("metrics_collected", metrics)
 

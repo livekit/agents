@@ -356,12 +356,14 @@ class JobProcess:
         self,
         *,
         executor_type: JobExecutorType,
-        user_arguments: Any | None = None,
+        user_arguments: Any | None,
+        http_proxy: str | None,
     ) -> None:
         self._executor_type = executor_type
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
         self._user_arguments = user_arguments
+        self._http_proxy: str | None = None
 
     @property
     def executor_type(self) -> JobExecutorType:
@@ -378,6 +380,10 @@ class JobProcess:
     @property
     def user_arguments(self) -> Any | None:
         return self._user_arguments
+
+    @property
+    def http_proxy(self) -> str | None:
+        return self._http_proxy
 
 
 class JobRequest:

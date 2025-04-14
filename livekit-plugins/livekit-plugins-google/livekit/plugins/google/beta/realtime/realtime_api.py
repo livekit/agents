@@ -7,8 +7,8 @@ import weakref
 from dataclasses import dataclass
 
 from google import genai
-from google.genai._api_client import HttpOptions
 from google.genai.types import (
+    AudioTranscriptionConfig,
     Blob,
     Content,
     FunctionDeclaration,
@@ -17,6 +17,7 @@ from google.genai.types import (
     LiveClientRealtimeInput,
     LiveConnectConfig,
     LiveServerContent,
+    LiveServerGoAway,
     LiveServerToolCall,
     LiveServerToolCallCancellation,
     Modality,
@@ -24,12 +25,13 @@ from google.genai.types import (
     PrebuiltVoiceConfig,
     SpeechConfig,
     Tool,
+    UsageMetadata,
     VoiceConfig,
 )
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import images, is_given
 
 from ...log import logger
 from ...utils import _build_gemini_fnc, get_tool_results_for_realtime, to_chat_ctx
@@ -38,6 +40,12 @@ from .api_proto import ClientEvents, LiveAPIModels, Voice
 INPUT_AUDIO_SAMPLE_RATE = 16000
 OUTPUT_AUDIO_SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
+
+DEFAULT_ENCODE_OPTIONS = images.EncodeOptions(
+    format="JPEG",
+    quality=75,
+    resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
+)
 
 
 @dataclass
@@ -63,6 +71,8 @@ class _RealtimeOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     instructions: NotGivenOr[str]
+    input_audio_transcription: AudioTranscriptionConfig | None
+    output_audio_transcription: AudioTranscriptionConfig | None
 
 
 @dataclass
@@ -99,6 +109,8 @@ class RealtimeModel(llm.RealtimeModel):
         top_k: NotGivenOr[int] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
+        output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -125,6 +137,8 @@ class RealtimeModel(llm.RealtimeModel):
             top_k (int, optional): The top-k value for response generation
             presence_penalty (float, optional): The presence penalty for response generation
             frequency_penalty (float, optional): The frequency penalty for response generation
+            input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
+            output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -155,6 +169,11 @@ class RealtimeModel(llm.RealtimeModel):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
+        if not is_given(input_audio_transcription):
+            input_audio_transcription = None
+        if not is_given(output_audio_transcription):
+            output_audio_transcription = AudioTranscriptionConfig()
+
         self._opts = _RealtimeOptions(
             model=model,
             api_key=gemini_api_key,
@@ -171,6 +190,8 @@ class RealtimeModel(llm.RealtimeModel):
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             instructions=instructions,
+            input_audio_transcription=input_audio_transcription,
+            output_audio_transcription=output_audio_transcription,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -204,7 +225,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._gemini_tools: list[Tool] = []
         self._client = genai.Client(
-            http_options=HttpOptions(api_version="v1alpha"),
             api_key=self._opts.api_key,
             vertexai=self._opts.vertexai,
             project=self._opts.project,
@@ -299,8 +319,15 @@ class RealtimeSession(llm.RealtimeSession):
         return self._tools
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        self.push_media(frame.data.tobytes(), "audio/pcm")
+
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        encoded_data = images.encode(frame, DEFAULT_ENCODE_OPTIONS)
+        self.push_media(encoded_data, "image/jpeg")
+
+    def push_media(self, bytes: bytes, mime_type: str) -> None:
         realtime_input = LiveClientRealtimeInput(
-            media_chunks=[Blob(data=frame.data.tobytes(), mime_type="audio/pcm")],
+            media_chunks=[Blob(data=bytes, mime_type=mime_type)]
         )
         self._msg_ch.send_nowait(realtime_input)
 
@@ -381,6 +408,8 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                 ),
                 tools=self._gemini_tools,
+                input_audio_transcription=self._opts.input_audio_transcription,
+                output_audio_transcription=self._opts.output_audio_transcription,
             )
 
             async with self._client.aio.live.connect(
@@ -404,12 +433,18 @@ class RealtimeSession(llm.RealtimeSession):
                         async for response in session.receive():
                             if self._active_response_id is None:
                                 self._start_new_generation()
+                            if response.setup_complete:
+                                logger.info("connection established with gemini live api server")
                             if response.server_content:
                                 self._handle_server_content(response.server_content)
                             if response.tool_call:
                                 self._handle_tool_calls(response.tool_call)
                             if response.tool_call_cancellation:
                                 self._handle_tool_call_cancellation(response.tool_call_cancellation)
+                            if response.usage_metadata:
+                                self._handle_usage_metadata(response.usage_metadata)
+                            if response.go_away:
+                                self._handle_go_away(response.go_away)
 
                 send_task = asyncio.create_task(_send_task(), name="gemini-realtime-send")
                 recv_task = asyncio.create_task(_recv_task(), name="gemini-realtime-recv")
@@ -497,6 +532,17 @@ class RealtimeSession(llm.RealtimeSession):
                         samples_per_channel=len(frame_data) // 2,
                     )
                     item_generation.audio_ch.send_nowait(frame)
+        input_transcription = server_content.input_transcription
+        if input_transcription and input_transcription.text:
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=self._active_response_id, transcript=input_transcription.text
+                ),
+            )
+        output_transcription = server_content.output_transcription
+        if output_transcription and output_transcription.text:
+            item_generation.text_ch.send_nowait(output_transcription.text)
 
         if server_content.interrupted or server_content.turn_complete:
             self._finalize_response()
@@ -522,7 +568,7 @@ class RealtimeSession(llm.RealtimeSession):
         for fnc_call in tool_call.function_calls:
             self._current_generation.function_ch.send_nowait(
                 llm.FunctionCall(
-                    call_id=fnc_call.id,
+                    call_id=fnc_call.id or "",
                     name=fnc_call.name,
                     arguments=json.dumps(fnc_call.args),
                 )
@@ -539,6 +585,16 @@ class RealtimeSession(llm.RealtimeSession):
             },
         )
         self.emit("function_calls_cancelled", tool_call_cancellation.ids)
+
+    def _handle_usage_metadata(self, usage_metadata: UsageMetadata):
+        # todo: handle metrics
+        logger.info("Usage metadata", extra={"usage_metadata": usage_metadata})
+
+    def _handle_go_away(self, go_away: LiveServerGoAway):
+        # should we reconnect?
+        logger.warning(
+            f"gemini live api server will soon disconnect. time left: {go_away.time_left}"
+        )
 
     def commit_audio(self) -> None:
         raise NotImplementedError("commit_audio_buffer is not supported yet")

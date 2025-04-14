@@ -837,7 +837,7 @@ wheels = [
 
 [[package]]
 name = "google-genai"
-version = "1.5.0"
+version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -848,9 +848,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/21/6f164fcb13293f520e016171be92611126d6bd2e9ceb246b32451c4ef51b/google_genai-1.5.0.tar.gz", hash = "sha256:83fcfc4956ad32ecea1fda37d8f3f7cbadbdeebd2310f2a55bc7564a2f1d459f", size = 135903 }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/7a/224e2f70c835202042969685ee3da00a6475508d1b64f0f1e90144f96beb/google_genai-1.10.0.tar.gz", hash = "sha256:f59423e0f155dc66b7792c8a0e6724c75c72dc699d1eb7907d4d0006d4f6186f", size = 156355 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/2a/a55da0c959326a7cf3c13398fc93c8e2af624b054ef3fa85b4cb6d0e2c96/google_genai-1.5.0-py3-none-any.whl", hash = "sha256:0ad433836a402957a967ccd57cbab7768325d28966a8556771974ae1c018be59", size = 142404 },
+    { url = "https://files.pythonhosted.org/packages/ba/a0/56839a2e202d79c773edd1c1db124da8eb2a7b657267a888080b678d0369/google_genai-1.10.0-py3-none-any.whl", hash = "sha256:41b105a2fcf8a027fc45cc16694cd559b8cd1272eab7345ad58cfa2c353bf34f", size = 154705 },
 ]
 
 [[package]]
@@ -1147,7 +1147,7 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "1.0.2"
+version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1156,13 +1156,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/24/4b/50b6bc1f7ecfc9e9c0a9eff9db8a5571bc1fdabbfac5115e39c3f4477cd9/livekit-1.0.2.tar.gz", hash = "sha256:45a3f319c27671df190ffee339132bb3e7f2d65a75a441804ed6b4bbfe616481", size = 300274 }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/30/14c2ed86914e96f351a28f849dbab6497aa1c6357baecbaef487a12c6282/livekit-1.0.3.tar.gz", hash = "sha256:7d52deaad66aa96c0529b49992ebb8e80bc6c4b884ff391fcdcdba6dc07b1030", size = 300414 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/e8/6af1bea9404fe8df4cd36de9aec7e2438f5a8fa97665c79312f83bdabb0b/livekit-1.0.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:6dcb64fb7ac9cc7735d8a3b4c175b4e188820de01dd8008adc81289b680f13a6", size = 10616843 },
-    { url = "https://files.pythonhosted.org/packages/88/df/2c08af7731badde50c9a99f9f114fa159358689603675ae0d036994aaf44/livekit-1.0.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:aa18bf097cd5283d4f16c248c1f291a3dbabbe92c40399f0f3c99e30603a2948", size = 9296117 },
-    { url = "https://files.pythonhosted.org/packages/3c/53/47c96a597a614ac8da19c4e1ecd735fbda63a311043c9cea542a8e3971cd/livekit-1.0.2-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:34418c08b4834bc07388d6789af1e533837f703f3e412b1159a4bd2d799755ba", size = 10351478 },
-    { url = "https://files.pythonhosted.org/packages/6e/57/4706368c38cb1d9184d82a42ed6d6c581a8a885c936b9e067123b45b9030/livekit-1.0.2-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:82de6b02cc28c59461bbae5f3be7f0a8f7a0178dfa4115ef5d913960b92461fb", size = 11851259 },
-    { url = "https://files.pythonhosted.org/packages/ff/9b/3e57710808e953fc4251f8eef9c8f5fee8fb387de2719e5dda929976c650/livekit-1.0.2-py3-none-win_amd64.whl", hash = "sha256:827c23964910779ee888cdf3a501590d7822c6cfff8e359502a7d301c05c5c13", size = 11197987 },
+    { url = "https://files.pythonhosted.org/packages/32/ae/8e5ed2636d54d46bfdf25d931ea2ed9e6de25b3201da1262e86f7120b74f/livekit-1.0.3-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:191cddd2bf0e882d3f7c72c5aa70a4c071d37650c3a6079e2c62718ce235e09d", size = 10616981 },
+    { url = "https://files.pythonhosted.org/packages/2e/66/b9dadb11f2ed82f136eac74c6695683c72f0861c607ba22c06ac84cf9123/livekit-1.0.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3582f398d92d942b835c6d17f2ad1dd3eaa085d389abff8d954897287e4557af", size = 9296259 },
+    { url = "https://files.pythonhosted.org/packages/1b/91/7a3a435f396fcfba56554191e8305e85d7f045d7d1a5407f5846bd6145f4/livekit-1.0.3-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:070afadf921f5fa5724a3bf4f5f0f2ca1a6623a6b43b12d580c17e515d2faa29", size = 10351617 },
+    { url = "https://files.pythonhosted.org/packages/9a/fc/4f6afb2238bffa87ad00270b9027f3346fa72acfb49ad946f6b87f246bb7/livekit-1.0.3-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:1f20e911741dec7c866513d340615be83b61ecc1d06532f5878b2be74b9a5aed", size = 11851395 },
+    { url = "https://files.pythonhosted.org/packages/aa/9d/d6a6f3aa5577de821c9c08fdbf37414606eba4ef11355ef127c8344febfc/livekit-1.0.3-py3-none-win_amd64.whl", hash = "sha256:c3060e69b7627a9001d09d6b0b041a5760b37d9d5efb0b0c3dd735f5ab247fdc", size = 11198130 },
 ]
 
 [[package]]
@@ -1251,6 +1251,9 @@ playai = [
 rag = [
     { name = "livekit-plugins-rag" },
 ]
+resemble = [
+    { name = "livekit-plugins-resemble" },
+]
 rime = [
     { name = "livekit-plugins-rime" },
 ]
@@ -1273,7 +1276,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = ">=1.0.2,<2" },
+    { name = "livekit", specifier = ">=1.0.3,<2" },
     { name = "livekit-api", specifier = ">=1.0.2,<2" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
@@ -1292,6 +1295,7 @@ requires-dist = [
     { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
     { name = "livekit-plugins-playai", marker = "extra == 'playai'", editable = "livekit-plugins/livekit-plugins-playai" },
     { name = "livekit-plugins-rag", marker = "extra == 'rag'", editable = "livekit-plugins/livekit-plugins-rag" },
+    { name = "livekit-plugins-resemble", marker = "extra == 'resemble'", editable = "livekit-plugins/livekit-plugins-resemble" },
     { name = "livekit-plugins-rime", marker = "extra == 'rime'", editable = "livekit-plugins/livekit-plugins-rime" },
     { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
     { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
@@ -1310,7 +1314,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "rag", "rime", "silero", "speechmatics", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "rag", "resemble", "rime", "silero", "speechmatics", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1480,7 +1484,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2,<3" },
     { name = "google-cloud-speech", specifier = ">=2,<3" },
     { name = "google-cloud-texttospeech", specifier = ">=2,<3" },
-    { name = "google-genai", specifier = "==1.5.0" },
+    { name = "google-genai", specifier = ">=1.10.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 

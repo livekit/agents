@@ -4,4 +4,4 @@
 "livekit-plugins-openai": patch
 ---
 
-gemini: support structured output (#1888)
+bump gemini sdk version & add video support for gemini multimodal  (#1946)

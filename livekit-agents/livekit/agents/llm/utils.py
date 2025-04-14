@@ -312,6 +312,14 @@ def function_arguments_to_pydantic_model(func: Callable) -> type[BaseModel]:
     return create_model(model_name, **fields)
 
 
+def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
+    result = {}
+    for name, field in model.model_fields.items():
+        key = field.alias if by_alias and field.alias else name
+        result[key] = getattr(model, name)
+    return result
+
+
 def pydantic_model_to_function_arguments(
     *,
     function_tool: Callable,
@@ -331,6 +339,6 @@ def pydantic_model_to_function_arguments(
         if is_context_type(type_hint) and call_ctx is not None:
             context_dict[param_name] = call_ctx
 
-    bound = signature.bind(**{**model.model_dump(), **context_dict})
+    bound = signature.bind(**{**_shallow_model_dump(model), **context_dict})
     bound.apply_defaults()
     return bound.args, bound.kwargs

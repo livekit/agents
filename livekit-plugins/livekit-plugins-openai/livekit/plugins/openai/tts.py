@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Union
 
 import httpx
 
@@ -47,7 +47,7 @@ DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "ash"
 
 
-_RESPONSE_FORMATS = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] | str
+_RESPONSE_FORMATS = Union[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"], str]
 
 
 @dataclass
