@@ -234,14 +234,16 @@ class ChatContext:
 
         return ChatContext(items)
 
-    def truncate(self, *, max_items: int, preserve_instructions: bool = True) -> ChatContext:
-        instructions: ChatMessage | None = None
-        if preserve_instructions:
-            from ..voice.generation import INSTRUCTIONS_MESSAGE_ID
+    def truncate(self, *, max_items: int) -> ChatContext:
+        """Truncate the chat context to the last N items in place.
 
-            idx = self.index_by_id(INSTRUCTIONS_MESSAGE_ID)
-            if idx is not None:
-                instructions = self._items.pop(idx)
+        Removes leading function calls to avoid partial function outputs.
+        Preserves the first system message by adding it back to the beginning.
+        """
+        instructions = next(
+            (item for item in self._items if item.type == "message" and item.role == "system"),
+            None,
+        )
 
         new_items = self._items[-max_items:]
         # chat ctx shouldn't start with function_call or function_call_output

@@ -114,21 +114,21 @@ class BaseAgent(Agent):
 
         # add the previous agent's chat history to the current agent
         llm_model = self.llm or self.session.llm
-        if userdata.prev_agent and not isinstance(llm_model, llm.RealtimeModel):
+        if isinstance(userdata.prev_agent, Agent) and not isinstance(llm_model, llm.RealtimeModel):
             # only add chat history for non-realtime models for now
             # OpenAI realtime model may response in text mode when text chat context loaded
             # https://community.openai.com/t/trouble-loading-previous-messages-with-realtime-api
 
-            truncated_chat_ctx = userdata.prev_agent.chat_ctx.copy().truncate(
-                max_items=6, preserve_instructions=False
-            )
+            truncated_chat_ctx = userdata.prev_agent.chat_ctx.copy(
+                exclude_instructions=True, exclude_function_call=False
+            ).truncate(max_items=6)
             existing_ids = {item.id for item in chat_ctx.items}
             items_copy = [item for item in truncated_chat_ctx.items if item.id not in existing_ids]
             chat_ctx.items.extend(items_copy)
 
-        # add an instructions including the user data as a system message
+        # add an instructions including the user data as assistant message
         chat_ctx.add_message(
-            role="system",
+            role="assistant",
             content=f"You are {agent_name} agent. Current user data is {userdata.summarize()}",
         )
         await self.update_chat_ctx(chat_ctx)
