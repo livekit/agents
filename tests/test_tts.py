@@ -93,16 +93,16 @@ async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
 
         async def test_timeout_process():
             with pytest.raises(APITimeoutError):
-                async for _ in tts.synthesize(
+                async with tts.synthesize(
                     text=TEST_AUDIO_SYNTHESIZE,
                     conn_options=APIConnectOptions(max_retry=0, timeout=5),
-                ):  # as stream:
-                    pass
+                ) as stream:
+                    async for _ in stream:
+                        pass
 
         await asyncio.wait_for(test_timeout_process(), timeout=10)
     except asyncio.TimeoutError:
-        pass
-        # pytest.fail("test timed out after 10 seconds")
+        pytest.fail("test timed out after 10 seconds")
     finally:
         await tts.aclose()
 
