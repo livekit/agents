@@ -52,13 +52,6 @@ def safe_is_async_generator(obj):
         return False
 
 
-def safe_is_async_generator(obj):
-    try:
-        return isinstance(obj, types.AsyncGeneratorType)
-    except Exception:
-        return False
-
-
 def live_async_generators_ids() -> set:
     return {
         id(obj)
