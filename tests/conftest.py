@@ -1,10 +1,14 @@
 import dataclasses
+import types
+import asyncio
+import gc
 import logging
 
 import pytest
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
 from livekit.agents.cli import log
+from .toxic_proxy import Toxiproxy
 
 TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
 
@@ -21,8 +25,95 @@ def configure_test():
     log._silence_noisy_loggers()
 
 
+@pytest.fixture
+def toxiproxy():
+    toxiproxy = Toxiproxy()
+    yield toxiproxy
+    if toxiproxy.running():
+        toxiproxy.destroy_all()
+
+
 @pytest.fixture()
 def logger():
     logger = logging.getLogger("livekit.tests")
     logger.setLevel(logging.DEBUG)
     return logger
+
+
+def safe_is_async_generator(obj):
+    # For whatever reason, OpenAI complains about this.
+
+    # .venv/lib/python3.9/site-packages/openai/_extras/pandas_proxy.py:20: in __load__
+    #   import pandas
+    #   ModuleNotFoundError: No module named 'pandas'
+    try:
+        return isinstance(obj, types.AsyncGeneratorType)
+    except Exception:
+        return False
+
+
+def is_pytest_asyncio_task(task) -> bool:
+    try:
+        coro = task.get_coro()
+        mod = getattr(coro, "__module__", "")
+        if "pytest" in mod or "pytest_asyncio" in mod:
+            return True
+        for frame in task.get_stack():
+            if "pytest" in frame.f_code.co_filename or "pytest_asyncio" in frame.f_code.co_filename:
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def format_task(task) -> str:
+    try:
+        name = task.get_name() if hasattr(task, "get_name") else "<unknown name>"
+        coro = task.get_coro()
+        coro_name = getattr(coro, "__qualname__", None) or type(coro).__name__
+        filename = lineno = ""
+        frame = getattr(coro, "cr_frame", None)
+        if frame:
+            filename = frame.f_code.co_filename
+            lineno = frame.f_lineno
+        return (
+            f"Task Name    : {name}\n"
+            f"Coroutine    : {coro_name}\n"
+            f"Location     : {filename}:{lineno}\n"
+            f"State        : {'pending' if not task.done() else 'done'}"
+        )
+    except Exception:
+        return repr(task)
+
+
+@pytest.fixture(autouse=True)
+async def fail_on_leaked_tasks():
+    tasks_before = set(asyncio.all_tasks())
+    async_gens_before = {id(obj) for obj in gc.get_objects() if safe_is_async_generator(obj)}
+
+    yield
+
+    tasks_after = set(asyncio.all_tasks())
+    async_gens_after = {id(obj) for obj in gc.get_objects() if safe_is_async_generator(obj)}
+
+    leaked_tasks = [
+        task
+        for task in tasks_after - tasks_before
+        if not task.done() and not is_pytest_asyncio_task(task)
+    ]
+    leaked_async_gens = async_gens_after - async_gens_before
+
+    error_messages = []
+    if leaked_tasks:
+        tasks_msg = "\n\n".join(format_task(task) for task in leaked_tasks)
+        error_messages.append("Leaked tasks detected:\n" + tasks_msg)
+    if leaked_async_gens:
+        gens_msg = "\n".join(
+            f"  - Async generator with id: {gen_id}" for gen_id in leaked_async_gens
+        )
+        error_messages.append("Leaked async generators detected:\n" + gens_msg)
+
+    if error_messages:
+        final_msg = "Test leaked resources:\n\n" + "\n\n".join(error_messages)
+        pytest.fail(final_msg)
