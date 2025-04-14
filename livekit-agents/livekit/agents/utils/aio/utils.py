@@ -21,6 +21,13 @@ async def cancel_and_wait(*futures: asyncio.Future):
             _, cb = waiters[i]
             fut.remove_done_callback(cb)
 
+        # ✅ NEW: Safely retrieve exceptions to silence warnings
+        for fut in futures:
+            if fut.done():
+                try:
+                    _ = fut.exception()
+                except Exception:
+                    pass  # Exception already retrieved or not present
 
 def _release_waiter(waiter, *_):
     if not waiter.done():
