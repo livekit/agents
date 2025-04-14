@@ -35,6 +35,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .langs import TTSLangs
 from .log import logger
 from .models import TTSModels
 
@@ -43,6 +44,7 @@ from .models import TTSModels
 class _TTSOptions:
     model: TTSModels | str
     speaker: str
+    lang: TTSLangs | str
     sample_rate: int
     speed_alpha: float
     reduce_latency: bool
@@ -60,8 +62,9 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels | str = "mist",
-        speaker: str = "lagoon",
+        model: TTSModels | str = "mistv2",
+        speaker: str = "cove",
+        lang: TTSLangs | str = "eng",
         sample_rate: int = 22050,
         speed_alpha: float = 1.0,
         reduce_latency: bool = False,
@@ -86,6 +89,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             speaker=speaker,
+            lang=lang,
             sample_rate=sample_rate,
             speed_alpha=speed_alpha,
             reduce_latency=reduce_latency,
@@ -159,6 +163,7 @@ class ChunkedStream(tts.ChunkedStream):
             "speaker": self._opts.speaker,
             "text": self._input_text,
             "modelId": self._opts.model,
+            "lang": self._opts.lang,
             "samplingRate": self._opts.sample_rate,
             "speedAlpha": self._opts.speed_alpha,
             "reduceLatency": self._opts.reduce_latency,

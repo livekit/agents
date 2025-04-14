@@ -71,15 +71,25 @@ class SpeechHandle:
     def done(self) -> bool:
         return self._playout_done_fut.done()
 
-    def interrupt(self) -> None:
+    def interrupt(self) -> SpeechHandle:
+        """Interrupt the current speech generation.
+
+        Raises:
+            RuntimeError: If this speech handle does not allow interruptions.
+
+        Returns:
+            SpeechHandle: The same speech handle that was interrupted.
+        """
         if not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
         if self.done():
-            return
+            return self
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._interrupt_fut.set_result(None)
+
+        return self
 
     async def wait_for_playout(self) -> None:
         await asyncio.shield(self._playout_done_fut)

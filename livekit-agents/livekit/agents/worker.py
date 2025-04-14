@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import datetime
 import inspect
+import json
 import math
 import multiprocessing as mp
 import os
@@ -51,6 +52,8 @@ from .job import (
     RunningJobInfo,
 )
 from .log import DEV_LEVEL, logger
+from .types import NOT_GIVEN, NotGivenOr
+from .utils import is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
@@ -70,6 +73,12 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
 class WorkerType(Enum):
     ROOM = agent.JobType.JT_ROOM
     PUBLISHER = agent.JobType.JT_PUBLISHER
+
+
+@dataclass
+class SimulateJobInfo:
+    room: str
+    participant_identity: str | None = None
 
 
 class _DefaultLoadCalc:
@@ -200,6 +209,12 @@ class WorkerOptions:
     The HTTP server is used as a health check endpoint.
     """
 
+    http_proxy: NotGivenOr[str | None] = NOT_GIVEN
+    """HTTP proxy used to connect to the LiveKit server.
+
+    By default it uses ``HTTP_PROXY`` or ``HTTPS_PROXY`` from environment
+    """
+
     def validate_config(self, devmode: bool):
         load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
         if load_threshold > 1 and not devmode:
@@ -247,6 +262,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                 "ignoring max_job_memory_usage"
             )
 
+        if not is_given(opts.http_proxy):
+            opts.http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+
         self._opts = opts
         self._loop = loop or asyncio.get_event_loop()
 
@@ -276,6 +294,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 high_ping_threshold=2.5,
                 mp_ctx=mp_ctx,
                 loop=self._loop,
+                http_proxy=opts.http_proxy or None,
             )
 
         self._proc_pool = ipc.proc_pool.ProcPool(
@@ -290,6 +309,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             close_timeout=opts.shutdown_process_timeout,
             memory_warn_mb=opts.job_memory_warn_mb,
             memory_limit_mb=opts.job_memory_limit_mb,
+            http_proxy=opts.http_proxy or None,
         )
 
         self._previous_status = agent.WorkerStatus.WS_AVAILABLE
@@ -305,7 +325,18 @@ class Worker(utils.EventEmitter[EventTypes]):
         async def health_check(_: Any):
             return web.Response(text="OK")
 
+        async def worker(_: Any):
+            body = json.dumps(
+                {
+                    "agent_name": self._opts.agent_name,
+                    "worker_type": agent.JobType.Name(self._opts.worker_type.value),
+                    "active_jobs": len(self.active_jobs),
+                }
+            )
+            return web.Response(body=body, content_type="application/json")
+
         self._http_server.app.add_routes([web.get("/", health_check)])
+        self._http_server.app.add_routes([web.get("/worker", worker)])
         self._http_server.app.add_subapp("/debug", tracing._create_tracing_app(self))
 
         self._conn_task: asyncio.Task[None] | None = None
@@ -374,8 +405,10 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._proc_pool.on("process_job_launched", _update_job_status)
         await self._proc_pool.start()
 
-        self._api = api.LiveKitAPI(self._opts.ws_url, self._opts.api_key, self._opts.api_secret)
-        self._http_session = aiohttp.ClientSession()
+        self._http_session = aiohttp.ClientSession(proxy=self._opts.http_proxy or None)
+        self._api = api.LiveKitAPI(
+            self._opts.ws_url, self._opts.api_key, self._opts.api_secret, session=self._http_session
+        )
         self._close_future = asyncio.Future(loop=self._loop)
 
         @utils.log_exceptions(logger=logger)
@@ -463,37 +496,57 @@ class Worker(utils.EventEmitter[EventTypes]):
         else:
             await _join_jobs()
 
-    async def simulate_job(self, room: str, participant_identity: str | None = None) -> None:
+    async def simulate_job(
+        self,
+        info: SimulateJobInfo | str,
+    ) -> None:
+        """
+        Simulate a job by creating a room and participant.
+
+        Args:
+            info: SimulateJobInfo or a join token for an existing room
+        """
         assert self._api is not None
+        # TODO(theomonnom): some fake information can still be found in the token
 
         from livekit.protocol.models import Room
 
-        from .cli import cli
-
-        participant = None
-        if cli.CLI_ARGUMENTS is None or not cli.CLI_ARGUMENTS.console:
-            room_obj = await self._api.room.create_room(api.CreateRoomRequest(name=room))
-            if participant_identity:
-                participant = await self._api.room.get_participant(
-                    api.RoomParticipantIdentity(room=room, identity=participant_identity)
-                )
-        else:
-            room_obj = Room(sid=utils.shortuuid("RM_"), name=room)
-
-        agent_id = utils.shortuuid("simulated-agent-")
-        token = (
-            api.AccessToken(self._opts.api_key, self._opts.api_secret)
-            .with_identity(agent_id)
-            .with_kind("agent")
-            .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-            .to_jwt()
+        room = info.room if isinstance(info, SimulateJobInfo) else "unknown-room"
+        participant_identity = (
+            info.participant_identity
+            if isinstance(info, SimulateJobInfo)
+            else "unknown-participant"
         )
+        agent_id = utils.shortuuid("simulated-agent-")
+
+        room_info = Room(sid=utils.shortuuid("RM_"), name=room)
+        participant_info = None
+
+        if isinstance(info, SimulateJobInfo):
+            from .cli import cli
+
+            if cli.CLI_ARGUMENTS is None or not cli.CLI_ARGUMENTS.console:
+                room_info = await self._api.room.create_room(api.CreateRoomRequest(name=room))
+                if participant_identity:
+                    participant_info = await self._api.room.get_participant(
+                        api.RoomParticipantIdentity(room=room, identity=participant_identity)
+                    )
+
+            token = (
+                api.AccessToken(self._opts.api_key, self._opts.api_secret)
+                .with_identity(agent_id)
+                .with_kind("agent")
+                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                .to_jwt()
+            )
+        else:
+            token = info
 
         job = agent.Job(
             id=utils.shortuuid("simulated-job-"),
-            room=room_obj,
+            room=room_info,
             type=agent.JobType.JT_ROOM,
-            participant=participant,
+            participant=participant_info,
         )
 
         running_info = RunningJobInfo(
@@ -577,7 +630,9 @@ class Worker(utils.EventEmitter[EventTypes]):
                 path_parts = [f"{scheme}://{parse.netloc}", parse.path, "/agent"]
                 agent_url = reduce(urljoin, path_parts)
 
-                ws = await self._http_session.ws_connect(agent_url, headers=headers, autoping=True)
+                ws = await self._http_session.ws_connect(
+                    agent_url, headers=headers, autoping=True, proxy=self._opts.http_proxy or None
+                )
 
                 retry_count = 0
 
@@ -616,14 +671,16 @@ class Worker(utils.EventEmitter[EventTypes]):
                     break
 
                 if retry_count >= self._opts.max_retry:
-                    raise RuntimeError(  # noqa: B904
+                    raise RuntimeError(
                         f"failed to connect to livekit after {retry_count} attempts",
-                    )
+                    ) from None
 
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
 
-                logger.warning(f"failed to connect to livekit, retrying in {retry_delay}s: {e}")
+                logger.warning(
+                    f"failed to connect to livekit, retrying in {retry_delay}s", exc_info=e
+                )
                 await asyncio.sleep(retry_delay)
             finally:
                 if ws is not None:
@@ -776,7 +833,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     f"assignment for job {job_req.id} timed out",
                     extra={"job_request": job_req, "agent_name": self._opts.agent_name},
                 )
-                raise AssignmentTimeoutError()  # noqa: B904
+                raise AssignmentTimeoutError() from None
 
             job_assign = wait_assignment.result()
             running_info = RunningJobInfo(

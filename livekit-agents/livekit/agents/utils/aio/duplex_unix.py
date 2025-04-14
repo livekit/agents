@@ -39,8 +39,8 @@ class _AsyncDuplex:
             OSError,
             EOFError,
             asyncio.IncompleteReadError,
-        ):
-            raise DuplexClosed()  # noqa: B904
+        ) as e:
+            raise DuplexClosed() from e
 
     async def send_bytes(self, data: bytes) -> None:
         try:
@@ -48,16 +48,16 @@ class _AsyncDuplex:
             self._writer.write(len_bytes)
             self._writer.write(data)
             await self._writer.drain()
-        except OSError:
-            raise DuplexClosed()  # noqa: B904
+        except OSError as e:
+            raise DuplexClosed() from e
 
     async def aclose(self) -> None:
         try:
             self._writer.close()
             await self._writer.wait_closed()
             self._sock.close()
-        except OSError:
-            raise DuplexClosed()  # noqa: B904
+        except OSError as e:
+            raise DuplexClosed() from e
 
 
 def _read_exactly(sock: socket.socket, num_bytes: int) -> bytes:
@@ -86,8 +86,8 @@ class _Duplex:
             len_bytes = _read_exactly(self._sock, 4)
             len = struct.unpack("!I", len_bytes)[0]
             return _read_exactly(self._sock, len)
-        except (OSError, EOFError):
-            raise DuplexClosed()  # noqa: B904
+        except (OSError, EOFError) as e:
+            raise DuplexClosed() from e
 
     def send_bytes(self, data: bytes) -> None:
         if self._sock is None:
@@ -97,8 +97,8 @@ class _Duplex:
             len_bytes = struct.pack("!I", len(data))
             self._sock.sendall(len_bytes)
             self._sock.sendall(data)
-        except OSError:
-            raise DuplexClosed()  # noqa: B904
+        except OSError as e:
+            raise DuplexClosed() from e
 
     def detach(self) -> socket.socket:
         if self._sock is None:
@@ -113,5 +113,5 @@ class _Duplex:
             if self._sock is not None:
                 self._sock.close()
                 self._sock = None
-        except OSError:
-            raise DuplexClosed()  # noqa: B904
+        except OSError as e:
+            raise DuplexClosed() from e

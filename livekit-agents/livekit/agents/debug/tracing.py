@@ -99,7 +99,7 @@ class Tracing:
     @staticmethod
     def _get_current_handle() -> TracingHandle:
         try:
-            job_id = job.get_current_job_context().job.id
+            job_id = job.get_job_context().job.id
             return Tracing._get_job_handle(job_id)
         except RuntimeError:
             pass

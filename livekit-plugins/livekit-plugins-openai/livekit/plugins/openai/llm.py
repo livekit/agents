@@ -23,7 +23,7 @@ import httpx
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import FunctionTool
 from livekit.agents.types import (
@@ -33,7 +33,11 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types.chat import ChatCompletionChunk, ChatCompletionToolChoiceOptionParam
+from openai.types.chat import (
+    ChatCompletionChunk,
+    ChatCompletionToolChoiceOptionParam,
+    completion_create_params,
+)
 from openai.types.chat.chat_completion_chunk import Choice
 
 from .models import (
@@ -483,10 +487,12 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[
+            completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
-
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
@@ -514,6 +520,9 @@ class LLM(llm.LLM):
             elif tool_choice in ("auto", "required", "none"):
                 oai_tool_choice = tool_choice
                 extra["tool_choice"] = oai_tool_choice
+
+        if is_given(response_format):
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format)
 
         return LLMStream(
             self,
@@ -555,9 +564,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            stream: openai.AsyncStream[
-                ChatCompletionChunk
-            ] = await self._client.chat.completions.create(
+            self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=to_chat_ctx(self._chat_ctx, id(self._llm)),
                 tools=to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN,
                 model=self._model,
@@ -587,15 +594,15 @@ class LLMStream(llm.LLMStream):
                         self._event_ch.send_nowait(chunk)
 
         except openai.APITimeoutError:
-            raise APITimeoutError(retryable=retryable)  # noqa: B904
+            raise APITimeoutError(retryable=retryable) from None
         except openai.APIStatusError as e:
-            raise APIStatusError(  # noqa: B904
+            raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
                 retryable=retryable,
-            )
+            ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 

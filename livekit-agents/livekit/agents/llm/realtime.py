@@ -125,6 +125,9 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
 
     @abstractmethod
+    def push_video(self, frame: rtc.VideoFrame) -> None: ...
+
+    @abstractmethod
     def generate_reply(
         self,
         *,

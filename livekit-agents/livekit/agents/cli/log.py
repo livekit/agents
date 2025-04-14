@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 import traceback
 from collections import OrderedDict
 from datetime import date, datetime, time, timezone
@@ -199,8 +200,9 @@ class ColoredFormatter(logging.Formatter):
 
 
 def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
-    handler = logging.StreamHandler()
+    root = logging.getLogger()
 
+    handler = logging.StreamHandler(sys.stdout)
     if devmode:
         # colorful logs for dev (improves readability)
         if console:
@@ -219,7 +221,6 @@ def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
         json_formatter = JsonFormatter()
         handler.setFormatter(json_formatter)
 
-    root = logging.getLogger()
     root.addHandler(handler)
     root.setLevel(log_level)
 
