@@ -10,7 +10,20 @@ import pytest
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APITimeoutError
 from livekit.agents.utils import AudioBuffer
-from livekit.plugins import cartesia, openai, aws
+from livekit.plugins import (
+    cartesia,
+    openai,
+    aws,
+    azure,
+    deepgram,
+    elevenlabs,
+    google,
+    groq,
+    neuphonic,
+    playai,
+    resemble,
+    rime,
+)
 
 from .toxic_proxy import Toxiproxy
 from .utils import wer
@@ -46,6 +59,76 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "polly.us-west-2.amazonaws.com:443",
         },
         id="aws",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": azure.TTS(),
+            "proxy-upstream": "westus.tts.speech.microsoft.com:443",
+        },
+        id="azure",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": deepgram.TTS(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": elevenlabs.TTS(),
+            "proxy-upstream": "api.elevenlabs.io:443",
+        },
+        id="elevenlabs",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": google.TTS(),
+            "proxy-upstream": "texttospeech.googleapis.com:443",
+        },
+        id="google",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": groq.TTS(),
+            "proxy-upstream": "api.groq.com:443",
+        },
+        id="groq",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": neuphonic.TTS(),
+            "proxy-upstream": "api.neuphonic.com:443",
+        },
+        id="neuphonic",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": openai.TTS(),
+            "proxy-upstream": "api.openai.com:443",
+        },
+        id="openai",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": playai.TTS(),
+            "proxy-upstream": "api.play.ht:443",
+        },
+        id="playai",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": resemble.TTS(),
+            "proxy-upstream": "f.cluster.resemble.ai:443",
+        },
+        id="resemble",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": rime.TTS(),
+            "proxy-upstream": "users.rime.ai:443",
+        },
+        id="rime",
     ),
 ]
 

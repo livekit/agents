@@ -29,8 +29,18 @@ services:
       - ../.env
     extra_hosts:
     # TTSs
-      - "api.cartesia.ai:172.28.0.2"
       - "polly.us-west-2.amazonaws.com:172.28.0.2"
+      - "westus.tts.speech.microsoft.com:172.28.0.2"
+      - "api.cartesia.ai:172.28.0.2"
+      - "api.deepgram.com:172.28.0.2"
+      - "api.elevenlabs.io:172.28.0.2"
+      - "texttospeech.googleapis.com:172.28.0.2"
+      - "api.groq.com:172.28.0.2"
+      - "api.neuphonic.com:172.28.0.2"
+      - "api.openai.com:172.28.0.2"
+      - "api.play.ht:172.28.0.2"
+      - "f.cluster.resemble.ai:172.28.0.2"
+      - "users.rime.ai:172.28.0.2"
 
     networks:
       - toxinet
