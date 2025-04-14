@@ -29,6 +29,7 @@ async def cancel_and_wait(*futures: asyncio.Future):
                 except Exception:
                     pass  # Exception already retrieved or not present
 
+
 def _release_waiter(waiter, *_):
     if not waiter.done():
         waiter.set_result(None)
