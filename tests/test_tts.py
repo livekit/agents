@@ -108,4 +108,4 @@ async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    # assert 4 <= elapsed_time <= 6, f"Expected timeout around 5 seconds, got {elapsed_time:.2f}s"
+    assert 4 <= elapsed_time <= 6, f"Expected timeout around 5 seconds, got {elapsed_time:.2f}s"
