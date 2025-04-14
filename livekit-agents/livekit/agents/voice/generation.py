@@ -47,7 +47,7 @@ def perform_llm_inference(
     *,
     node: io.LLMNode,
     chat_ctx: ChatContext,
-    tool_ctx: ToolContext | None,
+    tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task, _LLMGenerationData]:
     text_ch = aio.Chan()
@@ -57,7 +57,7 @@ def perform_llm_inference(
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
-        tools = list(tool_ctx.function_tools.values()) if tool_ctx is not None else []
+        tools = list(tool_ctx.function_tools.values())
         llm_node = node(
             chat_ctx,
             tools,
@@ -66,6 +66,7 @@ def perform_llm_inference(
         if asyncio.iscoroutine(llm_node):
             llm_node = await llm_node
 
+        # update the tool context after llm node
         tool_ctx.update_tools(tools)
 
         if isinstance(llm_node, str):
