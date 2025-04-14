@@ -52,36 +52,19 @@ def safe_is_async_generator(obj):
         return False
 
 
-def format_async_generator(gen_obj) -> str:
+def safe_is_async_generator(obj):
     try:
-        frame = getattr(gen_obj, "ag_frame", None)
-        if frame:
-            outer_frames = inspect.getouterframes(frame)
-            stack_summary = "\n".join(
-                f'    File "{fi.frame.f_code.co_filename}", line {fi.frame.f_lineno}, in {fi.frame.f_code.co_name}'
-                for fi in outer_frames
-            )
-            filename = frame.f_code.co_filename  # type: ignore[attr-defined]
-            lineno = frame.f_lineno  # type: ignore[attr-defined]
-            func_name = frame.f_code.co_name  # type: ignore[attr-defined]
-            details = (
-                f"AsyncGenerator id: {id(gen_obj)}\n"
-                f"  Created/paused in function: {func_name}\n"
-                f"  Location: {filename}:{lineno}\n"
-                f"  Frame stack:\n{stack_summary}"
-            )
-        else:
-            details = f"AsyncGenerator id: {id(gen_obj)} (no frame available)"
-    except Exception as e:
-        details = f"AsyncGenerator id: {id(gen_obj)} (failed to introspect: {e})"
-    return details
+        return isinstance(obj, types.AsyncGeneratorType)
+    except Exception:
+        return False
 
 
-def format_async_generator_by_id(gen_id) -> str:
-    for obj in gc.get_objects():
-        if id(obj) == gen_id and safe_is_async_generator(obj):
-            return format_async_generator(obj)
-    return f"AsyncGenerator id: {gen_id} (object not found in gc.get_objects())"
+def live_async_generators_ids() -> set:
+    return {
+        id(obj)
+        for obj in gc.get_objects()
+        if safe_is_async_generator(obj) and getattr(obj, "ag_frame", None) is not None
+    }
 
 
 def is_pytest_asyncio_task(task) -> bool:
@@ -105,30 +88,56 @@ def format_task(task) -> str:
         coro_name = getattr(coro, "__qualname__", None) or type(coro).__name__
         frame = getattr(coro, "cr_frame", None)
         if frame:
-            filename = frame.f_code.co_filename
-            lineno = frame.f_lineno
-            location = f"{filename}:{lineno}"
+            location = f"{frame.f_code.co_filename}:{frame.f_lineno}"
         else:
             location = "no frame available"
         return (
-            f"Task Name  : {name}\n"
-            f"Coroutine  : {coro_name}\n"
-            f"Location   : {location}\n"
-            f"State      : {'pending' if not task.done() else 'done'}"
+            f"Task Name   : {name}\n"
+            f"Coroutine   : {coro_name}\n"
+            f"Location    : {location}\n"
+            f"State       : {'pending' if not task.done() else 'done'}"
         )
     except Exception:
         return repr(task)
 
 
+def format_async_generator_by_id(gen_id: int) -> str:
+    for obj in gc.get_objects():
+        if id(obj) == gen_id and safe_is_async_generator(obj):
+            try:
+                frame = getattr(obj, "ag_frame", None)
+                if frame:
+                    filename = frame.f_code.co_filename  # type: ignore[attr-defined]
+                    lineno = frame.f_lineno  # type: ignore[attr-defined]
+                    func_name = frame.f_code.co_name  # type: ignore[attr-defined]
+                    stack_summary = "\n".join(
+                        f'    File "{frm.f_code.co_filename}", line {frm.f_lineno}, in {frm.f_code.co_name}'
+                        for frm in inspect.getouterframes(frame)
+                    )
+                    return (
+                        f"AsyncGenerator id: {gen_id}\n"
+                        f"  Created/paused in: {func_name}\n"
+                        f"  Location: {filename}:{lineno}\n"
+                        f"  Frame stack:\n{stack_summary}"
+                    )
+                else:
+                    return f"AsyncGenerator id: {gen_id} (closed)"
+            except Exception as e:
+                return f"AsyncGenerator id: {gen_id} (failed to introspect: {e})"
+    return f"AsyncGenerator id: {gen_id} (object not found)"
+
+
 @pytest.fixture(autouse=True)
 async def fail_on_leaked_tasks():
     tasks_before = set(asyncio.all_tasks())
-    async_gens_before = {id(obj) for obj in gc.get_objects() if safe_is_async_generator(obj)}
+    async_gens_before = live_async_generators_ids()
 
     yield
 
+    # gc.collect()
+
     tasks_after = set(asyncio.all_tasks())
-    async_gens_after = {id(obj) for obj in gc.get_objects() if safe_is_async_generator(obj)}
+    async_gens_after = live_async_generators_ids()
 
     leaked_tasks = [
         task
