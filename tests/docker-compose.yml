@@ -6,6 +6,8 @@ services:
       dockerfile: tests/Dockerfile.toxiproxy
     container_name: toxiproxy
     command: ["toxiproxy-server", "-host", "0.0.0.0", "-port", "8474"]
+    environment:
+      - LOG_LEVEL=info
     ports:
       - "8474:8474"
       - "443:443"
@@ -22,10 +24,14 @@ services:
       - ../tests:/app/tests
       - ../livekit-agents:/app/livekit-agents
       - ../livekit-plugins:/app/livekit-plugins
-    environment:
-      - CARTESIA_API_KEY
+      - ../pyproject.toml:/app/pyproject.toml
+    env_file:
+      - ../.env
     extra_hosts:
+    # TTSs
       - "api.cartesia.ai:172.28.0.2"
+      - "polly.us-west-2.amazonaws.com:172.28.0.2"
+
     networks:
       - toxinet
 

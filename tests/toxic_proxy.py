@@ -157,7 +157,6 @@ class Toxiproxy:
         proxies_data = response.json()
         proxies_dict: dict[str, Proxy] = {}
         for name, data in proxies_data.items():
-            print(data)
             proxies_dict[name] = Proxy(**data)
         return proxies_dict
 
