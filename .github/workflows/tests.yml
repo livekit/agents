@@ -2,9 +2,11 @@ name: tests
 
 on:
   push:
-    branches: [main, 0.x]
+    branches:
+      - main
   pull_request:
-    branches: [main, 0.x]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -69,13 +71,6 @@ jobs:
       - name: Install ffmpeg (Windows)
         if: ${{ startsWith(matrix.os, 'windows') }}
         run: choco install ffmpeg
-
-      - name: Install packages
-        shell: bash
-        run: |
-          pip install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
-          pip install -r ./tests/test-requirements.txt
-          ./livekit-plugins/install_local.sh
 
       - name: Run tests
         shell: bash
