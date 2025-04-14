@@ -3,7 +3,7 @@ import types
 import asyncio
 import gc
 import logging
-
+import inspect
 import pytest
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
@@ -52,6 +52,38 @@ def safe_is_async_generator(obj):
         return False
 
 
+def format_async_generator(gen_obj) -> str:
+    try:
+        frame = getattr(gen_obj, "ag_frame", None)
+        if frame:
+            outer_frames = inspect.getouterframes(frame)
+            stack_summary = "\n".join(
+                f'    File "{fi.frame.f_code.co_filename}", line {fi.frame.f_lineno}, in {fi.frame.f_code.co_name}'
+                for fi in outer_frames
+            )
+            filename = frame.f_code.co_filename  # type: ignore[attr-defined]
+            lineno = frame.f_lineno  # type: ignore[attr-defined]
+            func_name = frame.f_code.co_name  # type: ignore[attr-defined]
+            details = (
+                f"AsyncGenerator id: {id(gen_obj)}\n"
+                f"  Created/paused in function: {func_name}\n"
+                f"  Location: {filename}:{lineno}\n"
+                f"  Frame stack:\n{stack_summary}"
+            )
+        else:
+            details = f"AsyncGenerator id: {id(gen_obj)} (no frame available)"
+    except Exception as e:
+        details = f"AsyncGenerator id: {id(gen_obj)} (failed to introspect: {e})"
+    return details
+
+
+def format_async_generator_by_id(gen_id) -> str:
+    for obj in gc.get_objects():
+        if id(obj) == gen_id and safe_is_async_generator(obj):
+            return format_async_generator(obj)
+    return f"AsyncGenerator id: {gen_id} (object not found in gc.get_objects())"
+
+
 def is_pytest_asyncio_task(task) -> bool:
     try:
         coro = task.get_coro()
@@ -63,7 +95,6 @@ def is_pytest_asyncio_task(task) -> bool:
                 return True
     except Exception:
         pass
-
     return False
 
 
@@ -72,16 +103,18 @@ def format_task(task) -> str:
         name = task.get_name() if hasattr(task, "get_name") else "<unknown name>"
         coro = task.get_coro()
         coro_name = getattr(coro, "__qualname__", None) or type(coro).__name__
-        filename = lineno = ""
         frame = getattr(coro, "cr_frame", None)
         if frame:
             filename = frame.f_code.co_filename
             lineno = frame.f_lineno
+            location = f"{filename}:{lineno}"
+        else:
+            location = "no frame available"
         return (
-            f"Task Name    : {name}\n"
-            f"Coroutine    : {coro_name}\n"
-            f"Location     : {filename}:{lineno}\n"
-            f"State        : {'pending' if not task.done() else 'done'}"
+            f"Task Name  : {name}\n"
+            f"Coroutine  : {coro_name}\n"
+            f"Location   : {location}\n"
+            f"State      : {'pending' if not task.done() else 'done'}"
         )
     except Exception:
         return repr(task)
@@ -109,9 +142,7 @@ async def fail_on_leaked_tasks():
         tasks_msg = "\n\n".join(format_task(task) for task in leaked_tasks)
         error_messages.append("Leaked tasks detected:\n" + tasks_msg)
     if leaked_async_gens:
-        gens_msg = "\n".join(
-            f"  - Async generator with id: {gen_id}" for gen_id in leaked_async_gens
-        )
+        gens_msg = "\n\n".join(format_async_generator_by_id(gen_id) for gen_id in leaked_async_gens)
         error_messages.append("Leaked async generators detected:\n" + gens_msg)
 
     if error_messages:
