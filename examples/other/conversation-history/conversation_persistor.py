@@ -157,7 +157,7 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
         def _conversation_item_added(ev: ConversationItemAddedEvent):
             if ev.message.role == "assistant":
                 transcription = TranscriptionLog(
-                    role="assistant", transcription=ev.message.text_content
+                    role="assistant", transcription=ev.item.text_content
                 )
                 self._log_q.put_nowait(transcription)
             event = EventLog(eventname=ev.type)
