@@ -12,6 +12,7 @@ from livekit import api, rtc
 from livekit.agents import utils
 from livekit.agents.types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
+    ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
     TOPIC_TRANSCRIPTION,
 )
@@ -106,7 +107,7 @@ class TextStreamPrinter:
     def on_text_received(self, reader: rtc.TextStreamReader, participant_identity: str):
         async def _on_text_received():
             stream_id = reader.info.stream_id
-            segment_id = reader.info.attributes.get("segment_id", None)
+            segment_id = reader.info.attributes.get(ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID, None)
             # new stream with the same segment_id should overwrite the previous one
             if not segment_id:
                 logger.warning("No segment id found for text stream")

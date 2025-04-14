@@ -8,6 +8,7 @@ from ... import utils
 from ...log import logger
 from ...types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
+    ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
     TOPIC_TRANSCRIPTION,
 )
@@ -285,7 +286,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             }
             if self._track_id:
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
-        attributes["segment_id"] = self._current_id
+        attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] = self._current_id
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,
