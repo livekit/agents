@@ -57,13 +57,16 @@ def perform_llm_inference(
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
+        tools = list(tool_ctx.function_tools.values()) if tool_ctx is not None else []
         llm_node = node(
             chat_ctx,
-            list(tool_ctx.function_tools.values()) if tool_ctx is not None else [],
+            tools,
             model_settings,
         )
         if asyncio.iscoroutine(llm_node):
             llm_node = await llm_node
+
+        tool_ctx.update_tools(tools)
 
         if isinstance(llm_node, str):
             data.generated_text = llm_node

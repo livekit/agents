@@ -1430,7 +1430,11 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-            if generate_tool_reply and not isinstance(self.llm, GoogleRealtimeModel):
+            if (
+                generate_tool_reply
+                and GoogleRealtimeModel is not None
+                and not isinstance(self.llm, GoogleRealtimeModel)
+            ):
                 self._rt_session.interrupt()
 
                 handle = SpeechHandle.create(
