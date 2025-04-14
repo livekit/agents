@@ -1430,7 +1430,10 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-            if generate_tool_reply and not isinstance(self.llm, GoogleRealtimeModel):
+            if generate_tool_reply and (
+                # no direct cancellation in Gemini
+                GoogleRealtimeModel is None or not isinstance(self.llm, GoogleRealtimeModel)
+            ):
                 self._rt_session.interrupt()
 
                 handle = SpeechHandle.create(
