@@ -165,6 +165,13 @@ class ConversationPersistor(utils.EventEmitter[EventTypes]):
             """
             The state is either: "initializing", "idle", "listening", "thinking", or "speaking"
             """
+            if (
+                self.session.current_speech is not None
+                and self.session.current_speech.interrupted
+                and ev.old_state == "speaking"
+            ):
+                event = EventLog(eventname="speech_interrupted")
+                self._log_q.put_nowait(event)
             name = ev.type + " to " + ev.new_state + " from " + ev.old_state
             event = EventLog(eventname=name)
             self._log_q.put_nowait(event)
