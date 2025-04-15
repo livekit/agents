@@ -208,7 +208,7 @@ class RealtimeModel(llm.RealtimeModel):
             model=model,
             voice=voice,
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
-            tool_choice=tool_choice if is_given(tool_choice) else DEFAULT_TOOL_CHOICE,
+            tool_choice=tool_choice or None,
             input_audio_transcription=input_audio_transcription
             if is_given(input_audio_transcription)
             else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
