@@ -34,6 +34,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
+
 
 @dataclass
 class STTOptions:
@@ -110,6 +112,10 @@ class STT(stt.STT):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and speech_endpoint must be set"  # noqa: E501
             )
+
+        if speech_region and speech_endpoint:
+            logger.warning("speech_region and speech_endpoint both are set, using speech_endpoint")
+            speech_region = None
 
         self._config = STTOptions(
             speech_key=speech_key,
