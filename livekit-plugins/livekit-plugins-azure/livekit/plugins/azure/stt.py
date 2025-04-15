@@ -115,7 +115,7 @@ class STT(stt.STT):
 
         if speech_region and speech_endpoint:
             logger.warning("speech_region and speech_endpoint both are set, using speech_endpoint")
-            speech_region = None
+            speech_region = NOT_GIVEN
 
         self._config = STTOptions(
             speech_key=speech_key,
