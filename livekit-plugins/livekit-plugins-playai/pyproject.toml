@@ -9,7 +9,7 @@ description = "Agent Framework plugin for voice synthesis with PlayAI's API."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
-authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "livekit", "playHT", "playAI"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.0.0.rc4",
+    "livekit-agents[codecs]>=1.0.11",
     "pyht>=0.1.14",
     "aiohttp",
     "livekit",

@@ -1,10 +1,5 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
-import asyncio
-import pathlib
-import signal
-import sys
-import threading
 
 import click
 
@@ -12,19 +7,20 @@ from .. import utils
 from ..log import logger
 from ..plugin import Plugin
 from ..types import NOT_GIVEN, NotGivenOr
-from ..worker import JobExecutorType, Worker, WorkerOptions
-from . import proto
+from ..worker import JobExecutorType, WorkerOptions, SimulateJobInfo
+from . import proto, _run
 from .log import setup_logging
 
 CLI_ARGUMENTS: proto.CliArgs | None = None
 
 
-def _esc(*codes: int) -> str:
-    return "\033[" + ";".join(str(c) for c in codes) + "m"
-
-
-def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) -> None:
+def run_app(
+    opts: WorkerOptions,
+    *,
+    hot_reload: NotGivenOr[bool] = NOT_GIVEN,
+) -> None:
     """Run the CLI to interact with the worker"""
+
     cli = click.Group()
 
     @cli.command(help="Start the worker in production mode.")
@@ -67,7 +63,9 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
             watch=False,
             drain_timeout=drain_timeout,
         )
-        run_worker(args)
+        global CLI_ARGUMENTS
+        CLI_ARGUMENTS = args
+        _run.run_worker(args)
 
     @cli.command(help="Start the worker in development mode")
     @click.option(
@@ -121,8 +119,9 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
             drain_timeout=0,
             register=True,
         )
-
-        _run_dev(args)
+        global CLI_ARGUMENTS
+        CLI_ARGUMENTS = args
+        _run.run_dev(args)
 
     @cli.command(help="Start a new chat")
     @click.option(
@@ -147,9 +146,9 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
     ) -> None:
         # keep everything inside the same process when using the chat mode
         opts.job_executor_type = JobExecutorType.THREAD
-        opts.ws_url = url or opts.ws_url
-        opts.api_key = api_key or opts.api_key
-        opts.api_secret = api_secret or opts.api_secret
+        opts.ws_url = url or opts.ws_url or "ws://localhost:7881/fake_console_url"
+        opts.api_key = api_key or opts.api_key or "fake_console_key"
+        opts.api_secret = api_secret or opts.api_secret or "fake_console_secret"
 
         args = proto.CliArgs(
             opts=opts,
@@ -160,11 +159,11 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
             console=True,
             drain_timeout=0,
             register=False,
-            simulate_job=proto.SimulateJobArgs(
-                room="mock-console",
-            ),
+            simulate_job=SimulateJobInfo(room="mock-console"),
         )
-        run_worker(args)
+        global CLI_ARGUMENTS
+        CLI_ARGUMENTS = args
+        _run.run_worker(args)
 
     @cli.command(help="Connect to a specific room")
     @click.option(
@@ -221,13 +220,11 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
             asyncio_debug=asyncio_debug,
             watch=watch,
             drain_timeout=0,
-            simulate_job=proto.SimulateJobArgs(
-                room=room,
-                participant_identity=participant_identity,
-            ),
+            simulate_job=SimulateJobInfo(room=room, participant_identity=participant_identity),
         )
-
-        _run_dev(args)
+        global CLI_ARGUMENTS
+        CLI_ARGUMENTS = args
+        _run.run_dev(args)
 
     @cli.command(help="Download plugin dependency files")
     @click.option(
@@ -245,122 +242,3 @@ def run_app(opts: WorkerOptions, *, hot_reload: NotGivenOr[bool] = NOT_GIVEN) ->
             logger.info(f"Finished downloading files for {plugin}")
 
     cli()
-
-
-def _run_dev(
-    args: proto.CliArgs,
-):
-    if args.watch:
-        from .watcher import WatchServer
-
-        setup_logging(args.log_level, args.devmode, args.console)
-        main_file = pathlib.Path(sys.argv[0]).parent
-
-        async def _run_loop():
-            server = WatchServer(run_worker, main_file, args, loop=asyncio.get_event_loop())
-            await server.run()
-
-        try:
-            asyncio.run(_run_loop())
-        except KeyboardInterrupt:
-            pass
-    else:
-        run_worker(args)
-
-
-def run_worker(args: proto.CliArgs) -> None:
-    global CLI_ARGUMENTS
-    CLI_ARGUMENTS = args
-
-    setup_logging(args.log_level, args.devmode, args.console)
-    args.opts.validate_config(args.devmode)
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    if args.console:
-        print(_esc(34) + "=" * 50 + _esc(0))
-        print(_esc(34) + "     Livekit Agents - Console" + _esc(0))
-        print(_esc(34) + "=" * 50 + _esc(0))
-        print("Press [Ctrl+B] to toggle between Text/Audio mode, [Q] to quit.\n")
-
-    worker = Worker(args.opts, devmode=args.devmode, register=args.register, loop=loop)
-
-    loop.set_debug(args.asyncio_debug)
-    loop.slow_callback_duration = 0.1  # 100ms
-    utils.aio.debug.hook_slow_callbacks(2)
-
-    @worker.once("worker_started")
-    def _worker_started():
-        if args.simulate_job and args.reload_count == 0:
-            # logger.info("connecting to room %s", args.simulate_job.room)
-            loop.create_task(
-                worker.simulate_job(args.simulate_job.room, args.simulate_job.participant_identity)
-            )
-
-        if args.devmode:
-            logger.info(
-                f"{_esc(1)}see tracing information at http://localhost:{worker.worker_info.http_port}/debug{_esc(0)}"
-            )
-        else:
-            logger.info(
-                f"see tracing information at http://localhost:{worker.worker_info.http_port}/debug"
-            )
-
-    try:
-
-        def _signal_handler():
-            raise KeyboardInterrupt
-
-        if threading.current_thread() is threading.main_thread():
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, _signal_handler)
-
-    except NotImplementedError:
-        # TODO(theomonnom): add_signal_handler is not implemented on win
-        pass
-
-    async def _worker_run(worker: Worker) -> None:
-        try:
-            await worker.run()
-        except Exception:
-            logger.exception("worker failed")
-
-    watch_client = None
-    if args.watch:
-        from .watcher import WatchClient
-
-        watch_client = WatchClient(worker, args, loop=loop)
-        watch_client.start()
-
-    try:
-        main_task = loop.create_task(_worker_run(worker), name="agent_runner")
-        try:
-            loop.run_until_complete(main_task)
-        except KeyboardInterrupt:
-            pass
-
-        try:
-            if not args.devmode:
-                loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
-
-            loop.run_until_complete(worker.aclose())
-
-            if watch_client:
-                loop.run_until_complete(watch_client.aclose())
-        except KeyboardInterrupt:
-            logger.warning("exiting forcefully")
-            import os
-
-            os._exit(1)  # TODO(theomonnom): add aclose(force=True) in worker
-    finally:
-        try:
-            tasks = asyncio.all_tasks(loop)
-            for task in tasks:
-                task.cancel()
-
-            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.run_until_complete(loop.shutdown_default_executor())
-        finally:
-            loop.close()

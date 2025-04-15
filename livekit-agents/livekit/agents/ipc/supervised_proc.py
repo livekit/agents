@@ -30,6 +30,7 @@ class _ProcOpts:
     ping_interval: float
     ping_timeout: float
     high_ping_threshold: float
+    http_proxy: str | None
 
 
 class SupervisedProc(ABC):
@@ -43,6 +44,7 @@ class SupervisedProc(ABC):
         ping_interval: float,
         ping_timeout: float,
         high_ping_threshold: float,
+        http_proxy: str | None,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
@@ -56,6 +58,7 @@ class SupervisedProc(ABC):
             ping_interval=ping_interval,
             ping_timeout=ping_timeout,
             high_ping_threshold=high_ping_threshold,
+            http_proxy=http_proxy,
         )
 
         self._exitcode: int | None = None
@@ -153,6 +156,7 @@ class SupervisedProc(ABC):
                 ping_interval=self._opts.ping_interval,
                 ping_timeout=self._opts.ping_timeout,
                 high_ping_threshold=self._opts.high_ping_threshold,
+                http_proxy=self._opts.http_proxy or "",
             ),
         )
 
@@ -167,9 +171,6 @@ class SupervisedProc(ABC):
             )
 
             if init_res.error:
-                self._initialize_fut.set_exception(
-                    RuntimeError(f"process initialization failed: {init_res.error}")
-                )
                 logger.error(
                     f"process initialization failed: {init_res.error}",
                     extra=self.logging_extra(),
@@ -185,7 +186,8 @@ class SupervisedProc(ABC):
             logger.error("initialization timed out, killing process", extra=self.logging_extra())
             self._send_kill_signal()
             raise
-        except Exception as e:  # should be channel.ChannelClosed most of the time
+        except Exception as e:
+            # should be channel.ChannelClosed most of the time (or init_res error)
             self._initialize_fut.set_exception(e)
             raise
 

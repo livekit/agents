@@ -20,7 +20,7 @@ from ._exceptions import (
     APITimeoutError,
     AssignmentTimeoutError,
 )
-from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest
+from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest, get_job_context
 from .llm.chat_context import (
     ChatContent,
     ChatContext,
@@ -30,21 +30,35 @@ from .llm.chat_context import (
     FunctionCall,
     FunctionCallOutput,
 )
-from .llm.tool_context import function_tool
+from .llm.tool_context import FunctionTool, StopResponse, ToolError, function_tool
 from .plugin import Plugin
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    AgentState,
     APIConnectOptions,
     NotGiven,
     NotGivenOr,
 )
 from .version import __version__
-from .voice import Agent, AgentEvent, AgentSession, RunContext, io
-from .voice.background_audio import BackgroundAudio
+from .voice import (
+    Agent,
+    AgentEvent,
+    AgentSession,
+    AgentStateChangedEvent,
+    CloseEvent,
+    ConversationItemAddedEvent,
+    ErrorEvent,
+    MetricsCollectedEvent,
+    ModelSettings,
+    RunContext,
+    SpeechCreatedEvent,
+    UserInputTranscribedEvent,
+    UserStateChangedEvent,
+    io,
+)
+from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
-from .worker import Worker, WorkerOptions, WorkerPermissions, WorkerType
+from .worker import SimulateJobInfo, Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
     "__version__",
@@ -55,9 +69,10 @@ __all__ = [
     "JobProcess",
     "JobContext",
     "JobRequest",
+    "get_job_context",
     "JobExecutorType",
     "AutoSubscribe",
-    "AgentState",
+    "FunctionTool",
     "function_tool",
     "ChatContext",
     "ChatItem",
@@ -67,27 +82,39 @@ __all__ = [
     "ChatMessage",
     "ChatRole",
     "ChatContent",
+    "ErrorEvent",
+    "CloseEvent",
+    "ConversationItemAddedEvent",
+    "AgentStateChangedEvent",
+    "UserInputTranscribedEvent",
+    "UserStateChangedEvent",
+    "SpeechCreatedEvent",
+    "MetricsCollectedEvent",
     "io",
     "FunctionCall",
     "FunctionCallOutput",
+    "StopResponse",
+    "ToolError",
     "RunContext",
     "Plugin",
     "AgentSession",
     "AgentEvent",
+    "ModelSettings",
     "Agent",
-    "cli",
     "AssignmentTimeoutError",
     "APIConnectionError",
     "APIError",
     "APIStatusError",
     "APITimeoutError",
     "APIConnectOptions",
-    "AgentState",
     "NotGiven",
     "NOT_GIVEN",
     "NotGivenOr",
     "DEFAULT_API_CONNECT_OPTIONS",
-    "BackgroundAudio",
+    "BackgroundAudioPlayer",
+    "BuiltinAudioClip",
+    "AudioConfig",
+    "SimulateJobInfo",
 ]
 
 # Cleanup docs of unexported modules

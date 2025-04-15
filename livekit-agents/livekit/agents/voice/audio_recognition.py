@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterable
-from typing import Literal, Protocol
+from dataclasses import dataclass
+from typing import Protocol
 
 from livekit import rtc
 
-from .. import llm, metrics, stt, utils, vad
+from .. import llm, stt, utils, vad
 from ..debug import tracing
 from ..log import logger
 from ..utils import aio
@@ -15,9 +16,16 @@ from . import io
 from .agent import ModelSettings
 
 
+@dataclass
+class _EndOfTurnInfo:
+    new_transcript: str
+    transcription_delay: float
+    end_of_utterance_delay: float
+
+
 class _TurnDetector(Protocol):
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    def unlikely_threshold(self) -> float: ...
+    def unlikely_threshold(self, language: str | None) -> float: ...
     def supports_language(self, language: str | None) -> bool: ...
 
     async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float: ...
@@ -29,12 +37,12 @@ class RecognitionHooks(Protocol):
     def on_end_of_speech(self, ev: vad.VADEvent) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
-    async def on_end_of_turn(self, new_transcript: str) -> None: ...
+    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> None: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
-class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
+class AudioRecognition:
     def __init__(
         self,
         *,
@@ -44,8 +52,8 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
         turn_detector: _TurnDetector | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
+        manual_turn_detection: bool,
     ) -> None:
-        super().__init__()
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._stt_atask: asyncio.Task[None] | None = None
@@ -56,11 +64,13 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._turn_detector = turn_detector
         self._stt = stt
         self._vad = vad
+        self._manual_turn_detection = manual_turn_detection
 
         self._speaking = False
         self._last_speaking_time: float = 0
         self._last_final_transcript_time: float = 0
         self._audio_transcript = ""
+        self._audio_interim_transcript = ""
         self._last_language: str | None = None
         self._vad_graph = tracing.Tracing.add_graph(
             title="vad",
@@ -123,6 +133,21 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             self._vad_atask = None
             self._vad_ch = None
 
+    def clear_user_turn(self) -> None:
+        self._audio_transcript = ""
+        self._audio_interim_transcript = ""
+
+    def commit_user_turn(self) -> None:
+        if self._audio_interim_transcript:
+            # append interim transcript
+            # TODO(long): is there a way to flush the STT buffer?
+            self._audio_transcript = (
+                f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
+            )
+        self._audio_interim_transcript = ""
+        chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+        self._run_eou_detection(chat_ctx)
+
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
@@ -133,7 +158,7 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
 
             logger.debug(
                 "received user transcript",
-                extra={"user_transcript": transcript},
+                extra={"user_transcript": transcript, "language": self._last_language},
             )
 
             tracing.Tracing.log_event(
@@ -147,6 +172,7 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
+            self._audio_interim_transcript = ""
 
             if not self._speaking:
                 if not self._vad:
@@ -157,10 +183,12 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
                     # and using that timestamp for _last_speaking_time
                     self._last_speaking_time = time.time()
 
-                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+                if not self._manual_turn_detection:
+                    chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                    self._run_eou_detection(chat_ctx)
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev)
+            self._audio_interim_transcript = ev.alternatives[0].text
 
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
@@ -180,55 +208,61 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
             self._last_speaking_time = time.time() - ev.silence_duration
 
-            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx)
+            if not self._manual_turn_detection:
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
-        if self._stt and not self._audio_transcript:
+        if self._stt and not self._audio_transcript and not self._manual_turn_detection:
             # stt enabled but no transcript yet
             return
 
         chat_ctx = chat_ctx.copy()
         chat_ctx.add_message(role="user", content=self._audio_transcript)
-        turn_detector = self._turn_detector if self._audio_transcript else None
+        turn_detector = (
+            self._turn_detector
+            if self._audio_transcript and not self._manual_turn_detection
+            else None  # disable EOU model if manual turn detection enabled
+        )
 
         @utils.log_exceptions(logger=logger)
-        async def _bounce_eou_task() -> None:
+        async def _bounce_eou_task(last_speaking_time: float) -> None:
             endpointing_delay = self._min_endpointing_delay
 
-            if turn_detector is not None and turn_detector.supports_language(self._last_language):
-                end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
-                tracing.Tracing.log_event(
-                    "end of user turn probability",
-                    {"probability": end_of_turn_probability},
-                )
-                unlikely_threshold = turn_detector.unlikely_threshold()
-                if end_of_turn_probability < unlikely_threshold:
-                    endpointing_delay = self._max_endpointing_delay
+            if turn_detector is not None:
+                if not turn_detector.supports_language(self._last_language):
+                    logger.debug("Turn detector does not support language %s", self._last_language)
+                else:
+                    end_of_turn_probability = await turn_detector.predict_end_of_turn(chat_ctx)
+                    tracing.Tracing.log_event(
+                        "end of user turn probability",
+                        {"probability": end_of_turn_probability},
+                    )
+                    unlikely_threshold = turn_detector.unlikely_threshold(self._last_language)
+                    if end_of_turn_probability < unlikely_threshold:
+                        endpointing_delay = self._max_endpointing_delay
 
-            await asyncio.sleep(
-                max(
-                    self._last_speaking_time + endpointing_delay - time.time(),
-                    0,
-                )
-            )
+            extra_sleep = last_speaking_time + endpointing_delay - time.time()
+            await asyncio.sleep(max(extra_sleep, 0))
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
-            eou_metrics = metrics.EOUMetrics(
-                timestamp=time.time(),
-                end_of_utterance_delay=time.time() - self._last_speaking_time,
-                transcription_delay=max(
-                    self._last_final_transcript_time - self._last_speaking_time, 0
-                ),
+            await self._hooks.on_end_of_turn(
+                _EndOfTurnInfo(
+                    new_transcript=self._audio_transcript,
+                    transcription_delay=max(
+                        self._last_final_transcript_time - last_speaking_time, 0
+                    ),
+                    end_of_utterance_delay=time.time() - last_speaking_time,
+                )
             )
-            self.emit("metrics_collected", eou_metrics)
-            await self._hooks.on_end_of_turn(self._audio_transcript)
             self._audio_transcript = ""
 
         if self._end_of_turn_task is not None:
+            # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
 
-        self._end_of_turn_task = asyncio.create_task(_bounce_eou_task())
+        # copy the last_speaking_time before awaiting (the value can change)
+        self._end_of_turn_task = asyncio.create_task(_bounce_eou_task(self._last_speaking_time))
 
     @utils.log_exceptions(logger=logger)
     async def _stt_task(

@@ -68,9 +68,9 @@ def import_pil():
         if "Image" not in globals():
             globals()["Image"] = import_module("PIL.Image")
     except ImportError:
-        raise ImportError(  # noqa: B904
+        raise ImportError(
             "You haven't included the 'images' optional dependencies. Please install the 'codecs' extra by running `pip install livekit-agents[images]`"  # noqa: E501
-        )
+        ) from None
 
 
 def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:

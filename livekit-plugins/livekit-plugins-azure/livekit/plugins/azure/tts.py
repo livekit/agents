@@ -172,6 +172,7 @@ class TTS(tts.TTS):
         on_synthesizing_event: NotGivenOr[Callable] = NOT_GIVEN,
         on_viseme_event: NotGivenOr[Callable] = NOT_GIVEN,
         on_word_boundary_event: NotGivenOr[Callable] = NOT_GIVEN,
+        speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Azure TTS.
@@ -209,9 +210,10 @@ class TTS(tts.TTS):
             is_given(speech_host)
             or (is_given(speech_key) and is_given(speech_region))
             or (is_given(speech_auth_token) and is_given(speech_region))
+            or (is_given(speech_key) and is_given(speech_endpoint))
         ):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"  # noqa: E501
+                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and speech_endpoint must be set"  # noqa: E501
             )
 
         if is_given(prosody):
@@ -238,6 +240,7 @@ class TTS(tts.TTS):
             on_synthesizing_event=on_synthesizing_event,
             on_viseme_event=on_viseme_event,
             on_word_boundary_event=on_word_boundary_event,
+            speech_endpoint=speech_endpoint,
         )
 
     def update_options(

@@ -11,9 +11,13 @@ pip install livekit-plugins-speechmatics
 Usage:
 
 ```python
-agent = VoicePipelineAgent(
+from livekit.agents import AgentSession
+from livekit.plugins.turn_detector.english import EnglishModel
+from livekit.plugins import speechmatics
+
+agent = AgentSession(
     stt=speechmatics.STT(),
-    turn_detector=turn_detector.EOUModel(),
+    turn_detector=EnglishModel(),
     min_endpointing_delay=0.5,
     max_endpointing_delay=5.0,
     ...
@@ -21,11 +25,9 @@ agent = VoicePipelineAgent(
 ```
 
 Note: The plugin was built with
-LiveKit's [end-of-turn detection feature](https://github.com/livekit/agents#in-house-phrase-endpointing-model) in mind,
+LiveKit's [end-of-turn detection feature](https://docs.livekit.io/agents/v1/build/turn-detection/) in mind,
 and it doesn't implement phrase endpointing. `AddTranscript` and `AddPartialTranscript` events are emitted as soon
-as they’re received from the Speechmatics STT engine. For the best user experience,
-we recommend running the agent with end-of-turn detection enabled (
-see [example](https://github.com/livekit-examples/voice-pipeline-agent-python/blob/main/agent.py)).
+as they’re received from the Speechmatics STT engine.
 
 ## Pre-requisites
 

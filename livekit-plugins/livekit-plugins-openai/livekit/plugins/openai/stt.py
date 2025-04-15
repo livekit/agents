@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import dataclasses
 import json
 import os
 import time
@@ -84,7 +83,7 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
-        use_realtime: bool = True,
+        use_realtime: bool = False,
     ):
         """
         Create a new instance of OpenAI STT.
@@ -101,6 +100,7 @@ class STT(stt.STT):
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
+            use_realtime: Whether to use the realtime transcription API. (default: False)
         """  # noqa: E501
 
         super().__init__(
@@ -191,11 +191,12 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        config = self._sanitize_options(language=language)
+        if is_given(language):
+            self._opts.language = language
         stream = SpeechStream(
             stt=self,
-            opts=config,
             pool=self._pool,
+            conn_options=conn_options,
         )
         self._streams.add(stream)
         return stream
@@ -205,14 +206,30 @@ class STT(stt.STT):
         *,
         model: NotGivenOr[STTModels | GroqAudioModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        detect_language: NotGivenOr[bool] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """
+        Update the options for the speech stream. Most options are updated at the
+        connection level. SpeechStreams will be recreated when options are updated.
+
+        Args:
+            language: The language to transcribe in.
+            detect_language: Whether to automatically detect the language.
+            model: The model to use for transcription.
+            prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
+            turn_detection: When using realtime, this controls how model detects the user is done speaking.
+            noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
+        """  # noqa: E501
         if is_given(model):
             self._opts.model = model
         if is_given(language):
             self._opts.language = language
+        if is_given(detect_language):
+            self._opts.detect_language = detect_language
+            self._opts.language = ""
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(turn_detection):
@@ -276,12 +293,6 @@ class STT(stt.STT):
 
         return self._session
 
-    def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> _STTOptions:
-        config = dataclasses.replace(self._opts)
-        if is_given(language):
-            config.language = language
-        return config
-
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,
@@ -290,7 +301,8 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
-            config = self._sanitize_options(language=language)
+            if is_given(language):
+                self._opts.language = language
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
             prompt = self._opts.prompt if is_given(self._opts.prompt) else openai.NOT_GIVEN
 
@@ -306,13 +318,13 @@ class STT(stt.STT):
                     "audio/wav",
                 ),
                 model=self._opts.model,  # type: ignore
-                language=config.language,
+                language=self._opts.language,
                 prompt=prompt,
                 response_format=format,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
-            sd = stt.SpeechData(text=resp.text, language=config.language)
+            sd = stt.SpeechData(text=resp.text, language=self._opts.language)
             if isinstance(resp, TranscriptionVerbose) and resp.language:
                 sd.language = resp.language
 
@@ -322,14 +334,11 @@ class STT(stt.STT):
             )
 
         except openai.APITimeoutError:
-            raise APITimeoutError()  # noqa: B904
+            raise APITimeoutError() from None
         except openai.APIStatusError as e:
-            raise APIStatusError(  # noqa: B904
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-            )
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -339,13 +348,13 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         stt: STT,
-        opts: _STTOptions,
+        conn_options: APIConnectOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
     ) -> None:
-        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS, sample_rate=SAMPLE_RATE)
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
 
         self._pool = pool
-        self._opts = opts
+        self._language = stt._opts.language
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
@@ -354,14 +363,8 @@ class SpeechStream(stt.SpeechStream):
         *,
         language: str,
     ):
-        """
-        Update the options for the speech stream. Most options are updated at the
-        connection level. SpeechStreams will be recreated when options are updated.
-
-        Args:
-            language: The language to transcribe in.
-        """
-        self._opts.language = language
+        self._language = language
+        self._pool.invalidate()
         self._reconnect_event.set()
 
     @utils.log_exceptions(logger=logger)
@@ -434,7 +437,7 @@ class SpeechStream(stt.SpeechStream):
                                         alternatives=[
                                             stt.SpeechData(
                                                 text=current_text,
-                                                language=self._opts.language,
+                                                language=self._language,
                                             )
                                         ],
                                     )
@@ -450,7 +453,7 @@ class SpeechStream(stt.SpeechStream):
                                     alternatives=[
                                         stt.SpeechData(
                                             text=transcript,
-                                            language=self._opts.language,
+                                            language=self._language,
                                         )
                                     ],
                                 )

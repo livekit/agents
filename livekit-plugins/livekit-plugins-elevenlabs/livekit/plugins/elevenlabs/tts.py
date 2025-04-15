@@ -44,7 +44,9 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import TTSEncoding, TTSModels
 
-_DefaultEncoding: TTSEncoding = "mp3_44100"
+# by default, use 22.05kHz sample rate at 32kbps
+# in our testing,  reduce TTFB by about ~110ms
+_DefaultEncoding: TTSEncoding = "mp3_22050_32"
 
 
 def _sample_rate_from_format(output_format: TTSEncoding) -> int:
@@ -66,22 +68,9 @@ class Voice:
     id: str
     name: str
     category: str
-    settings: NotGivenOr[VoiceSettings] = NOT_GIVEN
 
 
-DEFAULT_VOICE = Voice(
-    id="EXAVITQu4vr4xnSDxMaL",
-    name="Bella",
-    category="premade",
-    settings=VoiceSettings(
-        stability=0.71,
-        speed=1.0,
-        similarity_boost=0.5,
-        style=0.0,
-        use_speaker_boost=True,
-    ),
-)
-
+DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 300
@@ -90,7 +79,8 @@ WS_INACTIVITY_TIMEOUT = 300
 @dataclass
 class _TTSOptions:
     api_key: str
-    voice: Voice
+    voice_id: str
+    voice_settings: NotGivenOr[VoiceSettings]
     model: TTSModels | str
     language: NotGivenOr[str]
     base_url: str
@@ -107,8 +97,10 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: Voice = DEFAULT_VOICE,
+        voice_id: str = DEFAULT_VOICE_ID,
+        voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         model: TTSModels | str = "eleven_flash_v2_5",
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         streaming_latency: NotGivenOr[int] = NOT_GIVEN,
@@ -123,26 +115,31 @@ class TTS(tts.TTS):
         Create a new instance of ElevenLabs TTS.
 
         Args:
-            voice (Voice): Voice configuration. Defaults to `DEFAULT_VOICE`.
+            voice_id (str): Voice ID. Defaults to `DEFAULT_VOICE_ID`.
+            voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
             model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
-            api_key (str | None): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
-            base_url (str | None): Custom base URL for the API. Optional.
-            streaming_latency (int): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
+            api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
+            base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
+            streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
-            word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            word_tokenizer (NotGivenOr[tokenize.WordTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
-            chunk_length_schedule (list[int]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
+            chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
         """  # noqa: E501
 
         if not is_given(chunk_length_schedule):
             chunk_length_schedule = [80, 120, 200, 260]
+
+        if not is_given(encoding):
+            encoding = _DefaultEncoding
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
             ),
-            sample_rate=_sample_rate_from_format(_DefaultEncoding),
+            sample_rate=_sample_rate_from_format(encoding),
             num_channels=1,
         )
 
@@ -158,11 +155,12 @@ class TTS(tts.TTS):
             )
 
         self._opts = _TTSOptions(
-            voice=voice,
+            voice_id=voice_id,
+            voice_settings=voice_settings,
             model=model,
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
-            encoding=_DefaultEncoding,
+            encoding=encoding,
             sample_rate=self.sample_rate,
             streaming_latency=streaming_latency,
             word_tokenizer=word_tokenizer,
@@ -190,20 +188,24 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: NotGivenOr[Voice] = NOT_GIVEN,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
+        voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Args:
-            voice (NotGivenOr[Voice]): Voice configuration.
+            voice_id (NotGivenOr[str]): Voice ID.
+            voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
             model (NotGivenOr[TTSModels | str]): TTS model to use.
             language (NotGivenOr[str]): Language code for the TTS model.
         """
         if is_given(model):
             self._opts.model = model
-        if is_given(voice):
-            self._opts.voice = voice
+        if is_given(voice_id):
+            self._opts.voice_id = voice_id
+        if is_given(voice_settings):
+            self._opts.voice_settings = voice_settings
         if is_given(language):
             self._opts.language = language
 
@@ -258,8 +260,8 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self) -> None:
         request_id = utils.shortuuid()
         voice_settings = (
-            _strip_nones(dataclasses.asdict(self._opts.voice.settings))
-            if is_given(self._opts.voice.settings)
+            _strip_nones(dataclasses.asdict(self._opts.voice_settings))
+            if is_given(self._opts.voice_settings)
             else None
         )
         data = {
@@ -398,8 +400,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         # 11labs protocol expects the first message to be an "init msg"
         init_pkt = {
             "text": " ",
-            "voice_settings": _strip_nones(dataclasses.asdict(self._opts.voice.settings))
-            if is_given(self._opts.voice.settings)
+            "voice_settings": _strip_nones(dataclasses.asdict(self._opts.voice_settings))
+            if is_given(self._opts.voice_settings)
             else None,
             "generation_config": {"chunk_length_schedule": self._opts.chunk_length_schedule},
         }
@@ -529,7 +531,6 @@ def _dict_to_voices_list(data: dict[str, Any]):
                 id=voice["voice_id"],
                 name=voice["name"],
                 category=voice["category"],
-                settings=None,
             )
         )
     return voices
@@ -541,7 +542,7 @@ def _strip_nones(data: dict[str, Any]):
 
 def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
-    voice_id = opts.voice.id
+    voice_id = opts.voice_id
     model_id = opts.model
     output_format = opts.encoding
     url = (
@@ -555,7 +556,7 @@ def _synthesize_url(opts: _TTSOptions) -> str:
 
 def _stream_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
-    voice_id = opts.voice.id
+    voice_id = opts.voice_id
     model_id = opts.model
     output_format = opts.encoding
     enable_ssml = str(opts.enable_ssml_parsing).lower()

@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import asyncio
 import atexit
 import contextlib
+import enum
 import random
 from collections.abc import AsyncGenerator, AsyncIterator
 from importlib.resources import as_file, files
@@ -19,11 +22,34 @@ from ..utils.audio import audio_frames_from_file
 from .agent_session import AgentSession
 from .events import AgentStateChangedEvent
 
-SoundSource = Union[AsyncIterator[rtc.AudioFrame], str]
+_resource_stack = contextlib.ExitStack()
+atexit.register(_resource_stack.close)
 
 
-class BackgroundSound(NamedTuple):
-    sound: SoundSource
+class BuiltinAudioClip(enum.Enum):
+    OFFICE_AMBIENCE = "office-ambience.ogg"
+    KEYBOARD_TYPING = "keyboard-typing.ogg"
+    KEYBOARD_TYPING2 = "keyboard-typing2.ogg"
+
+    def path(self) -> str:
+        file_path = files("livekit.agents.resources") / self.value
+        return str(_resource_stack.enter_context(as_file(file_path)))
+
+
+AudioSource = Union[AsyncIterator[rtc.AudioFrame], str, BuiltinAudioClip]
+
+
+class AudioConfig(NamedTuple):
+    """
+    Definition for the audio to be played in the background
+
+    Args:
+        volume: The volume of the audio (0.0-1.0)
+        probability: The probability of the audio being played, when multiple
+            AudioConfigs are provided (0.0-1.0)
+    """
+
+    source: AudioSource
     volume: float = 1.0
     probability: float = 1.0
 
@@ -34,69 +60,42 @@ class BackgroundSound(NamedTuple):
 # Instead, we remove the sound from the mixer, and it will get removed 400ms later.
 _AUDIO_SOURCE_BUFFER_MS = 400
 
-_resource_stack = contextlib.ExitStack()
-atexit.register(_resource_stack.close)
 
-
-class BackgroundAudio:
+class BackgroundAudioPlayer:
     def __init__(
         self,
         *,
-        ambient_sound: NotGivenOr[
-            Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
-        ] = NOT_GIVEN,
+        ambient_sound: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         thinking_sound: NotGivenOr[
-            Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
+            AudioSource | AudioConfig | list[AudioConfig] | None
         ] = NOT_GIVEN,
     ) -> None:
         """
         Initializes the BackgroundAudio component with optional ambient and thinking sounds.
 
         This component creates and publishes a continuous audio track to a LiveKit room while managing
-        the playback of ambient and agent “thinking” sounds. It supports two types of audio sources:
+        the playback of ambient and agent “thinking” sounds. It supports three types of audio sources:
+        - A BuiltinAudioClip enum value, which will use a pre-defined sound from the package resources
         - A file path (string) pointing to an audio file, which can be looped.
         - An AsyncIterator that yields rtc.AudioFrame
 
-        If no ambient sound is provided, a default low‑volume office ambience sound
-        (from "office-ambience.ogg" in the package resources) is used. Similarly, if no thinking sound is provided,
-        a default list of two keyboard typing sounds (from "keyboard-typing.ogg" and "keyboard-typing2.ogg")
-        with higher volume and associated selection probabilities is used.
-
-        When a list (or BackgroundSound) is supplied, the component considers each sound’s volume and probability:
+        When a list (or AudioConfig) is supplied, the component considers each sound’s volume and probability:
         - The probability value determines the chance that a particular sound is selected for playback.
         - A total probability below 1.0 means there is a chance no sound will be selected (resulting in silence).
 
         Args:
-            ambient_sound (NotGivenOr[Union[SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
+            ambient_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
                 The ambient sound to be played continuously. For file paths, the sound will be looped.
-                For AsyncIterator sources, ensure the iterator is infinite or looped. Defaults to a low‑volume
-                office ambience sound.
-            thinking_sound (NotGivenOr[Union[SoundSource, BackgroundSound, List[BackgroundSound], None]], optional):
+                For AsyncIterator sources, ensure the iterator is infinite or looped.
+
+            thinking_sound (NotGivenOr[Union[AudioSource, AudioConfig, List[AudioConfig], None]], optional):
                 The sound to be played when the associated agent enters a “thinking” state. This can be a single
-                sound source or a list of BackgroundSound objects (with volume and probability settings). Defaults
-                to a set of keyboard typing sounds.
+                sound source or a list of AudioConfig objects (with volume and probability settings).
+
         """  # noqa: E501
-        default_office = files("livekit.agents.resources") / "office-ambience.ogg"
-        default_keyboard = files("livekit.agents.resources") / "keyboard-typing.ogg"
-        default_keyboard2 = files("livekit.agents.resources") / "keyboard-typing2.ogg"
 
-        office_path = _resource_stack.enter_context(as_file(default_office))
-        keyboard_path = _resource_stack.enter_context(as_file(default_keyboard))
-        keyboard_path2 = _resource_stack.enter_context(as_file(default_keyboard2))
-
-        self._ambient_sound = (
-            ambient_sound
-            if is_given(ambient_sound)
-            else BackgroundSound(str(office_path), volume=0.2)
-        )
-        self._thinking_sound = (
-            thinking_sound
-            if is_given(thinking_sound)
-            else [
-                BackgroundSound(str(keyboard_path), volume=0.8, probability=0.4),
-                BackgroundSound(str(keyboard_path2), volume=0.8, probability=0.6),
-            ]
-        )
+        self._ambient_sound = ambient_sound if is_given(ambient_sound) else None
+        self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
 
         self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
         self._audio_mixer = rtc.AudioMixer(48000, 1, blocksize=4800, capacity=1)
@@ -111,9 +110,7 @@ class BackgroundAudio:
         self._ambient_handle: PlayHandle | None = None
         self._thinking_handle: PlayHandle | None = None
 
-    def _select_sound_from_list(
-        self, sounds: list[BackgroundSound]
-    ) -> Union[BackgroundSound, None]:
+    def _select_sound_from_list(self, sounds: list[AudioConfig]) -> AudioConfig | None:
         """
         Selects a sound from a list of BackgroundSound based on their probabilities.
         Returns None if no sound is selected (when sum of probabilities < 1.0).
@@ -142,44 +139,51 @@ class BackgroundAudio:
         return sounds[-1]
 
     def _normalize_sound_source(
-        self, source: Union[SoundSource, BackgroundSound, list[BackgroundSound], None]
-    ) -> Union[tuple[SoundSource, float], None]:
+        self, source: AudioSource | AudioConfig | list[AudioConfig] | None
+    ) -> tuple[AudioSource, float] | None:
         if source is None:
             return None
 
-        if isinstance(source, list):
-            selected = self._select_sound_from_list(cast(list[BackgroundSound], source))
+        if isinstance(source, BuiltinAudioClip):
+            return self._normalize_builtin_audio(source), 1.0
+        elif isinstance(source, list):
+            selected = self._select_sound_from_list(cast(list[AudioConfig], source))
             if selected is None:
                 return None
-            return selected.sound, selected.volume
-
-        if isinstance(source, BackgroundSound):
-            return source.sound, source.volume
+            return selected.source, selected.volume
+        elif isinstance(source, AudioConfig):
+            return self._normalize_builtin_audio(source.source), source.volume
 
         return source, 1.0
 
+    def _normalize_builtin_audio(self, source: AudioSource) -> AsyncIterator[rtc.AudioFrame] | str:
+        if isinstance(source, BuiltinAudioClip):
+            return source.path()
+        else:
+            return source
+
     def play(
         self,
-        sound: Union[SoundSource, BackgroundSound, list[BackgroundSound]],
+        audio: AudioSource | AudioConfig | list[AudioConfig],
         *,
         loop: bool = False,
-    ) -> "PlayHandle":
+    ) -> PlayHandle:
         """
-        Plays a sound once or in a loop.
+        Plays an audio once or in a loop.
 
         Args:
-            sound (Union[SoundSource, BackgroundSound, List[BackgroundSound]]):
-                The sound to play. Can be:
+            audio (Union[AudioSource, AudioConfig, List[AudioConfig]]):
+                The audio to play. Can be:
                 - A string pointing to a file path
                 - An AsyncIterator that yields `rtc.AudioFrame`
-                - A BackgroundSound object with volume and probability
-                - A list of BackgroundSound objects, where one will be selected based on probability
+                - An AudioConfig object with volume and probability
+                - A list of AudioConfig objects, where one will be selected based on probability
 
                 If a string is provided and `loop` is True, the sound will be looped.
                 If an AsyncIterator is provided, it is played until exhaustion (and cannot be looped
                 automatically).
             loop (bool, optional):
-                Whether to loop the sound. Only applicable if `sound` is a string or contains strings.
+                Whether to loop the audio. Only applicable if `audio` is a string or contains strings.
                 Defaults to False.
 
         Returns:
@@ -189,7 +193,7 @@ class BackgroundAudio:
         if not self._mixer_atask:
             raise RuntimeError("BackgroundAudio is not started")
 
-        normalized = self._normalize_sound_source(sound)
+        normalized = self._normalize_sound_source(audio)
         if normalized is None:
             play_handle = PlayHandle()
             play_handle._mark_playout_done()
@@ -256,7 +260,7 @@ class BackgroundAudio:
                 normalized = self._normalize_sound_source(self._ambient_sound)
                 if normalized:
                     sound_source, volume = normalized
-                    selected_sound = BackgroundSound(sound_source, volume)
+                    selected_sound = AudioConfig(sound_source, volume)
                     if isinstance(sound_source, str):
                         self._ambient_handle = self.play(selected_sound, loop=True)
                     else:
@@ -301,7 +305,7 @@ class BackgroundAudio:
         if not self._thinking_sound:
             return
 
-        if ev.state == "thinking":
+        if ev.new_state == "thinking":
             if self._thinking_handle and not self._thinking_handle.done():
                 return
 
@@ -312,8 +316,11 @@ class BackgroundAudio:
 
     @log_exceptions(logger=logger)
     async def _play_task(
-        self, play_handle: "PlayHandle", sound: SoundSource, volume: float, loop: bool
+        self, play_handle: PlayHandle, sound: AudioSource, volume: float, loop: bool
     ) -> None:
+        if isinstance(sound, BuiltinAudioClip):
+            sound = sound.path()
+
         if isinstance(sound, str):
             if loop:
                 sound = _loop_audio_frames(sound)

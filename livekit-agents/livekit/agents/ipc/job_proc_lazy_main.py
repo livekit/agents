@@ -29,7 +29,7 @@ from livekit import rtc
 
 from ..cli import cli
 from ..debug import tracing
-from ..job import JobContext, JobProcess, _JobContextVar
+from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
@@ -59,7 +59,12 @@ class ProcStartArgs:
 def proc_main(args: ProcStartArgs) -> None:
     from .proc_client import _ProcClient
 
-    job_proc = _JobProc(args.initialize_process_fnc, args.job_entrypoint_fnc, args.user_arguments)
+    job_proc = _JobProc(
+        args.initialize_process_fnc,
+        args.job_entrypoint_fnc,
+        JobExecutorType.PROCESS,
+        args.user_arguments,
+    )
 
     client = _ProcClient(
         args.mp_cch,
@@ -124,11 +129,13 @@ class _JobProc:
         self,
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Any],
+        executor_type: JobExecutorType,
         user_arguments: Any | None = None,
     ) -> None:
+        self._executor_type = executor_type
+        self._user_arguments = user_arguments
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
-        self._job_proc = JobProcess(user_arguments=user_arguments)
         self._job_task: asyncio.Task | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -142,6 +149,11 @@ class _JobProc:
     def initialize(self, init_req: InitializeRequest, client: _ProcClient) -> None:
         self._client = client
         self._inf_client = _InfClient(client)
+        self._job_proc = JobProcess(
+            executor_type=self._executor_type,
+            user_arguments=self._user_arguments,
+            http_proxy=init_req.http_proxy or None,
+        )
         self._initialize_process_fnc(self._job_proc)
 
     @log_exceptions(logger=logger)
@@ -242,8 +254,8 @@ class _JobProc:
         self._job_task.add_done_callback(_exit_proc_cb)
 
     async def _run_job_task(self) -> None:
-        http_context._new_session_ctx()
         job_ctx_token = _JobContextVar.set(self._job_ctx)
+        http_context._new_session_ctx()
 
         job_entry_task = asyncio.create_task(
             self._job_entrypoint_fnc(self._job_ctx), name="job_user_entrypoint"
@@ -328,7 +340,10 @@ def thread_main(
         from .proc_client import _ProcClient
 
         job_proc = _JobProc(
-            args.initialize_process_fnc, args.job_entrypoint_fnc, args.user_arguments
+            args.initialize_process_fnc,
+            args.job_entrypoint_fnc,
+            JobExecutorType.THREAD,
+            args.user_arguments,
         )
 
         client = _ProcClient(

@@ -9,7 +9,7 @@ description = "Groq inference plugin for LiveKit Agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
-authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "livekit", "groq"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.0.0.rc4",
+    "livekit-agents[codecs]>=1.0.11",
     "livekit-plugins-openai>=1.0.0.dev5",
     "aiohttp",
     "livekit",

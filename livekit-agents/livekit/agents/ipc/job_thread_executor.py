@@ -25,6 +25,7 @@ class _ProcOpts:
     close_timeout: float
     ping_interval: float
     high_ping_threshold: float
+    http_proxy: str | None
 
 
 class ThreadJobExecutor:
@@ -38,6 +39,7 @@ class ThreadJobExecutor:
         close_timeout: float,
         ping_interval: float,
         high_ping_threshold: float,
+        http_proxy: str | None,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._loop = loop
@@ -48,6 +50,7 @@ class ThreadJobExecutor:
             close_timeout=close_timeout,
             ping_interval=ping_interval,
             high_ping_threshold=high_ping_threshold,
+            http_proxy=http_proxy,
         )
 
         self._user_args: Any | None = None
@@ -152,7 +155,9 @@ class ThreadJobExecutor:
                 await asyncio.shield(self._main_atask)
 
     async def initialize(self) -> None:
-        await channel.asend_message(self._pch, proto.InitializeRequest())
+        await channel.asend_message(
+            self._pch, proto.InitializeRequest(http_proxy=self._opts.http_proxy or "")
+        )
 
         try:
             init_res = await asyncio.wait_for(

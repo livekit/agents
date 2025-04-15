@@ -41,9 +41,7 @@ async def _playout_task(playout_q: asyncio.Queue, audio_source: rtc.AudioSource)
 async def entrypoint(job: JobContext):
     # use another voice for this demo
     # you can get a list of the voices using 'await tts_11labs.list_voices()'
-    voice = elevenlabs.Voice(id="ODq5zmih8GrVes37Dizd", name="Patrick", category="premade")
-
-    tts_11labs = elevenlabs.TTS(model_id="eleven_multilingual_v2", voice=voice)
+    tts_11labs = elevenlabs.TTS(voice_id="ODq5zmih8GrVes37Dizd", model="eleven_multilingual_v2")
 
     source = rtc.AudioSource(tts_11labs.sample_rate, tts_11labs.num_channels)
     track = rtc.LocalAudioTrack.create_audio_track("agent-mic", source)

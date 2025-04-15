@@ -39,6 +39,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         mp_ctx: BaseContext,
         memory_warn_mb: float,
         memory_limit_mb: float,
+        http_proxy: str | None,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
@@ -53,6 +54,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._memory_limit_mb = memory_limit_mb
         self._memory_warn_mb = memory_warn_mb
         self._default_num_idle_processes = num_idle_processes
+        self._http_proxy = http_proxy
         self._target_idle_processes = num_idle_processes
 
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
@@ -123,6 +125,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 inference_executor=self._inf_executor,
                 ping_interval=2.5,
                 high_ping_threshold=0.5,
+                http_proxy=self._http_proxy,
                 loop=self._loop,
             )
         elif self._job_executor_type == JobExecutorType.PROCESS:
@@ -139,6 +142,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 high_ping_threshold=0.5,
                 memory_warn_mb=self._memory_warn_mb,
                 memory_limit_mb=self._memory_limit_mb,
+                http_proxy=self._http_proxy,
             )
         else:
             raise ValueError(f"unsupported job executor: {self._job_executor_type}")
