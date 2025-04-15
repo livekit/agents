@@ -119,6 +119,7 @@ DEFAULT_TURN_DETECTION = TurnDetection(
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
     model="gpt-4o-mini-transcribe",
 )
+DEFAULT_TOOL_CHOICE = "auto"
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -131,6 +132,7 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -149,6 +151,7 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None: ...
 
@@ -158,6 +161,7 @@ class RealtimeModel(llm.RealtimeModel):
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
@@ -204,6 +208,7 @@ class RealtimeModel(llm.RealtimeModel):
             model=model,
             voice=voice,
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
+            tool_choice=tool_choice if is_given(tool_choice) else DEFAULT_TOOL_CHOICE,
             input_audio_transcription=input_audio_transcription
             if is_given(input_audio_transcription)
             else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
@@ -637,7 +642,7 @@ class RealtimeSession(
             if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
                 oai_tool_choice = tool_choice["function"]
             if oai_tool_choice is None:
-                oai_tool_choice = "auto"
+                oai_tool_choice = DEFAULT_TOOL_CHOICE
 
             kwargs["tool_choice"] = oai_tool_choice
 
