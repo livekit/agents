@@ -24,6 +24,8 @@ from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt, 
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 
+from .log import logger
+
 
 @dataclass
 class STTOptions:
@@ -52,6 +54,7 @@ class STT(stt.STT):
         speech_key: str | None = None,
         speech_region: str | None = None,
         speech_host: str | None = None,
+        speech_endpoint: str | None = None,
         speech_auth_token: str | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
@@ -85,11 +88,17 @@ class STT(stt.STT):
             speech_host
             or (speech_key and speech_region)
             or (speech_auth_token and speech_region)
+            or (speech_endpoint and speech_key)
         ):
             raise ValueError(
                 "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION must be set"
             )
 
+        if speech_region and speech_endpoint:
+            logger.warning(
+                "speech_region and speech_endpoint are both set. Using speech_endpoint."
+            )
+            speech_region = None
         if language:
             languages = [language]
 
@@ -98,6 +107,7 @@ class STT(stt.STT):
             speech_region=speech_region,
             speech_host=speech_host,
             speech_auth_token=speech_auth_token,
+            speech_endpoint=speech_endpoint,
             languages=languages,
             sample_rate=sample_rate,
             num_channels=num_channels,
