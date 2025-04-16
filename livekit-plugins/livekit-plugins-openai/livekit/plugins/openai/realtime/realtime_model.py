@@ -889,6 +889,14 @@ class RealtimeSession(
     async def _recover_from_text_response(
         self, *, response_id: str, item_id: str, old_task: asyncio.Task | None
     ) -> None:
+        """Recover from text-only response to audio mode.
+
+        When chat history is loaded, OpenAI Realtime API may respond with text only.
+        This method recovers by:
+        1. Deleting the text response
+        2. Creating an empty user audio message
+        3. Requesting a new response to trigger audio mode
+        """
         handle = self._response_created_futures.pop(response_id, None)
         if handle and handle.done_fut.done():
             if handle.done_fut.exception() is not None:
@@ -898,7 +906,6 @@ class RealtimeSession(
         if old_task and not old_task.done():
             old_task.cancel()
 
-        self.interrupt()
         # remove the text item
         chat_ctx = self.chat_ctx
         idx = chat_ctx.index_by_id(item_id)
@@ -1028,6 +1035,7 @@ class RealtimeSession(
                 "trying to recover from text-only response",
                 extra={"retries": self._text_mode_recovery_retries},
             )
+            self.interrupt()
             self._text_mode_recovery_atask = asyncio.create_task(
                 self._recover_from_text_response(
                     response_id=response_id,
