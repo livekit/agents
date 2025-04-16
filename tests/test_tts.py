@@ -36,7 +36,7 @@ WER_THRESHOLD = 0.2
 TEST_AUDIO_SYNTHESIZE = pathlib.Path(os.path.dirname(__file__), "long_synthesize.txt").read_text()
 
 PROXY_LISTEN = "0.0.0.0:443"
-OAI_LISTEN = "0.0.0.0:444"
+OAI_LISTEN = "0.0.0.0:500"
 
 
 def setup_oai_proxy(toxiproxy: Toxiproxy) -> Proxy:
@@ -51,7 +51,9 @@ async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, 
     # don't verify ssl because of the proxy base_url being different
     client = openai_client.AsyncClient(http_client=httpx.AsyncClient(verify=False))
 
-    whisper_stt = openai.STT(model="whisper-1", base_url="https://toxiproxy:444/v1", client=client)
+    whisper_stt = openai.STT(
+        model="whisper-1", base_url="https://172.30.0.10:500/v1", client=client
+    )
     res = await whisper_stt.recognize(buffer=frames)
     assert wer(res.alternatives[0].text, TEST_AUDIO_SYNTHESIZE) <= WER_THRESHOLD
 
