@@ -1156,10 +1156,6 @@ class RealtimeSession(
         if self._current_generation is None:
             return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)  # noqa: E501
 
-        if self._text_mode_recovery_retries > 0:
-            logger.debug("skip closing generation because of text-only response")
-            return
-
         assert self._current_generation is not None, "current_generation is None"
         for generation in self._current_generation.messages.values():
             # close all messages that haven't been closed yet

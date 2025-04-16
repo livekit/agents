@@ -47,6 +47,7 @@ async def entrypoint(ctx: JobContext):
 
     await session.start(agent=agent, room=ctx.room)
 
+    session.interrupt()
     session.generate_reply()
 
 
