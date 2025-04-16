@@ -19,16 +19,12 @@ import os
 from dataclasses import dataclass
 from typing import Any, Literal, MutableSet, Union
 
-import boto3
-from livekit.agents import (
-    APIConnectionError,
-    APIStatusError,
-    llm,
-)
+import aioboto3
+from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import LLMCapabilities, ToolChoice, _create_ai_function_info
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
-from ._utils import _build_aws_ctx, _build_tools, _get_aws_credentials
+from ._utils import _build_aws_ctx, _build_tools, _get_aws_async_session
 from .log import logger
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
@@ -58,6 +54,7 @@ class LLM(llm.LLM):
         top_p: float | None = None,
         tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = "auto",
         additional_request_fields: dict[str, Any] | None = None,
+        session: aioboto3.Session | None = None,
     ) -> None:
         """
         Create a new instance of AWS Bedrock LLM.
@@ -77,15 +74,13 @@ class LLM(llm.LLM):
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice or Literal["auto", "required", "none"], optional): Specifies whether to use tools during response generation. Defaults to "auto".
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
+            session (aioboto3.Session, optional): Optional aioboto3 session to use.
         """
         super().__init__(
             capabilities=LLMCapabilities(
                 supports_choices_on_int=True,
                 requires_persistent_functions=True,
             )
-        )
-        self._api_key, self._api_secret = _get_aws_credentials(
-            api_key, api_secret, region
         )
 
         self._model = model or os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
@@ -103,6 +98,9 @@ class LLM(llm.LLM):
         )
         self._region = region
         self._running_fncs: MutableSet[asyncio.Task[Any]] = set()
+        self._session = session or _get_aws_async_session(
+            api_key=api_key, api_secret=api_secret, region=region
+        )
 
     def chat(
         self,
@@ -125,9 +123,6 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
-            aws_access_key_id=self._api_key,
-            aws_secret_access_key=self._api_secret,
-            region_name=self._region,
             max_output_tokens=self._opts.max_output_tokens,
             top_p=self._opts.top_p,
             additional_request_fields=self._opts.additional_request_fields,
@@ -145,9 +140,6 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         model: str | TEXT_MODEL,
-        aws_access_key_id: str | None,
-        aws_secret_access_key: str | None,
-        region_name: str,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
         fnc_ctx: llm.FunctionContext | None,
@@ -160,12 +152,7 @@ class LLMStream(llm.LLMStream):
         super().__init__(
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
         )
-        self._client = boto3.client(
-            "bedrock-runtime",
-            region_name=region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-        )
+        self._client = llm._session.client("bedrock-runtime")
         self._model = model
         self._llm: LLM = llm
         self._max_output_tokens = max_output_tokens
@@ -222,29 +209,27 @@ class LLMStream(llm.LLMStream):
                     "topP": self._top_p,
                 }
             )
-            response = self._client.converse_stream(
-                modelId=self._model,
-                messages=messages,
-                inferenceConfig=inference_config,
-                **_strip_nones(opts),
-            )  # type: ignore
+            async with self._client as client:
+                response = await client.converse_stream(
+                    modelId=self._model,
+                    messages=messages,
+                    inferenceConfig=inference_config,
+                    **_strip_nones(opts),
+                )  # type: ignore
 
-            request_id = response["ResponseMetadata"]["RequestId"]
-            if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
-                raise APIStatusError(
-                    f"aws bedrock llm: error generating content: {response}",
-                    retryable=False,
-                    request_id=request_id,
-                )
+                request_id = response["ResponseMetadata"]["RequestId"]
+                if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
+                    raise APIStatusError(
+                        f"aws bedrock llm: error generating content: {response}",
+                        retryable=False,
+                        request_id=request_id,
+                    )
 
-            for chunk in response["stream"]:
-                chat_chunk = self._parse_chunk(request_id, chunk)
-                if chat_chunk is not None:
-                    retryable = False
-                    self._event_ch.send_nowait(chat_chunk)
-
-                # Let other coroutines run
-                await asyncio.sleep(0)
+                async for chunk in response["stream"]:
+                    chat_chunk = self._parse_chunk(request_id, chunk)
+                    if chat_chunk is not None:
+                        retryable = False
+                        self._event_ch.send_nowait(chat_chunk)
 
         except Exception as e:
             raise APIConnectionError(
