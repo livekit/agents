@@ -1,5 +1,11 @@
 # livekit-plugins-elevenlabs
 
+## 0.8.2
+
+### Patch Changes
+
+- use 22.05khz by default for 11labs - [`a294d28c2af672a47f88f598f9fdb3fb13c39c38`](https://github.com/livekit/agents/commit/a294d28c2af672a47f88f598f9fdb3fb13c39c38) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.8.1
 
 ### Patch Changes
