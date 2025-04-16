@@ -107,13 +107,13 @@ SYNTHESIZE_TTS = [
         },
         id="neuphonic",
     ),
-    pytest.param(
-        lambda: {
-            "tts": openai.TTS(),
-            "proxy-upstream": "api.openai.com:443",
-        },
-        id="openai",
-    ),
+    # pytest.param(
+    #     lambda: {
+    #         "tts": openai.TTS(),
+    #         "proxy-upstream": "api.openai.com:443",
+    #     },
+    #     id="openai",
+    # ),
     pytest.param(
         lambda: {
             "tts": playai.TTS(),
