@@ -971,9 +971,9 @@ class RealtimeSession(
             self._response_created_futures[event.response.id] = handle
 
         # the generation_created event is emitted when
-        # 1. the response is not a message on response.output_item_added event
-        # 2. the content is audio on response.content_part_added event
-        # will try to recover from text response on response.content_part_done event
+        # 1. the response is not a message on response.output_item.added event
+        # 2. the content is audio on response.content_part.added event
+        # will try to recover from text response on response.content_part.done event
 
     def _handle_response_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
