@@ -29,6 +29,7 @@ from .tool_context import FunctionTool, ToolChoice
 class CompletionUsage(BaseModel):
     completion_tokens: int
     prompt_tokens: int
+    prompt_cached_tokens: int = 0
     cache_creation_tokens: int = 0
     cache_read_tokens: int = 0
     total_tokens: int
@@ -201,6 +202,7 @@ class LLMStream(ABC):
             label=self._llm._label,
             completion_tokens=usage.completion_tokens if usage else 0,
             prompt_tokens=usage.prompt_tokens if usage else 0,
+            cached_prompt_tokens=usage.prompt_cached_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
         )
