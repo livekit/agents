@@ -26,8 +26,32 @@ services:
       - ../livekit-agents:/app/livekit-agents
       - ../livekit-plugins:/app/livekit-plugins
       - ../pyproject.toml:/app/pyproject.toml
-    env_file:
-      - ../.env
+    environment:
+      - LIVEKIT_URL
+      - LIVEKIT_API_KEY
+      - LIVEKIT_API_SECRET
+      - DEEPGRAM_API_KEY
+      - OPENAI_API_KEY
+      - ELEVEN_API_KEY
+      - CARTESIA_API_KEY
+      - AZURE_SPEECH_KEY
+      - AZURE_SPEECH_REGION
+      - GOOGLE_CREDENTIALS_JSON
+      - ANTHROPIC_API_KEY
+      - GROQ_API_KEY
+      - ASSEMBLYAI_API_KEY
+      - FAL_KEY
+      - PLAYHT_API_KEY
+      - GOOGLE_API_KEY
+      - PLAYHT_USER_ID
+      - RIME_API_KEY
+      - SPEECHMATICS_API_KEY
+      - GOOGLE_APPLICATION_CREDENTIALS
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - NEUPHONIC_API_KEY
+      - RESEMBLE_API_KEY
+
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.28.0.2"
       - "westus.tts.speech.microsoft.com:172.28.0.2"

@@ -46,9 +46,6 @@ jobs:
         with:
           python-version: ${{ matrix.python_version }}
 
-      - name: Docker Compose Version
-        run: docker compose --version
-
       - name: Run tests
         shell: bash
         if: ${{ matrix.test_group == 'tts' }}

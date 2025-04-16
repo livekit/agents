@@ -7,6 +7,8 @@ import asyncio
 
 import pytest
 
+from dotenv import load_dotenv
+
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APITimeoutError
 from livekit.agents.utils import AudioBuffer
@@ -27,6 +29,9 @@ from livekit.plugins import (
 
 from .toxic_proxy import Toxiproxy
 from .utils import wer
+
+load_dotenv(override=True)
+
 
 WER_THRESHOLD = 0.2
 TEST_AUDIO_SYNTHESIZE = pathlib.Path(os.path.dirname(__file__), "long_synthesize.txt").read_text()
