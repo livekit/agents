@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     name: livekit-plugins-${{ matrix.plugin }}
     steps:
+      - uses: actions/checkout@v4
       - name: Run tests
         shell: bash
         env:
