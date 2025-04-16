@@ -16,6 +16,7 @@ import aiohttp
 from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
+from livekit.agents._exceptions import APIError, APIConnectionError
 from livekit.agents import io, llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -490,7 +491,9 @@ class RealtimeSession(
                             llm.RealtimeModelError(
                                 timestamp=time.time(),
                                 label=self._realtime_model._label,
-                                error=error,
+                                error=APIConnectionError(
+                                    message="OpenAI S2S connection closed unexpectedly",
+                                ),
                                 recoverable=False,
                             ),
                         )
@@ -1068,10 +1071,13 @@ class RealtimeSession(
         self.emit(
             "error",
             llm.RealtimeModelError(
-                type="realtime_model_error",
                 timestamp=time.time(),
                 label=self._realtime_model._label,
-                error=event.error,
+                error=APIError(
+                    message="OpenAI Realtime API returned an error",
+                    body=event.error,
+                    retryable=True,
+                ),
                 recoverable=True,
             ),
         )
