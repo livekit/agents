@@ -3,7 +3,7 @@ from typing import Annotated
 from pydantic import Field
 
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent
+from livekit.agents.voice import Agent, RunContext
 from livekit.plugins import cartesia
 
 from .global_functions import get_user_info, update_information
@@ -23,8 +23,9 @@ class Receptionist(Agent):
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="""Welcome the user to the LiveKit Dental Office
-            and ask how you can assist."""
+            instructions=f"""Welcome the user to the LiveKit Dental Office
+            and ask how you can assist. The information given so far is:
+            {self.session.userdata["userinfo"].json()}"""
         )
 
     @function_tool()
@@ -50,25 +51,25 @@ class Receptionist(Agent):
                 either 'schedule', 'reschedule', or 'cancel'"""
             ),
         ],
+        context: RunContext,
     ) -> tuple[Agent, str]:
         """
         Allows for users to schedule, reschedule, or cancel an appointment by
         transferring to the scheduler. No specified date or time is required.
         """
-        if not self.session.userdata["userinfo"].name:
-            self.session.userdata["userinfo"].name = name
-        return self.session.userdata["agents"].scheduler(
+        if not context.userdata["userinfo"].name:
+            context.userdata["userinfo"].name = name
+        return context.userdata["agents"].scheduler(
             service=action
         ), "I'll be transferring you to our scheduler, Echo!"
 
     @function_tool()
     async def leave_message(
-        self,
-        name: Annotated[list[str], Field(description="The user's name")],
+        self, name: Annotated[list[str], Field(description="The user's name")], context: RunContext
     ) -> tuple[Agent, str]:
         """
         Allows users to leave a message for the office by transferring to the messenger.
         """
-        if not self.session.userdata["userinfo"].name:
-            self.session.userdata["userinfo"].name = name
-        return self.session.userdata["agents"].messenger, "I'll be transferring you to Shimmer."
+        if not context.userdata["userinfo"].name:
+            context.userdata["userinfo"].name = name
+        return context.userdata["agents"].messenger, "I'll be transferring you to Shimmer."

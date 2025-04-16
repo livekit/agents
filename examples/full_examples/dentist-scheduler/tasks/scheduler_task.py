@@ -6,8 +6,7 @@ import aiohttp
 from pydantic import Field
 
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent
-from livekit.plugins import cartesia
+from livekit.agents.voice import Agent, RunContext
 
 from .global_functions import (
     get_user_info,
@@ -35,7 +34,7 @@ class Scheduler(Agent):
                             Convert all times given by the user to ISO 8601 format in UTC
                             timezone, assuming the user is in America/Los Angeles,
                             and do not mention the conversion or the UTC timezone to the user.
-                            Avoiding repeating words.""",
+                            Avoiding repeating words. It is 2025.""",
             tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600"),
             tools=[
                 update_information,
@@ -49,12 +48,19 @@ class Scheduler(Agent):
     async def on_enter(self) -> None:
         self._event_ids = self.session.userdata["event_ids"]
         await self.session.generate_reply(
-            instructions=f"""Introduce yourself and ask {self.session.userdata["userinfo"].name} to
-            confirm that they would like to {self._service_requested} an appointment."""
+            instructions=f"""Introduce yourself and confirm that they would like to
+            {self._service_requested} an appointment. The information given is:
+            {self.session.userdata["userinfo"].json()}"""
         )
 
     async def send_request(
-        self, *, request: APIRequests, uid: str = "", time: str = "", slug: str = ""
+        self,
+        *,
+        request: APIRequests,
+        uid: str = "",
+        time: str = "",
+        slug: str = "",
+        context: RunContext,
     ) -> dict:
         headers = {
             "cal-api-version": "2024-08-13",
@@ -64,8 +70,8 @@ class Scheduler(Agent):
             params = {}
             if request.value == "get_appts":
                 payload = {
-                    "attendeeEmail": self.session.userdata["userinfo"].email,
-                    "attendeeName": self.session.userdata["userinfo"].name,
+                    "attendeeEmail": context.userdata["userinfo"].email,
+                    "attendeeName": context.userdata["userinfo"].name,
                     "status": "upcoming",
                 }
                 params = {
@@ -84,8 +90,8 @@ class Scheduler(Agent):
 
             elif request.value == "schedule":
                 attendee_details = {
-                    "name": self.session.userdata["userinfo"].name,
-                    "email": self.session.userdata["userinfo"].email,
+                    "name": context.userdata["userinfo"].name,
+                    "email": context.userdata["userinfo"].email,
                     "timeZone": "America/Los_Angeles",
                 }
                 payload = {
@@ -113,6 +119,7 @@ class Scheduler(Agent):
             if request.value in ["schedule", "reschedule", "cancel"]:
                 async with session.post(**params) as response:
                     data = await response.json()
+                    print("Data ", data)
             elif request.value == "get_appts":
                 async with session.get(**params) as response:
                     data = await response.json()
@@ -140,15 +147,17 @@ class Scheduler(Agent):
                 in ISO 8601 format in UTC timezone assuming the user is in Los Angeles."""
             ),
         ],
+        context: RunContext,
     ) -> str:
         """
         Schedules a new appointment for users.
         The email should be confirmed by spelling it out to the user.
         """
-        self.session.userdata["userinfo"].email = email
+        context.userdata["userinfo"].email = email
         response = await self.send_request(
-            request=APIRequests.SCHEDULE, time=date, slug=description
+            request=APIRequests.SCHEDULE, time=date, slug=description, context=context
         )
+        print(response)
         if response["status"] == "success":
             return "Appointment has been successfully scheduled!"
         elif (
@@ -164,15 +173,16 @@ class Scheduler(Agent):
         email: Annotated[
             str, Field(description="The user's email, in the format local-part@domain")
         ],
+        context: RunContext,
     ) -> str:
         """
         Cancels an existing appointment.
         """
-        self.session.userdata["userinfo"].email = email
-        response = await self.send_request(request=APIRequests.GET_APPTS)
+        context.userdata["userinfo"].email = email
+        response = await self.send_request(request=APIRequests.GET_APPTS, context=context)
         if response["data"]:
             cancel_response = await self.send_request(
-                request=APIRequests.CANCEL, uid=response["data"][0]["uid"]
+                request=APIRequests.CANCEL, uid=response["data"][0]["uid"], context=context
             )
             if cancel_response["status"] == "success":
                 return "You're all set!"
@@ -189,17 +199,19 @@ class Scheduler(Agent):
             str,
             Field(description="the new time and day for the appointment to be rescheduled to"),
         ],
+        context: RunContext,
     ) -> str:
         """
         Reschedules an appointment to a new date specified by the user
         """
-        self.session.userdata["userinfo"].email = email
-        response = await self.send_request(request=APIRequests.GET_APPTS)
+        context.userdata["userinfo"].email = email
+        response = await self.send_request(request=APIRequests.GET_APPTS, context=context)
         if response["data"]:
             reschedule_response = await self.send_request(
                 request=APIRequests.RESCHEDULE,
                 uid=response["data"][0]["uid"],
                 time=new_time,
+                context=context,
             )
             if (
                 reschedule_response["status"] == "error"

@@ -5,7 +5,7 @@ from pydantic import Field
 from supabase import AsyncClient, create_async_client
 
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import Agent
+from livekit.agents.voice import Agent, RunContext
 from livekit.plugins import cartesia
 
 from .global_functions import (
@@ -51,9 +51,9 @@ class Messenger(Agent):
         self._supabase = await SupabaseClient.initiate_supabase()
 
         await self.session.generate_reply(
-            instructions=f"""Introduce yourself and ask {self.session.userdata["userinfo"].name} for
+            instructions=f"""Introduce yourself and ask for
             their phone number if not given. Then, ask for the message they want to leave for the
-            office."""
+            office. The information given so far is: {self.session.userdata["userinfo"].json()}"""
         )
 
     @function_tool()
@@ -61,13 +61,14 @@ class Messenger(Agent):
         self,
         phone_number: Annotated[str, Field(description="The user's phone number")],
         message: Annotated[str, Field(description="The user's message to be left for the office")],
+        context: RunContext,
     ) -> str:
         """Records the user's message to be left for the office and the user's phone number."""
-        self.session.userdata["userinfo"].phone = phone_number
-        self.session.userdata["userinfo"].message = message
+        context.userdata["userinfo"].phone = phone_number
+        context.userdata["userinfo"].message = message
         try:
             data = await self._supabase.insert_msg(
-                name=self.session.userdata["userinfo"].name,
+                name=context.userdata["userinfo"].name,
                 message=message,
                 phone=phone_number,
             )

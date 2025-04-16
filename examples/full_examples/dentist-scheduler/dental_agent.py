@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from api_setup import setup_event_types
 from dotenv import load_dotenv
+from pydantic import BaseModel
 from tasks import Messenger, Receptionist, Scheduler
 
 from livekit.agents import (
@@ -14,8 +15,7 @@ from livekit.agents.voice import Agent, AgentSession
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 
-@dataclass
-class UserInfo:
+class UserInfo(BaseModel):
     name: str | None = None
     email: str | None = None
     phone: str | None = None
