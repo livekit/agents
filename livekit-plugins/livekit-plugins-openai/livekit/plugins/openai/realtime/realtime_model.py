@@ -5,6 +5,7 @@ import base64
 import contextlib
 import json
 import os
+import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ import aiohttp
 from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
-from livekit.agents import io, llm, utils
+from livekit.agents import APIConnectionError, APIError, io, llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from openai.types.beta.realtime import (
@@ -483,7 +484,19 @@ class RealtimeSession(
                 msg = await ws_conn.receive()
                 if msg.type == aiohttp.WSMsgType.CLOSED:
                     if not closing:
-                        raise Exception("OpenAI S2S connection closed unexpectedly")
+                        error = Exception("OpenAI S2S connection closed unexpectedly")
+                        self.emit(
+                            "error",
+                            llm.RealtimeModelError(
+                                timestamp=time.time(),
+                                label=self._realtime_model._label,
+                                error=APIConnectionError(
+                                    message="OpenAI S2S connection closed unexpectedly",
+                                ),
+                                recoverable=False,
+                            ),
+                        )
+                        raise error
 
                     return
                 elif msg.type != aiohttp.WSMsgType.TEXT:
@@ -1056,7 +1069,16 @@ class RealtimeSession(
         )
         self.emit(
             "error",
-            llm.ErrorEvent(type=event.error.type, message=event.error.message),
+            llm.RealtimeModelError(
+                timestamp=time.time(),
+                label=self._realtime_model._label,
+                error=APIError(
+                    message="OpenAI Realtime API returned an error",
+                    body=event.error,
+                    retryable=True,
+                ),
+                recoverable=True,
+            ),
         )
 
         # if event.error.event_id:
