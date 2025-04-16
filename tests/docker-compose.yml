@@ -8,9 +8,9 @@ services:
     command: ["toxiproxy-server", "-host", "0.0.0.0", "-port", "8474"]
     environment:
       - LOG_LEVEL=info
-    ports:
-      - "8474:8474"
-      # - "443:443"
+    # ports:
+    #   - "8474:8474"
+    #   - "443:443"
     networks:
       toxinet:
         ipv4_address: 172.28.0.2

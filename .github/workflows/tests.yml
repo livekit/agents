@@ -46,6 +46,10 @@ jobs:
         with:
           python-version: ${{ matrix.python_version }}
 
+      - name: Debug Info
+        run: |
+          docker network ls
+
       - name: Run tests
         shell: bash
         if: ${{ matrix.test_group == 'tts' }}
