@@ -47,7 +47,7 @@ setuptools.setup(
     python_requires=">=3.9.0",
     install_requires=[
         "livekit-agents>=0.12.16,<1.0.0",
-        "azure-cognitiveservices-speech>=1.41.0",
+        "azure-cognitiveservices-speech>=1.43.0",
     ],
     package_data={},
     project_urls={
