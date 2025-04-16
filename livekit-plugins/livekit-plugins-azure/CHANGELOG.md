@@ -1,5 +1,11 @@
 # livekit-plugins-azure
 
+## 0.5.7
+
+### Patch Changes
+
+- add speech endpoint in azure ctor and azure speech sdk version upgrade - [#2007](https://github.com/livekit/agents/pull/2007) ([@jayeshp19](https://github.com/jayeshp19))
+
 ## 0.5.6
 
 ### Patch Changes
