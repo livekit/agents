@@ -143,6 +143,7 @@ AgentEvent = Annotated[
         AgentStateChangedEvent,
         MetricsCollectedEvent,
         ConversationItemAddedEvent,
+        FunctionToolsExecutedEvent,
         SpeechCreatedEvent,
         ErrorEvent,
         CloseEvent,
