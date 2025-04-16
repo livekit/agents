@@ -25,8 +25,10 @@ class DataStreamAudioOutput(AudioOutput):
     AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.
     """  # noqa: E501
 
-    def __init__(self, room: rtc.Room, *, destination_identity: str):
-        super().__init__(next_in_chain=None)
+    def __init__(
+        self, room: rtc.Room, *, destination_identity: str, sample_rate: int | None = None
+    ):
+        super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._room = room
         self._destination_identity = destination_identity
         self._stream_writer: rtc.ByteStreamWriter | None = None

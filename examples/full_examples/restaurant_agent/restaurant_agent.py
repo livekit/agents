@@ -114,20 +114,21 @@ class BaseAgent(Agent):
 
         # add the previous agent's chat history to the current agent
         llm_model = self.llm or self.session.llm
-        if userdata.prev_agent and not isinstance(llm_model, llm.RealtimeModel):
+        if isinstance(userdata.prev_agent, Agent) and not isinstance(llm_model, llm.RealtimeModel):
             # only add chat history for non-realtime models for now
             # OpenAI realtime model may response in text mode when text chat context loaded
             # https://community.openai.com/t/trouble-loading-previous-messages-with-realtime-api
-            items_copy = self._truncate_chat_ctx(
-                userdata.prev_agent.chat_ctx.items, keep_function_call=True
-            )
+
+            truncated_chat_ctx = userdata.prev_agent.chat_ctx.copy(
+                exclude_instructions=True, exclude_function_call=False
+            ).truncate(max_items=6)
             existing_ids = {item.id for item in chat_ctx.items}
-            items_copy = [item for item in items_copy if item.id not in existing_ids]
+            items_copy = [item for item in truncated_chat_ctx.items if item.id not in existing_ids]
             chat_ctx.items.extend(items_copy)
 
-        # add an instructions including the user data as a system message
+        # add an instructions including the user data as assistant message
         chat_ctx.add_message(
-            role="system",
+            role="assistant",
             content=f"You are {agent_name} agent. Current user data is {userdata.summarize()}",
         )
         await self.update_chat_ctx(chat_ctx)
@@ -140,39 +141,6 @@ class BaseAgent(Agent):
         userdata.prev_agent = current_agent
 
         return next_agent, f"Transferring to {name}."
-
-    def _truncate_chat_ctx(
-        self,
-        items: list[llm.ChatItem],
-        keep_last_n_messages: int = 6,
-        keep_system_message: bool = False,
-        keep_function_call: bool = False,
-    ) -> list[llm.ChatItem]:
-        """Truncate the chat context to keep the last n messages."""
-
-        def _valid_item(item: llm.ChatItem) -> bool:
-            if not keep_system_message and item.type == "message" and item.role == "system":
-                return False
-            if not keep_function_call and item.type in [
-                "function_call",
-                "function_call_output",
-            ]:
-                return False
-            return True
-
-        new_items: list[llm.ChatItem] = []
-        for item in reversed(items):
-            if _valid_item(item):
-                new_items.append(item)
-            if len(new_items) >= keep_last_n_messages:
-                break
-        new_items = new_items[::-1]
-
-        # the truncated items should not start with function_call or function_call_output
-        while new_items and new_items[0].type in ["function_call", "function_call_output"]:
-            new_items.pop(0)
-
-        return new_items
 
 
 class Greeter(BaseAgent):

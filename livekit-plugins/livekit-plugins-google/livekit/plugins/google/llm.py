@@ -26,6 +26,7 @@ from google.genai import types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
 from livekit.agents.llm import FunctionTool, ToolChoice, utils as llm_utils
+from livekit.agents.llm.tool_context import get_function_info
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -173,7 +174,9 @@ class LLM(llm.LLM):
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
                         mode="ANY",
-                        allowed_function_names=[fnc.name for fnc in tools],
+                        allowed_function_names=[get_function_info(fnc).name for fnc in tools]
+                        if tools
+                        else None,
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice

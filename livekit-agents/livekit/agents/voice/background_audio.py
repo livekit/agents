@@ -145,16 +145,22 @@ class BackgroundAudioPlayer:
             return None
 
         if isinstance(source, BuiltinAudioClip):
-            return source.path(), 1.0
+            return self._normalize_builtin_audio(source), 1.0
         elif isinstance(source, list):
             selected = self._select_sound_from_list(cast(list[AudioConfig], source))
             if selected is None:
                 return None
             return selected.source, selected.volume
         elif isinstance(source, AudioConfig):
-            return source.source, source.volume
+            return self._normalize_builtin_audio(source.source), source.volume
 
         return source, 1.0
+
+    def _normalize_builtin_audio(self, source: AudioSource) -> AsyncIterator[rtc.AudioFrame] | str:
+        if isinstance(source, BuiltinAudioClip):
+            return source.path()
+        else:
+            return source
 
     def play(
         self,
