@@ -10,7 +10,7 @@ services:
       - LOG_LEVEL=info
     ports:
       - "8474:8474"
-      - "443:443"
+      # - "443:443"
     networks:
       toxinet:
         ipv4_address: 172.28.0.2
