@@ -48,7 +48,11 @@ async def entrypoint(ctx: JobContext):
         logger.info("Session is closing")
 
         # Assume there is only one caller in the room
-        participant = ctx.get_sip_participants()[0]
+        participant = [
+            p
+            for p in ctx.room.remote_participants.values()
+            if p.kind == ParticipantKind.PARTICIPANT_KIND_SIP
+        ][0]
 
         # See https://docs.livekit.io/sip/ on how to set up SIP participants
         if participant.kind == ParticipantKind.PARTICIPANT_KIND_SIP:
