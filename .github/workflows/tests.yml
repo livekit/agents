@@ -17,8 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         # disabled Intel Macs due to pytorch 2.3+ not supporting it
-        # os: [macos-latest, windows-latest, ubuntu-latest, ubuntu-24.04-arm]
-        # python_version: ["3.9", "3.13"]
+        os: [macos-latest, windows-latest, ubuntu-latest, ubuntu-24.04-arm]
+        python_version: ["3.9", "3.13"]
         test_group: ["base"]
         include:
           # include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
