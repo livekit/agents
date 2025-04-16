@@ -20,6 +20,7 @@ services:
       context: ..
       dockerfile: tests/Dockerfile.tests
     container_name: app
+    command: tail -f /dev/null
     volumes:
       - ../tests:/app/tests
       - ../livekit-agents:/app/livekit-agents

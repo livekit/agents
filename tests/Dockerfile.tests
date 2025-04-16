@@ -7,6 +7,3 @@ RUN apt-get update && apt-get install -y curl strace procps
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
-# COPY . /app
-
-CMD ["/app/tests/run_proxied_tests.sh"]

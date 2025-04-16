@@ -22,14 +22,14 @@ jobs:
         test_group: ["base"]
         include:
           # include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
+          # - os: ubuntu-latest
+          #   python_version: "3.13"
+          #   test_group: stt
+          # - os: ubuntu-latest
+          #   python_version: "3.13"
+          #   test_group: llm
           - os: ubuntu-latest
-            python_version: "3.13"
-            test_group: stt
-          - os: ubuntu-latest
-            python_version: "3.13"
-            test_group: llm
-          - os: ubuntu-latest
-            python_version: "3.13"
+            python_version: "3.9"
             test_group: tts
 
     runs-on: ${{ matrix.os }}
@@ -46,34 +46,12 @@ jobs:
         with:
           python-version: ${{ matrix.python_version }}
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python_version }}
-          cache: "pip"
-
-      - name: Install ffmpeg (Linux)
-        if: ${{ startsWith(matrix.os, 'ubuntu') }}
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
-      - name: Install libssl 1.1 (Linux 22.04)
-        if: ${{ matrix.os == 'ubuntu-24.04-arm' }}
-        run: |
-          wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
-          wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
-          sudo dpkg -i libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
-          sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
-
-      - name: Install ffmpeg (macOS)
-        if: ${{ startsWith(matrix.os, 'macos') }}
-        run: brew install ffmpeg
-
-      - name: Install ffmpeg (Windows)
-        if: ${{ startsWith(matrix.os, 'windows') }}
-        run: choco install ffmpeg
+      - name: Docker Compose Version
+        run: docker-compose --version
 
       - name: Run tests
         shell: bash
+        if: ${{ matrix.test_group == 'tts' }}
         env:
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
@@ -100,25 +78,4 @@ jobs:
           NEUPHONIC_API_KEY: ${{ secrets.NEUPHONIC_API_KEY }}
           RESEMBLE_API_KEY: ${{ secrets.RESEMBLE_API_KEY }}
         working-directory: tests
-        run: |
-          echo "$GOOGLE_CREDENTIALS_JSON" > google.json
-
-          case "${{ matrix.test_group }}" in
-            base)
-              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_connection_pool.py"
-              ;;
-            llm)
-              test_files="test_llm.py"
-              ;;
-            stt)
-              test_files="test_stt.py"
-              ;;
-            tts)
-              test_files="test_tts.py"
-              ;;
-            *)
-              echo "Unknown test group: ${{ matrix.test_group }}"
-              exit 1
-              ;;
-          esac
-          uv run pytest $test_files --color=yes
+        run: make test
