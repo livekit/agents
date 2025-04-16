@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+import boto3
 import aioboto3
 import aiohttp
 
@@ -182,14 +183,14 @@ class ChunkedStream(tts.ChunkedStream):
                     finally:
                         await utils.aio.gracefully_cancel(push_task)
 
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
                 request_id=request_id,
                 body=None,
-            ) from e
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e

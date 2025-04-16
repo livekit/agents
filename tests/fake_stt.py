@@ -15,7 +15,8 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.audio import AudioBuffer
 
 
-class RecognizeSentinel: ...
+class RecognizeSentinel:
+    pass
 
 
 class FakeSTT(STT):
