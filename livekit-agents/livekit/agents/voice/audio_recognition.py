@@ -25,7 +25,7 @@ class _EndOfTurnInfo:
 
 class _TurnDetector(Protocol):
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    def unlikely_threshold(self, language: str | None) -> float: ...
+    def unlikely_threshold(self, language: str | None) -> float | None: ...
     def supports_language(self, language: str | None) -> bool: ...
 
     async def predict_end_of_turn(self, chat_ctx: llm.ChatContext) -> float: ...
@@ -239,7 +239,10 @@ class AudioRecognition:
                         {"probability": end_of_turn_probability},
                     )
                     unlikely_threshold = turn_detector.unlikely_threshold(self._last_language)
-                    if end_of_turn_probability < unlikely_threshold:
+                    if (
+                        unlikely_threshold is not None
+                        and end_of_turn_probability < unlikely_threshold
+                    ):
                         endpointing_delay = self._max_endpointing_delay
 
             extra_sleep = last_speaking_time + endpointing_delay - time.time()
