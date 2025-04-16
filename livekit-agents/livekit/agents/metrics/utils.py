@@ -12,7 +12,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None):
 
     if isinstance(metrics, LLMMetrics):
         logger.info(
-            f"LLM metrics: ttft={metrics.ttft:.2f}, input_tokens={metrics.prompt_tokens}, output_tokens={metrics.completion_tokens}, tokens_per_second={metrics.tokens_per_second:.2f}"  # noqa: E501
+            f"LLM metrics: ttft={metrics.ttft:.2f}, input_tokens={metrics.prompt_tokens},  cached_input_tokens={metrics.prompt_cached_tokens}, output_tokens={metrics.completion_tokens}, tokens_per_second={metrics.tokens_per_second:.2f}"  # noqa: E501
         )
     elif isinstance(metrics, TTSMetrics):
         logger.info(
