@@ -12,7 +12,7 @@ services:
     #   - "443:443"
     networks:
       toxinet:
-        ipv4_address: 172.28.0.2
+        ipv4_address: 172.30.0.10
 
   app:
     build:
@@ -51,18 +51,18 @@ services:
       - RESEMBLE_API_KEY
 
     extra_hosts:
-      - "polly.us-west-2.amazonaws.com:172.28.0.2"
-      - "westus.tts.speech.microsoft.com:172.28.0.2"
-      - "api.cartesia.ai:172.28.0.2"
-      - "api.deepgram.com:172.28.0.2"
-      - "api.elevenlabs.io:172.28.0.2"
-      - "texttospeech.googleapis.com:172.28.0.2"
-      - "api.groq.com:172.28.0.2"
-      - "api.neuphonic.com:172.28.0.2"
-      # - "api.openai.com:172.28.0.2"
-      - "api.play.ht:172.28.0.2"
-      - "f.cluster.resemble.ai:172.28.0.2"
-      - "users.rime.ai:172.28.0.2"
+      - "polly.us-west-2.amazonaws.com:172.30.0.10"
+      - "westus.tts.speech.microsoft.com:172.30.0.10"
+      - "api.cartesia.ai:172.30.0.10"
+      - "api.deepgram.com:172.30.0.10"
+      - "api.elevenlabs.io:172.30.0.10"
+      - "texttospeech.googleapis.com:172.30.0.10"
+      - "api.groq.com:172.30.0.10"
+      - "api.neuphonic.com:172.30.0.10"
+      # - "api.openai.com:172.30.0.10"
+      - "api.play.ht:172.30.0.10"
+      - "f.cluster.resemble.ai:172.30.0.10"
+      - "users.rime.ai:172.30.0.10"
     networks:
       - toxinet
 
@@ -71,4 +71,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: "172.28.0.0/16"
+        - subnet: "172.30.0.0/16"
