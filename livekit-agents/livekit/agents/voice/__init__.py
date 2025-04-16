@@ -7,6 +7,7 @@ from .events import (
     CloseEvent,
     ConversationItemAddedEvent,
     ErrorEvent,
+    FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     RunContext,
     SpeechCreatedEvent,
@@ -32,4 +33,5 @@ __all__ = [
     "CloseEvent",
     "UserStateChangedEvent",
     "AgentStateChangedEvent",
+    "FunctionToolsExecutedEvent",
 ]

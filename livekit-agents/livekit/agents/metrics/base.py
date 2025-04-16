@@ -15,6 +15,7 @@ class LLMMetrics(BaseModel):
     cancelled: bool
     completion_tokens: int
     prompt_tokens: int
+    prompt_cached_tokens: int
     total_tokens: int
     tokens_per_second: float
     speech_id: str | None = None
