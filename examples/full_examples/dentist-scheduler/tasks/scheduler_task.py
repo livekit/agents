@@ -7,6 +7,7 @@ from pydantic import Field
 
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, RunContext
+from livekit.plugins import cartesia
 
 from .global_functions import (
     get_user_info,
