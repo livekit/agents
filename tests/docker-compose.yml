@@ -24,6 +24,7 @@ services:
       - ../livekit-agents:/app/livekit-agents
       - ../livekit-plugins:/app/livekit-plugins
       - ../pyproject.toml:/app/pyproject.toml
+      - ../uv.lock:/app/uv.lock
     environment:
       - LIVEKIT_URL
       - LIVEKIT_API_KEY
