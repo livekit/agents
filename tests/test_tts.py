@@ -137,6 +137,10 @@ SYNTHESIZE_TTS = [
     ),
 ]
 
+PLUGIN = os.getenv("PLUGIN", "").strip()
+if PLUGIN:
+    SYNTHESIZE_TTS = [p for p in SYNTHESIZE_TTS if p.id.startswith(PLUGIN)]  # type: ignore
+
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
@@ -180,15 +184,15 @@ async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
     try:
 
         async def test_timeout_process():
-            with pytest.raises(APITimeoutError):
-                async with tts.synthesize(
-                    text=TEST_AUDIO_SYNTHESIZE,
-                    conn_options=APIConnectOptions(max_retry=0, timeout=5),
-                ) as stream:
-                    async for _ in stream:
-                        pass
+            async with tts.synthesize(
+                text=TEST_AUDIO_SYNTHESIZE,
+                conn_options=APIConnectOptions(max_retry=0, timeout=5),
+            ) as stream:
+                async for _ in stream:
+                    pass
 
-        await asyncio.wait_for(test_timeout_process(), timeout=10)
+        with pytest.raises(APITimeoutError):
+            await asyncio.wait_for(test_timeout_process(), timeout=10)
     except asyncio.TimeoutError:
         pytest.fail("test timed out after 10 seconds")
     finally:
