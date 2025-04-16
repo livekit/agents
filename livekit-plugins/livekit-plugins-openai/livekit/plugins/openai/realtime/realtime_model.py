@@ -983,6 +983,7 @@ class RealtimeSession(
         if item_type != "message":
             # confirm if it's not a message, otherwise wait until response.content_part_added
             self._emit_generation_event(response_id)
+            self._text_mode_recovery_retries = 0
 
     def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -1012,8 +1013,10 @@ class RealtimeSession(
                 )
             )
             self._current_generation.messages[item_id] = item_generation
-        elif self._text_mode_recovery_retries == 0:
-            logger.warning("received text-only response from realtime API")
+        else:
+            self.interrupt()
+            if self._text_mode_recovery_retries == 0:
+                logger.warning("received text-only response from realtime API")
 
     def _handle_response_content_part_done(self, event: ResponseContentPartDoneEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -1035,7 +1038,7 @@ class RealtimeSession(
                 "trying to recover from text-only response",
                 extra={"retries": self._text_mode_recovery_retries},
             )
-            self.interrupt()
+            # self.interrupt()
             self._text_mode_recovery_atask = asyncio.create_task(
                 self._recover_from_text_response(
                     response_id=response_id,
@@ -1152,6 +1155,10 @@ class RealtimeSession(
     def _handle_response_done(self, _: ResponseDoneEvent) -> None:
         if self._current_generation is None:
             return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)  # noqa: E501
+
+        if self._text_mode_recovery_retries > 0:
+            logger.debug("skip closing generation because of text-only response")
+            return
 
         assert self._current_generation is not None, "current_generation is None"
         for generation in self._current_generation.messages.values():
