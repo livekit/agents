@@ -583,14 +583,14 @@ class LLMStream(llm.LLMStream):
 
                     if chunk.usage is not None:
                         retryable = False
+                        tokens_details = chunk.usage.prompt_tokens_details
+                        cached_tokens = tokens_details.cached_tokens if tokens_details else 0
                         chunk = llm.ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
                                 completion_tokens=chunk.usage.completion_tokens,
                                 prompt_tokens=chunk.usage.prompt_tokens,
-                                prompt_cached_tokens=chunk.usage.prompt_tokens_details.cached_tokens
-                                if chunk.usage.prompt_tokens_details
-                                else 0,
+                                prompt_cached_tokens=cached_tokens or 0,
                                 total_tokens=chunk.usage.total_tokens,
                             ),
                         )

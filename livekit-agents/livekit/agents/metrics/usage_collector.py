@@ -7,7 +7,7 @@ from .base import AgentMetrics, LLMMetrics, STTMetrics, TTSMetrics
 @dataclass
 class UsageSummary:
     llm_prompt_tokens: int
-    llm_cached_prompt_tokens: int
+    llm_prompt_cached_tokens: int
     llm_completion_tokens: int
     tts_characters_count: int
     stt_audio_duration: float
@@ -23,7 +23,7 @@ class UsageCollector:
     def collect(self, metrics: AgentMetrics) -> None:
         if isinstance(metrics, LLMMetrics):
             self._summary.llm_prompt_tokens += metrics.prompt_tokens
-            self._summary.llm_cached_prompt_tokens += metrics.cached_prompt_tokens
+            self._summary.llm_prompt_cached_tokens += metrics.prompt_cached_tokens
             self._summary.llm_completion_tokens += metrics.completion_tokens
 
         elif isinstance(metrics, TTSMetrics):
