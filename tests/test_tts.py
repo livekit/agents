@@ -50,7 +50,7 @@ async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, 
 
     # don't verify ssl because of the proxy base_url being different
     client = openai_client.AsyncClient(
-        http_client=httpx.AsyncClient(verify=False), base_url="https://172.30.0.10:500/v1"
+        http_client=httpx.AsyncClient(verify=False, base_url="https://toxiproxy:500/v1")
     )
 
     whisper_stt = openai.STT(model="whisper-1", client=client)
