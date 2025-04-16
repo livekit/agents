@@ -160,6 +160,10 @@ class ChatContext:
     def items(self) -> list[ChatItem]:
         return self._items
 
+    @items.setter
+    def items(self, items: list[ChatItem]):
+        self._items = items
+
     def add_message(
         self,
         *,
@@ -192,6 +196,7 @@ class ChatContext:
         self,
         *,
         exclude_function_call: bool = False,
+        exclude_instructions: bool = False,
         tools: NotGivenOr[list[FunctionTool]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
@@ -212,6 +217,13 @@ class ChatContext:
                 continue
 
             if (
+                exclude_instructions
+                and item.type == "message"
+                and item.role in ["system", "developer"]
+            ):
+                continue
+
+            if (
                 is_given(tools)
                 and item.type in ["function_call", "function_call_output"]
                 and item.name not in valid_tools
@@ -221,6 +233,31 @@ class ChatContext:
             items.append(item)
 
         return ChatContext(items)
+
+    def truncate(self, *, max_items: int) -> ChatContext:
+        """Truncate the chat context to the last N items in place.
+
+        Removes leading function calls to avoid partial function outputs.
+        Preserves the first system message by adding it back to the beginning.
+        """
+        instructions = next(
+            (item for item in self._items if item.type == "message" and item.role == "system"),
+            None,
+        )
+
+        new_items = self._items[-max_items:]
+        # chat ctx shouldn't start with function_call or function_call_output
+        while new_items and new_items[0].type in [
+            "function_call",
+            "function_call_output",
+        ]:
+            new_items.pop(0)
+
+        if instructions:
+            new_items.insert(0, instructions)
+
+        self._items[:] = new_items
+        return self
 
     def to_dict(
         self,

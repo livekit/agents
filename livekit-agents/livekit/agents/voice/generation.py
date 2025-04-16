@@ -47,7 +47,7 @@ def perform_llm_inference(
     *,
     node: io.LLMNode,
     chat_ctx: ChatContext,
-    tool_ctx: ToolContext | None,
+    tool_ctx: ToolContext,
     model_settings: ModelSettings,
 ) -> tuple[asyncio.Task, _LLMGenerationData]:
     text_ch = aio.Chan()
@@ -57,13 +57,17 @@ def perform_llm_inference(
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
+        tools = list(tool_ctx.function_tools.values())
         llm_node = node(
             chat_ctx,
-            list(tool_ctx.function_tools.values()) if tool_ctx is not None else [],
+            tools,
             model_settings,
         )
         if asyncio.iscoroutine(llm_node):
             llm_node = await llm_node
+
+        # update the tool context after llm node
+        tool_ctx.update_tools(tools)
 
         if isinstance(llm_node, str):
             data.generated_text = llm_node
@@ -315,7 +319,6 @@ async def _execute_tools_task(
                 function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
                 json_args = fnc_call.arguments or "{}"
                 parsed_args = function_model.model_validate_json(json_args)
-
             except ValidationError:
                 logger.exception(
                     f"tried to call AI function `{fnc_call.name}` with invalid arguments",

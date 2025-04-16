@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "click~=8.1",
-    "livekit>=1.0.2,<2",
+    "livekit>=1.0.6,<2",
     "livekit-api>=1.0.2,<2",
     "livekit-protocol~=1.0",
     "protobuf>=3",
@@ -47,27 +47,28 @@ dependencies = [
 [project.optional-dependencies]
 codecs = ["av>=12.0.0", "numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
-aws = ["livekit-plugins-aws>=1.0.0.rc9"]
-neuphonic = ["livekit-plugins-neuphonic>=1.0.0.rc9"]
-playai = ["livekit-plugins-playai>=1.0.0.rc9"]
-turn-detector = ["livekit-plugins-turn-detector>=1.0.0.rc9"]
-assemblyai = ["livekit-plugins-assemblyai>=1.0.0.rc9"]
-rime = ["livekit-plugins-rime>=1.0.0.rc9"]
-nltk = ["livekit-plugins-nltk>=1.0.0.rc9"]
-anthropic = ["livekit-plugins-anthropic>=1.0.0.rc9"]
-openai = ["livekit-plugins-openai>=1.0.0.rc9"]
-groq = ["livekit-plugins-groq>=1.0.0.rc9"]
-elevenlabs = ["livekit-plugins-elevenlabs>=1.0.0.rc9"]
-azure = ["livekit-plugins-azure>=1.0.0.rc9"]
-fal = ["livekit-plugins-fal>=1.0.0.rc9"]
-clova = ["livekit-plugins-clova>=1.0.0.rc9"]
-deepgram = ["livekit-plugins-deepgram>=1.0.0.rc9"]
-rag = ["livekit-plugins-rag>=1.0.0.rc9"]
-silero = ["livekit-plugins-silero>=1.0.0.rc9"]
-cartesia = ["livekit-plugins-cartesia>=1.0.0.rc9"]
-speechmatics = ["livekit-plugins-speechmatics>=1.0.0.rc9"]
-google = ["livekit-plugins-google>=1.0.0.rc9"]
-gladia = ["livekit-plugins-gladia>=1.0.0.rc9"]
+aws = ["livekit-plugins-aws>=1.0.13"]
+neuphonic = ["livekit-plugins-neuphonic>=1.0.13"]
+playai = ["livekit-plugins-playai>=1.0.13"]
+turn-detector = ["livekit-plugins-turn-detector>=1.0.13"]
+assemblyai = ["livekit-plugins-assemblyai>=1.0.13"]
+rime = ["livekit-plugins-rime>=1.0.13"]
+nltk = ["livekit-plugins-nltk>=1.0.13"]
+anthropic = ["livekit-plugins-anthropic>=1.0.13"]
+openai = ["livekit-plugins-openai>=1.0.13"]
+groq = ["livekit-plugins-groq>=1.0.13"]
+elevenlabs = ["livekit-plugins-elevenlabs>=1.0.13"]
+azure = ["livekit-plugins-azure>=1.0.13"]
+fal = ["livekit-plugins-fal>=1.0.13"]
+clova = ["livekit-plugins-clova>=1.0.13"]
+deepgram = ["livekit-plugins-deepgram>=1.0.13"]
+rag = ["livekit-plugins-rag>=1.0.13"]
+silero = ["livekit-plugins-silero>=1.0.13"]
+cartesia = ["livekit-plugins-cartesia>=1.0.13"]
+speechmatics = ["livekit-plugins-speechmatics>=1.0.13"]
+google = ["livekit-plugins-google>=1.0.13"]
+gladia = ["livekit-plugins-gladia>=1.0.13"]
+resemble = ["livekit-plugins-resemble>=1.0.13"]
 
 
 [project.urls]

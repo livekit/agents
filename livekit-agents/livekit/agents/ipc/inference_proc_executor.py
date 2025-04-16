@@ -28,6 +28,7 @@ class InferenceProcExecutor(SupervisedProc):
         high_ping_threshold: float,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
+        http_proxy: str | None,
     ) -> None:
         super().__init__(
             initialize_timeout=initialize_timeout,
@@ -39,6 +40,7 @@ class InferenceProcExecutor(SupervisedProc):
             high_ping_threshold=high_ping_threshold,
             mp_ctx=mp_ctx,
             loop=loop,
+            http_proxy=http_proxy,
         )
 
         self._runners = runners
