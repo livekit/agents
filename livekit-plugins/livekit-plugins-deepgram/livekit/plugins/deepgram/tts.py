@@ -61,7 +61,10 @@ class TTS(tts.TTS):
 
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            # checking if the model is from aura-2 family (Aura-2 is currently available for the TTS REST API only.)
+            capabilities=tts.TTSCapabilities(streaming=False)
+            if model.startswith("aura-2")
+            else tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
