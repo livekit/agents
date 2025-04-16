@@ -79,4 +79,4 @@ jobs:
           NEUPHONIC_API_KEY: ${{ secrets.NEUPHONIC_API_KEY }}
           RESEMBLE_API_KEY: ${{ secrets.RESEMBLE_API_KEY }}
         working-directory: tests
-        run: make test
+        run: make down && make test
