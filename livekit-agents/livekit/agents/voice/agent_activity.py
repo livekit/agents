@@ -634,7 +634,9 @@ class AgentActivity(RecognitionHooks):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
-    def _on_error(self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError) -> None:
+    def _on_error(
+        self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
+    ) -> None:
         if isinstance(error, llm.LLMError):
             error_event = ErrorEvent(error=error, source=self.llm)
             self._session.emit("error", error_event)

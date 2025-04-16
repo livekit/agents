@@ -16,8 +16,8 @@ import aiohttp
 from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
-from livekit.agents._exceptions import APIError, APIConnectionError
 from livekit.agents import io, llm, utils
+from livekit.agents._exceptions import APIConnectionError, APIError
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from openai.types.beta.realtime import (

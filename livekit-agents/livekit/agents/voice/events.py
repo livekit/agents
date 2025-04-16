@@ -11,8 +11,8 @@ from ..llm import (
     FunctionCall,
     FunctionCallOutput,
     LLMError,
-    RealtimeModelError,
     RealtimeModel,
+    RealtimeModelError,
 )
 from ..metrics import AgentMetrics
 from ..stt import STT, STTError
