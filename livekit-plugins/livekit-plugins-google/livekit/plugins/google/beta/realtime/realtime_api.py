@@ -549,7 +549,6 @@ class RealtimeSession(llm.RealtimeSession):
 
         if server_content.turn_complete:
             self._finalize_response()
-            self._handle_agent_speech_stopped()
 
     def _finalize_response(self) -> None:
         if not self._current_generation:
@@ -564,9 +563,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._current_generation = None
         self._is_interrupted = True
         self._active_response_id = None
-
-    def _handle_agent_speech_stopped(self):
-        self.emit("agent_speech_stopped")
 
     def _handle_input_speech_started(self):
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
