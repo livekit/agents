@@ -11,8 +11,8 @@ class _EUORunnerEn(_EUORunnerBase):
 
 
 class EnglishModel(EOUModelBase):
-    def __init__(self, **kwargs):
-        super().__init__(model_type="en", **kwargs)
+    def __init__(self, custom_threshold: float | None = None):
+        super().__init__(model_type="en", custom_threshold=custom_threshold)
 
     def _inference_method(self) -> str:
         return _EUORunnerEn.INFERENCE_METHOD

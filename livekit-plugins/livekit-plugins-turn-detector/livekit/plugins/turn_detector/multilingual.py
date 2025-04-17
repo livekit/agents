@@ -11,8 +11,8 @@ class _EUORunnerMultilingual(_EUORunnerBase):
 
 
 class MultilingualModel(EOUModelBase):
-    def __init__(self, **kwargs):
-        super().__init__(model_type="multilingual", **kwargs)
+    def __init__(self, custom_threshold: float | None = None):
+        super().__init__(model_type="multilingual", custom_threshold=custom_threshold)
 
     def _inference_method(self) -> str:
         return _EUORunnerMultilingual.INFERENCE_METHOD
