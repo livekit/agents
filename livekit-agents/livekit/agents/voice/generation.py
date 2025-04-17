@@ -36,7 +36,7 @@ class _ACloseable(Protocol):
 
 @dataclass
 class _LLMGenerationData:
-    text_ch: aio.Chan[str]
+    text_ch: aio.Chan[str | llm.FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
@@ -81,6 +81,9 @@ def perform_llm_inference(
                     # io.LLMNode can either return a string or a ChatChunk
                     if isinstance(chunk, str):
                         data.generated_text += chunk
+                        text_ch.send_nowait(chunk)
+
+                    elif isinstance(chunk, llm.FlushSentinel):
                         text_ch.send_nowait(chunk)
 
                     elif isinstance(chunk, ChatChunk):
@@ -128,7 +131,7 @@ class _TTSGenerationData:
 
 
 def perform_tts_inference(
-    *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
+    *, node: io.TTSNode, input: AsyncIterable[str | llm.FlushSentinel], model_settings: ModelSettings
 ) -> tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 

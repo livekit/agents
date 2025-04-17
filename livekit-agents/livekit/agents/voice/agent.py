@@ -295,8 +295,8 @@ class Agent:
         tools: list[FunctionTool],
         model_settings: ModelSettings,
     ) -> (
-        AsyncIterable[llm.ChatChunk | str]
-        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str]]
+        AsyncIterable[llm.ChatChunk | str | llm.FlushSentinel]
+        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | llm.FlushSentinel]]
         | Coroutine[Any, Any, str]
         | Coroutine[Any, Any, llm.ChatChunk]
         | Coroutine[Any, Any, None]
@@ -324,7 +324,7 @@ class Agent:
         return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
     def transcription_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
+        self, text: AsyncIterable[str | llm.FlushSentinel], model_settings: ModelSettings
     ) -> AsyncIterable[str] | Coroutine[Any, Any, AsyncIterable[str]] | Coroutine[Any, Any, None]:
         """
         A node in the processing pipeline that finalizes transcriptions from text segments.
@@ -336,7 +336,7 @@ class Agent:
         You can override this node to customize post-processing logic according to your needs.
 
         Args:
-            text (AsyncIterable[str]): An asynchronous stream of text segments.
+            text (AsyncIterable[str | llm.FlushSentinel]): An asynchronous stream of text segments.
             model_settings (ModelSettings): Configuration and parameters for model execution.
 
         Yields:
@@ -345,7 +345,7 @@ class Agent:
         return Agent.default.transcription_node(self, text, model_settings)
 
     def tts_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
+        self, text: AsyncIterable[str | llm.FlushSentinel], model_settings: ModelSettings
     ) -> (
         AsyncGenerator[rtc.AudioFrame, None]
         | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
@@ -363,7 +363,8 @@ class Agent:
         or any other specialized processing.
 
         Args:
-            text (AsyncIterable[str]): An asynchronous stream of text segments to be synthesized.
+            text (AsyncIterable[str | llm.FlushSentinel]): An asynchronous stream of text segments
+                to be synthesized.
             model_settings (ModelSettings): Configuration and parameters for model execution.
 
         Yields:
@@ -447,7 +448,9 @@ class Agent:
 
         @staticmethod
         async def tts_node(
-            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+            agent: Agent,
+            text: AsyncIterable[str | llm.FlushSentinel],
+            model_settings: ModelSettings,
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent._get_activity_or_raise()
@@ -464,6 +467,10 @@ class Agent:
 
                 async def _forward_input():
                     async for chunk in text:
+                        if isinstance(chunk, llm.FlushSentinel):
+                            stream.flush()
+                            continue
+
                         stream.push_text(chunk)
 
                     stream.end_input()
@@ -477,10 +484,15 @@ class Agent:
 
         @staticmethod
         async def transcription_node(
-            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+            agent: Agent,
+            text: AsyncIterable[str | llm.FlushSentinel],
+            model_settings: ModelSettings,
         ) -> AsyncGenerator[str, None]:
             """Default implementation for `Agent.transcription_node`"""
             async for delta in text:
+                if isinstance(delta, llm.FlushSentinel):
+                    continue
+
                 yield delta
 
         @staticmethod
