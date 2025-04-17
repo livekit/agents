@@ -828,6 +828,7 @@ class RealtimeSession(
         self, *, instructions: NotGivenOr[str] = NOT_GIVEN
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         handle = self._create_response(instructions=instructions, user_initiated=True)
+        self._text_mode_recovery_retries = 0  # reset the counter
         return handle.done_fut
 
     def interrupt(self) -> None:
@@ -900,7 +901,7 @@ class RealtimeSession(
         return handle
 
     async def _recover_from_text_response(
-        self, *, response_id: str, item_id: str, old_task: asyncio.Task | None
+        self, *, item_id: str, response_handle: _CreateResponseHandle | None
     ) -> None:
         """Recover from text-only response to audio mode.
 
@@ -910,14 +911,6 @@ class RealtimeSession(
         2. Creating an empty user audio message
         3. Requesting a new response to trigger audio mode
         """
-        handle = self._response_created_futures.pop(response_id, None)
-        if handle and handle.done_fut.done():
-            if handle.done_fut.exception() is not None:
-                logger.error("generate_reply timed out, cancel recovery")
-            return
-
-        if old_task and not old_task.done():
-            old_task.cancel()
 
         # remove the text item
         chat_ctx = self.chat_ctx
@@ -926,14 +919,14 @@ class RealtimeSession(
             chat_ctx.items.pop(idx)
         await self.update_chat_ctx(chat_ctx, _add_mock_audio=True)
 
-        if handle and handle.done_fut.done():
-            if handle.done_fut.exception() is not None:
+        if response_handle and response_handle.done_fut.done():
+            if response_handle.done_fut.exception() is not None:
                 logger.error("generate_reply timed out, cancel recovery")
             return
 
         self._create_response(
-            old_handle=handle,
-            user_initiated=handle is not None,
+            old_handle=response_handle,
+            user_initiated=response_handle is not None,
         )
 
     def _emit_generation_event(self, response_id: str) -> None:
@@ -994,14 +987,14 @@ class RealtimeSession(
         assert (response_id := event.response_id) is not None, "response_id is None"
 
         if item_type != "message":
-            # confirm if it's not a message, otherwise wait until response.content_part_added
+            # emit immediately if it's not a message, otherwise wait response.content_part.added
             self._emit_generation_event(response_id)
             self._text_mode_recovery_retries = 0
 
     def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item_id) is not None, "item_id is None"
-        assert (item_type := event.part.type) is not None, "item.type is None"
+        assert (item_type := event.part.type) is not None, "part.type is None"
         assert (response_id := event.response_id) is not None, "response_id is None"
 
         if item_type == "audio":
@@ -1046,18 +1039,23 @@ class RealtimeSession(
                 self._text_mode_recovery_retries = 0
                 return
 
+            handle = self._response_created_futures.pop(response_id, None)
+            if handle and handle.done_fut.done():
+                if handle.done_fut.exception() is not None:
+                    logger.error("generate_reply timed out, cancel recovery")
+                self._text_mode_recovery_retries = 0
+                return
+
             self._text_mode_recovery_retries += 1
             logger.warning(
                 "trying to recover from text-only response",
                 extra={"retries": self._text_mode_recovery_retries},
             )
-            # self.interrupt()
+
+            if self._text_mode_recovery_atask and not self._text_mode_recovery_atask.done():
+                self._text_mode_recovery_atask.cancel()
             self._text_mode_recovery_atask = asyncio.create_task(
-                self._recover_from_text_response(
-                    response_id=response_id,
-                    item_id=item_id,
-                    old_task=self._text_mode_recovery_atask,
-                )
+                self._recover_from_text_response(item_id=item_id, response_handle=handle)
             )
 
     def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
