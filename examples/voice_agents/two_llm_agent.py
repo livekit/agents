@@ -61,7 +61,7 @@ class TwoLLMAgent(Agent):
                 if chunk.delta and chunk.delta.content:
                     quick_response += chunk.delta.content
 
-        # yield flush the quick response to tts
+        # flush the quick response to tts
         yield llm.FlushSentinel()
         logger.info(f"quick response: {quick_response}")
 
