@@ -1,1 +1,0 @@
-# LiveKit Bithuman Avatar Example
