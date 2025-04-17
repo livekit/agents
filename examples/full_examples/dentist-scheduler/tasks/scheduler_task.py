@@ -10,6 +10,7 @@ from livekit.agents.voice import Agent, RunContext
 from livekit.plugins import cartesia
 
 from .global_functions import (
+    get_date_today,
     get_user_info,
     transfer_to_messenger,
     transfer_to_receptionist,
@@ -35,13 +36,15 @@ class Scheduler(Agent):
                             Convert all times given by the user to ISO 8601 format in UTC
                             timezone, assuming the user is in America/Los Angeles,
                             and do not mention the conversion or the UTC timezone to the user.
-                            Avoiding repeating words. It is 2025.""",
+                            Avoiding repeating words. When scheduling appointments, ensure that
+                            the dates are in the future.""",
             tts=cartesia.TTS(voice="729651dc-c6c3-4ee5-97fa-350da1f88600"),
             tools=[
                 update_information,
                 get_user_info,
                 transfer_to_receptionist,
                 transfer_to_messenger,
+                get_date_today,
             ],
         )
         self._service_requested = service

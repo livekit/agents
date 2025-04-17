@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 
 from pydantic import Field
@@ -91,3 +92,11 @@ async def transfer_to_messenger(context: RunContext) -> tuple[Agent, str]:
     Transfers the user to the messenger if they want to leave a message for the office.
     """
     return context.userdata["agents"].messenger, "Transferring you to our messenger!"
+
+
+@function_tool()
+async def get_date_today() -> str:
+    """
+    Retrieves the current date in format YYYY-MM-DD
+    """
+    return date.today()
