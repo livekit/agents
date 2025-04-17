@@ -11,7 +11,10 @@ class FrameSampler(ABC):
 
 class FpsSampler(FrameSampler):
     def __init__(self, fps: float):
-        self._interval = 1.0 / fps
+        if fps <= 0:
+            self._interval = float("inf")
+        else:
+            self._interval = 1.0 / fps
         self._last_time = 0.0
 
     def allow(self, frame) -> bool:
