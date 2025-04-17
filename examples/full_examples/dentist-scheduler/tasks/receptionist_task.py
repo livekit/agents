@@ -6,7 +6,7 @@ from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, RunContext
 from livekit.plugins import cartesia
 
-from .global_functions import get_user_info, update_information
+from .global_functions import get_date_today, get_user_info, update_information
 
 
 class Receptionist(Agent):
@@ -18,7 +18,7 @@ class Receptionist(Agent):
             details. When handling appointments or taking a message,
             you will transfer the user to another agent.""",
             tts=cartesia.TTS(emotion=["positivity:high"]),
-            tools=[update_information, get_user_info],
+            tools=[update_information, get_user_info, get_date_today],
         )
 
     async def on_enter(self) -> None:
@@ -43,9 +43,9 @@ class Receptionist(Agent):
     @function_tool()
     async def manage_appointment(
         self,
-        name: Annotated[list[str], Field(description="The user's name")],
+        name: Annotated[str, Field(description="The user's name")],
         action: Annotated[
-            list[str],
+            str,
             Field(
                 description="""The appointment action requested,
                 either 'schedule', 'reschedule', or 'cancel'"""
@@ -65,7 +65,7 @@ class Receptionist(Agent):
 
     @function_tool()
     async def leave_message(
-        self, name: Annotated[list[str], Field(description="The user's name")], context: RunContext
+        self, name: Annotated[str, Field(description="The user's name")], context: RunContext
     ) -> tuple[Agent, str]:
         """
         Allows users to leave a message for the office by transferring to the messenger.
