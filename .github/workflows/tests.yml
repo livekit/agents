@@ -3,98 +3,29 @@ name: tests
 on:
   push:
     branches:
-      # - main
-      - 0.x
+      - main
   pull_request:
     branches:
-      # - main
-      - 0.x
+      - main
   workflow_dispatch:
 
 jobs:
   tests:
-    # Don't run tests for PRs on forks
+    # don't run tests for PRs on forks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     strategy:
       fail-fast: false
       matrix:
-        os: [
-            # disabled Intel Macs due to pytorch 2.3+ not supporting it
-            # macos-14-large,
-            macos-latest,
-            windows-latest,
-            ubuntu-latest,
-            ubuntu-24.04-arm,
-          ]
-        python_version: ["3.9", "3.12"]
-        test_group: ["base"]
-        include:
-          # Include llm, stt, and tts tests only on Ubuntu 20.04 with Python 3.9
-          - os: ubuntu-latest
-            python_version: "3.12"
-            test_group: llm
-          - os: ubuntu-latest
-            python_version: "3.12"
-            test_group: stt
-          - os: ubuntu-latest
-            python_version: "3.12"
-            test_group: tts
+        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, neuphonic, playai, resemble, rime]
 
-    runs-on: ${{ matrix.os }}
-    name: ${{ matrix.test_group }} — ${{ matrix.os }}) (py${{ matrix.python_version }})
+    runs-on: ubuntu-latest
+    name: livekit-plugins-${{ matrix.plugin }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
-          lfs: true
-
-      - name: Cache packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            /var/cache/apt/archives
-            ~/Library/Caches/Homebrew
-            C:\ProgramData\chocolatey\lib\ffmpeg
-          key: ${{ runner.os }}-cache
-          restore-keys: |
-            ${{ runner.os }}-cache
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python_version }}
-          cache: "pip"
-
-      - name: Install ffmpeg (Linux)
-        if: ${{ startsWith(matrix.os, 'ubuntu') }}
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      # Azure plugin fails with OpenSSL3, and Ubuntu 22.04 does not include libssl1.1 in its repos
-      - name: Install libssl 1.1 (Linux 22.04)
-        if: ${{ matrix.os == 'ubuntu-24.04-arm' }}
-        run: |
-          wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
-          wget https://old-releases.ubuntu.com/ubuntu/pool/main/o/openssl/libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
-          sudo dpkg -i libssl1.1_1.1.1-1ubuntu2.1_arm64.deb
-          sudo dpkg -i libssl-dev_1.1.1-1ubuntu2.1_arm64.deb
-
-      - name: Install ffmpeg (macOS)
-        if: ${{ startsWith(matrix.os, 'macos') }}
-        run: brew install ffmpeg
-
-      - name: Install ffmpeg (Windows)
-        if: ${{ startsWith(matrix.os, 'windows') }}
-        run: choco install ffmpeg
-
-      - name: Install packages
-        shell: bash
-        run: |
-          pip install pytest pytest-asyncio pytest-timeout './livekit-agents[codecs]' psutil
-          pip install -r ./tests/test-requirements.txt
-          ./livekit-plugins/install_local.sh
-
       - name: Run tests
         shell: bash
         env:
+          PLUGIN: ${{ matrix.plugin }}
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
@@ -115,31 +46,9 @@ jobs:
           RIME_API_KEY: ${{ secrets.RIME_API_KEY }}
           SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
           GOOGLE_APPLICATION_CREDENTIALS: google.json
-          PYTEST_ADDOPTS: "--color=yes"
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           NEUPHONIC_API_KEY: ${{ secrets.NEUPHONIC_API_KEY }}
           RESEMBLE_API_KEY: ${{ secrets.RESEMBLE_API_KEY }}
         working-directory: tests
-        run: |
-          echo "$GOOGLE_CREDENTIALS_JSON" > google.json
-
-          case "${{ matrix.test_group }}" in
-            base)
-              test_files="test_aio.py test_tokenizer.py test_vad.py test_ipc.py test_tts_fallback.py test_stt_fallback.py test_message_change.py test_build_func_desc.py test_create_func.py test_connection_pool.py"
-              ;;
-            llm)
-              test_files="test_llm.py"
-              ;;
-            stt)
-              test_files="test_stt.py"
-              ;;
-            tts)
-              test_files="test_tts.py"
-              ;;
-            *)
-              echo "Unknown test group: ${{ matrix.test_group }}"
-              exit 1
-              ;;
-          esac
-          pytest $test_files
+        run: make test

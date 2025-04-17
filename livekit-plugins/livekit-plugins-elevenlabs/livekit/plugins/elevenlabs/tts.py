@@ -281,6 +281,10 @@ class ChunkedStream(tts.ChunkedStream):
                 _synthesize_url(self._opts),
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
                 json=data,
+                timeout=aiohttp.ClientTimeout(
+                    total=30,
+                    sock_connect=self._conn_options.timeout,
+                ),
             ) as resp:
                 if not resp.content_type.startswith("audio/"):
                     content = await resp.text()

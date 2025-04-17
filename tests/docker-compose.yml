@@ -1,0 +1,75 @@
+
+services:
+  toxiproxy:
+    build:
+      context: ..
+      dockerfile: tests/Dockerfile.toxiproxy
+    command: ["toxiproxy-server", "-host", "0.0.0.0", "-port", "8474"]
+    environment:
+      - LOG_LEVEL=info
+    # ports:
+    #   - "8474:8474"
+    #   - "443:443"
+    networks:
+      toxinet:
+        ipv4_address: 172.30.0.10
+
+  app:
+    build:
+      context: ..
+      dockerfile: tests/Dockerfile.tests
+    command: tail -f /dev/null
+    volumes:
+      - ../tests:/app/tests
+      - ../livekit-agents:/app/livekit-agents
+      - ../livekit-plugins:/app/livekit-plugins
+      - ../pyproject.toml:/app/pyproject.toml
+      - ../uv.lock:/app/uv.lock
+    environment:
+      - LIVEKIT_URL
+      - LIVEKIT_API_KEY
+      - LIVEKIT_API_SECRET
+      - DEEPGRAM_API_KEY
+      - OPENAI_API_KEY
+      - ELEVEN_API_KEY
+      - CARTESIA_API_KEY
+      - AZURE_SPEECH_KEY
+      - AZURE_SPEECH_REGION
+      - GOOGLE_CREDENTIALS_JSON
+      - ANTHROPIC_API_KEY
+      - GROQ_API_KEY
+      - ASSEMBLYAI_API_KEY
+      - FAL_KEY
+      - PLAYHT_API_KEY
+      - GOOGLE_API_KEY
+      - PLAYHT_USER_ID
+      - RIME_API_KEY
+      - SPEECHMATICS_API_KEY
+      - GOOGLE_APPLICATION_CREDENTIALS
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - NEUPHONIC_API_KEY
+      - RESEMBLE_API_KEY
+
+    extra_hosts:
+      - "polly.us-west-2.amazonaws.com:172.30.0.10"
+      - "westus.tts.speech.microsoft.com:172.30.0.10"
+      - "api.cartesia.ai:172.30.0.10"
+      - "api.deepgram.com:172.30.0.10"
+      - "api.elevenlabs.io:172.30.0.10"
+      - "texttospeech.googleapis.com:172.30.0.10"
+      - "api.groq.com:172.30.0.10"
+      - "api.neuphonic.com:172.30.0.10"
+      # - "api.openai.com:172.30.0.10"
+      - "api.play.ht:172.30.0.10"
+      - "f.cluster.resemble.ai:172.30.0.10"
+      - "users.rime.ai:172.30.0.10"
+    networks:
+      - toxinet
+
+networks:
+  toxinet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "172.30.0.0/16"

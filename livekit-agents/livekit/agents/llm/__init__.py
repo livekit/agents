@@ -21,7 +21,6 @@ from .llm import (
     LLMStream,
 )
 from .realtime import (
-    ErrorEvent,
     GenerationCreatedEvent,
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
@@ -30,6 +29,7 @@ from .realtime import (
     RealtimeCapabilities,
     RealtimeError,
     RealtimeModel,
+    RealtimeModelError,
     RealtimeSession,
 )
 from .tool_context import (
@@ -74,6 +74,7 @@ __all__ = [
     "FunctionToolCall",
     "RealtimeModel",
     "RealtimeError",
+    "RealtimeModelError",
     "RealtimeCapabilities",
     "RealtimeSession",
     "InputTranscriptionCompleted",
@@ -81,7 +82,6 @@ __all__ = [
     "InputSpeechStartedEvent",
     "InputSpeechStoppedEvent",
     "GenerationCreatedEvent",
-    "ErrorEvent",
     "MessageGeneration",
     "LLMError",
 ]

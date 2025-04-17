@@ -272,15 +272,15 @@ class ChunkedStream(tts.ChunkedStream):
                 for frame in bstream.flush():
                     emitter.push(frame)
                 emitter.flush()
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
                 request_id=None,
                 body=None,
-            ) from e
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
