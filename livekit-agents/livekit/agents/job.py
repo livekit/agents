@@ -314,8 +314,10 @@ class JobContext:
         Add a SIP participant to the room.
 
         Args:
-            call_to: The number or SIP destination to transfer the participant to (ex. +12345555555)
-            trunk_id: The ID of the SIP trunk to use (ex. "sip-trunk-12345555555")
+            call_to: The number or SIP destination to transfer the participant to.
+                         This can either be a number (+12345555555) or a
+                         sip host (sip:<user>@<host>)
+            trunk_id: The ID of the SIP trunk to use
             participant_identity: The identity of the participant to add
             participant_name: The name of the participant to add
 
