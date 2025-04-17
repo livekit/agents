@@ -72,5 +72,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    # Set agent_name to enable explicit dispatch
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="inbound-agent"))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
