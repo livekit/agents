@@ -11,8 +11,8 @@ class _EUORunnerEn(_EUORunnerBase):
 
 
 class EnglishModel(EOUModelBase):
-    def __init__(self):
-        super().__init__(model_type="en")
+    def __init__(self, **kwargs):
+        super().__init__(model_type="en", **kwargs)
 
     def _inference_method(self) -> str:
         return _EUORunnerEn.INFERENCE_METHOD
