@@ -13,23 +13,12 @@
 # limitations under the License.
 
 
-from .core import (
-    API_KEY_ENV_VAR,
-    API_URL_ENV_VAR,
-    EGE_STOCK_AVATAR_ID,
-    BeyAvatarSession,
-    BeyException,
-    start_bey_avatar_session,
-)
+from .avatar import AvatarSession, BeyException
 from .version import __version__
 
 __all__ = [
-    "API_KEY_ENV_VAR",
-    "API_URL_ENV_VAR",
-    "EGE_STOCK_AVATAR_ID",
-    "BeyAvatarSession",
     "BeyException",
-    "start_bey_avatar_session",
+    "AvatarSession",
     "__version__",
 ]
 
