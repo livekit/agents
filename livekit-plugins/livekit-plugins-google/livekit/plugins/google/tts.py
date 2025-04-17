@@ -92,7 +92,7 @@ class TTS(tts.TTS):
         self._credentials_file = credentials_file
         self._location = location
 
-        lang = "en-US" if not is_given(language) else language
+        lang = language if is_given(language) else "en-US"
         ssml_gender = _gender_from_str("neutral" if not is_given(gender) else gender)
         name = "" if not is_given(voice_name) else voice_name
 
