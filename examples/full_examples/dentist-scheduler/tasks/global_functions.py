@@ -99,4 +99,4 @@ async def get_date_today() -> str:
     """
     Retrieves the current date in format YYYY-MM-DD
     """
-    return date.today()
+    return date.today().strftime("%Y/%m/%d")
