@@ -110,10 +110,8 @@ class _ResponseGeneration:
 # default values got from a "default" session from their API
 DEFAULT_TEMPERATURE = 0.8
 DEFAULT_TURN_DETECTION = TurnDetection(
-    type="server_vad",
-    threshold=0.5,
-    prefix_padding_ms=300,
-    silence_duration_ms=200,
+    type="semantic_vad",
+    eagerness="auto",
     create_response=True,
     interrupt_response=True,
 )
