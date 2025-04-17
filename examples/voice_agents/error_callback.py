@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import pathlib
@@ -54,10 +55,18 @@ async def entrypoint(ctx: JobContext):
             if p.kind == ParticipantKind.PARTICIPANT_KIND_SIP
         ][0]
 
+        def on_sip_transfer_done(f: asyncio.Future):
+            if f.exception():
+                logger.error(f"Error transferring SIP participant: {f.exception()}")
+            else:
+                logger.info("SIP participant transferred")
+            ctx.delete_room()
+
         # See https://docs.livekit.io/sip/ on how to set up SIP participants
         if participant.kind == ParticipantKind.PARTICIPANT_KIND_SIP:
-            ctx.transfer_sip_participant(participant, "tel:+18003310500")
-        ctx.delete_room()
+            ctx.transfer_sip_participant(participant, "tel:+18003310500").add_done_callback(
+                on_sip_transfer_done
+            )
 
     await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
 
