@@ -123,7 +123,6 @@ class Scheduler(Agent):
             if request.value in ["schedule", "reschedule", "cancel"]:
                 async with session.post(**params) as response:
                     data = await response.json()
-                    print("Data ", data)
             elif request.value == "get_appts":
                 async with session.get(**params) as response:
                     data = await response.json()
