@@ -28,7 +28,6 @@ members = [
     "livekit-plugins-nltk",
     "livekit-plugins-openai",
     "livekit-plugins-playai",
-    "livekit-plugins-rag",
     "livekit-plugins-resemble",
     "livekit-plugins-rime",
     "livekit-plugins-silero",
@@ -242,15 +241,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ee/67/531ea369ba64dcff5ec9c3402f9f51bf748cec26dde048a2f973a4eea7f5/annotated_types-0.7.0.tar.gz", hash = "sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89", size = 16081 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/78/b6/6307fbef88d9b5ee7421e68d78a9f162e0da4900bc5f5793f6d3d0e34fb8/annotated_types-0.7.0-py3-none-any.whl", hash = "sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53", size = 13643 },
-]
-
-[[package]]
-name = "annoy"
-version = "1.17.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/07/38/e321b0e05d8cc068a594279fb7c097efb1df66231c295d482d7ad51b6473/annoy-1.17.3.tar.gz", hash = "sha256:9cbfebefe0a5f843eba29c6be4c84d601f4f41ad4ded0486f1b88c3b07739c15", size = 647460 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/c1/dafbf82add040db10e6663da2a719eea9b2ca7a3b4dc79dc42cc130b121b/annoy-1.17.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:c33a5d4d344c136c84976bfb2825760142a8bb25335165e24e11c9afbfa8c2e9", size = 57745 },
 ]
 
 [[package]]
@@ -1148,7 +1138,7 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "1.0.3"
+version = "1.0.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1157,13 +1147,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/30/14c2ed86914e96f351a28f849dbab6497aa1c6357baecbaef487a12c6282/livekit-1.0.3.tar.gz", hash = "sha256:7d52deaad66aa96c0529b49992ebb8e80bc6c4b884ff391fcdcdba6dc07b1030", size = 300414 }
+sdist = { url = "https://files.pythonhosted.org/packages/42/56/79d5749a781c3a5b7abf585344abf6fcba454b6804240799e5f6b951f12a/livekit-1.0.6.tar.gz", hash = "sha256:782b6dd99e28354b0d67b2464338f5b925c00a427d34da7a7ade9d9798053188", size = 309379 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/32/ae/8e5ed2636d54d46bfdf25d931ea2ed9e6de25b3201da1262e86f7120b74f/livekit-1.0.3-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:191cddd2bf0e882d3f7c72c5aa70a4c071d37650c3a6079e2c62718ce235e09d", size = 10616981 },
-    { url = "https://files.pythonhosted.org/packages/2e/66/b9dadb11f2ed82f136eac74c6695683c72f0861c607ba22c06ac84cf9123/livekit-1.0.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3582f398d92d942b835c6d17f2ad1dd3eaa085d389abff8d954897287e4557af", size = 9296259 },
-    { url = "https://files.pythonhosted.org/packages/1b/91/7a3a435f396fcfba56554191e8305e85d7f045d7d1a5407f5846bd6145f4/livekit-1.0.3-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:070afadf921f5fa5724a3bf4f5f0f2ca1a6623a6b43b12d580c17e515d2faa29", size = 10351617 },
-    { url = "https://files.pythonhosted.org/packages/9a/fc/4f6afb2238bffa87ad00270b9027f3346fa72acfb49ad946f6b87f246bb7/livekit-1.0.3-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:1f20e911741dec7c866513d340615be83b61ecc1d06532f5878b2be74b9a5aed", size = 11851395 },
-    { url = "https://files.pythonhosted.org/packages/aa/9d/d6a6f3aa5577de821c9c08fdbf37414606eba4ef11355ef127c8344febfc/livekit-1.0.3-py3-none-win_amd64.whl", hash = "sha256:c3060e69b7627a9001d09d6b0b041a5760b37d9d5efb0b0c3dd735f5ab247fdc", size = 11198130 },
+    { url = "https://files.pythonhosted.org/packages/c2/43/e0e71ad63f8e8f4429a65b4e4709aac2c85a258addbc2dcdcbc9c318380a/livekit-1.0.6-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:938c4a62d08c5c9f4a577d28289193d20c79f3bb6e49ab866015297fc87c2925", size = 10772952 },
+    { url = "https://files.pythonhosted.org/packages/8d/e6/d6b0e90c2b66c5745e5957e534971f6cbb1fbe4f5feb8870b9a63f477399/livekit-1.0.6-py3-none-macosx_11_0_arm64.whl", hash = "sha256:ba850e7ae8eff217176b3f8d35d772de65148e896b19921fc5ee0e09ee2cf637", size = 9449530 },
+    { url = "https://files.pythonhosted.org/packages/27/a0/5a6b6dae2565a495008657f478fc22bfa2f9be375db66deb873979e504f3/livekit-1.0.6-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:295ba4b7252ed2c0322128586db6fe3a3c68ee799c95d8acfc9ea74990ca66a7", size = 10532248 },
+    { url = "https://files.pythonhosted.org/packages/87/8c/52c2dad375f06a1487745ee75fbfe3e4dd2a616a641c938e71a5b15cdf1b/livekit-1.0.6-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:0ffda3340d977435df2c1b03d5a512de29215a7144d2e282eb7aa764dfe1d54e", size = 12049921 },
+    { url = "https://files.pythonhosted.org/packages/d0/c4/b05062a673a66664e4cc4c113ed1d110863babeb573eb0a47a55bb9fdf09/livekit-1.0.6-py3-none-win_amd64.whl", hash = "sha256:a0503846cdd5fd9bdbe707c0d248f1c4bcbb33355787f418d35cc734ec64c8e0", size = 11378084 },
 ]
 
 [[package]]
@@ -1249,9 +1239,6 @@ openai = [
 playai = [
     { name = "livekit-plugins-playai" },
 ]
-rag = [
-    { name = "livekit-plugins-rag" },
-]
 resemble = [
     { name = "livekit-plugins-resemble" },
 ]
@@ -1277,7 +1264,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = ">=1.0.3,<2" },
+    { name = "livekit", specifier = ">=1.0.6,<2" },
     { name = "livekit-api", specifier = ">=1.0.2,<2" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
@@ -1295,7 +1282,6 @@ requires-dist = [
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
     { name = "livekit-plugins-playai", marker = "extra == 'playai'", editable = "livekit-plugins/livekit-plugins-playai" },
-    { name = "livekit-plugins-rag", marker = "extra == 'rag'", editable = "livekit-plugins/livekit-plugins-rag" },
     { name = "livekit-plugins-resemble", marker = "extra == 'resemble'", editable = "livekit-plugins/livekit-plugins-resemble" },
     { name = "livekit-plugins-rime", marker = "extra == 'rime'", editable = "livekit-plugins/livekit-plugins-rime" },
     { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
@@ -1315,7 +1301,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "rag", "resemble", "rime", "silero", "speechmatics", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechmatics", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1578,20 +1564,6 @@ requires-dist = [
     { name = "livekit" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "pyht", specifier = ">=0.1.14" },
-]
-
-[[package]]
-name = "livekit-plugins-rag"
-source = { editable = "livekit-plugins/livekit-plugins-rag" }
-dependencies = [
-    { name = "annoy" },
-    { name = "livekit-agents" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "annoy", specifier = ">=1.17" },
-    { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
 [[package]]

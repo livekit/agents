@@ -5,7 +5,6 @@ import pytest
 from livekit.agents.utils import ConnectionPool
 
 
-# A simple dummy connection object.
 class DummyConnection:
     def __init__(self, id):
         self.id = id
@@ -14,7 +13,6 @@ class DummyConnection:
         return f"DummyConnection({self.id})"
 
 
-# Factory to produce a dummy async connect callback that returns unique DummyConnection objects.
 def dummy_connect_factory():
     counter = 0
 
@@ -28,10 +26,6 @@ def dummy_connect_factory():
 
 @pytest.mark.asyncio
 async def test_get_reuses_connection():
-    """
-    Test that when a connection is returned to the pool via put(),
-    the subsequent call to get() reuses the same connection if it hasn't expired.
-    """
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
 
@@ -48,9 +42,6 @@ async def test_get_reuses_connection():
 
 @pytest.mark.asyncio
 async def test_get_creates_new_connection_when_none_available():
-    """
-    Test that get() creates a new connection when there are no available connections.
-    """
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
 
@@ -63,9 +54,6 @@ async def test_get_creates_new_connection_when_none_available():
 
 @pytest.mark.asyncio
 async def test_remove_connection():
-    """
-    Test that after removing a connection, the connection is not reused.
-    """
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
 
@@ -82,9 +70,6 @@ async def test_remove_connection():
 
 @pytest.mark.asyncio
 async def test_get_expired():
-    """
-    Test that get() returns a new connection if the previous connection has expired.
-    """
     # Use a short max duration to simulate expiration.
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=1, connect_cb=dummy_connect)
