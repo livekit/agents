@@ -1,27 +1,26 @@
 from __future__ import annotations
 
-import time
+import asyncio
 import os
 import pathlib
-import asyncio
+import time
 
 import pytest
-
 from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APITimeoutError
 from livekit.agents.utils import AudioBuffer
 from livekit.plugins import (
-    cartesia,
-    openai,
     aws,
     azure,
+    cartesia,
     deepgram,
     elevenlabs,
     google,
     groq,
     neuphonic,
+    openai,
     playai,
     resemble,
     rime,
