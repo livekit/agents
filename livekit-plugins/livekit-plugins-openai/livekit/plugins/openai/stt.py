@@ -59,6 +59,11 @@ _delta_transcript_interval = 0.5
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
+DEFAULT_TURN_DETECTION = SessionTurnDetection(
+    type="semantic_vad",
+    eagerness="auto",
+)
+
 
 @dataclass
 class _STTOptions:
@@ -110,12 +115,7 @@ class STT(stt.STT):
             language = ""
 
         if not is_given(turn_detection):
-            turn_detection = {
-                "type": "server_vad",
-                "threshold": 0.5,
-                "prefix_padding_ms": 600,
-                "silence_duration_ms": 350,
-            }
+            turn_detection = DEFAULT_TURN_DETECTION
 
         self._opts = _STTOptions(
             language=language,
