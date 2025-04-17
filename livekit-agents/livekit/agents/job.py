@@ -307,7 +307,7 @@ class JobContext:
         *,
         call_to: str,
         trunk_id: str,
-        participant_identity: str | NotGivenOr[str] = "SIP-participant",
+        participant_identity: str,
         participant_name: str | NotGivenOr[str] = "SIP-participant",
     ) -> asyncio.Future[api.SIPParticipantInfo]:
         """
