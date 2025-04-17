@@ -9,6 +9,7 @@ from livekit.agents.voice import Agent, RunContext
 from livekit.plugins import cartesia
 
 from .global_functions import (
+    get_date_today,
     transfer_to_receptionist,
     transfer_to_scheduler,
     update_information,
@@ -44,7 +45,12 @@ class Messenger(Agent):
             is not known, ask for it. Otherwise return the user's number during function calls.
             Be brief and to the point.""",
             tts=cartesia.TTS(voice="156fb8d2-335b-4950-9cb3-a2d33befec77"),
-            tools=[update_information, transfer_to_receptionist, transfer_to_scheduler],
+            tools=[
+                update_information,
+                transfer_to_receptionist,
+                transfer_to_scheduler,
+                get_date_today,
+            ],
         )
 
     async def on_enter(self) -> None:
