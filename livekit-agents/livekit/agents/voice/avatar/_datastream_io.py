@@ -88,10 +88,6 @@ class DataStreamAudioOutput(AudioOutput):
         task.add_done_callback(self._tasks.discard)
 
         self._stream_writer = None
-        logger.debug(
-            "data stream audio sink flushed",
-            extra={"pushed_duration": self._pushed_duration},
-        )
 
     def clear_buffer(self) -> None:
         task = asyncio.create_task(
