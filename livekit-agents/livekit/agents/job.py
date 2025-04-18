@@ -29,6 +29,7 @@ from livekit.protocol import agent, models
 
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
+from .types import NotGivenOr
 from .utils import http_context
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -265,6 +266,86 @@ class JobContext:
             self._participant_available(p)
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
+
+    def disconnect(self) -> asyncio.Future[None]:
+        """Disconnects the agent from the room, but does not delete the room."""
+        return asyncio.create_task(self._room.disconnect())
+
+    def delete_room(self) -> asyncio.Future[None]:
+        """Deletes the room and disconnects all participants."""
+        return asyncio.create_task(
+            self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+        )
+
+    def add_sip_participant(
+        self,
+        *,
+        call_to: str,
+        trunk_id: str,
+        participant_identity: str,
+        participant_name: str | NotGivenOr[str] = "SIP-participant",
+    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        """
+        Add a SIP participant to the room.
+
+        Args:
+            call_to: The number or SIP destination to transfer the participant to.
+                         This can either be a number (+12345555555) or a
+                         sip host (sip:<user>@<host>)
+            trunk_id: The ID of the SIP trunk to use
+            participant_identity: The identity of the participant to add
+            participant_name: The name of the participant to add
+
+        Make sure you have an outbound SIP trunk created in LiveKit.
+        See https://docs.livekit.io/sip/trunk-outbound/ for more information.
+        """
+        return asyncio.create_task(
+            self.api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=participant_identity,
+                    sip_trunk_id=trunk_id,
+                    sip_call_to=call_to,
+                    participant_name=participant_name,
+                )
+            ),
+        )
+
+    def transfer_sip_participant(
+        self,
+        participant: rtc.RemoteParticipant | str,
+        transfer_to: str,
+        play_dialtone: bool = False,
+    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        """Transfer a SIP participant to another number.
+
+        Args:
+            participant: The participant to transfer
+            transfer_to: The number or SIP destination to transfer the participant to.
+                         This can either be a number (+12345555555) or a
+                         sip host (sip:<user>@<host>)
+            play_dialtone: Whether to play a dialtone during transfer. Defaults to True.
+
+
+        Returns:
+            Future that completes when the transfer is complete
+
+        Make sure you have enabled call transfer on your provider SIP trunk.
+        See https://docs.livekit.io/sip/transfer-cold/ for more information.
+        """
+        assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
+            "Participant must be a SIP participant"
+        )
+        return asyncio.create_task(
+            self.api.sip.transfer_sip_participant(
+                api.TransferSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=participant.identity,
+                    transfer_to=transfer_to,
+                    play_dialtone=play_dialtone,
+                )
+            ),
+        )
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
