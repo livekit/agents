@@ -24,7 +24,7 @@ from livekit.plugins import (
     playai,
     resemble,
     rime,
-    speechify
+    speechify,
 )
 
 from .toxic_proxy import Toxiproxy
