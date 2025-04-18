@@ -50,6 +50,7 @@ from openai.types.beta.realtime.transcription_session_update_param import (
 
 from .log import logger
 from .models import GroqAudioModels, STTModels
+from .utils import AsyncAzureADTokenProvider
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -58,6 +59,11 @@ _max_session_duration = 10 * 60
 _delta_transcript_interval = 0.5
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
+
+DEFAULT_TURN_DETECTION = SessionTurnDetection(
+    type="semantic_vad",
+    eagerness="auto",
+)
 
 
 @dataclass
@@ -110,12 +116,7 @@ class STT(stt.STT):
             language = ""
 
         if not is_given(turn_detection):
-            turn_detection = {
-                "type": "server_vad",
-                "threshold": 0.5,
-                "prefix_padding_ms": 600,
-                "silence_duration_ms": 350,
-            }
+            turn_detection = DEFAULT_TURN_DETECTION
 
         self._opts = _STTOptions(
             language=language,
@@ -148,6 +149,66 @@ class STT(stt.STT):
             max_session_duration=_max_session_duration,
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
+        )
+
+    @staticmethod
+    def with_azure(
+        *,
+        language: str = "en",
+        detect_language: bool = False,
+        model: STTModels | str = "gpt-4o-mini-transcribe",
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+        use_realtime: bool = False,
+        timeout: httpx.Timeout | None = None,
+    ) -> STT:
+        """
+        Create a new instance of Azure OpenAI STT.
+
+        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+        - `api_key` from `AZURE_OPENAI_API_KEY`
+        - `organization` from `OPENAI_ORG_ID`
+        - `project` from `OPENAI_PROJECT_ID`
+        - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+        - `api_version` from `OPENAI_API_VERSION`
+        - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+        """  # noqa: E501
+
+        azure_client = openai.AsyncAzureOpenAI(
+            max_retries=0,
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+        )  # type: ignore
+
+        return STT(
+            language=language,
+            detect_language=detect_language,
+            model=model,
+            prompt=prompt,
+            turn_detection=turn_detection,
+            noise_reduction_type=noise_reduction_type,
+            client=azure_client,
+            use_realtime=use_realtime,
         )
 
     @staticmethod
