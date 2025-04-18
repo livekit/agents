@@ -44,6 +44,9 @@ class VoiceOptions:
 Userdata_T = TypeVar("Userdata_T")
 
 TurnDetectionMode = Union[Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector]
+
+InterruptionHandlingMode = Literal["parallel", "sequential"]
+
 """
 The mode of turn detection to use.
 
@@ -70,6 +73,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
+        interruption_handling: InterruptionHandlingMode = "parallel",
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
         min_endpointing_delay: float = 0.5,
@@ -121,6 +125,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task | None = None
+
+        self._interruption_handling = interruption_handling
 
     @property
     def userdata(self) -> Userdata_T:
