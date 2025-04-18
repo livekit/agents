@@ -120,6 +120,18 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
 )
 DEFAULT_TOOL_CHOICE = "auto"
 
+AZURE_DEFAULT_TURN_DETECTION = TurnDetection(
+    type="server_vad",
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=200,
+    create_response=True,
+)
+
+AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
+    model="whisper-1",
+)
+
 
 class RealtimeModel(llm.RealtimeModel):
     @overload
@@ -286,6 +298,12 @@ class RealtimeModel(llm.RealtimeModel):
             base_url = f"{azure_endpoint.rstrip('/')}/openai"
         elif azure_endpoint is not None:
             raise ValueError("base_url and azure_endpoint are mutually exclusive")
+
+        if not is_given(input_audio_transcription):
+            input_audio_transcription = AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
+
+        if not is_given(turn_detection):
+            turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
         return cls(
             voice=voice,
