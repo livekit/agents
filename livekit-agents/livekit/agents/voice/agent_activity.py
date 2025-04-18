@@ -1015,7 +1015,15 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             return
 
-        tr_node = self._agent.transcription_node(llm_output, model_settings)
+        async def _read_text(
+            llm_output: AsyncIterable[str | llm.FlushSentinel],
+        ) -> AsyncIterable[str]:
+            async for chunk in llm_output:
+                if isinstance(chunk, llm.FlushSentinel):
+                    continue
+                yield chunk
+
+        tr_node = self._agent.transcription_node(_read_text(llm_output), model_settings)
         if asyncio.iscoroutine(tr_node):
             tr_node = await tr_node
 

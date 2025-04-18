@@ -131,23 +131,52 @@ class _TTSGenerationData:
 
 
 def perform_tts_inference(
-    *, node: io.TTSNode, input: AsyncIterable[str | llm.FlushSentinel], model_settings: ModelSettings
+    *,
+    node: io.TTSNode,
+    input: AsyncIterable[str | llm.FlushSentinel],
+    model_settings: ModelSettings,
 ) -> tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
-        tts_node = node(input, model_settings)
-        if asyncio.iscoroutine(tts_node):
-            tts_node = await tts_node
+        text_segment_ch = aio.Chan[aio.Chan[str]]()
 
-        if isinstance(tts_node, AsyncIterable):
-            async for audio_frame in tts_node:
-                audio_ch.send_nowait(audio_frame)
+        async def _read_text():
+            seg_ch: aio.Chan[str] | None = None
+            try:
+                async for chunk in input:
+                    if isinstance(chunk, llm.FlushSentinel):
+                        if seg_ch is not None:
+                            seg_ch.close()
+                            seg_ch = None
+                        continue
 
-            return True
+                    if seg_ch is None:
+                        seg_ch = aio.Chan()
+                        text_segment_ch.send_nowait(seg_ch)
 
-        return False
+                    seg_ch.send_nowait(chunk)
+            finally:
+                text_segment_ch.close()
+                if seg_ch and not seg_ch.closed:
+                    seg_ch.close()
+
+        async def _inference_segments() -> bool:
+            has_tts: bool = False
+            async for segment_ch in text_segment_ch:
+                tts_node = node(segment_ch, model_settings)
+                if asyncio.iscoroutine(tts_node):
+                    tts_node = await tts_node
+
+                if isinstance(tts_node, AsyncIterable):
+                    async for audio_frame in tts_node:
+                        audio_ch.send_nowait(audio_frame)
+                    has_tts = True
+
+            return has_tts
+
+        await asyncio.gather(_read_text(), _inference_segments())
 
     tts_task = asyncio.create_task(_inference_task())
     tts_task.add_done_callback(lambda _: audio_ch.close())
