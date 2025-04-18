@@ -363,8 +363,7 @@ class Agent:
         or any other specialized processing.
 
         Args:
-            text (AsyncIterable[str): An asynchronous stream of text segments
-                to be synthesized.
+            text (AsyncIterable[str]): An asynchronous stream of text segments to be synthesized.
             model_settings (ModelSettings): Configuration and parameters for model execution.
 
         Yields:
@@ -465,10 +464,6 @@ class Agent:
 
                 async def _forward_input():
                     async for chunk in text:
-                        # if isinstance(chunk, llm.FlushSentinel):
-                        #     stream.flush()
-                        #     continue
-
                         stream.push_text(chunk)
 
                     stream.end_input()

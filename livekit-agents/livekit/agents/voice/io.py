@@ -29,7 +29,7 @@ LLMNode = Callable[
     ],
 ]
 TTSNode = Callable[
-    [AsyncIterable[str | llm.FlushSentinel], ModelSettings],
+    [AsyncIterable[str], ModelSettings],
     Union[
         Optional[AsyncIterable[rtc.AudioFrame]],
         Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
