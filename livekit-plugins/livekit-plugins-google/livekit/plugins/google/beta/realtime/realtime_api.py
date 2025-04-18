@@ -32,6 +32,7 @@ from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import images, is_given
+from livekit.agents.utils.sampler import FpsSampler
 
 from ...log import logger
 from ...utils import _build_gemini_fnc, get_tool_results_for_realtime, to_chat_ctx
@@ -73,6 +74,7 @@ class _RealtimeOptions:
     instructions: NotGivenOr[str]
     input_audio_transcription: AudioTranscriptionConfig | None
     output_audio_transcription: AudioTranscriptionConfig | None
+    video_fps: float
 
 
 @dataclass
@@ -111,6 +113,7 @@ class RealtimeModel(llm.RealtimeModel):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
+        video_fps: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -139,6 +142,7 @@ class RealtimeModel(llm.RealtimeModel):
             frequency_penalty (float, optional): The frequency penalty for response generation
             input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
             output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
+            video_fps (float, optional): The FPS of the video. Defaults to 1.0.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -173,6 +177,8 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription = None
         if not is_given(output_audio_transcription):
             output_audio_transcription = AudioTranscriptionConfig()
+        if not is_given(video_fps):
+            video_fps = 1.0
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -192,6 +198,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions=instructions,
             input_audio_transcription=input_audio_transcription,
             output_audio_transcription=output_audio_transcription,
+            video_fps=video_fps,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -220,6 +227,8 @@ class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
+        self._video_fps = realtime_model._opts.video_fps
+        self._video_sampler = FpsSampler(self._video_fps)
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents]()
@@ -322,8 +331,9 @@ class RealtimeSession(llm.RealtimeSession):
         self.push_media(frame.data.tobytes(), "audio/pcm")
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        encoded_data = images.encode(frame, DEFAULT_ENCODE_OPTIONS)
-        self.push_media(encoded_data, "image/jpeg")
+        if self._video_sampler.allow(frame):
+            encoded_data = images.encode(frame, DEFAULT_ENCODE_OPTIONS)
+            self.push_media(encoded_data, "image/jpeg")
 
     def push_media(self, bytes: bytes, mime_type: str) -> None:
         realtime_input = LiveClientRealtimeInput(
