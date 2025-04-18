@@ -14,6 +14,7 @@ from livekit.agents import (
     APIStatusError,
     NotGivenOr,
     utils,
+    wait_for_participant,
 )
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -97,7 +98,7 @@ class AvatarSession:
         await self._start_agent(livekit_url, livekit_token)
 
         logger.debug("waiting for avatar agent to join the room")
-        await self._wait_for_participant(room=room, identity=self._avatar_participant_identity)
+        await wait_for_participant(room=room, identity=self._avatar_participant_identity)
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
@@ -135,18 +136,3 @@ class AvatarSession:
         raise APIStatusError(
             f"Failed to start Bey Avatar Session after {self._conn_options.max_retry} retries"
         )
-
-    async def _wait_for_participant(self, room: rtc.Room, identity: str) -> rtc.RemoteParticipant:
-        fut = asyncio.Future[rtc.RemoteParticipant]()
-
-        def _on_participant_connected(p: rtc.RemoteParticipant):
-            if p.identity == identity:
-                fut.set_result(p)
-
-        room.on("participant_connected", _on_participant_connected)
-        for p in room.remote_participants.values():
-            if p.identity == identity:
-                fut.set_result(p)
-                break
-
-        return await fut
