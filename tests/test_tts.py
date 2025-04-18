@@ -26,7 +26,7 @@ from livekit.plugins import (
     rime,
 )
 
-from .toxic_proxy import Toxiproxy
+from .toxic_proxy import Proxy, Toxiproxy
 from .utils import wer
 
 load_dotenv(override=True)
@@ -36,11 +36,24 @@ WER_THRESHOLD = 0.2
 TEST_AUDIO_SYNTHESIZE = pathlib.Path(os.path.dirname(__file__), "long_synthesize.txt").read_text()
 
 PROXY_LISTEN = "0.0.0.0:443"
+OAI_LISTEN = "0.0.0.0:500"
+
+
+def setup_oai_proxy(toxiproxy: Toxiproxy) -> Proxy:
+    return toxiproxy.create("api.openai.com:443", "oai-stt-proxy", listen=OAI_LISTEN, enabled=True)
 
 
 async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, num_channels: int):
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
-    whisper_stt = openai.STT(model="whisper-1")
+    import httpx
+    import openai as openai_client
+
+    # don't verify ssl because of the proxy base_url being different
+    client = openai_client.AsyncClient(
+        http_client=httpx.AsyncClient(verify=False, base_url="https://toxiproxy:500/v1")
+    )
+
+    whisper_stt = openai.STT(model="whisper-1", client=client)
     res = await whisper_stt.recognize(buffer=frames)
     assert wer(res.alternatives[0].text, TEST_AUDIO_SYNTHESIZE) <= WER_THRESHOLD
 
@@ -106,13 +119,13 @@ SYNTHESIZE_TTS = [
         },
         id="neuphonic",
     ),
-    # pytest.param(
-    #     lambda: {
-    #         "tts": openai.TTS(),
-    #         "proxy-upstream": "api.openai.com:443",
-    #     },
-    #     id="openai",
-    # ),
+    pytest.param(
+        lambda: {
+            "tts": openai.TTS(),
+            "proxy-upstream": "api.openai.com:443",
+        },
+        id="openai",
+    ),
     pytest.param(
         lambda: {
             "tts": playai.TTS(),
@@ -144,6 +157,7 @@ if PLUGIN:
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_synthesize(tts_factory, toxiproxy: Toxiproxy):
+    setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -172,6 +186,7 @@ async def test_synthesize(tts_factory, toxiproxy: Toxiproxy):
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
+    setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
