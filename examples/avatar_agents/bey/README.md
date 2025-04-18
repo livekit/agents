@@ -61,5 +61,6 @@ pip install -r examples/avatar_agents/bey/requirements.txt
 python examples/avatar_agents/bey/agent_worker.py dev
 
 # You can specify a different avatar if you want
-python examples/avatar_agents/bey/agent_worker.py dev --avatar-id "your-avatar-id"
+# export BEY_AVATAR_ID=your-avatar-id
+python examples/avatar_agents/bey/agent_worker.py dev
 ```
