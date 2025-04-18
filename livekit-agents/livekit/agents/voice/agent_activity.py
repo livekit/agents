@@ -809,6 +809,10 @@ class AgentActivity(RecognitionHooks):
         # the user can edit it for the current generation, but changes will not be kept inside the
         # Agent.chat_ctx
         temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
+        if self._session._interruption_handling == "sequential" and self._current_speech is not None:
+                await self._current_speech.wait_for_playout()
+
+        user_message = llm.ChatMessage(role="user", content=[new_transcript])
         start_time = time.time()
         try:
             await self._agent.on_user_turn_completed(
