@@ -295,8 +295,8 @@ class Agent:
         tools: list[FunctionTool],
         model_settings: ModelSettings,
     ) -> (
-        AsyncIterable[llm.ChatChunk | str]
-        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str]]
+        AsyncIterable[llm.ChatChunk | str | llm.FlushSentinel]
+        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | llm.FlushSentinel]]
         | Coroutine[Any, Any, str]
         | Coroutine[Any, Any, llm.ChatChunk]
         | Coroutine[Any, Any, None]

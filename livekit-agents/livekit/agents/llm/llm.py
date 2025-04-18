@@ -54,6 +54,9 @@ class ChatChunk(BaseModel):
     usage: CompletionUsage | None = None
 
 
+class FlushSentinel: ...
+
+
 class LLMError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["llm_error"] = "llm_error"
