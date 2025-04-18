@@ -52,14 +52,14 @@ export LIVEKIT_URL="..."
 
 ```bash
 # Make sure you are inside a virtual environment first
-pip install -r examples/avatar/bey/requirements.txt
+pip install -r examples/avatar_agents/bey/requirements.txt
 ```
 
 * Start the agent worker:
 
 ```bash
-python examples/avatar/bey/agent_worker.py dev
+python examples/avatar_agents/bey/agent_worker.py dev
 
 # You can specify a different avatar if you want
-python examples/avatar/bey/agent_worker.py dev --avatar-id "your-avatar-id"
+python examples/avatar_agents/bey/agent_worker.py dev --avatar-id "your-avatar-id"
 ```
