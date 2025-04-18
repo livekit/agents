@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, neuphonic, playai, resemble, rime]
+        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, neuphonic, playai, resemble, rime, speechify]
 
     runs-on: ubuntu-latest
     name: livekit-plugins-${{ matrix.plugin }}
@@ -50,5 +50,6 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           NEUPHONIC_API_KEY: ${{ secrets.NEUPHONIC_API_KEY }}
           RESEMBLE_API_KEY: ${{ secrets.RESEMBLE_API_KEY }}
+          SPEECHIFY_API_KEY: ${{ secrets.SPEECHIFY_API_KEY }}
         working-directory: tests
         run: make test

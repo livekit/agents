@@ -2,4 +2,5 @@ livekit-agents>=0.12.18
 livekit-plugins-openai>=0.12.2
 livekit-plugins-cartesia>=0.4.11
 livekit-plugins-elevenlabs>=0.8.1
+livekit-plugins-speechify>=0.1.0
 python-dotenv~=1.0
