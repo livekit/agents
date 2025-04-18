@@ -121,7 +121,9 @@ class EOUModelBase(ABC):
         self,
         model_type: EOUModelType = "en",  # default to smaller, english-only model
         inference_executor: InferenceExecutor | None = None,
-        custom_threshold: float | None = None,
+        # if set, overrides the per-language threshold tuned for accuracy.
+        # not recommended unless you're confident in the impact.
+        unlikely_threshold: float | None = None,
     ) -> None:
         self._model_type = model_type
         self._executor = inference_executor or get_job_context().inference_executor
@@ -135,7 +137,7 @@ class EOUModelBase(ABC):
         with open(config_fname) as f:
             self._languages = json.load(f)
 
-        self._custom_threshold = custom_threshold
+        self._unlikely_threshold = unlikely_threshold
 
     @abstractmethod
     def _inference_method(self): ...
@@ -148,7 +150,7 @@ class EOUModelBase(ABC):
         # try the full language code first
         lang_data = self._languages.get(lang)
 
-        # if not found and it has a region code (e.g., 'en-us'), try the base language ('en')
+        # try the base language if the full language code is not found
         if lang_data is None and "-" in lang:
             base_lang = lang.split("-")[0]
             lang_data = self._languages.get(base_lang)
@@ -156,9 +158,9 @@ class EOUModelBase(ABC):
         if not lang_data:
             logger.warning(f"Language {language} not supported by EOU model")
             return None
-
-        if self._custom_threshold is not None:
-            return self._custom_threshold
+        # if a custom threshold is provided, use it
+        if self._unlikely_threshold is not None:
+            return self._unlikely_threshold
         else:
             return lang_data["threshold"]
 
