@@ -27,7 +27,6 @@ from .job import (
     JobProcess,
     JobRequest,
     get_job_context,
-    wait_for_participant,
 )
 from .llm.chat_context import (
     ChatContent,
@@ -123,7 +122,6 @@ __all__ = [
     "BuiltinAudioClip",
     "AudioConfig",
     "SimulateJobInfo",
-    "wait_for_participant",
 ]
 
 # Cleanup docs of unexported modules
