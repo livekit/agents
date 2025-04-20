@@ -13,11 +13,17 @@
 # limitations under the License.
 from typing import Literal
 
-TTSEncoding = Literal[
-    "raw",  # PCM 16bit little-endian
-    "opus",
+TTSModels = Literal[
+    "simba-english",
+    "simba-multilingual",
 ]
 
-TTSModel = Literal["simba-english", "simba-multilingual", "simba-turbo"]
-TTSVoice = Literal["gwyneth", "kristy"] | str
-TTSDefaultVoiceId = "gwyneth"
+TTSEncoding = Literal[
+    "mp3_24000_64kbps",
+    "wav_48000",
+    "ogg_24000",
+    "aac_24000",
+]
+
+VoiceType = Literal["shared", "personal"]
+Gender = Literal["male", "female", "neutral"]

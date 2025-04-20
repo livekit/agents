@@ -10,4 +10,4 @@ pip install livekit-plugins-speechify
 
 ## Pre-requisites
 
-You'll need an API key from Cartesia. It can be set as an environment variable: `SPEECHIFY_API_KEY`
+You'll need an API key from Speechify. It can be set as an environment variable: `SPEECHIFY_API_KEY`

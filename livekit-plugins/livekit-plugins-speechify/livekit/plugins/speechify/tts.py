@@ -1,4 +1,4 @@
-# Copyright 2024 LiveKit, Inc.
+# Copyright 2023 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,95 +15,131 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-from dataclasses import asdict, dataclass, field
-from typing import Literal
-from urllib.parse import urljoin
+from dataclasses import dataclass
 
 import aiohttp
-from livekit import rtc
+
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
-    tokenize,
+    APIStatusError,
+    APITimeoutError,
     tts,
     utils,
 )
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
 
 from .log import logger
-from .models import (
-    TTSDefaultVoiceId,
-    TTSEncoding,
-    TTSModel,
-    TTSVoice,
-)
+from .models import Gender, TTSEncoding, TTSModels, VoiceType
 
-API_AUTH_HEADER = "Authorization"
+_DefaultEncoding: TTSEncoding = "wav_48000"
 
-NUM_CHANNELS = 1
-BUFFERED_WORDS_COUNT = 8
+
+def _sample_rate_from_encoding(output_encoding: TTSEncoding) -> int:
+    split = output_encoding.split("_")
+    return int(split[1])
+
+
+def _audio_format_from_encoding(encoding: TTSEncoding) -> str:
+    split = encoding.split("_")
+    return split[0]
+
+
+DEFAULT_VOICE_ID = "cliff"
+API_BASE_URL_V1 = "https://api.sws.speechify.com/v1"
+AUTHORIZATION_HEADER = "Authorization"
+
+
+@dataclass
+class Voice:
+    id: str
+    type: VoiceType
+    display_name: str
+    gender: Gender
+    avatar_image: str | None
+    models: list[TTSModels]
+    locale: str
 
 
 @dataclass
 class _TTSOptions:
-    model: TTSModel | str
+    base_url: NotGivenOr[str]
+    token: NotGivenOr[str]
+    voice_id: str
     encoding: TTSEncoding
+    language: NotGivenOr[str]
+    model: NotGivenOr[TTSModels]
+    loudness_normalization: NotGivenOr[bool]
+    text_normalization: NotGivenOr[bool]
+    follow_redirects: bool
     sample_rate: int
-    voice: TTSVoice
-    endpoint: str
-    api_key: str
-    language: str
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModel | str = "simba-english",
-        language: str = "en",
-        encoding: TTSEncoding = "raw",
-        voice: TTSVoice = TTSDefaultVoiceId,
-        sample_rate: int = 24000,
-        endpoint: str | None = None,
-        api_key: str | None = None,
+        voice_id: NotGivenOr[str] = DEFAULT_VOICE_ID,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        text_normalization: NotGivenOr[bool] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        follow_redirects: bool = True,
     ) -> None:
         """
         Create a new instance of Speechify TTS.
 
         Args:
-            model (TTSModels, optional): The Speechify TTS model to use. Defaults to "simba-english".
-            language (str, optional): The language code for synthesis. Defaults to "en".
-            encoding (TTSEncoding, optional): The audio encoding format. Defaults to "opus".
-            voice (str, optional): The voice ID.
-            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
-            endpoint (str, optional): The Speechify API endpoint. If not provided, it will be read from the SPEECHIFY_ENDPOINT environment variable.
-            api_key (str, optional): The Speechify API key. If not provided, it will be read from the SPEECHIFY_API_KEY environment variable.
-            http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
-        """
+            voice_id (NotGivenOr[str]): Voice ID. Defaults to `cliff`.
+            encoding (NotGivenOr[TTSEncoding]): Audio encoding to use. Optional. Defaults to `wav_48000`.
+            model (NotGivenOr[TTSModels]): TTS model to use. Optional.
+            base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
+            api_key (NotGivenOr[str]): Speechify API key. Can be set via argument or `SPEECHIFY_API_KEY` environment variable
+            language (NotGivenOr[str]): Language code for the TTS model. Optional.
+            loudness_normalization (NotGivenOr[bool]): Whether to normalize the loudness of the audio. Optional.
+            text_normalization (NotGivenOr[bool]): Whether to normalize the text. Optional.
+            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
+            follow_redirects (bool): Whether to follow redirects in HTTP requests. Defaults to True.
+        """  # noqa: E501
+
+        if not is_given(encoding):
+            encoding = _DefaultEncoding
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+            ),
+            sample_rate=_sample_rate_from_encoding(encoding),
+            num_channels=1,
         )
 
-        api_key = api_key or os.environ.get("SPEECHIFY_API_KEY")
-        if not api_key:
-            raise ValueError("SPEECHIFY_API_KEY must be set")
-        endpoint = endpoint or os.environ.get("SPEECHIFY_ENDPOINT")
-        if not endpoint:
-            raise ValueError("SPEECHIFY_ENDPOINT must be set")
+        speechify_token = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
+        if not (speechify_token):
+            raise ValueError(
+                "Speechify API key is required, either as argument or set SPEECHIFY_API_KEY environment variable"  # noqa: E501
+            )
 
         self._opts = _TTSOptions(
             model=model,
+            voice_id=voice_id,
             language=language,
+            base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
+            token=speechify_token,
+            follow_redirects=follow_redirects,
             encoding=encoding,
-            sample_rate=sample_rate,
-            voice=voice,
-            endpoint=endpoint,
-            api_key=api_key,
+            sample_rate=_sample_rate_from_encoding(encoding),
+            loudness_normalization=loudness_normalization,
+            text_normalization=text_normalization,
         )
         self._session = http_session
 
@@ -113,221 +149,146 @@ class TTS(tts.TTS):
 
         return self._session
 
+    async def list_voices(self) -> list[Voice]:
+        async with self._ensure_session().get(
+            f"{self._opts.base_url}/voices",
+            headers=_get_auth_header(self._opts.token),
+        ) as resp:
+            return await resp.json()
+
     def update_options(
         self,
         *,
-        model: TTSModel | None = None,
-        language: str | None = None,
-        voice: TTSVoice | None = None,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        text_normalization: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
-        Update the Text-to-Speech (TTS) configuration options.
-
-        This method allows updating the TTS settings, including model type, language, voice.
-        If any parameter is not provided, the existing value will be retained.
-
         Args:
-            model (TTSModel, optional): The Speechify TTS model to use. Defaults to "simba-english".
-            language (str, optional): The language code for synthesis. Defaults to "en".
-            voice (TTSVoice, optional): The voice ID.
+            voice_id (NotGivenOr[str]): Voice ID.
+            model (NotGivenOr[TTSModels | str]): TTS model to use.
+            language (NotGivenOr[str]): Language code for the TTS model.
         """
-        self._opts.model = model or self._opts.model
-        self._opts.language = language or self._opts.language
-        self._opts.voice = voice or self._opts.voice
+        if is_given(model):
+            self._opts.model = model
+        if is_given(voice_id):
+            self._opts.voice_id = voice_id
+        if is_given(language):
+            self._opts.language = language
+        if is_given(loudness_normalization):
+            self._opts.loudness_normalization = loudness_normalization
+        if is_given(text_normalization):
+            self._opts.text_normalization = text_normalization
 
     def synthesize(
         self,
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> tts.ChunkedStream:
-        return ChunkedStreamWrapper(
+    ) -> ChunkedStream:
+        return ChunkedStream(
             tts=self,
             input_text=text,
-            conn_options=conn_options,
-        )
-
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "SynthesizeStream":
-        return SynthesizeStream(
-            tts=self,
             conn_options=conn_options,
             opts=self._opts,
             session=self._ensure_session(),
         )
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-        opts: _TTSOptions,
-        session: aiohttp.ClientSession,
-    ):
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._opts, self._session = opts, session
-        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
-            min_sentence_len=BUFFERED_WORDS_COUNT
-        ).stream()
+class ChunkedStream(tts.ChunkedStream):
+    """Synthesize using the chunked api endpoint"""
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-        decoder: utils.codecs.AudioStreamDecoder | None = None
-        if self._opts.encoding == "opus":
-            decoder = utils.codecs.AudioStreamDecoder()
-
-        is_finished = False
-
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse):
-            nonlocal is_finished
-            async for ev in self._sent_tokenizer_stream:
-                payload = _Payload(
-                    format=self._opts.encoding,
-                    items=[
-                        _TextItem(
-                            text=ev.token,
-                            speaker=self._opts.voice,
-                        )
-                    ],
-                )
-                await ws.send_str(json.dumps(asdict(payload)))
-            is_finished = True
-
-        async def _input_task():
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    self._sent_tokenizer_stream.flush()
-                    continue
-                self._sent_tokenizer_stream.push_text(data)
-            self._sent_tokenizer_stream.end_input()
-
-        def _send_frame(frame: rtc.AudioFrame | None, is_final: bool) -> None:
-            if frame is not None:
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        request_id=request_id,
-                        frame=frame,
-                        is_final=is_final,
-                    )
-                )
-
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
-            )
-
-            try:
-                while True:
-                    msg = await ws.receive()
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        if is_finished:
-                            break
-                        raise Exception("Speechify connection closed unexpectedly")
-
-                    if msg.type != aiohttp.WSMsgType.BINARY:
-                        logger.warning(
-                            "unexpected Speechify message type %s, %s",
-                            msg.type,
-                            msg.data,
-                        )
-                        continue
-
-                    if decoder:
-                        decoder.push(msg.data)
-                    else:
-                        for frame in audio_bstream.write(msg.data):
-                            _send_frame(frame, is_final=False)
-            finally:
-                if decoder:
-                    decoder.end_input()
-
-        async def _consume_decoder_task(decoder: utils.codecs.AudioStreamDecoder):
-            async for frame in decoder:
-                # logger.info(f"received decoder frame: {frame}")
-                _send_frame(frame, is_final=False)
-            await decoder.aclose()
-
-        url = urljoin(self._opts.endpoint, "/ws/generate-audio-stream")
-        headers = {
-            API_AUTH_HEADER: self._opts.api_key,
-        }
-
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
-        try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(url, headers=headers),
-                self._conn_options.timeout,
-            )
-
-            tasks = [
-                asyncio.create_task(_input_task()),
-                asyncio.create_task(_sentence_stream_task(ws)),
-                asyncio.create_task(_recv_task(ws)),
-            ]
-            if decoder:
-                tasks.append(asyncio.create_task(_consume_decoder_task(decoder)))
-
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
-        finally:
-            if ws is not None:
-                await ws.close()
-
-
-class ChunkedStreamWrapper(tts.ChunkedStream):
     def __init__(
         self,
         *,
         tts: TTS,
         input_text: str,
+        opts: _TTSOptions,
         conn_options: APIConnectOptions,
+        session: aiohttp.ClientSession,
     ) -> None:
-        super().__init__(
-            tts=tts,
-            input_text=input_text,
-            conn_options=conn_options,
-        )
-        self._stream: SynthesizeStream | None = None
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._opts, self._session = opts, session
 
     async def _run(self) -> None:
-        # Create the underlying stream
-        self._stream = self._tts.stream(conn_options=self._conn_options)
+        request_id = utils.shortuuid()
+        data = {
+            "input": self._input_text,
+            "voice_id": self._opts.voice_id,
+            "language": self._opts.language if is_given(self._opts.language) else None,
+            "model": self._opts.model if is_given(self._opts.model) else None,
+            "audio_format": _audio_format_from_encoding(self._opts.encoding),
+            "options": {
+                "loudness_normalization": self._opts.loudness_normalization
+                if is_given(self._opts.loudness_normalization)
+                else None,
+                "text_normalization": self._opts.text_normalization
+                if is_given(self._opts.text_normalization)
+                else None,
+            },
+        }
 
+        decoder = utils.codecs.AudioStreamDecoder(
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+        )
+
+        decode_task: asyncio.Task | None = None
         try:
-            # Push all text at once and end input
-            self._stream.push_text(self._input_text)
-            self._stream.end_input()
+            async with self._session.post(
+                _synthesize_url(self._opts),
+                headers=_get_auth_header(self._opts.token),
+                json=data,
+                timeout=self._conn_options.timeout,
+            ) as resp:
+                if not resp.content_type.startswith("audio/"):
+                    content = await resp.text()
+                    logger.error("speechify returned non-audio data: %s", content)
+                    return
 
-            # Forward all events from the stream
-            async for event in self._stream:
-                self._event_ch.send_nowait(event)
+                async def _decode_loop():
+                    try:
+                        async for bytes_data, _ in resp.content.iter_chunks():
+                            decoder.push(bytes_data)
+                    finally:
+                        decoder.end_input()
+
+                decode_task = asyncio.create_task(_decode_loop())
+                emitter = tts.SynthesizedAudioEmitter(
+                    event_ch=self._event_ch,
+                    request_id=request_id,
+                )
+                async for frame in decoder:
+                    emitter.push(frame)
+                emitter.flush()
+                await decode_task
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
         finally:
-            if self._stream is not None:
-                await self._stream.aclose()
+            if decode_task:
+                await utils.aio.gracefully_cancel(decode_task)
+            await decoder.aclose()
 
 
-@dataclass
-class _TextItem:
-    text: str
-    type: Literal["text"] = "text"
-    normalize_text: bool = False
-    """Expands dates, acronyms, abbreviations, units of measurements (e.g. 100km), and currencies. Costs 22.5ms of latency."""
-    speaker: TTSVoice = TTSDefaultVoiceId
-    # emotion
+def _synthesize_url(opts: _TTSOptions) -> str:
+    """Construct the Speechify stream URL."""
+    return f"{opts.base_url}/audio/stream"
 
 
-@dataclass
-class _Payload:
-    format: TTSEncoding
-    items: list[_TextItem] = field(default_factory=list)
+def _get_auth_header(token: str) -> dict[str, str]:
+    """Construct the authorization header with Bearer prefix."""
+    if token.startswith("Bearer "):
+        return {AUTHORIZATION_HEADER: token}
+    else:
+        return {AUTHORIZATION_HEADER: f"Bearer {token}"}
