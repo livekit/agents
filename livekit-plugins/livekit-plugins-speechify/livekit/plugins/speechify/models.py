@@ -19,7 +19,7 @@ TTSModels = Literal[
 ]
 
 TTSEncoding = Literal[
-    "mp3_24000_64kbps",
+    "mp3_24000",
     "wav_48000",
     "ogg_24000",
     "aac_24000",
