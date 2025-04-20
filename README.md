@@ -194,7 +194,7 @@ async def entrypoint(ctx: JobContext):
 </p>
 </td>
 <td width="50%">
-<h3>Multi-user push to talk</h3>
+<h3>🔄 Multi-user push to talk</h3>
 <p>Responds to multiple users in the room via push-to-talk.</p>
 <p>
 <a href="examples/voice_agents/push_to_talk.py">Code</a>
@@ -204,14 +204,14 @@ async def entrypoint(ctx: JobContext):
 
 <tr>
 <td width="50%">
-<h3>Background audio</h3>
+<h3>🎵 Background audio</h3>
 <p>Background ambient and thinking audio to improve realism.</p>
 <p>
 <a href="examples/voice_agents/background_audio.py">Code</a>
 </p>
 </td>
 <td width="50%">
-<h3>Dynamic tool creation</h3>
+<h3>🛠️ Dynamic tool creation</h3>
 <p>Creating function tools dynamically.</p>
 <p>
 <a href="examples/voice_agents/dynamic_tool_creation.py">Code</a>
@@ -228,7 +228,7 @@ async def entrypoint(ctx: JobContext):
 </p>
 </td>
 <td width="50%">
-<h3>Structured output</h3>
+<h3>📋 Structured output</h3>
 <p>Using structured output from LLM to guide TTS tone.</p>
 <p>
 <a href="examples/voice_agents/structured_output.py">Code</a>
@@ -238,14 +238,14 @@ async def entrypoint(ctx: JobContext):
 
 <tr>
 <td width="50%">
-<h3>Restaurant ordering and reservations</h3>
+<h3>🍽️ Restaurant ordering and reservations</h3>
 <p>Full example of an agent that handles calls for a restaurant.</p>
 <p>
 <a href="examples/full_examples/restaurant_agent/">Code</a>
 </p>
 </td>
 <td width="50%">
-<h3>Gemini Live vision</h3>
+<h3>👁️ Gemini Live vision</h3>
 <p>Full example (including iOS app) of Gemini Live agent that can see.</p>
 <p>
 <a href="https://github.com/livekit-examples/vision-demo">Code</a>
