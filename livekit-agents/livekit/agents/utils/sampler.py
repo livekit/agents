@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 class FrameSampler(ABC):
     @abstractmethod
-    def allow(self, frame) -> bool:
+    def allow(self) -> bool:
         """returns True if frame should be sent."""
         ...
 
@@ -17,7 +17,7 @@ class FpsSampler(FrameSampler):
             self._interval = 1.0 / fps
         self._last_time = 0.0
 
-    def allow(self, frame) -> bool:
+    def allow(self) -> bool:
         now = asyncio.get_event_loop().time()
         if now - self._last_time < self._interval:
             return False
