@@ -78,7 +78,6 @@ class TTS(tts.TTS):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
         """
-
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
