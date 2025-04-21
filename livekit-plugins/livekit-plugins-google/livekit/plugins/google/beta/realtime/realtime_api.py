@@ -5,6 +5,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Any
 
 from google import genai
 from google.genai.types import (
@@ -155,19 +156,14 @@ class RealtimeModel(llm.RealtimeModel):
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
         gcp_location = location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION")
         if vertexai:
-            if not gcp_project or not gcp_location:
-                raise ValueError(
-                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"  # noqa: E501
-                )
-            gemini_api_key = None  # VertexAI does not require an API key
-
+            if not (gcp_project and gcp_location):
+                raise ValueError("Project and location required for VertexAI")
+            gemini_api_key = None
         else:
+            if not gemini_api_key:
+                raise ValueError("API key required for Google API")
             gcp_project = None
             gcp_location = None
-            if not gemini_api_key:
-                raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
-                )
 
         if not is_given(input_audio_transcription):
             input_audio_transcription = None
@@ -192,6 +188,13 @@ class RealtimeModel(llm.RealtimeModel):
             instructions=instructions,
             input_audio_transcription=input_audio_transcription,
             output_audio_transcription=output_audio_transcription,
+        )
+
+        self._client = genai.Client(
+            api_key=self._opts.api_key,
+            vertexai=self._opts.vertexai,
+            project=self._opts.project,
+            location=self._opts.location,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -220,21 +223,15 @@ class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
+        self._client = realtime_model._client
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._gemini_tools: list[Tool] = []
-        self._client = genai.Client(
-            api_key=self._opts.api_key,
-            vertexai=self._opts.vertexai,
-            project=self._opts.project,
-            location=self._opts.location,
-        )
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
 
         self._current_generation: _ResponseGeneration | None = None
 
-        self._is_interrupted = False
         self._active_response_id = None
         self._session = None
         self._update_chat_ctx_lock = asyncio.Lock()
@@ -258,6 +255,11 @@ class RealtimeSession(llm.RealtimeSession):
                 finally:
                     self._session = None
 
+    def reset_gemini_session(self) -> None:
+        if self._session:
+            self._reconnect_event.set()
+            self._schedule_gemini_session_close()
+
     def update_options(
         self,
         *,
@@ -271,25 +273,37 @@ class RealtimeSession(llm.RealtimeSession):
         if is_given(temperature):
             self._opts.temperature = temperature
 
-        if self._session:
-            logger.warning("Updating options; triggering Gemini session reconnect.")
-            self._reconnect_event.set()
-            self._schedule_gemini_session_close()
+        self.reset_gemini_session()
 
     async def update_instructions(self, instructions: str) -> None:
         self._opts.instructions = instructions
-        if self._session:
-            logger.warning("Updating instructions; triggering Gemini session reconnect.")
-            self._reconnect_event.set()
-            self._schedule_gemini_session_close()
+        self.reset_gemini_session()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
-            self._chat_ctx = chat_ctx
-            turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
-            tool_results = get_tool_results_for_realtime(self._chat_ctx)
-            if turns:
-                self._msg_ch.send_nowait(LiveClientContent(turns=turns, turn_complete=False))
+            diff = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+            if diff.to_remove:
+                self._chat_ctx = chat_ctx
+                self.reset_gemini_session()
+
+            if diff.to_create:
+                new_items = []
+                for _, item_id in diff.to_create:
+                    item = chat_ctx.get_by_id(item_id)
+                    if item is not None:
+                        new_items.append(item)
+
+                if new_items:
+                    new_ctx = llm.ChatContext(items=new_items)
+                    turns, _ = to_chat_ctx(new_ctx, id(self), ignore_functions=True)
+                    if turns:
+                        self._msg_ch.send_nowait(
+                            LiveClientContent(turns=turns, turn_complete=False)
+                        )
+
+                self._chat_ctx = chat_ctx
+
+            tool_results = get_tool_results_for_realtime(chat_ctx)
             if tool_results:
                 self._msg_ch.send_nowait(tool_results)
 
@@ -378,30 +392,32 @@ class RealtimeSession(llm.RealtimeSession):
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
         while True:
-            config = LiveConnectConfig(
-                response_modalities=self._opts.response_modalities
-                if is_given(self._opts.response_modalities)
-                else [Modality.AUDIO],
-                generation_config=GenerationConfig(
-                    candidate_count=self._opts.candidate_count,
-                    temperature=self._opts.temperature
-                    if is_given(self._opts.temperature)
-                    else None,
-                    max_output_tokens=self._opts.max_output_tokens
-                    if is_given(self._opts.max_output_tokens)
-                    else None,
-                    top_p=self._opts.top_p if is_given(self._opts.top_p) else None,
-                    top_k=self._opts.top_k if is_given(self._opts.top_k) else None,
-                    presence_penalty=self._opts.presence_penalty
-                    if is_given(self._opts.presence_penalty)
-                    else None,
-                    frequency_penalty=self._opts.frequency_penalty
-                    if is_given(self._opts.frequency_penalty)
-                    else None,
-                ),
-                system_instruction=Content(parts=[Part(text=self._opts.instructions)])
+            gen_kwargs = _filter_not_given(
+                {
+                    "candidate_count": self._opts.candidate_count,
+                    "temperature": self._opts.temperature,
+                    "max_output_tokens": self._opts.max_output_tokens,
+                    "top_p": self._opts.top_p,
+                    "top_k": self._opts.top_k,
+                    "presence_penalty": self._opts.presence_penalty,
+                    "frequency_penalty": self._opts.frequency_penalty,
+                }
+            )
+            generation_config = GenerationConfig(**gen_kwargs)
+            sys_inst = (
+                Content(parts=[Part(text=self._opts.instructions)])
                 if is_given(self._opts.instructions)
-                else None,
+                else None
+            )
+            response_modalities = (
+                self._opts.response_modalities
+                if is_given(self._opts.response_modalities)
+                else [Modality.AUDIO]
+            )
+            config = LiveConnectConfig(
+                response_modalities=response_modalities,
+                generation_config=generation_config,
+                system_instruction=sys_inst,
                 speech_config=SpeechConfig(
                     voice_config=VoiceConfig(
                         prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
@@ -417,6 +433,15 @@ class RealtimeSession(llm.RealtimeSession):
             ) as session:
                 async with self._session_lock:
                     self._session = session
+
+                # for reconnect, send the updated chat context
+                if self._chat_ctx:
+                    turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
+                    if turns:
+                        await session.send(
+                            input=LiveClientContent(turns=turns, turn_complete=False),
+                            end_of_turn=False,
+                        )
 
                 @utils.log_exceptions(logger=logger)
                 async def _send_task():
@@ -469,7 +494,6 @@ class RealtimeSession(llm.RealtimeSession):
                     await utils.aio.cancel_and_wait(send_task, recv_task, reconnect_task)
 
     def _start_new_generation(self):
-        self._is_interrupted = False
         self._active_response_id = utils.shortuuid("gemini-turn-")
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
@@ -561,7 +585,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
         self._current_generation = None
-        self._is_interrupted = True
         self._active_response_id = None
 
     def _handle_input_speech_started(self):
@@ -571,13 +594,13 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._current_generation:
             return
         for fnc_call in tool_call.function_calls:
-            self._current_generation.function_ch.send_nowait(
-                llm.FunctionCall(
-                    call_id=fnc_call.id or "",
-                    name=fnc_call.name,
-                    arguments=json.dumps(fnc_call.args),
-                )
+            fnc_call = llm.FunctionCall(
+                call_id=fnc_call.id or "",
+                name=fnc_call.name,
+                arguments=json.dumps(fnc_call.args),
             )
+            self._current_generation.function_ch.send_nowait(fnc_call)
+            self._chat_ctx.items.append(fnc_call)
         self._finalize_response()
 
     def _handle_tool_call_cancellation(
@@ -602,10 +625,14 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
     def commit_audio(self) -> None:
-        raise NotImplementedError("commit_audio_buffer is not supported yet")
+        raise NotImplementedError("commit_audio is not supported yet")
 
     def clear_audio(self) -> None:
         raise NotImplementedError("clear_audio is not supported yet")
 
     def server_vad_enabled(self) -> bool:
         return True
+
+
+def _filter_not_given(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in kwargs.items() if is_given(v)}
