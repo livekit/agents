@@ -9,7 +9,7 @@ from dataclasses import asdict
 
 from livekit import rtc
 
-from ... import utils, wait_for_participant
+from ... import utils
 from ..io import AudioOutput, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
@@ -122,7 +122,7 @@ class DataStreamAudioReceiver(AudioReceiver):
 
     async def start(self) -> None:
         # wait for the target participant or first agent participant to join
-        self._remote_participant = await wait_for_participant(
+        self._remote_participant = await utils.wait_for_participant(
             room=self._room,
             identity=self._sender_identity,
             kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT if not self._sender_identity else None,
