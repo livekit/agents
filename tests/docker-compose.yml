@@ -62,7 +62,7 @@ services:
       - "texttospeech.googleapis.com:172.30.0.10"
       - "api.groq.com:172.30.0.10"
       - "api.neuphonic.com:172.30.0.10"
-      # - "api.openai.com:172.30.0.10"
+      - "api.openai.com:172.30.0.10"
       - "api.play.ht:172.30.0.10"
       - "f.cluster.resemble.ai:172.30.0.10"
       - "users.rime.ai:172.30.0.10"
