@@ -39,7 +39,7 @@ class MyAgent(Agent):
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        self.session.generate_reply(instructions="greet the user and ask about their day")
+        self.session.generate_reply()
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
