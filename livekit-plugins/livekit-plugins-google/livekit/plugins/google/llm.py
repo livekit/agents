@@ -53,7 +53,7 @@ class _LLMOptions:
     top_k: NotGivenOr[float]
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
-    thinking_budget: NotGivenOr[int]
+    thinking_config: NotGivenOr[types.ThinkingConfig]
 
 
 class LLM(llm.LLM):
@@ -71,7 +71,7 @@ class LLM(llm.LLM):
         top_k: NotGivenOr[float] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
-        thinking_budget: NotGivenOr[int] = NOT_GIVEN,
+        thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> None:
         """
@@ -96,7 +96,7 @@ class LLM(llm.LLM):
             top_k (int, optional): The top-k sampling value for response generation. Defaults to None.
             presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
-            thinking_budget (int, optional): The number of tokens the model can use for its thinking process (Check supported models). Defaults to None.
+            thinking_config (google.genai.types.ThinkingConfig, optional): "Thinking Process" configurations (Check supported models). Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
         """  # noqa: E501
         super().__init__()
@@ -136,7 +136,7 @@ class LLM(llm.LLM):
             top_k=top_k,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
-            thinking_budget=thinking_budget,
+            thinking_config=thinking_config,
         )
         self._client = genai.Client(
             api_key=gemini_api_key,
@@ -215,8 +215,8 @@ class LLM(llm.LLM):
             extra["presence_penalty"] = self._opts.presence_penalty
         if is_given(self._opts.frequency_penalty):
             extra["frequency_penalty"] = self._opts.frequency_penalty
-        if is_given(self._opts.thinking_budget):
-            extra["thinking_budget"] = self._opts.thinking_budget
+        if is_given(self._opts.thinking_config):
+            extra["thinking_config"] = self._opts.thinking_config
 
         return LLMStream(
             self,
@@ -258,10 +258,6 @@ class LLMStream(llm.LLMStream):
                 self._extra_kwargs["tools"] = [
                     types.Tool(function_declarations=function_declarations)
                 ]
-            if "thinking_budget" in self._extra_kwargs:
-                self._extra_kwargs["thinking_config"] = types.ThinkingConfig(
-                    thinking_budget=self._extra_kwargs["thinking_budget"])
-                del self._extra_kwargs["thinking_budget"]
 
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
