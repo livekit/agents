@@ -20,7 +20,14 @@ from ._exceptions import (
     APITimeoutError,
     AssignmentTimeoutError,
 )
-from .job import AutoSubscribe, JobContext, JobExecutorType, JobProcess, JobRequest, get_job_context
+from .job import (
+    AutoSubscribe,
+    JobContext,
+    JobExecutorType,
+    JobProcess,
+    JobRequest,
+    get_job_context,
+)
 from .llm.chat_context import (
     ChatContent,
     ChatContext,

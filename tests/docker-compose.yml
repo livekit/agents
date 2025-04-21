@@ -57,6 +57,7 @@ services:
       - "api.cartesia.ai:172.30.0.10"
       - "api.deepgram.com:172.30.0.10"
       - "api.elevenlabs.io:172.30.0.10"
+      - "api.sws.speechify.com:172.30.0.10"
       - "texttospeech.googleapis.com:172.30.0.10"
       - "api.groq.com:172.30.0.10"
       - "api.neuphonic.com:172.30.0.10"

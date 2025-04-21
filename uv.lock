@@ -31,6 +31,7 @@ members = [
     "livekit-plugins-resemble",
     "livekit-plugins-rime",
     "livekit-plugins-silero",
+    "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
     "livekit-plugins-turn-detector",
 ]
@@ -1603,6 +1604,16 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", specifier = ">=1.18" },
 ]
+
+[[package]]
+name = "livekit-plugins-speechify"
+source = { editable = "livekit-plugins/livekit-plugins-speechify" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-speechmatics"

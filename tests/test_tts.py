@@ -24,6 +24,7 @@ from livekit.plugins import (
     playai,
     resemble,
     rime,
+    speechify,
 )
 
 from .toxic_proxy import Proxy, Toxiproxy
@@ -146,6 +147,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "users.rime.ai:443",
         },
         id="rime",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": speechify.TTS(),
+            "proxy-upstream": "api.sws.speechify.com:443",
+        },
+        id="speechify",
     ),
 ]
 

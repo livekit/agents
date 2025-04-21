@@ -88,10 +88,6 @@ class DataStreamAudioOutput(AudioOutput):
         task.add_done_callback(self._tasks.discard)
 
         self._stream_writer = None
-        logger.debug(
-            "data stream audio sink flushed",
-            extra={"pushed_duration": self._pushed_duration},
-        )
 
     def clear_buffer(self) -> None:
         task = asyncio.create_task(
@@ -125,8 +121,12 @@ class DataStreamAudioReceiver(AudioReceiver):
         self._current_reader_cleared: bool = False
 
     async def start(self) -> None:
-        # wait for the first agent participant to join
-        self._remote_participant = await self._wait_for_participant(identity=self._sender_identity)
+        # wait for the target participant or first agent participant to join
+        self._remote_participant = await utils.wait_for_participant(
+            room=self._room,
+            identity=self._sender_identity,
+            kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT if not self._sender_identity else None,
+        )
 
         def _handle_clear_buffer(data: rtc.RpcInvocationData) -> str:
             assert self._remote_participant is not None
@@ -207,27 +207,3 @@ class DataStreamAudioReceiver(AudioReceiver):
                 yield AudioSegmentEnd()
 
             self._stream_reader_changed.clear()
-
-    async def _wait_for_participant(self, identity: str | None = None) -> rtc.RemoteParticipant:
-        """Wait for a participant to join the room and return it"""
-
-        def _is_matching_participant(participant: rtc.RemoteParticipant) -> bool:
-            if identity is not None and participant.identity != identity:
-                return False
-            return participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
-
-        for participant in self._room.remote_participants.values():
-            if _is_matching_participant(participant):
-                return participant
-
-        fut = asyncio.Future[rtc.RemoteParticipant]()
-
-        def _handle_participant_connected(participant: rtc.RemoteParticipant) -> None:
-            if _is_matching_participant(participant):
-                fut.set_result(participant)
-
-        self._room.on("participant_connected", _handle_participant_connected)
-        try:
-            return await fut
-        finally:
-            self._room.off("participant_connected", _handle_participant_connected)

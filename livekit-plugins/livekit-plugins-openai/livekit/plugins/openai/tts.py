@@ -128,7 +128,7 @@ class TTS(tts.TTS):
             self._opts.instructions = instructions
 
     @staticmethod
-    def create_azure_client(
+    def with_azure(
         *,
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
@@ -143,8 +143,12 @@ class TTS(tts.TTS):
         organization: str | None = None,
         project: str | None = None,
         base_url: str | None = None,
+        response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
     ) -> TTS:
         """
+        Create a new instance of Azure OpenAI TTS.
+
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
         - `api_key` from `AZURE_OPENAI_API_KEY`
         - `organization` from `OPENAI_ORG_ID`
@@ -165,6 +169,9 @@ class TTS(tts.TTS):
             organization=organization,
             project=project,
             base_url=base_url,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
         return TTS(
@@ -173,6 +180,7 @@ class TTS(tts.TTS):
             speed=speed,
             instructions=instructions,
             client=azure_client,
+            response_format=response_format,
         )
 
     def synthesize(
