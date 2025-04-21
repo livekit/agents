@@ -51,9 +51,10 @@ def _audio_format_from_encoding(encoding: TTSEncoding) -> str:
     return split[0]
 
 
-DEFAULT_VOICE_ID = "cliff"
+DEFAULT_VOICE_ID = "oliver"
 API_BASE_URL_V1 = "https://api.sws.speechify.com/v1"
 AUTHORIZATION_HEADER = "Authorization"
+CALLER_HEADER = "x-caller"
 
 
 @dataclass
@@ -152,7 +153,7 @@ class TTS(tts.TTS):
     async def list_voices(self) -> list[Voice]:
         async with self._ensure_session().get(
             f"{self._opts.base_url}/voices",
-            headers=_get_auth_header(self._opts.token),
+            headers=_get_headers(self._opts.token),
         ) as resp:
             return await resp.json()
 
@@ -239,7 +240,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._session.post(
                 _synthesize_url(self._opts),
-                headers=_get_auth_header(self._opts.token),
+                headers=_get_headers(self._opts.token),
                 json=data,
                 timeout=self._conn_options.timeout,
             ) as resp:
@@ -286,9 +287,8 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     return f"{opts.base_url}/audio/stream"
 
 
-def _get_auth_header(token: str) -> dict[str, str]:
-    """Construct the authorization header with Bearer prefix."""
-    if token.startswith("Bearer "):
-        return {AUTHORIZATION_HEADER: token}
-    else:
-        return {AUTHORIZATION_HEADER: f"Bearer {token}"}
+def _get_headers(token: str) -> dict[str, str]:
+    """Construct the headers for the Speechify API."""
+    headers = {AUTHORIZATION_HEADER: f"Bearer {token}" if not token.startswith("Bearer ") else token}
+    headers[CALLER_HEADER] = "livekit"
+    return headers
