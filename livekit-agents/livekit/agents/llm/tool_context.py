@@ -29,7 +29,7 @@ from typing import (
     runtime_checkable,
 )
 
-from typing_extensions import Required, TypedDict, TypeGuard
+from typing_extensions import Required, TypedDict, TypeGuard, NotRequired
 
 
 # Used by ToolChoice
@@ -83,12 +83,42 @@ class _FunctionToolInfo:
 
 @runtime_checkable
 class FunctionTool(Protocol):
-    __livekit_agents_ai_callable: _FunctionToolInfo
+    __livekit_tool_info: _FunctionToolInfo
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class RawFunctionDescription(TypedDict):
+    name: str
+    description: NotRequired[str]
+    parameters: dict[str, object]
+
+
+@dataclass
+class _RawFunctionToolInfo:
+    name: str
+    raw: dict
+
+
+@runtime_checkable
+class RawFunctionTool(Protocol):
+    __livekit_raw_tool_info: _RawFunctionToolInfo
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
+Raw_F = TypeVar("Raw_F", bound=Callable[[dict], Awaitable[Any]])
+
+
+@overload
+def function_tool(f: Raw_F, *, raw: RawFunctionDescription | dict) -> RawFunctionTool: ...
+
+
+@overload
+def function_tool(
+    f: None = None, *, raw: RawFunctionDescription | dict
+) -> Callable[[Raw_F], RawFunctionTool]: ...
 
 
 @overload
@@ -104,18 +134,30 @@ def function_tool(
 
 
 def function_tool(
-    f: F | None = None, *, name: str | None = None, description: str | None = None
-) -> FunctionTool | Callable[[F], FunctionTool]:
-    def deco(func: F) -> FunctionTool:
-        from docstring_parser import parse_from_object
+    f: F | Raw_F | None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    raw: RawFunctionDescription | dict | None = None,
+) -> FunctionTool | RawFunctionTool | Callable[[F | Raw_F], FunctionTool | RawFunctionTool]:
+    def deco(func: F | Raw_F) -> RawFunctionTool | FunctionTool:
+        if raw is not None:
+            if not raw.get("name") or not raw.get("parameters"):
+                raise ValueError("raw function description must contain a name and parameters key")
 
-        docstring = parse_from_object(func)
-        info = _FunctionToolInfo(
-            name=name or func.__name__,
-            description=description or docstring.description,
-        )
-        setattr(func, "__livekit_agents_ai_callable", info)
-        return cast(FunctionTool, func)
+            info = _RawFunctionToolInfo(raw={**raw}, name=raw["name"])
+            setattr(func, "__livekit_raw_tool_info", info)
+            return cast(RawFunctionTool, func)
+        else:
+            from docstring_parser import parse_from_object
+
+            docstring = parse_from_object(func)
+            info = _FunctionToolInfo(
+                name=name or func.__name__,
+                description=description or docstring.description,
+            )
+            setattr(func, "__livekit_tool_info", info)
+            return cast(FunctionTool, func)
 
     if f is not None:
         return deco(f)
@@ -124,17 +166,25 @@ def function_tool(
 
 
 def is_function_tool(f: Callable) -> TypeGuard[FunctionTool]:
-    return hasattr(f, "__livekit_agents_ai_callable")
+    return hasattr(f, "__livekit_tool_info")
 
 
 def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
-    return getattr(f, "__livekit_agents_ai_callable")
+    return getattr(f, "__livekit_tool_info")
 
 
-def find_function_tools(cls_or_obj: Any) -> list[FunctionTool]:
-    methods: list[FunctionTool] = []
+def is_raw_function_tool(f: Callable) -> TypeGuard[RawFunctionTool]:
+    return hasattr(f, "__livekit_raw_tool_info")
+
+
+def get_raw_function_info(f: RawFunctionTool) -> _RawFunctionToolInfo:
+    return getattr(f, "__livekit_raw_tool_info")
+
+
+def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
+    methods: list[FunctionTool | RawFunctionTool] = []
     for _, member in inspect.getmembers(cls_or_obj):
-        if is_function_tool(member):
+        if is_function_tool(member) or is_raw_function_tool(member):
             methods.append(member)
     return methods
 
@@ -142,7 +192,7 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool]:
 class ToolContext:
     """Stateless container for a set of AI functions"""
 
-    def __init__(self, tools: list[FunctionTool]) -> None:
+    def __init__(self, tools: list[FunctionTool | RawFunctionTool]) -> None:
         self.update_tools(tools)
 
     @classmethod
@@ -150,18 +200,25 @@ class ToolContext:
         return cls([])
 
     @property
-    def function_tools(self) -> dict[str, FunctionTool]:
+    def function_tools(self) -> dict[str, FunctionTool | RawFunctionTool]:
         return self._tools_map.copy()
 
-    def update_tools(self, tools: list[FunctionTool]) -> None:
-        self._tools = tools
+    def update_tools(self, tools: list[FunctionTool | RawFunctionTool]) -> None:
+        self._tools = tools.copy()
 
         for method in find_function_tools(self):
             tools.append(method)
 
         self._tools_map = {}
         for tool in tools:
-            info = get_function_info(tool)
+            if is_raw_function_tool(tool):
+                info = get_raw_function_info(tool)
+            elif is_function_tool(tool):
+                info = get_function_info(tool)
+            else:
+                # TODO(theomonnom): MCP servers & other tools
+                raise ValueError(f"unknown tool type: {type(tool)}")
+
             if info.name in self._tools_map:
                 raise ValueError(f"duplicate function name: {info.name}")
 
