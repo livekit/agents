@@ -12,8 +12,8 @@ from livekit import rtc
 from livekit.agents._exceptions import APIError
 
 from ..types import NOT_GIVEN, NotGivenOr
-from .chat_context import ChatContext, FunctionCall, RawFunctionTool
-from .tool_context import FunctionTool, ToolChoice, ToolContext
+from .chat_context import ChatContext, FunctionCall
+from .tool_context import FunctionTool, RawFunctionTool, ToolChoice, ToolContext
 
 
 @dataclass

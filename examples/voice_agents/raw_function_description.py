@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
-from livekit.plugins import openai
+from livekit.plugins import openai, silero  # noqa: F401
 
 # This demo defines an agent using a raw function tool to open predefined gates via enum input.
 # When using raw function tools, compatibility across LLM providers is not guaranteed,
@@ -53,7 +53,13 @@ class RawFunctionAgent(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    session = AgentSession(llm=openai.realtime.RealtimeModel())
+    session = AgentSession(
+        # stt=openai.STT(),
+        # llm=openai.LLM(),
+        # tts=openai.TTS(),
+        # vad=silero.VAD.load(),
+        llm=openai.realtime.RealtimeModel()
+    )
     await session.start(RawFunctionAgent(), room=ctx.room)
 
 
