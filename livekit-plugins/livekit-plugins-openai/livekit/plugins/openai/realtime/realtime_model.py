@@ -900,35 +900,6 @@ class RealtimeSession(
             handle.timeout_start()
         return handle
 
-    async def _recover_from_text_response(
-        self, *, item_id: str, response_handle: _CreateResponseHandle | None
-    ) -> None:
-        """Recover from text-only response to audio mode.
-
-        When chat history is loaded, OpenAI Realtime API may respond with text only.
-        This method recovers by:
-        1. Deleting the text response
-        2. Creating an empty user audio message
-        3. Requesting a new response to trigger audio mode
-        """
-
-        # remove the text item
-        chat_ctx = self.chat_ctx
-        idx = chat_ctx.index_by_id(item_id)
-        if idx is not None:
-            chat_ctx.items.pop(idx)
-        await self.update_chat_ctx(chat_ctx, _add_mock_audio=True)
-
-        if response_handle and response_handle.done_fut.done():
-            if response_handle.done_fut.exception() is not None:
-                logger.error("generate_reply timed out, cancel recovery")
-            return
-
-        self._create_response(
-            old_handle=response_handle,
-            user_initiated=response_handle is not None,
-        )
-
     def _emit_generation_event(self, response_id: str) -> None:
         # called when the generation is a function call or a audio message
         generation_ev = llm.GenerationCreatedEvent(
@@ -1025,38 +996,69 @@ class RealtimeSession(
                 logger.warning("received text-only response from realtime API")
 
     def _handle_response_content_part_done(self, event: ResponseContentPartDoneEvent) -> None:
+        if event.part.type != "text":
+            return
+
+        # try to recover from text-only response on response.content_part_done event
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item_id) is not None, "item_id is None"
         assert (response_id := event.response_id) is not None, "response_id is None"
 
-        # try to recover from text-only response on response.content_part_done event
-        if event.part.type == "text":
-            if self._text_mode_recovery_retries >= 5:
-                logger.error(
-                    "failed to recover from text-only response",
-                    extra={"retried_times": self._text_mode_recovery_retries},
-                )
-                self._text_mode_recovery_retries = 0
-                return
+        async def _retry_generation(
+            item_id: str, response_handle: _CreateResponseHandle | None
+        ) -> None:
+            """Recover from text-only response to audio mode.
 
-            handle = self._response_created_futures.pop(response_id, None)
-            if handle and handle.done_fut.done():
-                if handle.done_fut.exception() is not None:
+            When chat history is loaded, OpenAI Realtime API may respond with text only.
+            This method recovers by:
+            1. Deleting the text response
+            2. Creating an empty user audio message
+            3. Requesting a new response to trigger audio mode
+            """
+
+            # remove the text item
+            chat_ctx = self.chat_ctx
+            idx = chat_ctx.index_by_id(item_id)
+            if idx is not None:
+                chat_ctx.items.pop(idx)
+            await self.update_chat_ctx(chat_ctx, _add_mock_audio=True)
+
+            if response_handle and response_handle.done_fut.done():
+                if response_handle.done_fut.exception() is not None:
                     logger.error("generate_reply timed out, cancel recovery")
-                self._text_mode_recovery_retries = 0
                 return
 
-            self._text_mode_recovery_retries += 1
-            logger.warning(
-                "trying to recover from text-only response",
-                extra={"retries": self._text_mode_recovery_retries},
+            self._create_response(
+                old_handle=response_handle,
+                user_initiated=response_handle is not None,
             )
 
-            if self._text_mode_recovery_atask and not self._text_mode_recovery_atask.done():
-                self._text_mode_recovery_atask.cancel()
-            self._text_mode_recovery_atask = asyncio.create_task(
-                self._recover_from_text_response(item_id=item_id, response_handle=handle)
+        if self._text_mode_recovery_retries >= 5:
+            logger.error(
+                "failed to recover from text-only response",
+                extra={"retried_times": self._text_mode_recovery_retries},
             )
+            self._text_mode_recovery_retries = 0
+            return
+
+        handle = self._response_created_futures.pop(response_id, None)
+        if handle and handle.done_fut.done():
+            if handle.done_fut.exception() is not None:
+                logger.error("generate_reply timed out, cancel recovery")
+            self._text_mode_recovery_retries = 0
+            return
+
+        self._text_mode_recovery_retries += 1
+        logger.warning(
+            "trying to recover from text-only response",
+            extra={"retries": self._text_mode_recovery_retries},
+        )
+
+        if self._text_mode_recovery_atask and not self._text_mode_recovery_atask.done():
+            self._text_mode_recovery_atask.cancel()
+        self._text_mode_recovery_atask = asyncio.create_task(
+            _retry_generation(item_id=item_id, response_handle=handle)
+        )
 
     def _handle_conversion_item_created(self, event: ConversationItemCreatedEvent) -> None:
         assert event.item.id is not None, "item.id is None"
