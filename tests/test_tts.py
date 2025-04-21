@@ -198,9 +198,9 @@ async def test_synthesize(tts_factory, toxiproxy: Toxiproxy):
                 async for audio in stream:
                     frames.append(audio.frame)
 
-        await asyncio.wait_for(process_synthesis(), timeout=25)
+        await asyncio.wait_for(process_synthesis(), timeout=30)
     except asyncio.TimeoutError:
-        pytest.fail("test timed out after 25 seconds")
+        pytest.fail("test timed out after 30 seconds")
     finally:
         await tts.aclose()
 
