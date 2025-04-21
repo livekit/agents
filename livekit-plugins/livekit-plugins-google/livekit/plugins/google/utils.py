@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from copy import deepcopy
@@ -8,12 +9,33 @@ from typing import Any
 from pydantic import TypeAdapter
 
 from google.genai import types
+from livekit import rtc
 from livekit.agents import llm
 from livekit.agents.llm import FunctionTool, utils as llm_utils
+from livekit.agents.utils.sampler import FrameSampler
 
 from .log import logger
 
-__all__ = ["to_chat_ctx", "to_fnc_ctx"]
+__all__ = [
+    "FpsSampler",
+    "to_chat_ctx",
+    "to_fnc_ctx",
+    "get_tool_results_for_realtime",
+    "to_response_format",
+]
+
+
+class FpsSampler(FrameSampler):
+    def __init__(self, fps: float):
+        self._interval = 1.0 / fps if fps > 0 else float("inf")
+        self._last_time = 0.0
+
+    def allow(self, _frame: rtc.VideoFrame) -> bool:
+        now = asyncio.get_event_loop().time()
+        if now - self._last_time < self._interval:
+            return False
+        self._last_time = now
+        return True
 
 
 def to_fnc_ctx(fncs: list[FunctionTool]) -> list[types.FunctionDeclaration]:
@@ -120,7 +142,7 @@ def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
 
 
 def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
-    fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
+    fnc = llm_utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
     json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
     return types.FunctionDeclaration(
         name=fnc["name"],
