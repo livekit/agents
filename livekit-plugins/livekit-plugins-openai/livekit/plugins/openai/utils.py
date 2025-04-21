@@ -10,8 +10,8 @@ from typing import Any, Callable, Union
 from livekit.agents import llm
 from livekit.agents.llm.tool_context import (
     get_raw_function_info,
-    is_raw_function_tool,
     is_function_tool,
+    is_raw_function_tool,
 )
 from livekit.agents.log import logger
 from openai.types.chat import (
@@ -39,7 +39,7 @@ def to_fnc_ctx(
             tools.append(
                 {
                     "type": "function",
-                    "function": info.raw,  # type: ignore
+                    "function": info.raw_schema,  # type: ignore
                 }
             )
         elif is_function_tool(fnc):

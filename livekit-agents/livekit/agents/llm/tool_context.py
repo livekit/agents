@@ -29,7 +29,7 @@ from typing import (
     runtime_checkable,
 )
 
-from typing_extensions import Required, TypedDict, TypeGuard, NotRequired
+from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
 
 
 # Used by ToolChoice
@@ -97,7 +97,7 @@ class RawFunctionDescription(TypedDict):
 @dataclass
 class _RawFunctionToolInfo:
     name: str
-    raw: dict
+    raw_schema: dict
 
 
 @runtime_checkable
@@ -108,16 +108,16 @@ class RawFunctionTool(Protocol):
 
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
-Raw_F = TypeVar("Raw_F", bound=Callable[[dict], Awaitable[Any]])
+Raw_F = TypeVar("Raw_F", bound=Callable[..., Awaitable[Any]])
 
 
 @overload
-def function_tool(f: Raw_F, *, raw: RawFunctionDescription | dict) -> RawFunctionTool: ...
+def function_tool(f: Raw_F, *, raw_schema: RawFunctionDescription | dict) -> RawFunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, raw: RawFunctionDescription | dict
+    f: None = None, *, raw_schema: RawFunctionDescription | dict
 ) -> Callable[[Raw_F], RawFunctionTool]: ...
 
 
@@ -138,14 +138,14 @@ def function_tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    raw: RawFunctionDescription | dict | None = None,
+    raw_schema: RawFunctionDescription | dict | None = None,
 ) -> FunctionTool | RawFunctionTool | Callable[[F | Raw_F], FunctionTool | RawFunctionTool]:
     def deco(func: F | Raw_F) -> RawFunctionTool | FunctionTool:
-        if raw is not None:
-            if not raw.get("name") or not raw.get("parameters"):
+        if raw_schema is not None:
+            if not raw_schema.get("name") or not raw_schema.get("parameters"):
                 raise ValueError("raw function description must contain a name and parameters key")
 
-            info = _RawFunctionToolInfo(raw={**raw}, name=raw["name"])
+            info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
             setattr(func, "__livekit_raw_tool_info", info)
             return cast(RawFunctionTool, func)
         else:
