@@ -24,9 +24,10 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(voice="alloy"),
+        llm=openai.realtime.RealtimeModel(voice="ash"),
     )
 
+    logger.info("staring bithuman runtime")
     bithuman_avatar = bithuman.AvatarSession(
         model_path=os.getenv("BITHUMAN_MODEL_PATH"),
         api_secret=os.getenv("BITHUMAN_API_SECRET"),
@@ -34,7 +35,7 @@ async def entrypoint(ctx: JobContext):
     await bithuman_avatar.start(session, room=ctx.room)
 
     await session.start(
-        agent=Agent(instructions="Talk to me!"),
+        agent=Agent(instructions="Your are Einstein, talk to me!"),
         room=ctx.room,
         # audio is forwarded to the avatar, so we disable room audio output
         room_output_options=RoomOutputOptions(audio_enabled=False),

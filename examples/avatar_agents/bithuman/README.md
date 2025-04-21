@@ -31,7 +31,7 @@ BITHUMAN_MODEL_PATH=/path/to/model.imx
 
 ## Running the Example
 
-To run the agent with a BitHuman avatar:
+To run the agent with a BitHuman avatar (the first time loading on MacOS may take a while for warmup):
 
 ```bash
 python examples/avatar_agents/bithuman/agent_worker.py dev
