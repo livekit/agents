@@ -50,6 +50,7 @@ services:
       - AWS_SECRET_ACCESS_KEY
       - NEUPHONIC_API_KEY
       - RESEMBLE_API_KEY
+      - SPEECHIFY_API_KEY
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"

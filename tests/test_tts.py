@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import os
 import pathlib
+import ssl
 import time
 
+import aiohttp
 import pytest
 from dotenv import load_dotenv
 
@@ -46,18 +48,32 @@ def setup_oai_proxy(toxiproxy: Toxiproxy) -> Proxy:
 
 async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, num_channels: int):
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
-    import httpx
-    import openai as openai_client
 
-    # don't verify ssl because of the proxy base_url being different
-    client = openai_client.AsyncClient(
-        http_client=httpx.AsyncClient(verify=False, base_url="https://toxiproxy:500/v1")
-    )
+    data = rtc.combine_audio_frames(frames).to_wav_bytes()
+    form = aiohttp.FormData()
+    form.add_field("file", data, filename="file.wav", content_type="audio/wav")
+    form.add_field("model", "whisper-1")
+    form.add_field("response_format", "verbose_json")
 
-    whisper_stt = openai.STT(model="whisper-1", client=client)
-    res = await whisper_stt.recognize(buffer=frames)
-    assert wer(res.alternatives[0].text, TEST_AUDIO_SYNTHESIZE) <= WER_THRESHOLD
+    ssl_ctx = ssl.create_default_context()
+    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
 
+    async with aiohttp.ClientSession(
+        connector=connector, timeout=aiohttp.ClientTimeout(total=30)
+    ) as session:
+        async with session.post(
+            "https://toxiproxy:500/v1/audio/transcriptions",
+            data=form,
+            headers={
+                "Host": "api.openai.com",
+                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+            },
+            ssl=ssl_ctx,
+            server_hostname="api.openai.com",
+        ) as resp:
+            result = await resp.json()
+
+    assert wer(result["text"], TEST_AUDIO_SYNTHESIZE) <= WER_THRESHOLD
     combined_frame = rtc.combine_audio_frames(frames)
     assert combined_frame.sample_rate == sample_rate, "sample rate should be the same"
     assert combined_frame.num_channels == num_channels, "num channels should be the same"
