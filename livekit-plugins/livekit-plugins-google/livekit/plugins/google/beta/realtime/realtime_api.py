@@ -357,10 +357,10 @@ class RealtimeSession(llm.RealtimeSession):
         return fut
 
     def interrupt(self) -> None:
-        logger.warning("interrupt() - no direct cancellation in Gemini")
+        pass
 
     def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
-        logger.warning(f"truncate(...) called for {message_id}, ignoring for Gemini")
+        pass
 
     async def aclose(self) -> None:
         self._msg_ch.close()
@@ -543,8 +543,11 @@ class RealtimeSession(llm.RealtimeSession):
         output_transcription = server_content.output_transcription
         if output_transcription and output_transcription.text:
             item_generation.text_ch.send_nowait(output_transcription.text)
+        if server_content.interrupted:
+            self._finalize_response()
+            self._handle_input_speech_started()
 
-        if server_content.interrupted or server_content.turn_complete:
+        if server_content.turn_complete:
             self._finalize_response()
 
     def _finalize_response(self) -> None:
@@ -560,7 +563,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._current_generation = None
         self._is_interrupted = True
         self._active_response_id = None
-        self.emit("agent_speech_stopped")
+
+    def _handle_input_speech_started(self):
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_tool_calls(self, tool_call: LiveServerToolCall):
         if not self._current_generation:

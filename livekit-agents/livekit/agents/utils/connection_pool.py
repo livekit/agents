@@ -76,7 +76,7 @@ class ConnectionPool(Generic[T]):
         conn = await self.get()
         try:
             yield conn
-        except Exception:
+        except BaseException:
             self.remove(conn)
             raise
         else:
