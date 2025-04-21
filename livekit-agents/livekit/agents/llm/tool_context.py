@@ -89,6 +89,13 @@ class FunctionTool(Protocol):
 
 
 class RawFunctionDescription(TypedDict):
+    """
+    Represents the raw function schema format expected by the OpenAI function calling API.
+
+    This structure is a direct mapping to OpenAI's function definition format used in:
+    https://platform.openai.com/docs/guides/function-calling?api-mode=responses
+    """
+
     name: str
     description: NotRequired[str]
     parameters: dict[str, object]
