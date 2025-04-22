@@ -25,7 +25,13 @@ from livekit.agents import llm, utils
 from ..log import logger
 from . import _strict
 from .chat_context import ChatContext
-from .tool_context import FunctionTool, get_function_info
+from .tool_context import (
+    FunctionTool,
+    RawFunctionTool,
+    get_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -315,7 +321,7 @@ def function_arguments_to_pydantic_model(func: Callable) -> type[BaseModel]:
 
 def prepare_function_arguments(
     *,
-    fnc: FunctionTool,
+    fnc: FunctionTool | RawFunctionTool,
     json_arguments: str,  # raw function output from the LLM
     call_ctx: RunContext | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
@@ -328,26 +334,38 @@ def prepare_function_arguments(
     type_hints = get_type_hints(fnc, include_extras=True)
     args_dict = from_json(json_arguments)
 
-    model_type = function_arguments_to_pydantic_model(fnc)
+    if is_function_tool(fnc):
+        model_type = function_arguments_to_pydantic_model(fnc)
 
-    # Function arguments with default values are treated as optional
-    # when converted to strict LLM function descriptions. (e.g., we convert default
-    # parameters to type: ["string", "null"]).
-    # The following make sure to use the default value when we receive None.
-    # (Only if the type can't be Optional)
-    for param_name, param in signature.parameters.items():
-        type_hint = type_hints[param_name]
-        if param_name in args_dict and args_dict[param_name] is None:
-            if not _is_optional_type(type_hint) and param.default is not inspect.Parameter.empty:
-                args_dict[param_name] = param.default
-            else:
-                raise ValidationError(
-                    f"Received None for required parameter '{param_name} ;"
-                    "this argument cannot be None and no default is available."
-                )
+        # Function arguments with default values are treated as optional
+        # when converted to strict LLM function descriptions. (e.g., we convert default
+        # parameters to type: ["string", "null"]).
+        # The following make sure to use the default value when we receive None.
+        # (Only if the type can't be Optional)
+        for param_name, param in signature.parameters.items():
+            type_hint = type_hints[param_name]
+            if param_name in args_dict and args_dict[param_name] is None:
+                if (
+                    not _is_optional_type(type_hint)
+                    and param.default is not inspect.Parameter.empty
+                ):
+                    args_dict[param_name] = param.default
+                else:
+                    raise ValidationError(
+                        f"Received None for required parameter '{param_name} ;"
+                        "this argument cannot be None and no default is available."
+                    )
 
-    model = model_type.model_validate(args_dict)  # can raise ValidationError
-    raw_fields = _shallow_model_dump(model)
+        model = model_type.model_validate(args_dict)  # can raise ValidationError
+        raw_fields = _shallow_model_dump(model)
+    elif is_raw_function_tool(fnc):
+        # e.g async def open_gate(self, raw_arguments: dict[str, object]):
+        # raw_arguments is required when using raw function tools
+        raw_fields = {
+            "raw_arguments": args_dict,
+        }
+    else:
+        raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
     # inject RunContext if needed
     context_dict = {}
