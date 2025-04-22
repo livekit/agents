@@ -6,7 +6,7 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import Field
 
-from livekit.agents import JobContext, WorkerOptions, cli, llm
+from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, RunContext
 from livekit.agents.voice.room_io import RoomInputOptions
@@ -113,12 +113,7 @@ class BaseAgent(Agent):
         chat_ctx = self.chat_ctx.copy()
 
         # add the previous agent's chat history to the current agent
-        llm_model = self.llm or self.session.llm
-        if isinstance(userdata.prev_agent, Agent) and not isinstance(llm_model, llm.RealtimeModel):
-            # only add chat history for non-realtime models for now
-            # OpenAI realtime model may response in text mode when text chat context loaded
-            # https://community.openai.com/t/trouble-loading-previous-messages-with-realtime-api
-
+        if isinstance(userdata.prev_agent, Agent):
             truncated_chat_ctx = userdata.prev_agent.chat_ctx.copy(
                 exclude_instructions=True, exclude_function_call=False
             ).truncate(max_items=6)
@@ -128,7 +123,7 @@ class BaseAgent(Agent):
 
         # add an instructions including the user data as assistant message
         chat_ctx.add_message(
-            role="assistant",
+            role="system",  # role=system works for OpenAI's LLM and Realtime API
             content=f"You are {agent_name} agent. Current user data is {userdata.summarize()}",
         )
         await self.update_chat_ctx(chat_ctx)
@@ -316,7 +311,7 @@ async def entrypoint(ctx: JobContext):
             "checkout": Checkout(menu),
         }
     )
-    agent = AgentSession[UserData](
+    session = AgentSession[UserData](
         userdata=userdata,
         stt=deepgram.STT(),
         llm=openai.LLM(),
@@ -327,7 +322,7 @@ async def entrypoint(ctx: JobContext):
         # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 
-    await agent.start(
+    await session.start(
         agent=userdata.agents["greeter"],
         room=ctx.room,
         room_input_options=RoomInputOptions(

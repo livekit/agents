@@ -14,6 +14,9 @@ LLMModels = Literal[
     "llama-guard-3-8b",
     "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "deepseek-r1-distill-llama-70b",
 ]
 
 TTSModels = Literal[

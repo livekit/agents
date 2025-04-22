@@ -299,6 +299,7 @@ class AgentActivity(RecognitionHooks):
                     "input_audio_transcription_completed",
                     self._on_input_audio_transcription_completed,
                 )
+                self._rt_session.on("error", self._on_error)
 
                 remove_instructions(self._agent._chat_ctx)
 
@@ -463,7 +464,7 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
-    def generate_reply(
+    def _generate_reply(
         self,
         *,
         user_message: NotGivenOr[llm.ChatMessage | None] = NOT_GIVEN,
@@ -522,6 +523,12 @@ class AgentActivity(RecognitionHooks):
             )
 
         elif isinstance(self.llm, llm.LLM):
+            # instructions used inside generate_reply are "extra" instructions.
+            # this matches the behavior of the Realtime API:
+            # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
+            if instructions:
+                instructions = [self._agent.instructions, instructions].join("\n")
+
             self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
@@ -633,8 +640,13 @@ class AgentActivity(RecognitionHooks):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
 
-    def _on_error(self, error: llm.LLMError | stt.STTError | tts.TTSError) -> None:
+    def _on_error(
+        self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
+    ) -> None:
         if isinstance(error, llm.LLMError):
+            error_event = ErrorEvent(error=error, source=self.llm)
+            self._session.emit("error", error_event)
+        elif isinstance(error, llm.RealtimeModelError):
             error_event = ErrorEvent(error=error, source=self.llm)
             self._session.emit("error", error_event)
         elif isinstance(error, stt.STTError):
@@ -819,7 +831,7 @@ class AgentActivity(RecognitionHooks):
 
         # Ensure the new message is passed to generate_reply
         # This preserves the original message_id, making it easier for users to track responses
-        speech_handle = self.generate_reply(
+        speech_handle = self._generate_reply(
             user_message=user_message, chat_ctx=temp_mutable_chat_ctx
         )
         eou_metrics = EOUMetrics(
@@ -1430,7 +1442,10 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-            if generate_tool_reply and not isinstance(self.llm, GoogleRealtimeModel):
+            if generate_tool_reply and (
+                # no direct cancellation in Gemini
+                GoogleRealtimeModel is None or not isinstance(self.llm, GoogleRealtimeModel)
+            ):
                 self._rt_session.interrupt()
 
                 handle = SpeechHandle.create(

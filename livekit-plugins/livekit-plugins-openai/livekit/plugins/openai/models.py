@@ -18,6 +18,9 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
     "gpt-4o",
     "gpt-4o-2024-05-13",
     "gpt-4o-mini",
@@ -57,8 +60,9 @@ TelnyxChatModels = Literal[
 
 CerebrasChatModels = Literal[
     "llama3.1-8b",
-    "llama3.1-70b",
     "llama-3.3-70b",
+    "llama-4-scout-17b-16e-instruct",
+    "deepseek-r1-distill-llama-70b",
 ]
 
 PerplexityChatModels = Literal[
