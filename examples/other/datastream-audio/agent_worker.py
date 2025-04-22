@@ -12,8 +12,7 @@ from livekit.agents import (
 )
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import PlaybackFinishedEvent
-from livekit.plugins import deepgram, openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import openai
 
 logger = logging.getLogger("basic-agent")
 
@@ -28,11 +27,7 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(
-        vad=silero.VAD.load(),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=openai.TTS(voice="ash"),
-        turn_detection=MultilingualModel(),
+        llm=openai.realtime.RealtimeModel(),
     )
 
     # stream audio to another participant in the room through a datastream
