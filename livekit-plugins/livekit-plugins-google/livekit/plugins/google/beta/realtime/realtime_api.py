@@ -95,7 +95,7 @@ class RealtimeModel(llm.RealtimeModel):
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
-        model: LiveAPIModels | str = "gemini-2.0-flash-exp",
+        model: LiveAPIModels | str = "gemini-2.0-flash-live-001",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: Voice | str = "Puck",
         modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
@@ -423,8 +423,8 @@ class RealtimeSession(llm.RealtimeSession):
                     async for msg in self._msg_ch:
                         if isinstance(msg, LiveClientContent):
                             await session.send(input=msg, end_of_turn=True)
-
-                        await session.send(input=msg)
+                        else:
+                            await session.send(input=msg)
                     await session.send(input=".", end_of_turn=True)
 
                 @utils.log_exceptions(logger=logger)
