@@ -1,14 +1,9 @@
-# from https://github.com/openai/openai-python/blob/7193688e364bd726594fe369032e813ced1bdfe2/src/openai/lib/_pydantic.py
-
-
 from __future__ import annotations
 
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypeGuard
-
-from ..types import NOT_GIVEN
 
 _T = TypeVar("_T")
 
@@ -20,6 +15,19 @@ def to_strict_json_schema(model: type[BaseModel] | TypeAdapter[Any]) -> dict[str
         schema = model.model_json_schema()
 
     return _ensure_strict_json_schema(schema, path=(), root=schema)
+
+
+# from https://platform.openai.com/docs/guides/function-calling?api-mode=responses&strict-mode=disabled#strict-mode
+# Strict mode
+# Setting strict to true will ensure function calls reliably adhere to the function schema,
+# instead of being best effort. We recommend always enabling strict mode.
+#
+# Under the hood, strict mode works by leveraging our structured outputs feature and therefore
+# introduces a couple requirements:
+#
+# additionalProperties must be set to false for each object in the parameters.
+# All fields in properties must be marked as required.
+# You can denote optional fields by adding null as a type option (see example below).
 
 
 def _ensure_strict_json_schema(
@@ -90,11 +98,25 @@ def _ensure_strict_json_schema(
                 for i, entry in enumerate(all_of)
             ]
 
-    # strip `None` defaults as there's no meaningful distinction here
-    # the schema will still be `nullable` and the model will default
-    # to using `None` anyway
-    if json_schema.get("default", NOT_GIVEN) is None:
-        json_schema.pop("default")
+    # strict mode doesn't support default
+    if json_schema.get("default") is not None:
+        json_schema.pop("default", None)
+
+        # Treat any parameter with a default value as optional. If the parameter’s type doesn't
+        # support None, the default will be used instead.
+        t = json_schema.get("type")
+        if isinstance(t, str):
+            json_schema["type"] = [t, "null"]
+
+        elif isinstance(t, list):
+            types = t.copy()
+            if "null" not in types:
+                types.append("null")
+
+            json_schema["type"] = types
+
+    json_schema.pop("title", None)
+    json_schema.pop("discriminator", None)
 
     # we can't use `$ref`s if there are also other properties defined, e.g.
     # `{"$ref": "...", "description": "my description"}`

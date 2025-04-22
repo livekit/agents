@@ -5,7 +5,7 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from pydantic_core import from_json
 
 from livekit import rtc
@@ -321,11 +321,15 @@ async def _execute_tools_task(
                 continue
 
             json_args = fnc_call.arguments or "{}"
-            parsed_args: BaseModel | None = None
             if is_function_tool(function_tool):
                 try:
-                    function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
-                    parsed_args = function_model.model_validate_json(json_args)
+                    fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
+                        fnc=function_tool,
+                        json_arguments=json_args,
+                        call_ctx=RunContext(
+                            session=session, speech_handle=speech_handle, function_call=fnc_call
+                        ),
+                    )
 
                 except ValidationError:
                     logger.exception(
@@ -338,13 +342,6 @@ async def _execute_tools_task(
                     )
                     continue
 
-                fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
-                    model=parsed_args,
-                    function_tool=function_tool,
-                    call_ctx=RunContext(
-                        session=session, speech_handle=speech_handle, function_call=fnc_call
-                    ),
-                )
             elif is_raw_function_tool(function_tool):
                 raw_args = from_json(json_args)
                 fnc_args, fnc_kwargs = ((), {"raw_arguments": raw_args})
@@ -370,12 +367,7 @@ async def _execute_tools_task(
                 },
             )
 
-            py_out = _PythonOutput(
-                fnc_call=fnc_call,
-                output=None,
-                exception=None,
-            )
-
+            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 task = asyncio.create_task(
                     function_tool(*fnc_args, **fnc_kwargs),
@@ -385,6 +377,9 @@ async def _execute_tools_task(
                 tasks.append(task)
                 _authorize_inline_task(task, function_call=fnc_call)
             except Exception:
+                # catching exceptions here because even though the function is asynchronous,
+                # errors such as missing or incompatible arguments can still occur at
+                # invocation time.
                 logger.exception(
                     "exception occurred while executing tool",
                     extra={
