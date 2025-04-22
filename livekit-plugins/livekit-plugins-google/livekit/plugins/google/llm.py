@@ -53,7 +53,7 @@ class _LLMOptions:
     top_k: NotGivenOr[float]
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
-    thinking_budget: NotGivenOr[int]
+    thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
 
 
 class LLM(llm.LLM):
@@ -72,7 +72,7 @@ class LLM(llm.LLM):
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        thinking_budget: NotGivenOr[int] = NOT_GIVEN,
+        thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -97,7 +97,7 @@ class LLM(llm.LLM):
             presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
-            thinking_budget (int, optional): The maximum number of thinking steps allowed for response generation. Defaults to None.
+            thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -124,12 +124,21 @@ class LLM(llm.LLM):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
-        # Validate thinking_budget
-        if is_given(thinking_budget):
-            if not isinstance(thinking_budget, int):
-                raise ValueError("thinking_budget must be an integer")
-            if not (0 <= thinking_budget <= 24576):
-                raise ValueError("thinking_budget must be between 0 and 24576")
+        # Validate thinking_config
+        if is_given(thinking_config):
+            _thinking_budget = None
+            if isinstance(thinking_config, dict):
+                _thinking_budget = thinking_config.get("thinking_budget")
+            elif isinstance(thinking_config, types.ThinkingConfig):
+                _thinking_budget = thinking_config.thinking_budget
+
+            if _thinking_budget is not None:
+                if not isinstance(_thinking_budget, int):
+                    raise ValueError("thinking_budget inside thinking_config must be an integer")
+                if not (0 <= _thinking_budget <= 24576):
+                    raise ValueError(
+                        "thinking_budget inside thinking_config must be between 0 and 24576"
+                    )
 
         self._opts = _LLMOptions(
             model=model,
@@ -143,7 +152,7 @@ class LLM(llm.LLM):
             top_k=top_k,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
-            thinking_budget=thinking_budget,
+            thinking_config=thinking_config,
         )
         self._client = genai.Client(
             api_key=gemini_api_key,
@@ -224,10 +233,8 @@ class LLM(llm.LLM):
             extra["frequency_penalty"] = self._opts.frequency_penalty
 
         # Add thinking config if thinking_budget is provided
-        if is_given(self._opts.thinking_budget):
-            extra["thinking_config"] = types.ThinkingConfig(
-                thinking_budget=self._opts.thinking_budget
-            )
+        if is_given(self._opts.thinking_config):
+            extra["thinking_config"] = self._opts.thinking_config
 
         return LLMStream(
             self,
