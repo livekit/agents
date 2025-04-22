@@ -83,6 +83,7 @@ class AudioRecognition:
 
         self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
+        self._tasks: set[asyncio.Task] = set()
 
     def start(self) -> None:
         self.update_stt(self._stt)
@@ -117,7 +118,9 @@ class AudioRecognition:
                 self._stt_task(stt, self._stt_ch, self._stt_atask)
             )
         elif self._stt_atask is not None:
-            self._stt_atask.cancel()
+            task = asyncio.create_task(utils.aio.cancel_and_wait(self._stt_atask))
+            task.add_done_callback(lambda _: self._tasks.discard(task))
+            self._tasks.add(task)
             self._stt_atask = None
             self._stt_ch = None
 
@@ -129,7 +132,9 @@ class AudioRecognition:
                 self._vad_task(vad, self._vad_ch, self._vad_atask)
             )
         elif self._vad_atask is not None:
-            self._vad_atask.cancel()
+            task = asyncio.create_task(utils.aio.cancel_and_wait(self._vad_atask))
+            task.add_done_callback(lambda _: self._tasks.discard(task))
+            self._tasks.add(task)
             self._vad_atask = None
             self._vad_ch = None
 
@@ -138,7 +143,9 @@ class AudioRecognition:
         self._audio_interim_transcript = ""
 
         # reset stt to clear the buffer from previous user turn
-        self.update_stt(self._stt)
+        stt = self._stt
+        self.update_stt(None)
+        self.update_stt(stt)
 
     def commit_user_turn(self) -> None:
         if self._audio_interim_transcript:
