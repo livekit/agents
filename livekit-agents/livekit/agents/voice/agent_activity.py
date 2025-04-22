@@ -739,6 +739,8 @@ class AgentActivity(RecognitionHooks):
                     "speech interrupted by vad",
                     speech_id=self._current_speech.id,
                 )
+                if self._rt_session is not None:
+                    self._rt_session.interrupt()
                 self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
