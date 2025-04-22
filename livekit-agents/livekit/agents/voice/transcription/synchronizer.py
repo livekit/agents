@@ -128,6 +128,7 @@ class _TextData:
     pushed_text: str = ""
     done: bool = False
     forwarded_hyphens: int = 0
+    forwarded_text: str = ""
 
 
 class _SegmentSynchronizerImpl:
@@ -239,7 +240,7 @@ class _SegmentSynchronizerImpl:
         if pushed_speaking_units > 0:
             self._speed_on_speaking_unit = pushed_hyphens / pushed_speaking_units
 
-    def playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
+    def mark_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
         if self.closed:
             logger.warning("_SegmentSynchronizerImpl.playback_finished called after close")
             return
@@ -255,10 +256,18 @@ class _SegmentSynchronizerImpl:
         if not interrupted:
             self._playback_completed = True
 
+    @property
+    def synchronized_transcript(self) -> str:
+        if self._playback_completed:
+            return self._text_data.pushed_text
+
+        return self._text_data.forwarded_text
+
     @utils.log_exceptions(logger=logger)
     async def _capture_task(self) -> None:
         try:
             async for text in self._out_ch:
+                self._text_data.forwarded_text += text
                 await self._next_in_chain.capture_text(text)
         finally:
             self._next_in_chain.flush()
@@ -500,17 +509,32 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._capturing = False
 
     # this is going to be automatically called by the next_in_chain
-    def on_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
-        super().on_playback_finished(playback_position=playback_position, interrupted=interrupted)
-
+    def on_playback_finished(
+        self,
+        *,
+        playback_position: float,
+        interrupted: bool,
+        synchronized_transcript: str | None = None,
+    ) -> None:
         if not self._synchronizer.enabled:
+            super().on_playback_finished(
+                playback_position=playback_position,
+                interrupted=interrupted,
+                synchronized_transcript=synchronized_transcript,
+            )
             return
 
-        self._synchronizer._impl.playback_finished(
+        self._synchronizer._impl.mark_playback_finished(
             playback_position=playback_position, interrupted=interrupted
         )
         self._synchronizer.rotate_segment()
         self._pushed_duration = 0.0
+
+        super().on_playback_finished(
+            playback_position=playback_position,
+            interrupted=interrupted,
+            synchronized_transcript=self._synchronizer._impl.synchronized_transcript,
+        )
 
     def on_attached(self) -> None:
         super().on_attached()

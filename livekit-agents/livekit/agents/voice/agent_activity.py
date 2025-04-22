@@ -34,7 +34,6 @@ from .generation import (
     perform_tool_executions,
     perform_tts_inference,
     remove_instructions,
-    truncate_message,
     update_instructions,
 )
 from .speech_handle import SpeechHandle
@@ -1082,11 +1081,11 @@ class AgentActivity(RecognitionHooks):
                     speech_id=speech_handle.id,
                 )
 
-                truncated_text = truncate_message(
-                    message=text_out.text, played_duration=playback_ev.playback_position
-                )
                 msg = chat_ctx.add_message(
-                    role="assistant", content=truncated_text, id=llm_gen_data.id, interrupted=True
+                    role="assistant",
+                    content=playback_ev.synchronized_transcript or text_out.text,
+                    id=llm_gen_data.id,
+                    interrupted=True,
                 )
                 self._agent._chat_ctx.items.append(msg)
                 self._session._update_agent_state("listening")
