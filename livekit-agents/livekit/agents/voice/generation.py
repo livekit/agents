@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import ValidationError
-from pydantic_core import from_json
 
 from livekit import rtc
 
@@ -320,36 +319,32 @@ async def _execute_tools_task(
                 )
                 continue
 
-            json_args = fnc_call.arguments or "{}"
-            if is_function_tool(function_tool):
-                try:
-                    fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-                        fnc=function_tool,
-                        json_arguments=json_args,
-                        call_ctx=RunContext(
-                            session=session, speech_handle=speech_handle, function_call=fnc_call
-                        ),
-                    )
-
-                except ValidationError:
-                    logger.exception(
-                        f"tried to call AI function `{fnc_call.name}` with invalid arguments",
-                        extra={
-                            "function": fnc_call.name,
-                            "arguments": fnc_call.arguments,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    continue
-
-            elif is_raw_function_tool(function_tool):
-                raw_args = from_json(json_args)
-                fnc_args, fnc_kwargs = ((), {"raw_arguments": raw_args})
-            else:
+            if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",
                     extra={
                         "function": fnc_call.name,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                continue
+
+            try:
+                json_args = fnc_call.arguments or "{}"
+                fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
+                    fnc=function_tool,
+                    json_arguments=json_args,
+                    call_ctx=RunContext(
+                        session=session, speech_handle=speech_handle, function_call=fnc_call
+                    ),
+                )
+
+            except ValidationError:
+                logger.exception(
+                    f"tried to call AI function `{fnc_call.name}` with invalid arguments",
+                    extra={
+                        "function": fnc_call.name,
+                        "arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
