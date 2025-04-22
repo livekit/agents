@@ -14,7 +14,6 @@ from livekit.agents import (
     APIStatusError,
     NotGivenOr,
     utils,
-    wait_for_participant,
 )
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -98,7 +97,7 @@ class AvatarSession:
         await self._start_agent(livekit_url, livekit_token)
 
         logger.debug("waiting for avatar agent to join the room")
-        await wait_for_participant(room=room, identity=self._avatar_participant_identity)
+        await utils.wait_for_participant(room=room, identity=self._avatar_participant_identity)
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,

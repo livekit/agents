@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar, Union
+from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,7 +13,7 @@ from livekit.agents._exceptions import APIError
 
 from ..types import NOT_GIVEN, NotGivenOr
 from .chat_context import ChatContext, FunctionCall
-from .tool_context import FunctionTool, ToolChoice, ToolContext
+from .tool_context import FunctionTool, RawFunctionTool, ToolChoice, ToolContext
 
 
 @dataclass
@@ -123,7 +123,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
     ) -> None: ...  # can raise RealtimeError on Timeout
 
     @abstractmethod
-    async def update_tools(self, tools: list[FunctionTool]) -> None: ...
+    async def update_tools(self, tools: list[FunctionTool | RawFunctionTool | Any]) -> None: ...
 
     @abstractmethod
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None: ...

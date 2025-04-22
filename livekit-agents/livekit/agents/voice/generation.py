@@ -5,7 +5,8 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
+from pydantic_core import from_json
 
 from livekit import rtc
 
@@ -17,6 +18,10 @@ from ..llm import (
     ToolContext,
     ToolError,
     utils as llm_utils,
+)
+from ..llm.tool_context import (
+    is_function_tool,
+    is_raw_function_tool,
 )
 from ..log import logger
 from ..types import NotGivenOr
@@ -347,16 +352,39 @@ async def _execute_tools_task(
                 )
                 continue
 
-            try:
-                function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
-                json_args = fnc_call.arguments or "{}"
-                parsed_args = function_model.model_validate_json(json_args)
-            except ValidationError:
-                logger.exception(
-                    f"tried to call AI function `{fnc_call.name}` with invalid arguments",
+            json_args = fnc_call.arguments or "{}"
+            parsed_args: BaseModel | None = None
+            if is_function_tool(function_tool):
+                try:
+                    function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
+                    parsed_args = function_model.model_validate_json(json_args)
+
+                except ValidationError:
+                    logger.exception(
+                        f"tried to call AI function `{fnc_call.name}` with invalid arguments",
+                        extra={
+                            "function": fnc_call.name,
+                            "arguments": fnc_call.arguments,
+                            "speech_id": speech_handle.id,
+                        },
+                    )
+                    continue
+
+                fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
+                    model=parsed_args,
+                    function_tool=function_tool,
+                    call_ctx=RunContext(
+                        session=session, speech_handle=speech_handle, function_call=fnc_call
+                    ),
+                )
+            elif is_raw_function_tool(function_tool):
+                raw_args = from_json(json_args)
+                fnc_args, fnc_kwargs = ((), {"raw_arguments": raw_args})
+            else:
+                logger.error(
+                    f"unknown tool type: {type(function_tool)}",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -374,26 +402,29 @@ async def _execute_tools_task(
                 },
             )
 
-            fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
-                model=parsed_args,
-                function_tool=function_tool,
-                call_ctx=RunContext(
-                    session=session, speech_handle=speech_handle, function_call=fnc_call
-                ),
-            )
-
             py_out = _PythonOutput(
                 fnc_call=fnc_call,
                 output=None,
                 exception=None,
             )
 
-            task = asyncio.create_task(
-                function_tool(*fnc_args, **fnc_kwargs),
-                name=f"function_tool_{fnc_call.name}",
-            )
-            tasks.append(task)
-            _authorize_inline_task(task, function_call=fnc_call)
+            try:
+                task = asyncio.create_task(
+                    function_tool(*fnc_args, **fnc_kwargs),
+                    name=f"function_tool_{fnc_call.name}",
+                )
+
+                tasks.append(task)
+                _authorize_inline_task(task, function_call=fnc_call)
+            except Exception:
+                logger.exception(
+                    "exception occurred while executing tool",
+                    extra={
+                        "function": fnc_call.name,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                continue
 
             def _log_exceptions(
                 task: asyncio.Task,

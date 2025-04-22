@@ -184,7 +184,6 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
         the ``CEREBRAS_API_KEY`` environmental variable.
-        @integrations:cerebras:llm
         """
 
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")

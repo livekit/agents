@@ -15,6 +15,7 @@ members = [
     "livekit-plugins-assemblyai",
     "livekit-plugins-aws",
     "livekit-plugins-azure",
+    "livekit-plugins-bey",
     "livekit-plugins-cartesia",
     "livekit-plugins-clova",
     "livekit-plugins-deepgram",
@@ -31,6 +32,7 @@ members = [
     "livekit-plugins-resemble",
     "livekit-plugins-rime",
     "livekit-plugins-silero",
+    "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
     "livekit-plugins-turn-detector",
 ]
@@ -1195,6 +1197,9 @@ aws = [
 azure = [
     { name = "livekit-plugins-azure" },
 ]
+bey = [
+    { name = "livekit-plugins-bey" },
+]
 cartesia = [
     { name = "livekit-plugins-cartesia" },
 ]
@@ -1270,6 +1275,7 @@ requires-dist = [
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
     { name = "livekit-plugins-azure", marker = "extra == 'azure'", editable = "livekit-plugins/livekit-plugins-azure" },
+    { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/livekit-plugins-bey" },
     { name = "livekit-plugins-cartesia", marker = "extra == 'cartesia'", editable = "livekit-plugins/livekit-plugins-cartesia" },
     { name = "livekit-plugins-clova", marker = "extra == 'clova'", editable = "livekit-plugins/livekit-plugins-clova" },
     { name = "livekit-plugins-deepgram", marker = "extra == 'deepgram'", editable = "livekit-plugins/livekit-plugins-deepgram" },
@@ -1301,7 +1307,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechmatics", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechmatics", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1374,6 +1380,16 @@ requires-dist = [
     { name = "azure-cognitiveservices-speech", specifier = ">=1.43.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-bey"
+source = { editable = "livekit-plugins/livekit-plugins-bey" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-cartesia"
@@ -1603,6 +1619,16 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", specifier = ">=1.18" },
 ]
+
+[[package]]
+name = "livekit-plugins-speechify"
+source = { editable = "livekit-plugins/livekit-plugins-speechify" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-speechmatics"

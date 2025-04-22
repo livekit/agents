@@ -69,6 +69,7 @@ google = ["livekit-plugins-google>=1.0.13"]
 gladia = ["livekit-plugins-gladia>=1.0.13"]
 resemble = ["livekit-plugins-resemble>=1.0.13"]
 bey = ["livekit-plugins-bey>=1.0.13"]
+speechify = ["livekit-plugins-speechify>=1.0.13"]
 
 
 [project.urls]
