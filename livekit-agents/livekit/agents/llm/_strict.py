@@ -148,7 +148,7 @@ def _ensure_strict_json_schema(
         # we call `_ensure_strict_json_schema` again to fix the inlined schema and ensure it's valid.  # noqa: E501
         return _ensure_strict_json_schema(json_schema, path=path, root=root)
 
-    # ——— simplify nullable unions (“anyOf” or “oneOf”) ———
+    # simplify nullable unions (“anyOf” or “oneOf”)
     for union_key in ("anyOf", "oneOf"):
         variants = json_schema.get(union_key)
         if is_list(variants) and len(variants) == 2 and {"type": "null"} in variants:
