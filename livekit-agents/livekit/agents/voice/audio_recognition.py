@@ -101,6 +101,8 @@ class AudioRecognition:
             self._vad_ch.send_nowait(frame)
 
     async def aclose(self) -> None:
+        await aio.cancel_and_wait(*self._tasks)
+
         if self._stt_atask is not None:
             await aio.cancel_and_wait(self._stt_atask)
 
@@ -118,7 +120,7 @@ class AudioRecognition:
                 self._stt_task(stt, self._stt_ch, self._stt_atask)
             )
         elif self._stt_atask is not None:
-            task = asyncio.create_task(utils.aio.cancel_and_wait(self._stt_atask))
+            task = asyncio.create_task(aio.cancel_and_wait(self._stt_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
             self._stt_atask = None
@@ -132,7 +134,7 @@ class AudioRecognition:
                 self._vad_task(vad, self._vad_ch, self._vad_atask)
             )
         elif self._vad_atask is not None:
-            task = asyncio.create_task(utils.aio.cancel_and_wait(self._vad_atask))
+            task = asyncio.create_task(aio.cancel_and_wait(self._vad_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
             self._vad_atask = None
