@@ -563,6 +563,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
+            print(to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN)
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=to_chat_ctx(self._chat_ctx, id(self._llm)),
                 tools=to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN,
