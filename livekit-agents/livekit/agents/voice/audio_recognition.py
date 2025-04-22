@@ -136,12 +136,13 @@ class AudioRecognition:
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
-        self.update_stt(self._stt)  # reset stt
+
+        # reset stt to clear the buffer from previous user turn
+        self.update_stt(self._stt)
 
     def commit_user_turn(self) -> None:
         if self._audio_interim_transcript:
-            # append interim transcript
-            # TODO(long): is there a way to flush the STT buffer?
+            # append interim transcript in case the final transcript is not ready
             self._audio_transcript = (
                 f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
             )
