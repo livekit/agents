@@ -95,7 +95,7 @@ class RealtimeModel(llm.RealtimeModel):
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
-        model: LiveAPIModels | str = "gemini-2.0-flash-exp",
+        model: LiveAPIModels | str = "gemini-2.0-flash-live-001",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: Voice | str = "Puck",
         modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
