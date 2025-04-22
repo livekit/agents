@@ -14,7 +14,7 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
+from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
 from pydantic_core import PydanticUndefined, from_json
 from typing_extensions import TypeVar
