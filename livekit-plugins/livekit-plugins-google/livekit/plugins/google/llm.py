@@ -310,7 +310,7 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: client error",
                 status_code=e.code,
-                body=e.message + e.status,
+                body=f"{e.message} {e.status}",
                 request_id=request_id,
                 retryable=False if e.code != 429 else True,
             ) from e
@@ -318,7 +318,7 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: server error",
                 status_code=e.code,
-                body=e.message + e.status,
+                body=f"{e.message} {e.status}",
                 request_id=request_id,
                 retryable=retryable,
             ) from e
@@ -326,7 +326,7 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: api error",
                 status_code=e.code,
-                body=e.message + e.status,
+                body=f"{e.message} {e.status}",
                 request_id=request_id,
                 retryable=retryable,
             ) from e
