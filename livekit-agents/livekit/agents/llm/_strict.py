@@ -84,6 +84,14 @@ def _ensure_strict_json_schema(
             for i, variant in enumerate(any_of)
         ]
 
+    # unions (oneOf)
+    one_of = json_schema.get("oneOf")
+    if is_list(one_of):
+        json_schema["oneOf"] = [
+            _ensure_strict_json_schema(variant, path=(*path, "oneOf", str(i)), root=root)
+            for i, variant in enumerate(one_of)
+        ]
+
     # intersections
     all_of = json_schema.get("allOf")
     if is_list(all_of):
@@ -139,6 +147,26 @@ def _ensure_strict_json_schema(
         # Since the schema expanded from `$ref` might not have `additionalProperties: false` applied,  # noqa: E501
         # we call `_ensure_strict_json_schema` again to fix the inlined schema and ensure it's valid.  # noqa: E501
         return _ensure_strict_json_schema(json_schema, path=path, root=root)
+
+    # simplify nullable unions (“anyOf” or “oneOf”)
+    for union_key in ("anyOf", "oneOf"):
+        variants = json_schema.get(union_key)
+        if is_list(variants) and len(variants) == 2 and {"type": "null"} in variants:
+            # pick out the non-null branch
+            non_null = next(
+                (item for item in variants if item != {"type": "null"}),
+                None,
+            )
+            assert is_dict(non_null)
+
+            t = non_null["type"]
+            if isinstance(t, str):
+                non_null["type"] = [t, "null"]
+
+            merged = {k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")}
+            merged.update(non_null)
+            json_schema = merged
+            break
 
     return json_schema
 
