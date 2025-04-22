@@ -6,6 +6,7 @@ from typing_extensions import TypeAlias
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"
 """
 The state of the agent, stored in the agent's attributes.

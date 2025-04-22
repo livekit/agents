@@ -9,7 +9,13 @@ from livekit import rtc
 
 from ... import utils
 from ...log import logger
-from ...types import ATTRIBUTE_AGENT_STATE, NOT_GIVEN, TOPIC_CHAT, NotGivenOr
+from ...types import (
+    ATTRIBUTE_AGENT_STATE,
+    ATTRIBUTE_PUBLISH_ON_BEHALF,
+    NOT_GIVEN,
+    TOPIC_CHAT,
+    NotGivenOr,
+)
 from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
@@ -25,8 +31,6 @@ from ._output import (
     _ParticipantLegacyTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
-
-ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
 
 
 @dataclass
