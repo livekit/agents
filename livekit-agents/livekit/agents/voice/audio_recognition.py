@@ -136,6 +136,7 @@ class AudioRecognition:
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        self.update_stt(self._stt)  # reset stt
 
     def commit_user_turn(self) -> None:
         if self._audio_interim_transcript:
