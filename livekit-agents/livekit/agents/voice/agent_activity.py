@@ -1380,7 +1380,6 @@ class AgentActivity(RecognitionHooks):
                 self._session._conversation_item_added(msg)
             return
 
-        self._session._update_agent_state("speaking")
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
         for msg_id, text_out, _ in message_outputs:
