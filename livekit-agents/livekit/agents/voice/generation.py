@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
-from pydantic_core import from_json
 
 from livekit import rtc
 
@@ -322,6 +321,9 @@ async def _execute_tools_task(
 
             json_args = fnc_call.arguments or "{}"
             parsed_args: BaseModel | None = None
+            call_ctx = RunContext(
+                session=session, speech_handle=speech_handle, function_call=fnc_call
+            )
             if is_function_tool(function_tool):
                 try:
                     function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
@@ -339,15 +341,12 @@ async def _execute_tools_task(
                     continue
 
                 fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
-                    model=parsed_args,
-                    function_tool=function_tool,
-                    call_ctx=RunContext(
-                        session=session, speech_handle=speech_handle, function_call=fnc_call
-                    ),
+                    model=parsed_args, function_tool=function_tool, call_ctx=call_ctx
                 )
             elif is_raw_function_tool(function_tool):
-                raw_args = from_json(json_args)
-                fnc_args, fnc_kwargs = ((), {"raw_arguments": raw_args})
+                fnc_args, fnc_kwargs = llm_utils.json_args_to_function_arguments(
+                    function_tool=function_tool, json_args=json_args, call_ctx=call_ctx
+                )
             else:
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",

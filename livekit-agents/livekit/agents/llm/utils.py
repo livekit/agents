@@ -15,7 +15,7 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
-from pydantic_core import PydanticUndefined
+from pydantic_core import PydanticUndefined, from_json
 from typing_extensions import TypeVar
 
 from livekit import rtc
@@ -320,15 +320,13 @@ def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str
     return result
 
 
-def pydantic_model_to_function_arguments(
-    *,
-    function_tool: Callable,
-    model: BaseModel,
-    call_ctx: RunContext | None = None,
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
+def inspect_signature(
+    *, function_tool: Callable, call_ctx: RunContext | None = None
+) -> tuple[inspect.Signature, dict]:
     """
-    Convert a model’s fields into function args/kwargs.
-    Raises TypeError if required params are missing
+    Builds the tool signature and extracts the context arguments.
+
+    NOTE: this could be "precompiled" - won't change through agent lifetime.
     """
     signature = inspect.signature(function_tool)
     type_hints = get_type_hints(function_tool, include_extras=True)
@@ -339,6 +337,35 @@ def pydantic_model_to_function_arguments(
         if is_context_type(type_hint) and call_ctx is not None:
             context_dict[param_name] = call_ctx
 
+    return signature, context_dict
+
+
+def pydantic_model_to_function_arguments(
+    *,
+    function_tool: Callable,
+    model: BaseModel,
+    call_ctx: RunContext | None = None,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """
+    Convert a model’s fields into function args/kwargs.
+    Raises TypeError if required params are missing
+    """
+    signature, context_dict = inspect_signature(function_tool=function_tool, call_ctx=call_ctx)
     bound = signature.bind(**{**_shallow_model_dump(model), **context_dict})
     bound.apply_defaults()
+    return bound.args, bound.kwargs
+
+
+def json_args_to_function_arguments(
+    *,
+    function_tool: Callable,
+    json_args: str,
+    call_ctx: RunContext | None = None,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """
+    Converts raw json into function arguments.
+    """
+    signature, context_dict = inspect_signature(function_tool=function_tool, call_ctx=call_ctx)
+    raw_args = from_json(json_args)
+    bound = signature.bind(**{"raw_arguments": raw_args, **context_dict})
     return bound.args, bound.kwargs
