@@ -38,7 +38,7 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import Gender, TTSEncoding, TTSModels, VoiceType
 
-_DefaultEncoding: TTSEncoding = "wav_48000"
+_DefaultEncoding: TTSEncoding = "ogg_24000"
 
 
 def _sample_rate_from_encoding(output_encoding: TTSEncoding) -> int:
@@ -51,7 +51,7 @@ def _audio_format_from_encoding(encoding: TTSEncoding) -> str:
     return split[0]
 
 
-DEFAULT_VOICE_ID = "oliver"
+DEFAULT_VOICE_ID = "jack"
 API_BASE_URL_V1 = "https://api.sws.speechify.com/v1"
 AUTHORIZATION_HEADER = "Authorization"
 CALLER_HEADER = "x-caller"
@@ -240,7 +240,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._session.post(
                 _synthesize_url(self._opts),
-                headers=_get_headers(self._opts.token),
+                headers=_get_headers(self._opts.token, encoding=self._opts.encoding),
                 json=data,
                 timeout=self._conn_options.timeout,
             ) as resp:
@@ -287,10 +287,26 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     return f"{opts.base_url}/audio/stream"
 
 
-def _get_headers(token: str) -> dict[str, str]:
+def _get_headers(token: str, *, encoding: TTSEncoding | None = None) -> dict[str, str]:
     """Construct the headers for the Speechify API."""
     headers = {
         AUTHORIZATION_HEADER: f"Bearer {token}" if not token.startswith("Bearer ") else token
     }
+
+    if encoding:
+        accept = ""
+        format = _audio_format_from_encoding(encoding)
+        if format == "ogg":
+            accept = "audio/ogg"
+        elif format == "mp3":
+            accept = "audio/mpeg"
+        elif format == "aac":
+            accept = "audio/aac"
+
+        # docs does not specify mime type for wav
+        # https://docs.sws.speechify.com/v1/api-reference/api-reference/tts/audio/stream
+
+        if accept:
+            headers["Accept"] = accept
     headers[CALLER_HEADER] = "livekit"
     return headers
