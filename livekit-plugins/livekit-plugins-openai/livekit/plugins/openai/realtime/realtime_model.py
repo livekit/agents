@@ -135,8 +135,10 @@ _MOCK_AUDIO_ID_PREFIX = "lk_mock_audio_item_"
 # default values got from a "default" session from their API
 DEFAULT_TEMPERATURE = 0.8
 DEFAULT_TURN_DETECTION = TurnDetection(
-    type="semantic_vad",
-    eagerness="auto",
+    type="server_vad",
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=200,
     create_response=True,
     interrupt_response=True,
 )
