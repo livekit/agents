@@ -107,7 +107,6 @@ def _ensure_strict_json_schema(
             ]
 
     # strict mode doesn't support default
-    print(json_schema)
     if json_schema.get("default") is not None:
         json_schema.pop("default", None)
 
