@@ -526,7 +526,7 @@ class AgentActivity(RecognitionHooks):
             # this matches the behavior of the Realtime API:
             # https://platform.openai.com/docs/api-reference/realtime-client-events/response/create
             if instructions:
-                instructions = [self._agent.instructions, instructions].join("\n")
+                instructions = "\n".join([self._agent.instructions, instructions])
 
             self._create_speech_task(
                 self._pipeline_reply_task(
