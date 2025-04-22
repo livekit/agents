@@ -172,7 +172,7 @@ class ConnectionPool(Generic[T]):
         if self._prewarm_task is not None:
             task = self._prewarm_task()
             if task:
-                aio.gracefully_cancel(task)
+                await aio.gracefully_cancel(task)
 
         self.invalidate()
         await self._drain_to_close()
