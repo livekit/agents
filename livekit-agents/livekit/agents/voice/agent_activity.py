@@ -660,6 +660,7 @@ class AgentActivity(RecognitionHooks):
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         log_event("input_speech_started")
+        self._session._update_user_state("speaking")
         # self.interrupt() isn't going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
         # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
         try:
@@ -671,6 +672,7 @@ class AgentActivity(RecognitionHooks):
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         log_event("input_speech_stopped")
+        self._session._update_user_state("listening")
         if ev.user_transcription_enabled:
             self._session.emit(
                 "user_input_transcribed",
