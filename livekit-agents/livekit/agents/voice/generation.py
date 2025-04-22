@@ -625,24 +625,3 @@ def remove_instructions(chat_ctx: ChatContext) -> None:
             chat_ctx.items.remove(msg)
         else:
             break
-
-
-STANDARD_SPEECH_RATE = 0.5  # words per second
-
-
-def truncate_message(*, message: str, played_duration: float) -> str:
-    # TODO(theomonnom): this is very naive
-    from ..tokenize import _basic_word
-
-    words = _basic_word.split_words(message, ignore_punctuation=False)
-    total_duration = len(words) * STANDARD_SPEECH_RATE
-
-    if total_duration <= played_duration:
-        return message
-
-    max_words = int(played_duration // STANDARD_SPEECH_RATE)
-    if max_words < 1:
-        return ""
-
-    _, _, end_pos = words[max_words - 1]
-    return message[:end_pos]
