@@ -423,8 +423,8 @@ class RealtimeSession(llm.RealtimeSession):
                     async for msg in self._msg_ch:
                         if isinstance(msg, LiveClientContent):
                             await session.send(input=msg, end_of_turn=True)
-
-                        await session.send(input=msg)
+                        else:
+                            await session.send(input=msg)
                     await session.send(input=".", end_of_turn=True)
 
                 @utils.log_exceptions(logger=logger)
