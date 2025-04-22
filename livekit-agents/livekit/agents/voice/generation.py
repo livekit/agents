@@ -339,7 +339,7 @@ async def _execute_tools_task(
                     ),
                 )
 
-            except ValidationError:
+            except (ValidationError, ValueError):
                 logger.exception(
                     f"tried to call AI function `{fnc_call.name}` with invalid arguments",
                     extra={

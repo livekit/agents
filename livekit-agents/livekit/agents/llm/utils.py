@@ -345,16 +345,14 @@ def prepare_function_arguments(
         for param_name, param in signature.parameters.items():
             type_hint = type_hints[param_name]
             if param_name in args_dict and args_dict[param_name] is None:
-                if (
-                    not _is_optional_type(type_hint)
-                    and param.default is not inspect.Parameter.empty
-                ):
-                    args_dict[param_name] = param.default
-                else:
-                    raise ValidationError(
-                        f"Received None for required parameter '{param_name} ;"
-                        "this argument cannot be None and no default is available."
-                    )
+                if not _is_optional_type(type_hint):
+                    if param.default is not inspect.Parameter.empty:
+                        args_dict[param_name] = param.default
+                    else:
+                        raise ValueError(
+                            f"Received None for required parameter '{param_name} ;"
+                            "this argument cannot be None and no default is available."
+                        )
 
         model = model_type.model_validate(args_dict)  # can raise ValidationError
         raw_fields = _shallow_model_dump(model)
