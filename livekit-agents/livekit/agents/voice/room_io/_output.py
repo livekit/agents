@@ -153,7 +153,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
                     break
         if not self._track_id:
             for p in self._room.remote_participants.values():
-                if not self._valid_participant(p):
+                if not self._is_local_proxy_participant(p):
                     continue
                 for track in p.track_publications.values():
                     self._on_track_published(track, p)
@@ -225,7 +225,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
         if (
-            not self._valid_participant(participant)
+            not self._is_local_proxy_participant(participant)
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
             return
@@ -243,7 +243,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
 
         self._track_id = track.sid
 
-    def _valid_participant(self, participant: rtc.Participant) -> bool:
+    def _is_local_proxy_participant(self, participant: rtc.Participant) -> bool:
         if not self._participant_identity:
             return False
 
