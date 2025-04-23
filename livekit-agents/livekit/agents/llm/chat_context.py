@@ -205,9 +205,7 @@ class ChatContext:
 
         valid_tools = set()
         if is_given(tools):
-            valid_tools = {
-                tool if isinstance(tool, str) else get_tool_name(tool) for tool in tools
-            }
+            valid_tools = {tool if isinstance(tool, str) else get_tool_name(tool) for tool in tools}
 
         for item in self.items:
             if exclude_function_call and item.type in [

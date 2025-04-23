@@ -190,21 +190,23 @@ def is_raw_function_tool(f: Callable) -> TypeGuard[RawFunctionTool]:
 def get_raw_function_info(f: RawFunctionTool) -> _RawFunctionToolInfo:
     return getattr(f, "__livekit_raw_tool_info")
 
+
 def get_tool_name(f: Callable) -> str:
     if is_raw_function_tool(f):
         info = get_raw_function_info(f)
-        if hasattr(info, 'name'):
+        if hasattr(info, "name"):
             return info.name
         else:
             raise ValueError(f"Could not extract name from raw tool info: {info}")
     elif is_function_tool(f):
         info = get_function_info(f)
-        if hasattr(info, 'name'):
+        if hasattr(info, "name"):
             return info.name
         else:
             raise ValueError(f"Could not extract name from function tool info: {info}")
     else:
         raise ValueError(f"Unknown tool type: {type(f)}")
+
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
     methods: list[FunctionTool | RawFunctionTool] = []
