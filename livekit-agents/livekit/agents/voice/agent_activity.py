@@ -1092,7 +1092,11 @@ class AgentActivity(RecognitionHooks):
 
                 msg = chat_ctx.add_message(
                     role="assistant",
-                    content=playback_ev.synchronized_transcript or text_out.text,
+                    content=(
+                        playback_ev.synchronized_transcript
+                        if playback_ev.synchronized_transcript is not None
+                        else text_out.text
+                    ),
                     id=llm_gen_data.id,
                     interrupted=True,
                 )
