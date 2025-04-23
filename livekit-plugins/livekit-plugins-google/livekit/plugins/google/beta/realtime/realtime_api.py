@@ -362,10 +362,11 @@ class RealtimeSession(llm.RealtimeSession):
         if is_given(instructions):
             logger.warn("Gemini does not handle generate_reply with temporary instructions")
 
-        # TODO: Gemini does not support assistant role, and we also cannot easily update system
-        # instructions without a new session.
-        user_turn = Content(parts=[Part(text=".")], role="user")
-        event = LiveClientContent(turns=[user_turn], turn_complete=True)
+        # TODO: Gemini requires the last message to end with user's turn
+        event = LiveClientContent(turns=[], turn_complete=True)
+        if is_given(instructions):
+            event.turns.append(Content(parts=[Part(text=instructions)], role="model"))
+        event.turns.append(Content(parts=[Part(text=".")], role="user"))
         self._send_client_event(event)
 
         def _on_timeout() -> None:
