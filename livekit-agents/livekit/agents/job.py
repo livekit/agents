@@ -268,10 +268,6 @@ class JobContext:
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
-    def disconnect(self) -> asyncio.Future[None]:
-        """Disconnects the agent from the room, but does not delete the room."""
-        return asyncio.create_task(self._room.disconnect())
-
     def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:
         """Deletes the room and disconnects all participants."""
         task = asyncio.create_task(
