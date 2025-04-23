@@ -476,6 +476,7 @@ class RealtimeSession(llm.RealtimeSession):
                     await session.send(input=msg)
                 else:
                     await session.send(input=msg)
+        except Exception as e:
             logger.error(f"error in send task: {e}", exc_info=e)
         finally:
             logger.debug("send task finished.")
