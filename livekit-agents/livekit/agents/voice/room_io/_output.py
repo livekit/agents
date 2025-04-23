@@ -7,6 +7,7 @@ from livekit import rtc
 from ... import utils
 from ...log import logger
 from ...types import (
+    ATTRIBUTE_PUBLISH_ON_BEHALF,
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
@@ -123,6 +124,9 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         self._track_id: str | None = None
         self._participant_identity: str | None = None
 
+        # identity of the participant that on behalf of the current participant
+        self._represented_by: str | None = None
+
         self._room.on("track_published", self._on_track_published)
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_task: asyncio.Task | None = None
@@ -137,13 +141,24 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         self._participant_identity = (
             participant.identity if isinstance(participant, rtc.Participant) else participant
         )
+        self._represented_by = self._participant_identity
         if self._participant_identity is None:
             return
 
-        try:
-            self._track_id = find_micro_track_id(self._room, self._participant_identity)
-        except ValueError:
-            return
+        # find track id from existing participants
+        if self._participant_identity == self._room.local_participant.identity:
+            for track in self._room.local_participant.track_publications.values():
+                self._on_local_track_published(track, track.track)
+                if self._track_id is not None:
+                    break
+        if not self._track_id:
+            for p in self._room.remote_participants.values():
+                if not self._is_local_proxy_participant(p):
+                    continue
+                for track in p.track_publications.values():
+                    self._on_track_published(track, p)
+                    if self._track_id is not None:
+                        break
 
         self.flush()
         self._reset_state()
@@ -187,7 +202,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
             return
 
         transcription = rtc.Transcription(
-            participant_identity=self._participant_identity,
+            participant_identity=self._represented_by or self._participant_identity,
             track_sid=self._track_id,
             segments=[
                 rtc.TranscriptionSegment(
@@ -210,13 +225,13 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
         if (
-            self._participant_identity is None
-            or participant.identity != self._participant_identity
+            not self._is_local_proxy_participant(participant)
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
             return
 
         self._track_id = track.sid
+        self._represented_by = participant.identity
 
     def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
         if (
@@ -227,6 +242,18 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
             return
 
         self._track_id = track.sid
+
+    def _is_local_proxy_participant(self, participant: rtc.Participant) -> bool:
+        if not self._participant_identity:
+            return False
+
+        if participant.identity == self._participant_identity or (
+            (on_behalf := participant.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF)) is not None
+            and on_behalf == self._participant_identity
+        ):
+            return True
+
+        return False
 
 
 class _ParticipantTranscriptionOutput(io.TextOutput):

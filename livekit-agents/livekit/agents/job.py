@@ -30,7 +30,7 @@ from livekit.protocol import agent, models
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
 from .types import NotGivenOr
-from .utils import http_context
+from .utils import http_context, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
@@ -238,32 +238,7 @@ class JobContext:
         participant that joins the room will be returned.
         If the participant has already joined, the function will return immediately.
         """
-        if not self._room.isconnected():
-            raise RuntimeError("room is not connected")
-
-        fut = asyncio.Future[rtc.RemoteParticipant]()
-
-        def kind_match(p: rtc.RemoteParticipant) -> bool:
-            if isinstance(kind, list):
-                return p.kind in kind
-
-            return p.kind == kind
-
-        for p in self._room.remote_participants.values():
-            if (identity is None or p.identity == identity) and kind_match(p):
-                fut.set_result(p)
-                break
-
-        def _on_participant_connected(p: rtc.RemoteParticipant):
-            if (identity is None or p.identity == identity) and kind_match(p):
-                self._room.off("participant_connected", _on_participant_connected)
-                if not fut.done():
-                    fut.set_result(p)
-
-        if not fut.done():
-            self._room.on("participant_connected", _on_participant_connected)
-
-        return await fut
+        return await wait_for_participant(self._room, identity=identity, kind=kind)
 
     async def connect(
         self,

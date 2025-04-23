@@ -76,7 +76,7 @@ class ConnectionPool(Generic[T]):
         conn = await self.get()
         try:
             yield conn
-        except Exception:
+        except BaseException:
             self.remove(conn)
             raise
         else:
@@ -172,7 +172,7 @@ class ConnectionPool(Generic[T]):
         if self._prewarm_task is not None:
             task = self._prewarm_task()
             if task:
-                aio.gracefully_cancel(task)
+                await aio.gracefully_cancel(task)
 
         self.invalidate()
         await self._drain_to_close()

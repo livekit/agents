@@ -5,7 +5,7 @@ from typing import Literal, Union
 
 from google.genai import types
 
-LiveAPIModels = Literal["gemini-2.0-flash-exp"]
+LiveAPIModels = Literal["gemini-2.0-flash-exp", "gemini-2.0-flash-live-001"]
 
 Voice = Literal["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
 

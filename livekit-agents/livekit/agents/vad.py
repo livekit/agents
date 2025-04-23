@@ -151,7 +151,7 @@ class VADStream(ABC):
         self._input_ch.close()
 
     async def aclose(self) -> None:
-        """Close ths stream immediately"""
+        """Close the stream immediately"""
         self._input_ch.close()
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
@@ -162,7 +162,7 @@ class VADStream(ABC):
             val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
             if not self._task.cancelled() and (exc := self._task.exception()):
-                raise exc from None
+                raise exc  # noqa: B904
 
             raise StopAsyncIteration from None
 

@@ -9,7 +9,13 @@ from livekit import rtc
 
 from ... import utils
 from ...log import logger
-from ...types import ATTRIBUTE_AGENT_STATE, NOT_GIVEN, TOPIC_CHAT, NotGivenOr
+from ...types import (
+    ATTRIBUTE_AGENT_STATE,
+    ATTRIBUTE_PUBLISH_ON_BEHALF,
+    NOT_GIVEN,
+    TOPIC_CHAT,
+    NotGivenOr,
+)
 from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
@@ -25,8 +31,6 @@ from ._output import (
     _ParticipantLegacyTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
-
-ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
 
 
 @dataclass
@@ -112,7 +116,12 @@ class RoomIO:
             self._on_participant_connected(participant)
 
         if self._input_options.text_enabled:
-            self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
+            try:
+                self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
+            except ValueError:
+                logger.warning(
+                    f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
+                )
 
         if self._input_options.video_enabled:
             self._video_input = _ParticipantVideoInputStream(self._room)
@@ -191,6 +200,7 @@ class RoomIO:
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
+        self._agent_session._room_io = self
 
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)

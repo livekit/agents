@@ -80,7 +80,10 @@ class PlaybackFinishedEvent:
     playback_position: float
     """How much of the audio was played back"""
     interrupted: bool
-    """interrupted is True if playback was interrupted (clear_buffer() was called)"""
+    """Interrupted is True if playback was interrupted (clear_buffer() was called)"""
+    synchronized_transcript: str | None = None
+    """Transcript synced with playback; may be partial if the audio was interrupted
+    When None, the transcript is not synchronized with the playback"""
 
 
 class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
@@ -112,10 +115,17 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
                 lambda ev: self.on_playback_finished(
                     interrupted=ev.interrupted,
                     playback_position=ev.playback_position,
+                    synchronized_transcript=ev.synchronized_transcript,
                 ),
             )
 
-    def on_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
+    def on_playback_finished(
+        self,
+        *,
+        playback_position: float,
+        interrupted: bool,
+        synchronized_transcript: str | None = None,
+    ) -> None:
         """
         Developers building audio sinks must call this method when a playback/segment is finished.
         Segments are segmented by calls to flush() or clear_buffer()
@@ -130,7 +140,11 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished"]]):
         self.__playback_finished_count += 1
         self.__playback_finished_event.set()
 
-        ev = PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
+        ev = PlaybackFinishedEvent(
+            playback_position=playback_position,
+            interrupted=interrupted,
+            synchronized_transcript=synchronized_transcript,
+        )
         self.__last_playback_ev = ev
         self.emit("playback_finished", ev)
 

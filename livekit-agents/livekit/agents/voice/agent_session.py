@@ -221,7 +221,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 chat_cli = ChatCLI(self)
                 await chat_cli.start()
 
-            elif is_given(room):
+            elif is_given(room) and not self._room_io:
                 room_input_options = copy.deepcopy(room_input_options)
                 room_output_options = copy.deepcopy(room_output_options)
 
@@ -264,7 +264,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._room_io.start()
 
             else:
-                if not self.output.audio and not self.output.transcription:
+                if not self._room_io and not self.output.audio and not self.output.transcription:
                     logger.warning(
                         "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
@@ -386,14 +386,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._next_activity is None:
                 raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
-            return self._next_activity.generate_reply(
+            return self._next_activity._generate_reply(
                 user_message=user_message,
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
             )
 
-        return self._activity.generate_reply(
+        return self._activity._generate_reply(
             user_message=user_message,
             instructions=instructions,
             tool_choice=tool_choice,
@@ -441,7 +441,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_error(
         self,
-        error: llm.LLMError | stt.STTError | tts.TTSError,
+        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError,
     ) -> None:
         if self._closing_task or error.recoverable:
             return
