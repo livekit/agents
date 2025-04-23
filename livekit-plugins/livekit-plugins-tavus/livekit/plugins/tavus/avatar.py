@@ -98,8 +98,7 @@ class AvatarSession:
         logger.debug("waiting for avatar agent to join the room")
         await wait_for_participant(room=room, identity=self._avatar_participant_identity)
 
-        # TODO: push audio to datastream
-        # agent_session.output.audio = DataStreamAudioOutput(
-        #     room=room,
-        #     destination_identity=self._avatar_participant_identity,
-        # )
+        agent_session.output.audio = DataStreamAudioOutput(
+            room=room,
+            destination_identity=self._avatar_participant_identity,
+        )
