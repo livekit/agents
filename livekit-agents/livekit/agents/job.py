@@ -278,6 +278,7 @@ class JobContext:
             self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
         )
         self._pending_tasks.append(task)
+        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
         return task
 
     def add_sip_participant(
@@ -314,6 +315,7 @@ class JobContext:
             ),
         )
         self._pending_tasks.append(task)
+        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
         return task
 
     def transfer_sip_participant(
@@ -352,6 +354,7 @@ class JobContext:
             ),
         )
         self._pending_tasks.append(task)
+        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
         return task
 
     def shutdown(self, reason: str = "") -> None:
