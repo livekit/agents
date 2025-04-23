@@ -83,6 +83,7 @@ async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, 
     assert combined_frame.num_channels == num_channels, "num channels should be the same"
 
     # clipping
+    signal = np.array(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
     peak = np.iinfo(np.int16).max
     num_clipped = np.sum((signal >= peak) | (signal <= -peak))
     assert num_clipped == 0, f"{num_clipped} samples are clipped"
