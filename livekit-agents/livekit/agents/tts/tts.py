@@ -203,24 +203,15 @@ class ChunkedStream(ABC):
                 return await self._run()
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0:
+                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
                     self._emit_error(e, recoverable=False)
                     raise
-                elif i == self._conn_options.max_retry:
-                    self._emit_error(e, recoverable=False)
-                    raise APIConnectionError(
-                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
-                    ) from e
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
-                        extra={
-                            "tts": self._tts._label,
-                            "attempt": i + 1,
-                            "streamed": False,
-                        },
+                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
                     )
 
                 await asyncio.sleep(retry_interval)

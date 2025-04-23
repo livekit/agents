@@ -40,6 +40,7 @@ dev = [
     "ruff",
     "pytest-asyncio>=0.25.3",
     "jiwer>=3.1.0",
+    "scipy>=1.13.1",
 ]
 
 [tool.ruff]

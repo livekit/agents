@@ -7,11 +7,13 @@ import ssl
 import time
 
 import aiohttp
+import numpy as np
 import pytest
 from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APITimeoutError
+from livekit.agents.tts import TTS
 from livekit.agents.utils import AudioBuffer
 from livekit.plugins import (
     aws,
@@ -30,7 +32,7 @@ from livekit.plugins import (
 )
 
 from .toxic_proxy import Proxy, Toxiproxy
-from .utils import wer
+from .utils import EventCollector, wer
 
 load_dotenv(override=True)
 
@@ -46,10 +48,21 @@ def setup_oai_proxy(toxiproxy: Toxiproxy) -> Proxy:
     return toxiproxy.create("api.openai.com:443", "oai-stt-proxy", listen=OAI_LISTEN, enabled=True)
 
 
+def _get_spectral_flux(signal: np.ndarray, sample_rate: int) -> np.ndarray:
+    from scipy.signal import stft
+
+    _, _, Zxx = stft(signal[:, 0], fs=sample_rate, nperseg=512, noverlap=256)
+    magnitude = np.abs(Zxx)
+    flux = np.diff(magnitude, axis=1)
+    spectral_flux = np.mean(np.maximum(flux, 0), axis=0)
+    return spectral_flux
+
+
 async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, num_channels: int):
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
 
-    data = rtc.combine_audio_frames(frames).to_wav_bytes()
+    frame = rtc.combine_audio_frames(frames)
+    data = frame.to_wav_bytes()
     form = aiohttp.FormData()
     form.add_field("file", data, filename="file.wav", content_type="audio/wav")
     form.add_field("model", "whisper-1")
@@ -73,10 +86,21 @@ async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, 
         ) as resp:
             result = await resp.json()
 
+    # semantic
     assert wer(result["text"], TEST_AUDIO_SYNTHESIZE) <= WER_THRESHOLD
     combined_frame = rtc.combine_audio_frames(frames)
     assert combined_frame.sample_rate == sample_rate, "sample rate should be the same"
     assert combined_frame.num_channels == num_channels, "num channels should be the same"
+
+    # spectral flux
+    signal = np.array(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
+    spectral_flux = _get_spectral_flux(signal, sample_rate)
+    assert np.max(spectral_flux) < 5e3, "glitchy audio (spectral jumps detected)"
+
+    # clipping
+    peak = np.iinfo(np.int16).max
+    num_clipped = np.sum((signal >= peak) | (signal <= -peak))
+    assert num_clipped == 0, f"{num_clipped} samples are clipped"
 
 
 SYNTHESIZE_TTS = [
@@ -178,6 +202,15 @@ if PLUGIN:
     SYNTHESIZE_TTS = [p for p in SYNTHESIZE_TTS if p.id.startswith(PLUGIN)]  # type: ignore
 
 
+async def _do_synthesis(tts: TTS, *, conn_options: APIConnectOptions) -> list[rtc.AudioFrame]:
+    frames = []
+    async with tts.synthesize(text=TEST_AUDIO_SYNTHESIZE, conn_options=conn_options) as stream:
+        async for audio in stream:
+            frames.append(audio.frame)
+
+    return frames
+
+
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_synthesize(tts_factory, toxiproxy: Toxiproxy):
@@ -188,17 +221,11 @@ async def test_synthesize(tts_factory, toxiproxy: Toxiproxy):
     proxy_name = f"{tts.label}-proxy"
     toxiproxy.create(proxy_upstream, proxy_name, listen=PROXY_LISTEN, enabled=True)
 
-    frames = []
     try:
-
-        async def process_synthesis():
-            async with tts.synthesize(
-                text=TEST_AUDIO_SYNTHESIZE, conn_options=APIConnectOptions(max_retry=0, timeout=5)
-            ) as stream:
-                async for audio in stream:
-                    frames.append(audio.frame)
-
-        await asyncio.wait_for(process_synthesis(), timeout=30)
+        frames = await asyncio.wait_for(
+            _do_synthesis(tts, conn_options=APIConnectOptions(max_retry=3, timeout=5)),
+            timeout=30,
+        )
     except asyncio.TimeoutError:
         pytest.fail("test timed out after 30 seconds")
     finally:
@@ -218,24 +245,38 @@ async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
     p = toxiproxy.create(proxy_upstream, proxy_name, listen=PROXY_LISTEN, enabled=True)
     p.add_toxic(type="timeout", attributes={"timeout": 0})
 
-    start_time = time.time()
     try:
+        # test timeout
+        start_time = time.time()
+        try:
+            with pytest.raises(APITimeoutError):
+                await asyncio.wait_for(
+                    _do_synthesis(tts, conn_options=APIConnectOptions(max_retry=0, timeout=2.5)),
+                    timeout=10,
+                )
+        except asyncio.TimeoutError:
+            pytest.fail("test timed out after 10 seconds")
 
-        async def test_timeout_process():
-            async with tts.synthesize(
-                text=TEST_AUDIO_SYNTHESIZE,
-                conn_options=APIConnectOptions(max_retry=0, timeout=5),
-            ) as stream:
-                async for _ in stream:
-                    pass
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        assert 1.5 <= elapsed_time <= 3.5, (
+            f"expected timeout around 2 seconds, got {elapsed_time:.2f}s"
+        )
 
+        # test retries
+        error_events = EventCollector(tts, "error")
+        start_time = time.time()
         with pytest.raises(APITimeoutError):
-            await asyncio.wait_for(test_timeout_process(), timeout=10)
-    except asyncio.TimeoutError:
-        pytest.fail("test timed out after 10 seconds")
+            await _do_synthesis(
+                tts, conn_options=APIConnectOptions(max_retry=3, timeout=0.5, retry_interval=0.0)
+            )
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+
+        assert error_events.count == 4, "expected 4 errors, got {error_events.count}"
+        assert 1 <= elapsed_time <= 3, (
+            f"expected total timeout around 2 seconds, got {elapsed_time:.2f}s"
+        )
     finally:
         await tts.aclose()
-
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    assert 4 <= elapsed_time <= 6, f"Expected timeout around 5 seconds, got {elapsed_time:.2f}s"
