@@ -17,6 +17,11 @@ from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
+from livekit.agents.llm.tool_context import (
+    get_raw_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from openai.types.beta.realtime import (
@@ -130,8 +135,10 @@ _MOCK_AUDIO_ID_PREFIX = "lk_mock_audio_item_"
 # default values got from a "default" session from their API
 DEFAULT_TEMPERATURE = 0.8
 DEFAULT_TURN_DETECTION = TurnDetection(
-    type="semantic_vad",
-    eagerness="auto",
+    type="server_vad",
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=200,
     create_response=True,
     interrupt_response=True,
 )
@@ -770,13 +777,24 @@ class RealtimeSession(
             except asyncio.TimeoutError:
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
-    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         async with self._update_fnc_ctx_lock:
             oai_tools: list[session_update_event.SessionTool] = []
-            retained_tools: list[llm.FunctionTool] = []
+            retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
             for tool in tools:
-                tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+                if is_function_tool(tool):
+                    tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+                elif is_raw_function_tool(tool):
+                    tool_info = get_raw_function_info(tool)
+                    tool_desc = tool_info.raw_schema
+                    tool_desc["type"] = "function"  # internally tagged
+                else:
+                    logger.error(
+                        "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
+                    )
+                    continue
+
                 try:
                     session_tool = session_update_event.SessionTool.model_validate(tool_desc)
                     oai_tools.append(session_tool)

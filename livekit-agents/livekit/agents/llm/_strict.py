@@ -1,14 +1,9 @@
-# from https://github.com/openai/openai-python/blob/7193688e364bd726594fe369032e813ced1bdfe2/src/openai/lib/_pydantic.py
-
-
 from __future__ import annotations
 
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypeGuard
-
-from ..types import NOT_GIVEN
 
 _T = TypeVar("_T")
 
@@ -20,6 +15,19 @@ def to_strict_json_schema(model: type[BaseModel] | TypeAdapter[Any]) -> dict[str
         schema = model.model_json_schema()
 
     return _ensure_strict_json_schema(schema, path=(), root=schema)
+
+
+# from https://platform.openai.com/docs/guides/function-calling?api-mode=responses&strict-mode=disabled#strict-mode
+# Strict mode
+# Setting strict to true will ensure function calls reliably adhere to the function schema,
+# instead of being best effort. We recommend always enabling strict mode.
+#
+# Under the hood, strict mode works by leveraging our structured outputs feature and therefore
+# introduces a couple requirements:
+#
+# additionalProperties must be set to false for each object in the parameters.
+# All fields in properties must be marked as required.
+# You can denote optional fields by adding null as a type option (see example below).
 
 
 def _ensure_strict_json_schema(
@@ -76,6 +84,14 @@ def _ensure_strict_json_schema(
             for i, variant in enumerate(any_of)
         ]
 
+    # unions (oneOf)
+    one_of = json_schema.get("oneOf")
+    if is_list(one_of):
+        json_schema["oneOf"] = [
+            _ensure_strict_json_schema(variant, path=(*path, "oneOf", str(i)), root=root)
+            for i, variant in enumerate(one_of)
+        ]
+
     # intersections
     all_of = json_schema.get("allOf")
     if is_list(all_of):
@@ -90,11 +106,25 @@ def _ensure_strict_json_schema(
                 for i, entry in enumerate(all_of)
             ]
 
-    # strip `None` defaults as there's no meaningful distinction here
-    # the schema will still be `nullable` and the model will default
-    # to using `None` anyway
-    if json_schema.get("default", NOT_GIVEN) is None:
-        json_schema.pop("default")
+    # strict mode doesn't support default
+    if json_schema.get("default") is not None:
+        json_schema.pop("default", None)
+
+        # Treat any parameter with a default value as optional. If the parameter’s type doesn't
+        # support None, the default will be used instead.
+        t = json_schema.get("type")
+        if isinstance(t, str):
+            json_schema["type"] = [t, "null"]
+
+        elif isinstance(t, list):
+            types = t.copy()
+            if "null" not in types:
+                types.append("null")
+
+            json_schema["type"] = types
+
+    json_schema.pop("title", None)
+    json_schema.pop("discriminator", None)
 
     # we can't use `$ref`s if there are also other properties defined, e.g.
     # `{"$ref": "...", "description": "my description"}`
@@ -117,6 +147,26 @@ def _ensure_strict_json_schema(
         # Since the schema expanded from `$ref` might not have `additionalProperties: false` applied,  # noqa: E501
         # we call `_ensure_strict_json_schema` again to fix the inlined schema and ensure it's valid.  # noqa: E501
         return _ensure_strict_json_schema(json_schema, path=path, root=root)
+
+    # simplify nullable unions (“anyOf” or “oneOf”)
+    for union_key in ("anyOf", "oneOf"):
+        variants = json_schema.get(union_key)
+        if is_list(variants) and len(variants) == 2 and {"type": "null"} in variants:
+            # pick out the non-null branch
+            non_null = next(
+                (item for item in variants if item != {"type": "null"}),
+                None,
+            )
+            assert is_dict(non_null)
+
+            t = non_null["type"]
+            if isinstance(t, str):
+                non_null["type"] = [t, "null"]
+
+            merged = {k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")}
+            merged.update(non_null)
+            json_schema = merged
+            break
 
     return json_schema
 

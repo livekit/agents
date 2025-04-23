@@ -386,14 +386,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._next_activity is None:
                 raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
-            return self._next_activity.generate_reply(
+            return self._next_activity._generate_reply(
                 user_message=user_message,
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
             )
 
-        return self._activity.generate_reply(
+        return self._activity._generate_reply(
             user_message=user_message,
             instructions=instructions,
             tool_choice=tool_choice,

@@ -34,6 +34,7 @@ from .realtime import (
 )
 from .tool_context import (
     FunctionTool,
+    RawFunctionTool,
     StopResponse,
     ToolChoice,
     ToolContext,
@@ -41,6 +42,7 @@ from .tool_context import (
     find_function_tools,
     function_tool,
     is_function_tool,
+    is_raw_function_tool,
 )
 
 __all__ = [
@@ -66,6 +68,8 @@ __all__ = [
     "function_tool",
     "find_function_tools",
     "FunctionTool",
+    "is_raw_function_tool",
+    "RawFunctionTool",
     "ToolContext",
     "ToolError",
     "StopResponse",

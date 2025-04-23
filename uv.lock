@@ -16,6 +16,7 @@ members = [
     "livekit-plugins-aws",
     "livekit-plugins-azure",
     "livekit-plugins-bey",
+    "livekit-plugins-bithuman",
     "livekit-plugins-cartesia",
     "livekit-plugins-clova",
     "livekit-plugins-deepgram",
@@ -1200,6 +1201,9 @@ azure = [
 bey = [
     { name = "livekit-plugins-bey" },
 ]
+bithuman = [
+    { name = "livekit-plugins-bithuman" },
+]
 cartesia = [
     { name = "livekit-plugins-cartesia" },
 ]
@@ -1253,6 +1257,9 @@ rime = [
 silero = [
     { name = "livekit-plugins-silero" },
 ]
+speechify = [
+    { name = "livekit-plugins-speechify" },
+]
 speechmatics = [
     { name = "livekit-plugins-speechmatics" },
 ]
@@ -1276,6 +1283,7 @@ requires-dist = [
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
     { name = "livekit-plugins-azure", marker = "extra == 'azure'", editable = "livekit-plugins/livekit-plugins-azure" },
     { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/livekit-plugins-bey" },
+    { name = "livekit-plugins-bithuman", marker = "extra == 'bithuman'", editable = "livekit-plugins/livekit-plugins-bithuman" },
     { name = "livekit-plugins-cartesia", marker = "extra == 'cartesia'", editable = "livekit-plugins/livekit-plugins-cartesia" },
     { name = "livekit-plugins-clova", marker = "extra == 'clova'", editable = "livekit-plugins/livekit-plugins-clova" },
     { name = "livekit-plugins-deepgram", marker = "extra == 'deepgram'", editable = "livekit-plugins/livekit-plugins-deepgram" },
@@ -1291,6 +1299,7 @@ requires-dist = [
     { name = "livekit-plugins-resemble", marker = "extra == 'resemble'", editable = "livekit-plugins/livekit-plugins-resemble" },
     { name = "livekit-plugins-rime", marker = "extra == 'rime'", editable = "livekit-plugins/livekit-plugins-rime" },
     { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
+    { name = "livekit-plugins-speechify", marker = "extra == 'speechify'", editable = "livekit-plugins/livekit-plugins-speechify" },
     { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "livekit-protocol", specifier = "~=1.0" },
@@ -1307,7 +1316,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechmatics", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechify", "speechmatics", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1384,6 +1393,16 @@ requires-dist = [
 [[package]]
 name = "livekit-plugins-bey"
 source = { editable = "livekit-plugins/livekit-plugins-bey" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-bithuman"
+source = { editable = "livekit-plugins/livekit-plugins-bithuman" }
 dependencies = [
     { name = "livekit-agents" },
 ]
