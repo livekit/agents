@@ -381,6 +381,32 @@ class AgentActivity(RecognitionHooks):
             if not self._draining:
                 logger.warning("task closing without draining")
 
+            # Unregister event handlers to prevent duplicate metrics
+            if isinstance(self.llm, llm.LLM):
+                self.llm.off("metrics_collected", self._on_metrics_collected)
+                self.llm.off("error", self._on_error)
+
+            if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
+                self._rt_session.off("generation_created", self._on_generation_created)
+                self._rt_session.off("input_speech_started", self._on_input_speech_started)
+                self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
+                self._rt_session.off(
+                    "input_audio_transcription_completed",
+                    self._on_input_audio_transcription_completed,
+                )
+                self._rt_session.off("error", self._on_error)
+
+            if isinstance(self.stt, stt.STT):
+                self.stt.off("metrics_collected", self._on_metrics_collected)
+                self.stt.off("error", self._on_error)
+
+            if isinstance(self.tts, tts.TTS):
+                self.tts.off("metrics_collected", self._on_metrics_collected)
+                self.tts.off("error", self._on_error)
+
+            if isinstance(self.vad, vad.VAD):
+                self.vad.off("metrics_collected", self._on_metrics_collected)
+
             if self._rt_session is not None:
                 await self._rt_session.aclose()
 
