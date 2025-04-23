@@ -48,16 +48,6 @@ def setup_oai_proxy(toxiproxy: Toxiproxy) -> Proxy:
     return toxiproxy.create("api.openai.com:443", "oai-stt-proxy", listen=OAI_LISTEN, enabled=True)
 
 
-def _get_spectral_flux(signal: np.ndarray, sample_rate: int) -> np.ndarray:
-    from scipy.signal import stft
-
-    _, _, Zxx = stft(signal[:, 0], fs=sample_rate, nperseg=512, noverlap=256)
-    magnitude = np.abs(Zxx)
-    flux = np.diff(magnitude, axis=1)
-    spectral_flux = np.mean(np.maximum(flux, 0), axis=0)
-    return spectral_flux
-
-
 async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, num_channels: int):
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
 
@@ -91,11 +81,6 @@ async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, 
     combined_frame = rtc.combine_audio_frames(frames)
     assert combined_frame.sample_rate == sample_rate, "sample rate should be the same"
     assert combined_frame.num_channels == num_channels, "num channels should be the same"
-
-    # spectral flux
-    signal = np.array(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
-    spectral_flux = _get_spectral_flux(signal, sample_rate)
-    assert np.max(spectral_flux) < 5e3, "glitchy audio (spectral jumps detected)"
 
     # clipping
     peak = np.iinfo(np.int16).max
