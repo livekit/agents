@@ -17,22 +17,26 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
-import weakref
 from dataclasses import dataclass
 
 import aiohttp
 
 from hume import AsyncHumeClient
 from hume.tts import Format, FormatWav, PostedContext, PostedUtterance, PostedUtteranceVoiceWithName
-from livekit.agents import APIConnectionError, APIConnectOptions, tokenize, tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APITimeoutError,
+    tokenize,
+    tts,
+    utils,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-
-from .log import logger
 
 # Default audio settings
 DEFAULT_SAMPLE_RATE = 24000
@@ -114,7 +118,7 @@ class TTS(tts.TTS):
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
-                streaming=True,
+                streaming=False,
             ),
             sample_rate=sample_rate,
             num_channels=DEFAULT_NUM_CHANNELS,
@@ -146,7 +150,6 @@ class TTS(tts.TTS):
 
         self._client = AsyncHumeClient(api_key=self._api_key)
         self._session = http_session
-        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -222,26 +225,6 @@ class TTS(tts.TTS):
             opts=self._opts,
         )
 
-    def stream(
-        self,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            opts=self._opts,
-        )
-        self._streams.add(stream)
-        return stream
-
-    async def aclose(self) -> None:
-        """Close all streams and cleanup resources."""
-        for stream in list(self._streams):
-            await stream.aclose()
-        self._streams.clear()
-        await super().aclose()
-
 
 class ChunkedStream(tts.ChunkedStream):
     """Stream for Hume TTS JSON streaming API."""
@@ -290,6 +273,7 @@ class ChunkedStream(tts.ChunkedStream):
                         strip_headers=self._opts.strip_headers,
                     ):
                         decoder.push(base64.b64decode(chunk.audio))
+
                 finally:
                     decoder.end_input()
 
@@ -303,120 +287,11 @@ class ChunkedStream(tts.ChunkedStream):
 
             emitter.flush()
 
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             if decode_task:
                 await utils.aio.gracefully_cancel(decode_task)
             await decoder.aclose()
-
-
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._opts = opts
-        self._client = tts._client
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
-
-    @utils.log_exceptions(logger=logger)
-    async def _create_text_stream(self):
-        async def text_stream():
-            async for word_stream in self._segments_ch:
-                async for word in word_stream:
-                    self._mark_started()
-                    yield word.token
-
-        return text_stream()
-
-    @utils.log_exceptions(logger=logger)
-    async def _tokenize_input(self):
-        # Converts incoming text into WordStreams and sends them into _segments_ch
-        word_stream = None
-        async for input in self._input_ch:
-            if isinstance(input, str):
-                if word_stream is None:
-                    word_stream = self._opts.word_tokenizer.stream()
-                    self._segments_ch.send_nowait(word_stream)
-                word_stream.push_text(input)
-            elif isinstance(input, self._FlushSentinel):
-                if word_stream:
-                    word_stream.end_input()
-                word_stream = None
-        self._segments_ch.close()
-
-    @utils.log_exceptions(logger=logger)
-    async def _get_text_as_string(self, text_stream):
-        full_text = ""
-
-        async for chunk in text_stream:
-            full_text += f"{chunk} "
-
-        return full_text
-
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-        input_task = asyncio.create_task(self._tokenize_input())
-
-        try:
-            text_stream = await self._create_text_stream()
-            decoder = utils.codecs.AudioStreamDecoder(
-                sample_rate=self._opts.sample_rate,
-                num_channels=DEFAULT_NUM_CHANNELS,
-            )
-
-            async def decode_loop():
-                try:
-                    full_text = await self._get_text_as_string(text_stream)
-                    logger.info("description %s", self._opts.utterance_options.description)
-                    logger.info("speed %s", self._opts.utterance_options.speed)
-                    logger.info(
-                        "trailing silence %s", self._opts.utterance_options.trailing_silence
-                    )
-
-                    async for chunk in self._client.tts.synthesize_json_streaming(
-                        utterances=[
-                            PostedUtterance(
-                                text=full_text,
-                                description=self._opts.utterance_options.description,
-                                voice=self._opts.utterance_options.voice,
-                                speed=self._opts.utterance_options.speed,
-                                trailing_silence=self._opts.utterance_options.trailing_silence,
-                            )
-                        ],
-                        context=self._opts.context,
-                        format=self._opts.format,
-                        num_generations=self._opts.num_generations,
-                        split_utterances=self._opts.split_utterances,
-                        instant_mode=self._opts.instant_mode,
-                        strip_headers=self._opts.strip_headers,
-                    ):
-                        decoder.push(base64.b64decode(chunk.audio))
-
-                finally:
-                    decoder.end_input()
-
-            decode_task = asyncio.create_task(decode_loop())
-
-            try:
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
-                )
-
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
-            finally:
-                await utils.aio.gracefully_cancel(decode_task)
-                await decoder.aclose()
-
-        except Exception as e:
-            raise APIConnectionError() from e
-        finally:
-            await utils.aio.gracefully_cancel(input_task)
