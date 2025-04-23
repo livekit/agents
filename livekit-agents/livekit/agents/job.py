@@ -110,7 +110,7 @@ class JobContext:
             ]
         ] = []
         self._participant_tasks = dict[tuple[str, Callable], asyncio.Task[None]]()
-        self._pending_tasks = list[asyncio.Task[None]]()
+        self._pending_tasks = list[asyncio.Task]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
@@ -272,7 +272,7 @@ class JobContext:
         """Disconnects the agent from the room, but does not delete the room."""
         return asyncio.create_task(self._room.disconnect())
 
-    def delete_room(self) -> asyncio.Future[None]:
+    def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:
         """Deletes the room and disconnects all participants."""
         task = asyncio.create_task(
             self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
