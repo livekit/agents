@@ -27,7 +27,7 @@ from .. import utils
 from ..log import logger
 
 if TYPE_CHECKING:
-    from ..llm import FunctionTool
+    from ..llm import FunctionTool, RawFunctionTool
 
 
 class ImageContent(BaseModel):
@@ -197,15 +197,27 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
-        tools: NotGivenOr[list[FunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
-        from .tool_context import get_tool_name
+        from .tool_context import (
+            get_function_info,
+            get_raw_function_info,
+            is_function_tool,
+            is_raw_function_tool,
+        )
 
         valid_tools = set()
         if is_given(tools):
-            valid_tools = {tool if isinstance(tool, str) else get_tool_name(tool) for tool in tools}
+            for tool in tools:
+                if isinstance(tool, str):
+                    valid_tools.add(tool)
+                elif is_function_tool(tool):
+                    valid_tools.add(get_function_info(tool).name)
+                elif is_raw_function_tool(tool):
+                    valid_tools.add(get_raw_function_info(tool).name)
+                # TODO(theomonnom): other tools
 
         for item in self.items:
             if exclude_function_call and item.type in [
