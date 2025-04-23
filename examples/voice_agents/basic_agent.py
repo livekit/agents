@@ -16,7 +16,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import google, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -64,11 +64,7 @@ class MyAgent(Agent):
 
         logger.info(f"Looking up weather for {location}")
 
-        return {
-            "weather": "sunny",
-            "temperature": 70,
-            "location": location,
-        }
+        return "sunny with a temperature of 70 degrees."
 
 
 def prewarm(proc: JobProcess):
@@ -86,9 +82,10 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=openai.TTS(voice="ash"),
+        # llm=openai.LLM(model="gpt-4o-mini"),
+        llm=google.beta.realtime.RealtimeModel(),
+        # stt=deepgram.STT(model="nova-3", language="multi"),
+        # tts=openai.TTS(voice="ash"),
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),
     )

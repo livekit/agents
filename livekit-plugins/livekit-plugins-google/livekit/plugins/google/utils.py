@@ -28,7 +28,7 @@ def get_tool_results_for_realtime(chat_ctx: llm.ChatContext) -> types.LiveClient
                 types.FunctionResponse(
                     id=msg.call_id,
                     name=msg.name,
-                    response={"text": msg.output},
+                    response={"output": msg.output},
                 )
             )
     return (
@@ -99,9 +99,6 @@ def to_chat_ctx(
     if current_role is not None and parts:
         turns.append(types.Content(role=current_role, parts=parts))
 
-    if not turns:
-        # if no turns, add a user message with a placeholder
-        turns = [types.Content(role="user", parts=[types.Part(text=".")])]
     return turns, system_instruction
 
 
