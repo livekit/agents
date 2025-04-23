@@ -201,12 +201,12 @@ class ChatContext:
     ) -> ChatContext:
         items = []
 
-        from .tool_context import get_function_info
+        from .tool_context import get_tool_name
 
         valid_tools = set()
         if is_given(tools):
             valid_tools = {
-                tool if isinstance(tool, str) else get_function_info(tool).name for tool in tools
+                tool if isinstance(tool, str) else get_tool_name(tool) for tool in tools
             }
 
         for item in self.items:
