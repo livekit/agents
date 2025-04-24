@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
@@ -109,6 +110,7 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     hash: bytes | None = None
+    created_at: float = Field(default_factory=time.time)
 
     @property
     def text_content(self) -> str | None:
