@@ -64,9 +64,6 @@ class RoomInputOptions:
     audio_num_channels: int = 1
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     text_input_cb: TextInputCallback = _default_text_input_cb
-    sync_transcription: NotGivenOr[bool] = NOT_GIVEN
-    """False to disable transcription synchronization with audio output.
-    Otherwise, transcription is emitted as quickly as available."""
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
     """Participant kinds accepted for auto subscription. If empty, all kinds are accepted."""
     participant_identity: NotGivenOr[str] = NOT_GIVEN
@@ -83,6 +80,9 @@ class RoomOutputOptions:
     audio_publish_options: rtc.TrackPublishOptions = field(
         default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
+    sync_transcription: NotGivenOr[bool] = NOT_GIVEN
+    """False to disable transcription synchronization with audio output.
+    Otherwise, transcription is emitted as quickly as available."""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
