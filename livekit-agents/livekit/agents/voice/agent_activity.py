@@ -1041,6 +1041,7 @@ class AgentActivity(RecognitionHooks):
         def _on_first_frame(_: asyncio.Future) -> None:
             self._session._update_agent_state("speaking")
 
+        audio_out: _AudioOutput | None = None
         if audio_output is not None:
             assert tts_gen_data is not None
             # TODO(theomonnom): should the audio be added to the chat_context too?
@@ -1090,13 +1091,18 @@ class AgentActivity(RecognitionHooks):
                     speech_id=speech_handle.id,
                 )
 
+                synchronized_transcript = (
+                    playback_ev.synchronized_transcript
+                    if playback_ev.synchronized_transcript is not None
+                    else text_out.text
+                )
+
+                if audio_out is not None and not audio_out.first_frame_fut.done():
+                    synchronized_transcript = ""
+
                 msg = chat_ctx.add_message(
                     role="assistant",
-                    content=(
-                        playback_ev.synchronized_transcript
-                        if playback_ev.synchronized_transcript is not None
-                        else text_out.text
-                    ),
+                    content=synchronized_transcript,
                     id=llm_gen_data.id,
                     interrupted=True,
                 )
