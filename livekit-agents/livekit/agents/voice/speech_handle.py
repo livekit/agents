@@ -69,7 +69,7 @@ class SpeechHandle:
 
         Only available once the speech playout is complete.
         """
-        return None
+        return self._chat_message
 
     # TODO(theomonnom): should we introduce chat_items property as well for generated tools?
 
