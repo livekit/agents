@@ -12,7 +12,6 @@ from livekit.agents import (
     APIConnectOptions,
     NotGivenOr,
     utils,
-    wait_for_participant,
 )
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -20,6 +19,7 @@ from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from .api import TavusAPI, TavusException
 from .log import logger
 
+SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "tavus-avatar-agent"
 _AVATAR_AGENT_NAME = "tavus-avatar-agent"
 
@@ -96,9 +96,10 @@ class AvatarSession:
         )
 
         logger.debug("waiting for avatar agent to join the room")
-        await wait_for_participant(room=room, identity=self._avatar_participant_identity)
+        await utils.wait_for_participant(room=room, identity=self._avatar_participant_identity)
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
             destination_identity=self._avatar_participant_identity,
+            sample_rate=SAMPLE_RATE,
         )
