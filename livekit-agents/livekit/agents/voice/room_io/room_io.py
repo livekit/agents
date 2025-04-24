@@ -182,8 +182,8 @@ class RoomIO:
             # use the RoomIO's audio output if available, otherwise use the agent's audio output
             # (e.g the audio output isn't using RoomIO with our avatar datastream impl)
             sync_transcription = True
-            if utils.is_given(self._input_options.sync_transcription):
-                sync_transcription = self._input_options.sync_transcription
+            if utils.is_given(self._output_options.sync_transcription):
+                sync_transcription = self._output_options.sync_transcription
 
             if sync_transcription and (
                 audio_output := self._audio_output or self._agent_session.output.audio
