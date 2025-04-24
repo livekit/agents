@@ -842,7 +842,8 @@ class AgentActivity(RecognitionHooks):
         if old_task is not None:
             # We never cancel user code as this is very confusing.
             # So we wait for the old execution of on_user_turn_completed to finish.
-            # In practice this is OK because most speeches will be interrupted if a new turn is detected.
+            # In practice this is OK because most speeches will be interrupted if a new turn
+            # is detected.
             await old_task
 
         if isinstance(self.llm, llm.RealtimeModel):
