@@ -10,6 +10,7 @@ from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
+from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -269,6 +270,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
 
+            try:
+                job_ctx = get_job_context()
+                job_ctx.add_tracing_callback(self._trace_chat_ctx)
+            except RuntimeError:
+                pass  # ignore
+
             # it is ok to await it directly, there is no previous task to drain
             await self._update_activity_task(self._agent)
 
@@ -286,6 +293,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._update_agent_state("listening")
+
+    async def _trace_chat_ctx(self) -> None:
+        if self._activity is None:
+            return  # can happen at startup
+
+        chat_ctx = self._activity.agent.chat_ctx
+        debug.Tracing.store_kv("chat_ctx", chat_ctx.to_dict(exclude_function_call=False))
+        debug.Tracing.store_kv("history", self.history.to_dict(exclude_function_call=False))
 
     async def drain(self) -> None:
         if self._activity is None:
@@ -317,7 +332,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         await self._aclose_impl()
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
-        debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
+        # don't log VAD metrics as they are too verbose
+        if ev.type != "metrics_collected" or ev.metrics.type != "vad_metrics":
+            debug.Tracing.log_event(f'agent.on("{event}")', ev.model_dump())
+
         return super().emit(event, ev)
 
     def update_options(self) -> None:

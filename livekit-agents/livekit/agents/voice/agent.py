@@ -239,7 +239,7 @@ class Agent:
         Raises:
             RuntimeError: If the agent is not running
         """
-        return self._get_activity_or_raise().agent
+        return self._get_activity_or_raise().session
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the

@@ -166,12 +166,16 @@ class AgentActivity(RecognitionHooks):
         return self._draining
 
     @property
-    def agent(self) -> AgentSession:
+    def session(self) -> AgentSession:
         return self._session
 
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
         return self._agent._turn_detection or self._session._turn_detection
+
+    @property
+    def agent(self) -> Agent:
+        return self._agent
 
     @property
     def stt(self) -> stt.STT | None:
