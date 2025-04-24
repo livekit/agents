@@ -66,6 +66,7 @@ class _VideoSampler(Protocol):
     def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool: ...
 
 
+# TODO(theomonnom): Should this be moved to another file?
 class VoiceActivityVideoSampler:
     def __init__(self, *, speaking_fps: float = 3.0, silent_fps: float = 1.0):
         if speaking_fps <= 0 or silent_fps <= 0:
