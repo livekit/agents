@@ -1053,8 +1053,10 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(tools)
 
         if new_message is not None:
-            chat_ctx.items.append(new_message)
-            self._agent._chat_ctx.items.append(new_message)
+            idx = chat_ctx.find_insertion_index(created_at=new_message.created_at)
+            chat_ctx.items.insert(idx, new_message)
+            idx = self._agent._chat_ctx.find_insertion_index(created_at=new_message.created_at)
+            self._agent._chat_ctx.items.insert(idx, new_message)
             self._session._conversation_item_added(new_message)
 
         if instructions is not None:
