@@ -1474,8 +1474,6 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(exe_task)
             return
 
-        speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
-
         if len(message_outputs) > 0:
             # there should be only one message
             msg_id, text_out, _ = message_outputs[0]
@@ -1485,6 +1483,9 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.items.append(msg)
             speech_handle._set_chat_message(msg)
             self._session._conversation_item_added(msg)
+
+        # mark playout must be done before _set_chat_message
+        speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
         tool_output.first_tool_fut.add_done_callback(
             lambda _: self._session._update_agent_state("thinking")
