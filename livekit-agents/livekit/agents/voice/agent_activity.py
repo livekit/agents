@@ -1080,35 +1080,33 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
 
+            forwarded_text = text_out.text
             # if the audio playout was enabled, clear the buffer
             if audio_output is not None:
                 audio_output.clear_buffer()
+
                 playback_ev = await audio_output.wait_for_playout()
+                if audio_out is not None and audio_out.first_frame_fut.done():
+                    # playback_ev is valid only if the first frame was already played
+                    log_event(
+                        "playout interrupted",
+                        playback_position=playback_ev.playback_position,
+                        speech_id=speech_handle.id,
+                    )
+                    if playback_ev.synchronized_transcript is not None:
+                        forwarded_text = playback_ev.synchronized_transcript
+                else:
+                    forwarded_text = ""
 
-                log_event(
-                    "playout interrupted",
-                    playback_position=playback_ev.playback_position,
-                    speech_id=speech_handle.id,
-                )
-
-                synchronized_transcript = (
-                    playback_ev.synchronized_transcript
-                    if playback_ev.synchronized_transcript is not None
-                    else text_out.text
-                )
-
-                if audio_out is not None and not audio_out.first_frame_fut.done():
-                    synchronized_transcript = ""
-
-                msg = chat_ctx.add_message(
-                    role="assistant",
-                    content=synchronized_transcript,
-                    id=llm_gen_data.id,
-                    interrupted=True,
-                )
-                self._agent._chat_ctx.items.append(msg)
-                self._session._update_agent_state("listening")
-                self._session._conversation_item_added(msg)
+            msg = chat_ctx.add_message(
+                role="assistant",
+                content=forwarded_text,
+                id=llm_gen_data.id,
+                interrupted=True,
+            )
+            self._agent._chat_ctx.items.append(msg)
+            self._session._update_agent_state("listening")
+            self._session._conversation_item_added(msg)
 
             speech_handle._mark_playout_done()
             await utils.aio.cancel_and_wait(exe_task)
@@ -1368,44 +1366,54 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
-            if not speech_handle.interrupted:
-                self._session._update_agent_state("listening")
+            self._session._update_agent_state("listening")
 
-        if speech_handle.interrupted:
+        if speech_handle.interrupted and len(message_outputs) > 0:
             await utils.aio.cancel_and_wait(*tasks)
 
+            msg_id, text_out, audio_out = message_outputs[0]  # there should be only one message
+            forwarded_text = text_out.text
             if audio_output is not None:
                 audio_output.clear_buffer()
-                playback_ev = await audio_output.wait_for_playout()
 
-                log_event(
-                    "playout interrupted",
-                    playback_position=playback_ev.playback_position,
-                    speech_id=speech_handle.id,
+                playback_ev = await audio_output.wait_for_playout()
+                playback_position = playback_ev.playback_position
+                if audio_out is not None and audio_out.first_frame_fut.done():
+                    # playback_ev is valid only if the first frame was already played
+                    log_event(
+                        "playout interrupted",
+                        playback_position=playback_ev.playback_position,
+                        speech_id=speech_handle.id,
+                    )
+                    if playback_ev.synchronized_transcript is not None:
+                        forwarded_text = playback_ev.synchronized_transcript
+                else:
+                    forwarded_text = ""
+                    playback_position = 0
+
+                # truncate server-side message
+                self._rt_session.truncate(
+                    message_id=msg_id, audio_end_ms=int(playback_position * 1000)
                 )
-                self._session._update_agent_state("listening")
+
+            msg = llm.ChatMessage(
+                role="assistant", content=[forwarded_text], id=msg_id, interrupted=True
+            )
+            self._agent._chat_ctx.items.append(msg)
+            self._session._conversation_item_added(msg)
 
             speech_handle._mark_playout_done()
             await utils.aio.cancel_and_wait(exe_task)
-
-            # TODO(theomonnom): truncate message (+ OAI serverside mesage)
-
-            for msg_id, text_out, _ in message_outputs:
-                msg = llm.ChatMessage(
-                    role="assistant", content=[text_out.text], id=msg_id, interrupted=True
-                )
-                self._agent._chat_ctx.items.append(msg)
-                self._session._conversation_item_added(msg)
             return
 
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
-        for msg_id, text_out, _ in message_outputs:
-            msg = llm.ChatMessage(
-                role="assistant", content=[text_out.text], id=msg_id, interrupted=False
-            )
-            self._agent._chat_ctx.items.append(msg)
-            self._session._conversation_item_added(msg)
+        msg_id, text_out, _ = message_outputs[0]  # there should be only one message
+        msg = llm.ChatMessage(
+            role="assistant", content=[text_out.text], id=msg_id, interrupted=False
+        )
+        self._agent._chat_ctx.items.append(msg)
+        self._session._conversation_item_added(msg)
 
         tool_output.first_tool_fut.add_done_callback(
             lambda _: self._session._update_agent_state("thinking")
