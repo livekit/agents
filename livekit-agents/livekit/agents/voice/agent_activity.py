@@ -375,6 +375,8 @@ class AgentActivity(RecognitionHooks):
             task = self._create_speech_task(self._agent.on_exit(), name="AgentTask_on_exit")
             _authorize_inline_task(task)
 
+            self._deregister_callbacks()
+
             self._wake_up_main_task()
             self._draining = True
             if self._main_atask is not None:
@@ -668,6 +670,18 @@ class AgentActivity(RecognitionHooks):
         ):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
+    
+    def _deregister_callbacks(self):
+        # TODO: use off_all() once merged
+        # https://github.com/livekit/python-sdks/pull/426
+        if isinstance(self.llm, llm.RealtimeModel) or isinstance(self.llm, llm.LLM):
+            self.llm._events.clear()
+        if isinstance(self.stt, stt.STT):
+            self.stt._events.clear()
+        if isinstance(self.tts, tts.TTS):
+            self.tts._events.clear()
+        if isinstance(self.vad, vad.VAD):
+            self.vad._events.clear()
 
     def _on_error(
         self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
