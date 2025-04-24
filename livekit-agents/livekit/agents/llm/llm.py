@@ -244,3 +244,17 @@ class LLMStream(ABC):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+    def to_str_iterable(self) -> AsyncIterable[str]:
+        """
+        Convert the LLMStream to an async iterable of strings.
+        This assumes the stream will not call any tools.
+        """
+
+        async def _iterable():
+            async with self:
+                async for chunk in self:
+                    if chunk.delta and chunk.delta.content:
+                        yield chunk.delta.content
+
+        return _iterable()
