@@ -15,6 +15,7 @@ members = [
     "livekit-plugins-assemblyai",
     "livekit-plugins-aws",
     "livekit-plugins-azure",
+    "livekit-plugins-bey",
     "livekit-plugins-cartesia",
     "livekit-plugins-clova",
     "livekit-plugins-deepgram",
@@ -375,6 +376,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/83/c5/b593f08f70b73b8a997b87673235f83ec42d9c9bf0fae7f348e889dfc00c/azure_cognitiveservices_speech-1.43.0-py3-none-win32.whl", hash = "sha256:36570806a6b8fe12696a0372193ecc623bc629e355fa1edc67c03ac71731066b", size = 2152884 },
     { url = "https://files.pythonhosted.org/packages/f5/b8/b1e7894cb4bcd721356eb1687e6f17112c2c659f4365827b8e7daac07c7d/azure_cognitiveservices_speech-1.43.0-py3-none-win_amd64.whl", hash = "sha256:50a50aabc69434d1311c09eaa640622c1d47d270e6cbcf5d192a04325cb7de4c", size = 2410492 },
     { url = "https://files.pythonhosted.org/packages/5e/79/8d16e2cdeb01459726818558f1b484106b89e8b54ad85a847e471a5c2659/azure_cognitiveservices_speech-1.43.0-py3-none-win_arm64.whl", hash = "sha256:29dab439a3789196c38b169a74fb4eefa4ede59e79f062541c08cc39a2d786a5", size = 2205218 },
+]
+
+[[package]]
+name = "backoff"
+version = "2.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148 },
 ]
 
 [[package]]
@@ -1137,6 +1147,25 @@ wheels = [
 ]
 
 [[package]]
+name = "langfuse"
+version = "2.60.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "backoff" },
+    { name = "httpx" },
+    { name = "idna" },
+    { name = "packaging" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d7/7a/a998b48823a609af8f5096cb322a4ddfded01d565509cd6b511a2e5891ca/langfuse-2.60.3.tar.gz", hash = "sha256:171c0caf07a26282bd0403c6c15886ef1f447def42d6570684c94d6d9ae61d6e", size = 152467 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/6b/4d3bdea30ceb3e4cf3ac1a2f104ffc20b6caa636549874262b2fa8cedaec/langfuse-2.60.3-py3-none-any.whl", hash = "sha256:2b866c44f24d5f06b617d7f14f75a2e42577538b530e4e26dc6ad770d6d1399e", size = 275008 },
+]
+
+[[package]]
 name = "livekit"
 version = "1.0.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1194,6 +1223,9 @@ aws = [
 ]
 azure = [
     { name = "livekit-plugins-azure" },
+]
+bey = [
+    { name = "livekit-plugins-bey" },
 ]
 cartesia = [
     { name = "livekit-plugins-cartesia" },
@@ -1270,6 +1302,7 @@ requires-dist = [
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
     { name = "livekit-plugins-azure", marker = "extra == 'azure'", editable = "livekit-plugins/livekit-plugins-azure" },
+    { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/livekit-plugins-bey" },
     { name = "livekit-plugins-cartesia", marker = "extra == 'cartesia'", editable = "livekit-plugins/livekit-plugins-cartesia" },
     { name = "livekit-plugins-clova", marker = "extra == 'clova'", editable = "livekit-plugins/livekit-plugins-clova" },
     { name = "livekit-plugins-deepgram", marker = "extra == 'deepgram'", editable = "livekit-plugins/livekit-plugins-deepgram" },
@@ -1301,7 +1334,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechmatics", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "images", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechmatics", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1374,6 +1407,16 @@ requires-dist = [
     { name = "azure-cognitiveservices-speech", specifier = ">=1.43.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-bey"
+source = { editable = "livekit-plugins/livekit-plugins-bey" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-cartesia"
@@ -1531,6 +1574,7 @@ requires-dist = [
 name = "livekit-plugins-openai"
 source = { editable = "livekit-plugins/livekit-plugins-openai" }
 dependencies = [
+    { name = "langfuse" },
     { name = "livekit-agents", extra = ["codecs", "images"] },
     { name = "openai", extra = ["realtime"] },
 ]
@@ -1543,6 +1587,7 @@ vertex = [
 [package.metadata]
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
+    { name = "langfuse", specifier = "==2.60.3" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
     { name = "openai", extras = ["realtime"], specifier = ">=1.68.2" },
 ]

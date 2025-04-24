@@ -20,8 +20,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from langfuse import openai
 
-import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
