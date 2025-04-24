@@ -1017,6 +1017,7 @@ class AgentActivity(RecognitionHooks):
             msg = self._agent._chat_ctx.add_message(
                 role="assistant", content=text_out.text, interrupted=speech_handle.interrupted
             )
+            speech_handle._set_chat_message(msg)
             self._session._conversation_item_added(msg)
 
         self._session._update_agent_state("listening")
@@ -1170,7 +1171,7 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.items.append(msg)
             self._session._update_agent_state("listening")
             self._session._conversation_item_added(msg)
-
+            speech_handle._set_chat_message(msg)
             speech_handle._mark_playout_done()
             await utils.aio.cancel_and_wait(exe_task)
             return
@@ -1181,6 +1182,7 @@ class AgentActivity(RecognitionHooks):
             )
             self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)
+            speech_handle._set_chat_message(msg)
 
         self._session._update_agent_state("listening")
         log_event("playout completed", speech_id=speech_handle.id)
@@ -1465,6 +1467,7 @@ class AgentActivity(RecognitionHooks):
                     role="assistant", content=[forwarded_text], id=msg_id, interrupted=True
                 )
                 self._agent._chat_ctx.items.append(msg)
+                speech_handle._set_chat_message(msg)
                 self._session._conversation_item_added(msg)
 
             speech_handle._mark_playout_done()
@@ -1480,6 +1483,7 @@ class AgentActivity(RecognitionHooks):
                 role="assistant", content=[text_out.text], id=msg_id, interrupted=False
             )
             self._agent._chat_ctx.items.append(msg)
+            speech_handle._set_chat_message(msg)
             self._session._conversation_item_added(msg)
 
         tool_output.first_tool_fut.add_done_callback(
