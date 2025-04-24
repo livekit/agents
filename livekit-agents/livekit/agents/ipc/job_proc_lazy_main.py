@@ -189,6 +189,7 @@ class _JobProc:
                         return
 
                     try:
+                        job_ctx_token = _JobContextVar.set(self._job_ctx)
                         tracing_tasks = []
                         for callback in self._job_ctx._tracing_callbacks:
                             tracing_tasks.append(
@@ -196,6 +197,7 @@ class _JobProc:
                             )
 
                         await asyncio.gather(*tracing_tasks)
+                        _JobContextVar.reset(job_ctx_token)
                     except Exception:
                         logger.exception("error while exeuting tracing tasks")
 

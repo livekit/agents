@@ -294,7 +294,10 @@ class ChatContext:
             items.append(item)
 
         return {
-            "items": [item.model_dump(mode="json", exclude_none=True) for item in items],
+            "items": [
+                item.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+                for item in items
+            ],
         }
 
     @classmethod
