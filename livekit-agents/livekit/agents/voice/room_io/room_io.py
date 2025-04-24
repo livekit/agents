@@ -32,6 +32,11 @@ from ._output import (
     _ParticipantTranscriptionOutput,
 )
 
+DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
+    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+]
+
 
 @dataclass
 class TextInputEvent:
@@ -62,6 +67,11 @@ class RoomInputOptions:
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
     Otherwise, transcription is emitted as quickly as available."""
+    participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
+    """Participant kinds accepted for auto subscription. If empty, all kinds are accepted."""
+    participant_identity: NotGivenOr[str] = NOT_GIVEN
+    """The participant to link to. If not provided, link to the first participant.
+    Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
 
 
 @dataclass
@@ -95,6 +105,10 @@ class RoomIO:
         self._participant_identity = (
             participant.identity if isinstance(participant, rtc.RemoteParticipant) else participant
         )
+        if self._participant_identity is None and utils.is_given(
+            input_options.participant_identity
+        ):
+            self._participant_identity = input_options.participant_identity
 
         self._audio_input: _ParticipantAudioInputStream | None = None
         self._video_input: _ParticipantVideoInputStream | None = None
@@ -295,6 +309,15 @@ class RoomIO:
             participant.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF)
             == self._room.local_participant.identity
         ):
+            return
+
+        participant_kinds = (
+            self._input_options.participant_kinds
+            if utils.is_given(self._input_options.participant_kinds)
+            else DEFAULT_PARTICIPANT_KINDS
+        )
+        if participant_kinds and participant.kind not in participant_kinds:
+            # not an accepted participant kind, skip
             return
 
         self._participant_available_fut.set_result(participant)
