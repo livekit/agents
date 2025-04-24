@@ -670,7 +670,7 @@ class AgentActivity(RecognitionHooks):
         ):
             ev.speech_id = speech_handle.id
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
-    
+
     def _deregister_callbacks(self):
         # TODO: use off_all() once merged
         # https://github.com/livekit/python-sdks/pull/426
