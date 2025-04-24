@@ -65,7 +65,8 @@ class RoomInputOptions:
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     text_input_cb: TextInputCallback = _default_text_input_cb
     participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
-    """Participant kinds accepted for auto subscription. If empty, all kinds are accepted."""
+    """Participant kinds accepted for auto subscription. If not provided,
+    accept `DEFAULT_PARTICIPANT_KINDS`."""
     participant_identity: NotGivenOr[str] = NOT_GIVEN
     """The participant to link to. If not provided, link to the first participant.
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
@@ -311,12 +312,8 @@ class RoomIO:
         ):
             return
 
-        participant_kinds = (
-            self._input_options.participant_kinds
-            if utils.is_given(self._input_options.participant_kinds)
-            else DEFAULT_PARTICIPANT_KINDS
-        )
-        if participant_kinds and participant.kind not in participant_kinds:
+        accepted_kinds = self._input_options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
+        if participant.kind not in accepted_kinds:
             # not an accepted participant kind, skip
             return
 
