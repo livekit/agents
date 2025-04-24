@@ -843,7 +843,7 @@ class AgentActivity(RecognitionHooks):
             # We never cancel user code as this is very confusing.
             # So we wait for the old execution of on_user_turn_completed to finish.
             # In practice this is OK because most speeches will be interrupted if a new turn
-            # is detected.
+            # is detected. So the previous execution should complete quickly.
             await old_task
 
         if isinstance(self.llm, llm.RealtimeModel):
