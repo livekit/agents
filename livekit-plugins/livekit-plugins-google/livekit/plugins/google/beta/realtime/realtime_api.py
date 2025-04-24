@@ -248,7 +248,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._current_generation: _ResponseGeneration | None = None
         self._active_session: genai.LiveSession | None = None
-        self._session_needs_restart = asyncio.Event()
+        # indicates if the underlying session should end
+        self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
 
@@ -266,9 +267,8 @@ class RealtimeSession(llm.RealtimeSession):
                     self._active_session = None
 
     def _mark_restart_needed(self):
-        if not self._session_needs_restart.is_set():
-            logger.warning("configuration updated; triggering Gemini session restart.")
-            self._session_needs_restart.set()
+        if not self._session_should_close.is_set():
+            self._session_should_close.set()
             # reset the msg_ch, do not send messages from previous session
             self._msg_ch = utils.aio.Chan[ClientEvents]()
 
@@ -361,10 +361,8 @@ class RealtimeSession(llm.RealtimeSession):
         fut = asyncio.Future()
         self._pending_generation_fut = fut
 
-        if is_given(instructions):
-            logger.warn("Gemini does not handle generate_reply with temporary instructions")
-
-        # TODO: Gemini requires the last message to end with user's turn
+        # Gemini requires the last message to end with user's turn
+        # so we need to add a placeholder user turn in order to trigger a new generation
         event = LiveClientContent(turns=[], turn_complete=True)
         if is_given(instructions):
             event.turns.append(Content(parts=[Part(text=instructions)], role="model"))
@@ -395,6 +393,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def aclose(self) -> None:
         self._msg_ch.close()
+        self._session_should_close.set()
 
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
@@ -418,7 +417,7 @@ class RealtimeSession(llm.RealtimeSession):
             # previous session might not be closed yet, we'll do it here.
             await self._close_active_session()
 
-            self._session_needs_restart.clear()
+            self._session_should_close.clear()
             config = self._build_connect_config()
             session = None
             try:
@@ -437,7 +436,7 @@ class RealtimeSession(llm.RealtimeSession):
                         self._recv_task(session), name="gemini-realtime-recv"
                     )
                     restart_wait_task = asyncio.create_task(
-                        self._session_needs_restart.wait(), name="gemini-restart-wait"
+                        self._session_should_close.wait(), name="gemini-restart-wait"
                     )
 
                     done, pending = await asyncio.wait(
@@ -459,7 +458,7 @@ class RealtimeSession(llm.RealtimeSession):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Gemini Realtime API connection error: {e}", exc_info=e)
+                logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
                 if not self._msg_ch.closed:
                     logger.info("attempting to reconnect after 1 seconds...")
                     await asyncio.sleep(1)
@@ -470,7 +469,7 @@ class RealtimeSession(llm.RealtimeSession):
         try:
             async for msg in self._msg_ch:
                 async with self._session_lock:
-                    if self._session_needs_restart.is_set() or (
+                    if self._session_should_close.is_set() or (
                         not self._active_session or self._active_session != session
                     ):
                         break
@@ -480,7 +479,9 @@ class RealtimeSession(llm.RealtimeSession):
                 else:
                     await session.send(input=msg)
         except Exception as e:
-            logger.error(f"error in send task: {e}", exc_info=e)
+            if not self._session_should_close.is_set():
+                logger.error(f"error in send task: {e}", exc_info=e)
+                self._mark_restart_needed()
         finally:
             logger.debug("send task finished.")
 
@@ -488,7 +489,7 @@ class RealtimeSession(llm.RealtimeSession):
         try:
             while True:
                 async with self._session_lock:
-                    if self._session_needs_restart.is_set() or (
+                    if self._session_should_close.is_set() or (
                         not self._active_session or self._active_session != session
                     ):
                         logger.debug("receive task: Session changed or closed, stopping receive.")
@@ -513,8 +514,9 @@ class RealtimeSession(llm.RealtimeSession):
 
                 # TODO(dz): a server-side turn is complete
         except Exception as e:
-            logger.error(f"error in receive task: {e}", exc_info=e)
-            self._mark_restart_needed()
+            if not self._session_should_close.is_set():
+                logger.error(f"error in receive task: {e}", exc_info=e)
+                self._mark_restart_needed()
         finally:
             self._finalize_response(closed=True)
 
@@ -647,8 +649,10 @@ class RealtimeSession(llm.RealtimeSession):
         self._current_generation = None
 
         for item_generation in gen.messages.values():
-            item_generation.text_ch.close()
-            item_generation.audio_ch.close()
+            if not item_generation.text_ch.closed:
+                item_generation.text_ch.close()
+            if not item_generation.audio_ch.closed:
+                item_generation.audio_ch.close()
 
         gen.function_ch.close()
         gen.message_ch.close()
@@ -691,7 +695,7 @@ class RealtimeSession(llm.RealtimeSession):
             f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}"
         )
         # TODO(dz): this isn't a seamless reconnection just yet
-        self._session_needs_restart.set()
+        self._session_should_close.set()
 
     def commit_audio(self) -> None:
         pass
