@@ -57,7 +57,8 @@ class RoomInputOptions:
     video_enabled: bool = False
     video_fps: float = 1.0
     """The FPS of the video stream.
-    If video is enabled, this will be used to sample the incoming video frames."""
+    If video is enabled, input video will be limited to this rate.
+    The video passed to models will be min(video_fps, source_fps)."""
     audio_sample_rate: int = 24000
     audio_num_channels: int = 1
     noise_cancellation: rtc.NoiseCancellationOptions | None = None

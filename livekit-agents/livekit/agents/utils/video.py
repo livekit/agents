@@ -10,11 +10,9 @@ class VideoFPSSampler:
         self._last_sample_time = 0
 
     def should_sample(self, event: rtc.VideoFrameEvent) -> bool:
-        # Calculate the time delta in milliseconds between frames for the target FPS
         time_delta = 1.0 / self._fps
         current_time = perf_counter()
 
-        # If this is the first frame or enough time has passed since the last sample
         if current_time - self._last_sample_time >= time_delta:
             self._last_sample_time = current_time
             return True
