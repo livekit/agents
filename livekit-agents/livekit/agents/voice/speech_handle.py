@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 from typing import Callable
 
-from .. import utils, llm
+from .. import llm, utils
 
 
 class SpeechHandle:
