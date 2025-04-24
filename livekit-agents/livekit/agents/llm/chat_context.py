@@ -316,6 +316,12 @@ class ChatContext:
         }
 
     def find_insertion_index(self, *, created_at: float) -> int:
+        """
+        Returns the index to insert an item by creation time.
+
+        Iterates in reverse, assuming items are sorted by `created_at`.
+        Finds the position after the last item with `created_at <=` the given timestamp.
+        """
         for i in reversed(range(len(self._items))):
             item = self._items[i]
             if item.type == "message" and item.created_at <= created_at:
