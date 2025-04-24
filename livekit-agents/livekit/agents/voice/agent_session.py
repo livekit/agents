@@ -68,7 +68,7 @@ class _VideoSampler(Protocol):
 
 # TODO(theomonnom): Should this be moved to another file?
 class VoiceActivityVideoSampler:
-    def __init__(self, *, speaking_fps: float = 3.0, silent_fps: float = 1.0):
+    def __init__(self, *, speaking_fps: float = 1.0, silent_fps: float = 0.3):
         if speaking_fps <= 0 or silent_fps <= 0:
             raise ValueError("FPS values must be greater than zero")
 
@@ -158,7 +158,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
-                captures video at ~3 fps while the user is speaking and ~1 fps
+                captures video at ~1 fps while the user is speaking and ~0.3 fps
                 when silent by default.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
@@ -167,7 +167,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._loop = loop or asyncio.get_event_loop()
 
         if not is_given(video_sampler):
-            video_sampler = VoiceActivityVideoSampler(speaking_fps=3.0, silent_fps=1.0)
+            video_sampler = VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.3)
 
         self._video_sampler = video_sampler
 
