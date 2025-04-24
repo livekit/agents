@@ -55,6 +55,9 @@ class RoomInputOptions:
     text_enabled: bool = True
     audio_enabled: bool = True
     video_enabled: bool = False
+    video_fps: float = 1.0
+    """The FPS of the video stream.
+    If video is enabled, this will be used to sample the incoming video frames."""
     audio_sample_rate: int = 24000
     audio_num_channels: int = 1
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
@@ -124,7 +127,9 @@ class RoomIO:
                 )
 
         if self._input_options.video_enabled:
-            self._video_input = _ParticipantVideoInputStream(self._room)
+            self._video_input = _ParticipantVideoInputStream(
+                self._room, fps=self._input_options.video_fps
+            )
 
         if self._input_options.audio_enabled:
             self._audio_input = _ParticipantAudioInputStream(

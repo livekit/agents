@@ -11,6 +11,10 @@ import livekit.rtc as rtc
 from livekit.agents import utils
 
 from ...log import logger
+from ...types import (
+    NOT_GIVEN,
+    NotGivenOr,
+)
 from ..io import AudioInput, VideoInput
 
 T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
@@ -102,7 +106,9 @@ class _ParticipantInputStream(Generic[T], ABC):
 
     @utils.log_exceptions(logger=logger)
     async def _forward_task(
-        self, old_task: asyncio.Task | None, stream: rtc.VideoStream | rtc.AudioStream
+        self,
+        old_task: asyncio.Task | None,
+        stream: AsyncIterator[rtc.VideoFrameEvent] | AsyncIterator[rtc.AudioFrameEvent],
     ) -> None:
         if old_task:
             await utils.aio.cancel_and_wait(old_task)
@@ -121,7 +127,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         logger.debug("stream closed", extra=extra)
 
     @abstractmethod
-    def _create_stream(self, track: rtc.RemoteTrack) -> rtc.VideoStream | rtc.AudioStream: ...
+    def _create_stream(
+        self, track: rtc.RemoteTrack
+    ) -> AsyncIterator[rtc.VideoFrameEvent] | AsyncIterator[rtc.AudioFrameEvent]: ...
 
     def _close_stream(self) -> None:
         if self._stream is not None:
@@ -166,7 +174,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._noise_cancellation = noise_cancellation
 
     @override
-    def _create_stream(self, track: rtc.Track) -> rtc.AudioStream:
+    def _create_stream(self, track: rtc.Track) -> AsyncIterator[rtc.AudioFrameEvent]:
         return rtc.AudioStream.from_track(
             track=track,
             sample_rate=self._sample_rate,
@@ -176,11 +184,16 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
 
 class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):
-    def __init__(self, room: rtc.Room) -> None:
+    def __init__(self, room: rtc.Room, *, fps: NotGivenOr[float] = NOT_GIVEN) -> None:
         _ParticipantInputStream.__init__(
             self, room=room, track_source=rtc.TrackSource.SOURCE_CAMERA
         )
+        self._fps = fps if utils.is_given(fps) else None
 
     @override
-    def _create_stream(self, track: rtc.Track) -> rtc.VideoStream:
-        return rtc.VideoStream.from_track(track=track)
+    def _create_stream(self, track: rtc.Track) -> AsyncIterator[rtc.VideoFrameEvent]:
+        stream = rtc.VideoStream.from_track(track=track)
+        if not self._fps:
+            return stream
+        sampler = utils.VideoFPSSampler(self._fps)
+        return utils.SamplingVideoStream(stream, sampler)
