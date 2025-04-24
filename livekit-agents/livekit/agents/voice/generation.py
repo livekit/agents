@@ -237,6 +237,8 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
+            # set the first frame future if not already set
+            # (after completing the first frame)
             if not out.first_frame_fut.done():
                 out.first_frame_fut.set_result(None)
     finally:
