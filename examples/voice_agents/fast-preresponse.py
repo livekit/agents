@@ -45,6 +45,16 @@ class PreResponseAgent(Agent):
             add_to_chat_ctx=False,
         )
 
+        # Alternatively, if you want the reply to be aware of this "silence filler" response,
+        # you can await the say method—but the tradeoff is that it may be slower since it won’t
+        # execute concurrently with the main response generation:
+        #
+        # speech_handle = await self.session.say(
+        #     self._fast_llm.chat(chat_ctx=fast_llm_ctx).to_str_iterable()
+        # )
+        # assert speech_handle.chat_message is not None, "say method always returns a chat message"
+        # turn_ctx.items.append(speech_handle.chat_message)
+
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
