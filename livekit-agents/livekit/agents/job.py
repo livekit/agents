@@ -425,7 +425,7 @@ class JobProcess:
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
         self._user_arguments = user_arguments
-        self._http_proxy: str | None = None
+        self._http_proxy: str | None = http_proxy
 
     @property
     def executor_type(self) -> JobExecutorType:
