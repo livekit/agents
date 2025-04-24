@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
 
 from livekit import rtc
 
@@ -60,6 +61,38 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 """
 
 
+@runtime_checkable
+class _VideoSampler(Protocol):
+    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool: ...
+
+
+# TODO(theomonnom): Should this be moved to another file?
+class VoiceActivityVideoSampler:
+    def __init__(self, *, speaking_fps: float = 3.0, silent_fps: float = 1.0):
+        if speaking_fps <= 0 or silent_fps <= 0:
+            raise ValueError("FPS values must be greater than zero")
+
+        self.speaking_fps = speaking_fps
+        self.silent_fps = silent_fps
+        self._last_sampled_time: float | None = None
+
+    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool:
+        now = time.time()
+        is_speaking = session.user_state == "speaking"
+        target_fps = self.speaking_fps if is_speaking else self.silent_fps
+        min_frame_interval = 1.0 / target_fps
+
+        if self._last_sampled_time is None:
+            self._last_sampled_time = now
+            return True
+
+        if (now - self._last_sampled_time) >= min_frame_interval:
+            self._last_sampled_time = now
+            return True
+
+        return False
+
+
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
@@ -76,10 +109,67 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
+        video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        """`AgentSession` is the LiveKit Agents runtime that glues together
+        media streams, speech/LLM components, and tool orchestration into a
+        single real-time voice agent.
+
+        It links audio, video, and text I/O with STT, VAD, TTS, and the LLM;
+        handles turn detection, endpointing, interruptions, and multi-step
+        tool calls; and exposes everything through event callbacks so you can
+        focus on writing function tools and simple hand-offs rather than
+        low-level streaming logic.
+
+        Args:
+            turn_detection (TurnDetectionMode, optional): Strategy for deciding
+                when the user has finished speaking.
+
+                * ``"stt"`` – rely on speech-to-text end-of-utterance cues
+                * ``"vad"`` – rely on Voice Activity Detection start/stop cues
+                * ``"realtime_llm"`` – use server-side detection from a
+                  realtime LLM
+                * ``"manual"`` – caller controls turn boundaries explicitly
+                * ``_TurnDetector`` instance – plug-in custom detector
+
+                If *NOT_GIVEN*, the session chooses the best available mode in
+                priority order ``realtime_llm → vad → stt → manual``; it
+                automatically falls back if the necessary model is missing.
+            stt (stt.STT, optional): Speech-to-text backend.
+            vad (vad.VAD, optional): Voice-activity detector
+            llm (llm.LLM | llm.RealtimeModel, optional): LLM or RealtimeModel
+            tts (tts.TTS, optional): Text-to-speech engine.
+            userdata (Userdata_T, optional): Arbitrary per-session user data.
+            allow_interruptions (bool): Whether the user can interrupt the
+                agent mid-utterance. Default ``True``.
+            discard_audio_if_uninterruptible (bool): When ``True``, buffered
+                audio is dropped while the agent is speaking and cannot be
+                interrupted. Default ``True``.
+            min_interruption_duration (float): Minimum speech length (s) to
+                register as an interruption. Default ``0.5`` s.
+            min_endpointing_delay (float): Minimum time-in-seconds the agent
+                must wait after a potential end-of-utterance signal (from VAD
+                or an EOU model) before it declares the user’s turn complete.
+                Default ``0.5`` s.
+            max_endpointing_delay (float): Maximum time-in-seconds the agent
+                will wait before terminating the turn. Default ``6.0`` s.
+            max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
+                Default ``3``.
+            video_sampler (_VideoSampler, optional): Uses
+                :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
+                captures video at ~3 fps while the user is speaking and ~1 fps
+                when silent by default.
+            loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
+                session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
+        """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+
+        if not is_given(video_sampler):
+            video_sampler = VoiceActivityVideoSampler(speaking_fps=3.0, silent_fps=1.0)
+
+        self._video_sampler = video_sampler
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
@@ -173,6 +263,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def current_speech(self) -> SpeechHandle | None:
         return self._activity.current_speech if self._activity is not None else None
+
+    @property
+    def user_state(self) -> UserState:
+        return self._user_state
+
+    @property
+    def agent_state(self) -> AgentState:
+        return self._agent_state
 
     @property
     def current_agent(self) -> Agent:
@@ -505,6 +603,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         async for frame in video_input:
             if self._activity is not None:
+                if self._video_sampler is not None and not self._video_sampler(frame, self):
+                    continue  # ignore this frame
+
                 self._activity.push_video(frame)
 
     def _update_agent_state(self, state: AgentState) -> None:

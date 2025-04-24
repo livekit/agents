@@ -39,7 +39,8 @@ class PreResponseAgent(Agent):
         fast_llm_ctx.items.insert(0, self._fast_llm_prompt)
         fast_llm_ctx.items.append(new_message)
 
-        # Intentionally not awaiting SpeechHandle to allow the main response generation to run concurrently
+        # Intentionally not awaiting SpeechHandle to allow the main response generation to
+        # run concurrently
         self.session.say(
             self._fast_llm.chat(chat_ctx=fast_llm_ctx).to_str_iterable(),
             add_to_chat_ctx=False,
