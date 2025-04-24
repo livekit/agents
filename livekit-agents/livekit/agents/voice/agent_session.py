@@ -166,7 +166,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._loop = loop or asyncio.get_event_loop()
 
         if not is_given(video_sampler):
-            video_sampler = VoiceActivityVideoSampler()
+            video_sampler = VoiceActivityVideoSampler(speaking_fps=3.0, silent_fps=1.0)
 
         self._video_sampler = video_sampler
 
