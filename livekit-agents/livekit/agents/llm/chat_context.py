@@ -173,12 +173,15 @@ class ChatContext:
         content: list[ChatContent] | str,
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
+        created_at: NotGivenOr[float] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs = {}
         if is_given(id):
             kwargs["id"] = id
         if is_given(interrupted):
             kwargs["interrupted"] = interrupted
+        if is_given(created_at):
+            kwargs["created_at"] = created_at
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
@@ -276,6 +279,7 @@ class ChatContext:
         *,
         exclude_image: bool = True,
         exclude_audio: bool = True,
+        exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
     ) -> dict:
         items = []
@@ -295,12 +299,29 @@ class ChatContext:
 
             items.append(item)
 
+        exclude_fields = set()
+        if exclude_timestamp:
+            exclude_fields.add("created_at")
+
         return {
             "items": [
-                item.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+                item.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                    exclude=exclude_fields,
+                )
                 for item in items
             ],
         }
+
+    def find_insertion_index(self, *, created_at: float) -> int:
+        for i in reversed(range(len(self._items))):
+            item = self._items[i]
+            if item.type == "message" and item.created_at <= created_at:
+                return i + 1
+
+        return 0
 
     @classmethod
     def from_dict(cls, data: dict) -> ChatContext:
