@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union, Protocol, runtime_checkable
 
 from livekit import rtc
 
@@ -60,6 +61,37 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 """
 
 
+@runtime_checkable
+class _VideoSampler(Protocol):
+    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool: ...
+
+
+class VoiceActivityVideoSampler:
+    def __init__(self, *, speaking_fps: float = 3.0, silent_fps: float = 1.0):
+        if speaking_fps <= 0 or silent_fps <= 0:
+            raise ValueError("FPS values must be greater than zero")
+
+        self.speaking_fps = speaking_fps
+        self.silent_fps = silent_fps
+        self._last_sampled_time: float | None = None
+
+    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool:
+        now = time.time()
+        is_speaking = session.user_state == "speaking"
+        target_fps = self.speaking_fps if is_speaking else self.silent_fps
+        min_frame_interval = 1.0 / target_fps
+
+        if self._last_sampled_time is None:
+            self._last_sampled_time = now
+            return True
+
+        if (now - self._last_sampled_time) >= min_frame_interval:
+            self._last_sampled_time = now
+            return True
+
+        return False
+
+
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
@@ -76,10 +108,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
+        video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+
+        if not is_given(video_sampler):
+            video_sampler = VoiceActivityVideoSampler()
+
+        self._video_sampler = video_sampler
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
@@ -173,6 +211,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def current_speech(self) -> SpeechHandle | None:
         return self._activity.current_speech if self._activity is not None else None
+
+    @property
+    def user_state(self) -> UserState:
+        return self._user_state
+
+    @property
+    def agent_state(self) -> AgentState:
+        return self._agent_state
 
     @property
     def current_agent(self) -> Agent:
@@ -505,6 +551,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         async for frame in video_input:
             if self._activity is not None:
+                if self._video_sampler is not None and not self._video_sampler(frame, self):
+                    continue  # ignore this frame
+
                 self._activity.push_video(frame)
 
     def _update_agent_state(self, state: AgentState) -> None:

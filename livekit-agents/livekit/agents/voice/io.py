@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from dataclasses import dataclass
-from typing import Callable, Literal, Optional, Union
+from typing import Callable, Literal, Optional, Union, Protocol
 
 from livekit import rtc
 
