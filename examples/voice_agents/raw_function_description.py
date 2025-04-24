@@ -2,7 +2,15 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    RunContext,
+    WorkerOptions,
+    cli,
+    function_tool,
+)
 from livekit.plugins import openai, silero  # noqa: F401
 
 # This demo defines an agent using a raw function tool to open predefined gates via enum input.
@@ -49,7 +57,7 @@ class RawFunctionAgent(Agent):
             },
         }
     )
-    async def open_gate(self, raw_arguments: dict[str, object]):
+    async def open_gate(self, raw_arguments: dict[str, object], ctx: RunContext):
         gate_id = raw_arguments["gate_id"]
         logger.info(f"Opening gate: {gate_id}")
         return f"Gate {gate_id} opened successfully"
