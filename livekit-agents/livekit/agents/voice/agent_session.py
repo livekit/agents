@@ -9,8 +9,8 @@ from typing import Generic, Literal, TypeVar, Union
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
-from ..job import get_job_context
 from ..cli import cli
+from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
