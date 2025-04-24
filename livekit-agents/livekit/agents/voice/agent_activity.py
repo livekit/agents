@@ -806,13 +806,6 @@ class AgentActivity(RecognitionHooks):
         # IMPORTANT: This method can be cancelled by the AudioRecognition
         # We explicitly create a new task to avoid cancelling user code.
 
-        # When the audio recognition detects the end of a user turn:
-        #  - check if realtime model server-side turn detection is enabled
-        #  - check if there is no current generation happening
-        #  - cancel the current generation if it allows interruptions (otherwise skip this current
-        #  turn)
-        #  - generate a reply to the user input
-
         if self.draining:
             logger.warning(
                 "skipping user input, task is draining",
@@ -845,6 +838,13 @@ class AgentActivity(RecognitionHooks):
             # In practice this is OK because most speeches will be interrupted if a new turn
             # is detected. So the previous execution should complete quickly.
             await old_task
+
+        # When the audio recognition detects the end of a user turn:
+        #  - check if realtime model server-side turn detection is enabled
+        #  - check if there is no current generation happening
+        #  - cancel the current generation if it allows interruptions (otherwise skip this current
+        #  turn)
+        #  - generate a reply to the user input
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
