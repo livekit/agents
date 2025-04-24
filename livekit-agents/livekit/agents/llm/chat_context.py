@@ -110,7 +110,7 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     hash: bytes | None = None
-    timestamp: float = Field(default_factory=time.time)
+    created_at: float = Field(default_factory=time.time)
 
     @property
     def text_content(self) -> str | None:
