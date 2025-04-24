@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 from langfuse import openai
+from langfuse.openai import AsyncOpenAI
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
@@ -71,7 +72,7 @@ class LLM(llm.LLM):
         model: str | ChatModels = "gpt-4o",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -96,7 +97,7 @@ class LLM(llm.LLM):
             store=store,
             metadata=metadata,
         )
-        self._client = client or openai.AsyncClient(
+        self._client = client or AsyncOpenAI(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
             max_retries=0,
@@ -173,7 +174,7 @@ class LLM(llm.LLM):
         model: str | CerebrasChatModels = "llama3.1-8b",
         api_key: str | None = None,
         base_url: str = "https://api.cerebras.ai/v1",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -210,7 +211,7 @@ class LLM(llm.LLM):
         model: str = "accounts/fireworks/models/llama-v3p3-70b-instruct",
         api_key: str | None = None,
         base_url: str = "https://api.fireworks.ai/inference/v1",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -246,7 +247,7 @@ class LLM(llm.LLM):
         model: str | XAIChatModels = "grok-2-public",
         api_key: str | None = None,
         base_url: str = "https://api.x.ai/v1",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -281,7 +282,7 @@ class LLM(llm.LLM):
         model: str | DeepSeekChatModels = "deepseek-chat",
         api_key: str | None = None,
         base_url: str = "https://api.deepseek.com/v1",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -317,7 +318,7 @@ class LLM(llm.LLM):
         model: str | OctoChatModels = "llama-2-13b-chat",
         api_key: str | None = None,
         base_url: str = "https://text.octoai.run/v1",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -352,7 +353,7 @@ class LLM(llm.LLM):
         *,
         model: str = "llama3.1",
         base_url: str = "http://localhost:11434/v1",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
@@ -377,7 +378,7 @@ class LLM(llm.LLM):
         model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
         api_key: str | None = None,
         base_url: str = "https://api.perplexity.ai",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -413,7 +414,7 @@ class LLM(llm.LLM):
         model: str | TogetherChatModels = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
         api_key: str | None = None,
         base_url: str = "https://api.together.xyz/v1",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -449,7 +450,7 @@ class LLM(llm.LLM):
         model: str | TelnyxChatModels = "meta-llama/Meta-Llama-3.1-70B-Instruct",
         api_key: str | None = None,
         base_url: str = "https://api.telnyx.com/v2/ai",
-        client: openai.AsyncClient | None = None,
+        client: AsyncOpenAI | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -541,7 +542,7 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         model: str | ChatModels,
-        client: openai.AsyncClient,
+        client: AsyncOpenAI,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool],
         conn_options: APIConnectOptions,
