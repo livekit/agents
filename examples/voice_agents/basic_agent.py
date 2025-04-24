@@ -64,11 +64,7 @@ class MyAgent(Agent):
 
         logger.info(f"Looking up weather for {location}")
 
-        return {
-            "weather": "sunny",
-            "temperature": 70,
-            "location": location,
-        }
+        return "sunny with a temperature of 70 degrees."
 
 
 def prewarm(proc: JobProcess):

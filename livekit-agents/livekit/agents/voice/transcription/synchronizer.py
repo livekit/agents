@@ -527,14 +527,14 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._synchronizer._impl.mark_playback_finished(
             playback_position=playback_position, interrupted=interrupted
         )
-        self._synchronizer.rotate_segment()
-        self._pushed_duration = 0.0
-
         super().on_playback_finished(
             playback_position=playback_position,
             interrupted=interrupted,
             synchronized_transcript=self._synchronizer._impl.synchronized_transcript,
         )
+
+        self._synchronizer.rotate_segment()
+        self._pushed_duration = 0.0
 
     def on_attached(self) -> None:
         super().on_attached()

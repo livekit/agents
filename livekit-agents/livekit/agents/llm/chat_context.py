@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
@@ -27,7 +28,7 @@ from .. import utils
 from ..log import logger
 
 if TYPE_CHECKING:
-    from ..llm import FunctionTool
+    from ..llm import FunctionTool, RawFunctionTool
 
 
 class ImageContent(BaseModel):
@@ -109,6 +110,7 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     hash: bytes | None = None
+    created_at: float = Field(default_factory=time.time)
 
     @property
     def text_content(self) -> str | None:
@@ -197,17 +199,27 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
-        tools: NotGivenOr[list[FunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
-        from .tool_context import get_function_info
+        from .tool_context import (
+            get_function_info,
+            get_raw_function_info,
+            is_function_tool,
+            is_raw_function_tool,
+        )
 
         valid_tools = set()
         if is_given(tools):
-            valid_tools = {
-                tool if isinstance(tool, str) else get_function_info(tool).name for tool in tools
-            }
+            for tool in tools:
+                if isinstance(tool, str):
+                    valid_tools.add(tool)
+                elif is_function_tool(tool):
+                    valid_tools.add(get_function_info(tool).name)
+                elif is_raw_function_tool(tool):
+                    valid_tools.add(get_raw_function_info(tool).name)
+                # TODO(theomonnom): other tools
 
         for item in self.items:
             if exclude_function_call and item.type in [
@@ -284,7 +296,10 @@ class ChatContext:
             items.append(item)
 
         return {
-            "items": [item.model_dump(mode="json", exclude_none=True) for item in items],
+            "items": [
+                item.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+                for item in items
+            ],
         }
 
     @classmethod

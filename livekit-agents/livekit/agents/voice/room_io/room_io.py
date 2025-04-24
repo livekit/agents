@@ -32,6 +32,11 @@ from ._output import (
     _ParticipantTranscriptionOutput,
 )
 
+DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
+    rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+]
+
 
 @dataclass
 class TextInputEvent:
@@ -59,9 +64,12 @@ class RoomInputOptions:
     audio_num_channels: int = 1
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
     text_input_cb: TextInputCallback = _default_text_input_cb
-    sync_transcription: NotGivenOr[bool] = NOT_GIVEN
-    """False to disable transcription synchronization with audio output.
-    Otherwise, transcription is emitted as quickly as available."""
+    participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
+    """Participant kinds accepted for auto subscription. If not provided,
+    accept `DEFAULT_PARTICIPANT_KINDS`."""
+    participant_identity: NotGivenOr[str] = NOT_GIVEN
+    """The participant to link to. If not provided, link to the first participant.
+    Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
 
 
 @dataclass
@@ -73,6 +81,9 @@ class RoomOutputOptions:
     audio_publish_options: rtc.TrackPublishOptions = field(
         default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
+    sync_transcription: NotGivenOr[bool] = NOT_GIVEN
+    """False to disable transcription synchronization with audio output.
+    Otherwise, transcription is emitted as quickly as available."""
 
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
@@ -95,6 +106,10 @@ class RoomIO:
         self._participant_identity = (
             participant.identity if isinstance(participant, rtc.RemoteParticipant) else participant
         )
+        if self._participant_identity is None and utils.is_given(
+            input_options.participant_identity
+        ):
+            self._participant_identity = input_options.participant_identity
 
         self._audio_input: _ParticipantAudioInputStream | None = None
         self._video_input: _ParticipantVideoInputStream | None = None
@@ -168,8 +183,8 @@ class RoomIO:
             # use the RoomIO's audio output if available, otherwise use the agent's audio output
             # (e.g the audio output isn't using RoomIO with our avatar datastream impl)
             sync_transcription = True
-            if utils.is_given(self._input_options.sync_transcription):
-                sync_transcription = self._input_options.sync_transcription
+            if utils.is_given(self._output_options.sync_transcription):
+                sync_transcription = self._output_options.sync_transcription
 
             if sync_transcription and (
                 audio_output := self._audio_output or self._agent_session.output.audio
@@ -295,6 +310,11 @@ class RoomIO:
             participant.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF)
             == self._room.local_participant.identity
         ):
+            return
+
+        accepted_kinds = self._input_options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
+        if participant.kind not in accepted_kinds:
+            # not an accepted participant kind, skip
             return
 
         self._participant_available_fut.set_result(participant)
