@@ -26,9 +26,15 @@ class _ParticipantInputStream(Generic[T], ABC):
         self,
         room: rtc.Room,
         *,
-        track_source: rtc.TrackSource.ValueType,
+        track_source: rtc.TrackSource.ValueType | list[rtc.TrackSource.ValueType],
     ) -> None:
-        self._room, self._track_source = room, track_source
+        self._room = room
+        self._accepted_sources = (
+            {track_source}
+            if isinstance(track_source, rtc.TrackSource.ValueType)
+            else set(track_source)
+        )
+
         self._data_ch = utils.aio.Chan[T]()
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
         self._participant_identity: str | None = None
@@ -50,7 +56,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             "input stream attached",
             extra={
                 "participant": self._participant_identity,
-                "source": rtc.TrackSource.Name(self._track_source),
+                "sources": [rtc.TrackSource.Name(source) for source in self._accepted_sources],
             },
         )
         self._attached = True
@@ -60,7 +66,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             "input stream detached",
             extra={
                 "participant": self._participant_identity,
-                "source": rtc.TrackSource.Name(self._track_source),
+                "sources": [rtc.TrackSource.Name(source) for source in self._accepted_sources],
             },
         )
         self._attached = False
@@ -102,14 +108,17 @@ class _ParticipantInputStream(Generic[T], ABC):
 
     @utils.log_exceptions(logger=logger)
     async def _forward_task(
-        self, old_task: asyncio.Task | None, stream: rtc.VideoStream | rtc.AudioStream
+        self,
+        old_task: asyncio.Task | None,
+        stream: rtc.VideoStream | rtc.AudioStream,
+        track_source: rtc.TrackSource.ValueType,
     ) -> None:
         if old_task:
             await utils.aio.cancel_and_wait(old_task)
 
         extra = {
             "participant": self._participant_identity,
-            "source": rtc.TrackSource.Name(self._track_source),
+            "source": rtc.TrackSource.Name(track_source),
         }
         logger.debug("start reading stream", extra=extra)
         async for event in stream:
@@ -138,14 +147,14 @@ class _ParticipantInputStream(Generic[T], ABC):
     ) -> None:
         if (
             self._participant_identity != participant.identity
-            or publication.source != self._track_source
+            or publication.source not in self._accepted_sources
         ):
             return
 
         self._close_stream()
         self._stream = self._create_stream(track)
         self._forward_atask = asyncio.create_task(
-            self._forward_task(self._forward_atask, self._stream)
+            self._forward_task(self._forward_atask, self._stream, publication.source)
         )
 
 
@@ -178,7 +187,12 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):
     def __init__(self, room: rtc.Room) -> None:
         _ParticipantInputStream.__init__(
-            self, room=room, track_source=rtc.TrackSource.SOURCE_CAMERA
+            self,
+            room=room,
+            track_source=[
+                rtc.TrackSource.SOURCE_CAMERA,
+                rtc.TrackSource.SOURCE_SCREENSHARE,
+            ],
         )
 
     @override
