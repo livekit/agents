@@ -135,8 +135,7 @@ class RealtimeModel(llm.RealtimeModel):
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str, optional): The name of the model to use. Defaults to "gemini-2.0-flash-live-001".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
-            language (str, optional): The language(BCP-47 Code) to use for the API.
-            supported languages: https://ai.google.dev/gemini-api/docs/live#supported-languages
+            language (str, optional): The language(BCP-47 Code) to use for the API. supported languages - https://ai.google.dev/gemini-api/docs/live#supported-languages
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
                 project (str, optional): The project id to use for the API. Defaults to None. (for vertexai)
