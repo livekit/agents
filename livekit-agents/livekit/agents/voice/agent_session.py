@@ -575,15 +575,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
         async with self._activity_lock:
+            # create & remember the replacement activity
             self._next_activity = AgentActivity(task, self)
 
-            if self._activity is not None:
-                await self._activity.drain()
-                await self._activity.aclose()
+            prev_activity = self._activity          # may be None on the very first call
 
+            # --- start the NEW activity first ----------------------------------
+            await self._next_activity.start()
+            # -------------------------------------------------------------------
+
+            # swap pointers so the session now routes audio to the fresh activity
             self._activity = self._next_activity
-            self._next_activity = None
-            await self._activity.start()
+            self._next_activity = None              # hand-off finished
+
+            # --- 1-second grace period before killing the old session ----------
+            if prev_activity is not None:
+                await asyncio.sleep(1.0)            # <- gives Whisper time to finish
+                await prev_activity.drain()
+                await prev_activity.aclose()
 
     @utils.log_exceptions(logger=logger)
     async def _forward_audio_task(self) -> None:
