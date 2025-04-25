@@ -219,6 +219,12 @@ class AudioRecognition:
             # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
             self._last_speaking_time = time.time() - ev.silence_duration
 
+            # write the audio to a wav file
+            audio_frame = utils.audio.combine_frames(ev.frames)
+            timestamp = time.time()
+            with open(f"audio_{timestamp}.wav", "wb") as f:
+                f.write(audio_frame.to_wav_bytes())
+
             if not self._manual_turn_detection:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
