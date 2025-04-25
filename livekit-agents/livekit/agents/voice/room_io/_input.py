@@ -36,6 +36,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         )
 
         self._data_ch = utils.aio.Chan[T]()
+        self._publication: rtc.RemoteTrackPublication | None = None
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
         self._participant_identity: str | None = None
         self._attached = True
@@ -44,6 +45,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._tasks: set[asyncio.Task] = set()
 
         self._room.on("track_subscribed", self._on_track_available)
+        self._room.on("track_unpublished", self._on_track_unavailable)
 
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
@@ -100,6 +102,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         if self._stream:
             await self._stream.aclose()
             self._stream = None
+        self._publication = None
         if self._forward_atask:
             await utils.aio.cancel_and_wait(self._forward_atask)
 
@@ -138,24 +141,45 @@ class _ParticipantInputStream(Generic[T], ABC):
             task.add_done_callback(self._tasks.discard)
             self._tasks.add(task)
             self._stream = None
+            self._publication = None
 
     def _on_track_available(
         self,
         track: rtc.RemoteTrack,
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
-    ) -> None:
+    ) -> bool:
         if (
             self._participant_identity != participant.identity
             or publication.source not in self._accepted_sources
+            or (self._publication and self._publication.sid == publication.sid)
+        ):
+            return False
+
+        self._close_stream()
+        self._stream = self._create_stream(track)
+        self._publication = publication
+        self._forward_atask = asyncio.create_task(
+            self._forward_task(self._forward_atask, self._stream, publication.source)
+        )
+        return True
+
+    def _on_track_unavailable(
+        self, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> None:
+        if (
+            not self._publication
+            or self._publication.sid != publication.sid
+            or participant.identity != self._participant_identity
         ):
             return
 
         self._close_stream()
-        self._stream = self._create_stream(track)
-        self._forward_atask = asyncio.create_task(
-            self._forward_task(self._forward_atask, self._stream, publication.source)
-        )
+
+        # subscribe to the first available track
+        for publication in participant.track_publications.values():
+            if self._on_track_available(publication.track, publication, participant):
+                return
 
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
