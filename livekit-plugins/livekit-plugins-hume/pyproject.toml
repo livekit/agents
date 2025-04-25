@@ -25,7 +25,7 @@ classifiers = [
 dependencies = [
     "aiohttp>=3.8.0",
     "livekit-agents>=1.0.17",
-    "hume"
+    "hume>=0.7.0"
 ]
 
 [project.urls]
