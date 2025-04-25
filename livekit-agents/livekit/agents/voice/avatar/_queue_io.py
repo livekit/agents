@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Literal
+from typing import Literal, Union
 
 from livekit import rtc
 
@@ -24,7 +24,7 @@ class QueueAudioOutput(
 
     def __init__(self, *, sample_rate: int | None = None):
         super().__init__(next_in_chain=None, sample_rate=sample_rate)
-        self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
+        self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
         self._capturing = False
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
