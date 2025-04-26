@@ -22,7 +22,7 @@ class LLM(OpenAILLM):
         model: str | LLMModels = "llama-3.3-70b-versatile",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         user: NotGivenOr[str] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
+        temperature: float | None = None,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         base_url: str | None = "https://api.groq.com/openai/v1",
