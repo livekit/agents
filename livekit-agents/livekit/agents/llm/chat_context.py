@@ -308,7 +308,7 @@ class ChatContext:
                 item.model_dump(
                     mode="json",
                     exclude_none=True,
-                    exclude_defaults=True,
+                    exclude_defaults=False,
                     exclude=exclude_fields,
                 )
                 for item in items
