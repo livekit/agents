@@ -22,6 +22,11 @@ jobs:
     name: livekit-plugins-${{ matrix.plugin }}
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Google credentials
+        if: matrix.plugin == 'google'
+        shell: bash
+        run: |
+          echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > tests/google.json
       - name: Run tests
         shell: bash
         env:

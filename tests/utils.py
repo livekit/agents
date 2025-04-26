@@ -87,21 +87,3 @@ async def make_test_speech(
     frames = bstream.write(input_audio.data.tobytes())
     frames.extend(bstream.flush())
     return frames, TEST_AUDIO_TRANSCRIPT
-
-
-def setup_plugin_credentials(plugin: str):
-    if plugin.startswith("google") and not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-        # For Google TTS, we need to extract credentials from env var to a file
-        google_creds = os.getenv("GOOGLE_CREDENTIALS_JSON")
-        if google_creds:
-            import tempfile
-
-            temp_dir = tempfile.TemporaryDirectory()
-            creds_path = os.path.join(temp_dir.name, "google.json")
-
-            # Write credentials to file
-            with open(creds_path, "w") as f:
-                f.write(google_creds)
-
-            # Set environment variable to point to the credentials file
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path

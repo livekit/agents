@@ -30,7 +30,7 @@ from livekit.plugins import (
 )
 
 from .toxic_proxy import Proxy, Toxiproxy
-from .utils import setup_plugin_credentials, wer
+from .utils import wer
 
 load_dotenv(override=True)
 
@@ -176,7 +176,6 @@ SYNTHESIZE_TTS = [
 PLUGIN = os.getenv("PLUGIN", "").strip()
 if PLUGIN:
     SYNTHESIZE_TTS = [p for p in SYNTHESIZE_TTS if p.id.startswith(PLUGIN)]  # type: ignore
-    setup_plugin_credentials(PLUGIN)
 
 
 @pytest.mark.usefixtures("job_process")
