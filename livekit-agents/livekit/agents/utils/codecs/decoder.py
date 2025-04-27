@@ -94,7 +94,7 @@ class AudioStreamDecoder:
     _executor: Optional[ThreadPoolExecutor] = None
 
     def __init__(
-        self, *, sample_rate: int = 48000, num_channels: int = 1, format: str | None = None
+        self, *, sample_rate: int = 48000, num_channels: int = 1, format: Optional[str] = None
     ):
         self._sample_rate = sample_rate
         self._layout = "mono"
