@@ -200,8 +200,7 @@ class AudioStreamDecoder:
                 raise ValueError(f"Invalid WAV file: missing RIFF/WAVE: {header}")
 
             # parse fmt chunk
-            fmt_chunk_found = False
-            while not fmt_chunk_found:
+            while True:
                 sub_header = self._input_buf.read(8)
                 if len(sub_header) < 8:
                     raise ValueError("Invalid WAV file: incomplete fmt chunk header")
@@ -220,27 +219,24 @@ class AudioStreamDecoder:
                     )
                     if audio_format != 1:
                         raise ValueError(f"Unsupported WAV audio format: {audio_format}")
-                    fmt_chunk_found = True
+                    break
 
             # parse data chunk
-            data_chunk_found = False
-            while not data_chunk_found:
+            while True:
                 sub_header = self._input_buf.read(8)
                 if len(sub_header) < 8:
                     raise ValueError("Invalid WAV file: incomplete data chunk header")
                 chunk_id, chunk_size = struct.unpack("<4sI", sub_header)
                 if chunk_id == b"data":
-                    data_chunk_found = True
-                else:
-                    # skip chunk data
-                    to_skip = chunk_size
-                    while to_skip > 0:
-                        skipped = self._input_buf.read(min(1024, to_skip))
-                        if not skipped:
-                            raise ValueError(
-                                "Invalid WAV file: incomplete chunk while seeking data"
-                            )
-                        to_skip -= len(skipped)
+                    break
+
+                # skip chunk data
+                to_skip = chunk_size
+                while to_skip > 0:
+                    skipped = self._input_buf.read(min(1024, to_skip))
+                    if not skipped:
+                        raise ValueError("Invalid WAV file: incomplete chunk while seeking data")
+                    to_skip -= len(skipped)
 
             # now ready to decode
             bstream = AudioByteStream(sample_rate=wave_rate, num_channels=wave_channels)
