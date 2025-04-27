@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from google import genai
+from google.genai.live import AsyncSession
 from google.genai.types import (
     AudioTranscriptionConfig,
     Blob,
@@ -25,6 +26,7 @@ from google.genai.types import (
     Modality,
     Part,
     PrebuiltVoiceConfig,
+    SessionResumptionConfig,
     SpeechConfig,
     Tool,
     UsageMetadata,
@@ -62,6 +64,7 @@ class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None
     voice: Voice | str
+    language: NotGivenOr[str]
     response_modalities: NotGivenOr[list[Modality]]
     vertexai: bool
     project: str | None
@@ -101,6 +104,7 @@ class RealtimeModel(llm.RealtimeModel):
         model: LiveAPIModels | str = "gemini-2.0-flash-live-001",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: Voice | str = "Puck",
+        language: NotGivenOr[str] = NOT_GIVEN,
         modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
         vertexai: bool = False,
         project: NotGivenOr[str] = NOT_GIVEN,
@@ -131,6 +135,7 @@ class RealtimeModel(llm.RealtimeModel):
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str, optional): The name of the model to use. Defaults to "gemini-2.0-flash-live-001".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
+            language (str, optional): The language(BCP-47 Code) to use for the API. supported languages - https://ai.google.dev/gemini-api/docs/live#supported-languages
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
                 project (str, optional): The project id to use for the API. Defaults to None. (for vertexai)
@@ -195,6 +200,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions=instructions,
             input_audio_transcription=input_audio_transcription,
             output_audio_transcription=output_audio_transcription,
+            language=language,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -247,11 +253,13 @@ class RealtimeSession(llm.RealtimeSession):
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
 
         self._current_generation: _ResponseGeneration | None = None
-        self._active_session: genai.LiveSession | None = None
+        self._active_session: AsyncSession | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+
+        self._session_resumption_handle: str | None = None
 
         self._update_lock = asyncio.Lock()
         self._session_lock = asyncio.Lock()
@@ -465,7 +473,7 @@ class RealtimeSession(llm.RealtimeSession):
             finally:
                 await self._close_active_session()
 
-    async def _send_task(self, session: genai.LiveSession):
+    async def _send_task(self, session: AsyncSession):
         try:
             async for msg in self._msg_ch:
                 async with self._session_lock:
@@ -485,7 +493,7 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             logger.debug("send task finished.")
 
-    async def _recv_task(self, session: genai.LiveSession):
+    async def _recv_task(self, session: AsyncSession):
         try:
             while True:
                 async with self._session_lock:
@@ -500,6 +508,15 @@ class RealtimeSession(llm.RealtimeSession):
                         response.server_content or response.tool_call
                     ):
                         self._start_new_generation()
+
+                    if response.session_resumption_update:
+                        if (
+                            response.session_resumption_update.resumable
+                            and response.session_resumption_update.new_handle
+                        ):
+                            self._session_resumption_handle = (
+                                response.session_resumption_update.new_handle
+                            )
 
                     if response.server_content:
                         self._handle_server_content(response.server_content)
@@ -548,11 +565,13 @@ class RealtimeSession(llm.RealtimeSession):
             speech_config=SpeechConfig(
                 voice_config=VoiceConfig(
                     prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
-                )
+                ),
+                language_code=self._opts.language if is_given(self._opts.language) else None,
             ),
             tools=[Tool(function_declarations=self._gemini_declarations)],
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
+            session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
         )
 
     def _start_new_generation(self):
