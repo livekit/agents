@@ -155,7 +155,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self) -> None:
         request_id = utils.shortuuid()
         headers = {
-            "accept": "audio/mp3",
+            "accept": "audio/wav",
             "Authorization": f"Bearer {self._api_key}",
             "content-type": "application/json",
         }
@@ -166,14 +166,17 @@ class ChunkedStream(tts.ChunkedStream):
             "lang": self._opts.lang,
             "samplingRate": self._opts.sample_rate,
             "speedAlpha": self._opts.speed_alpha,
-            "reduceLatency": self._opts.reduce_latency,
             "pauseBetweenBrackets": self._opts.pause_between_brackets,
             "phonemizeBetweenBrackets": self._opts.phonemize_between_brackets,
+            "audioFormat": "wav",
         }
+        if self._opts.reduce_latency:
+            payload["reduceLatency"] = True
 
         decoder = utils.codecs.AudioStreamDecoder(
             sample_rate=self._opts.sample_rate,
             num_channels=NUM_CHANNELS,
+            format="wav",
         )
 
         decode_task: asyncio.Task | None = None
@@ -199,6 +202,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=request_id,
                     segment_id=self._segment_id,
                 )
+
                 async for frame in decoder:
                     emitter.push(frame)
                 emitter.flush()
