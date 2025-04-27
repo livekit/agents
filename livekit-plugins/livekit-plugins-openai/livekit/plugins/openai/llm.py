@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from langfuse import openai
-from langfuse.openai import AsyncOpenAI
+from langfuse import Langfuse
 
+import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
@@ -34,6 +34,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from openai import AsyncOpenAI
 from openai.types.chat import (
     ChatCompletionChunk,
     ChatCompletionToolChoiceOptionParam,
@@ -52,6 +53,9 @@ from .models import (
     XAIChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, to_chat_ctx, to_fnc_ctx
+
+langfuse = Langfuse()
+
 
 
 @dataclass
@@ -553,6 +557,7 @@ class LLMStream(llm.LLMStream):
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
+        self._collected_content = []
 
     async def _run(self) -> None:
         # current function call that we're waiting for full completion (args are streamed)
@@ -563,6 +568,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_raw_arguments: str | None = None
         self._tool_index: int | None = None
         retryable = True
+        self._collected_content = []
 
         try:
             self._oai_stream = stream = await self._client.chat.completions.create(
@@ -573,15 +579,26 @@ class LLMStream(llm.LLMStream):
                 stream=True,
                 **self._extra_kwargs,
             )
-
+            trace = langfuse.trace(
+                input=to_chat_ctx(self._chat_ctx, id(self._llm)),
+            )
+            generation = trace.generation(
+                model=self._model,
+                input=to_chat_ctx(self._chat_ctx, id(self._llm)),
+            )
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice)
                         if chat_chunk is not None:
                             retryable = False
+                            if chat_chunk.delta.content:
+                                self._collected_content.append(chat_chunk.delta.content)
                             self._event_ch.send_nowait(chat_chunk)
-
+                            if choice.finish_reason in ("stop", "tool_calls"):
+                                complete_output = "".join(self._collected_content)
+                                generation.end(output=complete_output)
+                                trace.update(output=complete_output)
                     if chunk.usage is not None:
                         retryable = False
                         tokens_details = chunk.usage.prompt_tokens_details
@@ -596,18 +613,16 @@ class LLMStream(llm.LLMStream):
                             ),
                         )
                         self._event_ch.send_nowait(chunk)
-
-        # TODO: handle timeout and status errors (not supported by langfuse)
-        # except openai.APITimeoutError:
-        #     raise APITimeoutError(retryable=retryable) from None
-        # except openai.APIStatusError as e:
-        #     raise APIStatusError(
-        #         e.message,
-        #         status_code=e.status_code,
-        #         request_id=e.request_id,
-        #         body=e.body,
-        #         retryable=retryable,
-        #     ) from None
+        except openai.APITimeoutError:
+            raise APITimeoutError(retryable=retryable) from None
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=e.body,
+                retryable=retryable,
+            ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
