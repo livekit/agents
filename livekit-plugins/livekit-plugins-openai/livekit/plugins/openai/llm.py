@@ -597,16 +597,17 @@ class LLMStream(llm.LLMStream):
                         )
                         self._event_ch.send_nowait(chunk)
 
-        except openai.APITimeoutError:
-            raise APITimeoutError(retryable=retryable) from None
-        except openai.APIStatusError as e:
-            raise APIStatusError(
-                e.message,
-                status_code=e.status_code,
-                request_id=e.request_id,
-                body=e.body,
-                retryable=retryable,
-            ) from None
+        # TODO: handle timeout and status errors (not supported by langfuse)
+        # except openai.APITimeoutError:
+        #     raise APITimeoutError(retryable=retryable) from None
+        # except openai.APIStatusError as e:
+        #     raise APIStatusError(
+        #         e.message,
+        #         status_code=e.status_code,
+        #         request_id=e.request_id,
+        #         body=e.body,
+        #         retryable=retryable,
+        #     ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
