@@ -105,7 +105,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             voice=voice_params,
             audio_config=texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.OGG_OPUS,
+                audio_encoding=texttospeech.AudioEncoding.PCM,
                 sample_rate_hertz=sample_rate,
                 pitch=pitch,
                 effects_profile_id=effects_profile_id,
