@@ -37,19 +37,33 @@ from livekit.agents.utils import is_given
 
 from .langs import TTSLangs
 from .log import logger
-from .models import TTSModels
+from .models import ArcanaVoices, TTSModels
 
 
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
     speaker: str
-    lang: TTSLangs | str
-    sample_rate: int
-    speed_alpha: float
-    reduce_latency: bool
-    pause_between_brackets: bool
-    phonemize_between_brackets: bool
+    arcana_options: _ArcanaOptions | None = None
+    mistv2_options: _Mistv2Options | None = None
+
+
+@dataclass
+class _ArcanaOptions:
+    repetition_penalty: NotGivenOr[float] = NOT_GIVEN
+    temperature: NotGivenOr[float] = NOT_GIVEN
+    top_p: NotGivenOr[float] = NOT_GIVEN
+    max_tokens: NotGivenOr[int] = NOT_GIVEN
+
+
+@dataclass
+class _Mistv2Options:
+    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    sample_rate: NotGivenOr[int] = NOT_GIVEN
+    speed_alpha: NotGivenOr[float] = NOT_GIVEN
+    reduce_latency: NotGivenOr[bool] = NOT_GIVEN
+    pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
+    phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
 
 
 DEFAULT_API_URL = "https://users.rime.ai/v1/rime-tts"
@@ -62,14 +76,20 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels | str = "mistv2",
-        speaker: str = "cove",
+        model: TTSModels | str = "arcana",
+        speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
+        # Arcana options
+        repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        # Mistv2 options
         lang: TTSLangs | str = "eng",
         sample_rate: int = 22050,
-        speed_alpha: float = 1.0,
-        reduce_latency: bool = False,
-        pause_between_brackets: bool = False,
-        phonemize_between_brackets: bool = False,
+        speed_alpha: NotGivenOr[float] = NOT_GIVEN,
+        reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
+        pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -86,16 +106,32 @@ class TTS(tts.TTS):
                 "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
             )
 
+        if not is_given(speaker):
+            if model == "mistv2":
+                speaker = "cove"
+            else:
+                speaker = "astra"
+
         self._opts = _TTSOptions(
             model=model,
             speaker=speaker,
-            lang=lang,
-            sample_rate=sample_rate,
-            speed_alpha=speed_alpha,
-            reduce_latency=reduce_latency,
-            pause_between_brackets=pause_between_brackets,
-            phonemize_between_brackets=phonemize_between_brackets,
         )
+        if model == "arcana":
+            self._opts.arcana_options = _ArcanaOptions(
+                repetition_penalty=repetition_penalty,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+            )
+        elif model == "mistv2":
+            self._opts.mistv2_options = _Mistv2Options(
+                lang=lang,
+                sample_rate=sample_rate,
+                speed_alpha=speed_alpha,
+                reduce_latency=reduce_latency,
+                pause_between_brackets=pause_between_brackets,
+                phonemize_between_brackets=phonemize_between_brackets,
+            )
         self._session = http_session
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -154,35 +190,56 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        headers = {
-            "accept": "audio/wav",
-            "Authorization": f"Bearer {self._api_key}",
-            "content-type": "application/json",
-        }
         payload = {
             "speaker": self._opts.speaker,
             "text": self._input_text,
             "modelId": self._opts.model,
-            "lang": self._opts.lang,
-            "samplingRate": self._opts.sample_rate,
-            "speedAlpha": self._opts.speed_alpha,
-            "pauseBetweenBrackets": self._opts.pause_between_brackets,
-            "phonemizeBetweenBrackets": self._opts.phonemize_between_brackets,
-            "audioFormat": "wav",
         }
-        if self._opts.reduce_latency:
-            payload["reduceLatency"] = True
+        format = "mp3"
+        if self._opts.model == "arcana":
+            arcana_opts = self._opts.arcana_options
+            if is_given(arcana_opts.repetition_penalty):
+                payload["repetition_penalty"] = arcana_opts.repetition_penalty
+            if is_given(arcana_opts.temperature):
+                payload["temperature"] = arcana_opts.temperature
+            if is_given(arcana_opts.top_p):
+                payload["top_p"] = arcana_opts.top_p
+            if is_given(arcana_opts.max_tokens):
+                payload["max_tokens"] = arcana_opts.max_tokens
+            format = "wav"
+        elif self._opts.model == "mistv2":
+            mistv2_opts = self._opts.mistv2_options
+            if is_given(mistv2_opts.lang):
+                payload["lang"] = mistv2_opts.lang
+            if is_given(mistv2_opts.sample_rate):
+                payload["samplingRate"] = mistv2_opts.sample_rate
+            if is_given(mistv2_opts.speed_alpha):
+                payload["speedAlpha"] = mistv2_opts.speed_alpha
+            if is_given(mistv2_opts.reduce_latency):
+                payload["reduceLatency"] = mistv2_opts.reduce_latency
+            if is_given(mistv2_opts.pause_between_brackets):
+                payload["pauseBetweenBrackets"] = mistv2_opts.pause_between_brackets
+            if is_given(mistv2_opts.phonemize_between_brackets):
+                payload["phonemizeBetweenBrackets"] = mistv2_opts.phonemize_between_brackets
 
+        headers = {
+            "accept": f"audio/{format}",
+            "Authorization": f"Bearer {self._api_key}",
+            "content-type": "application/json",
+        }
         decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=self._opts.sample_rate,
+            sample_rate=self._tts.sample_rate,
             num_channels=NUM_CHANNELS,
-            format="wav",
+            format=format,
         )
 
         decode_task: asyncio.Task | None = None
         try:
             async with self._session.post(
-                DEFAULT_API_URL, headers=headers, json=payload
+                DEFAULT_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=self._conn_options.timeout,
             ) as response:
                 if not response.content_type.startswith("audio"):
                     content = await response.text()

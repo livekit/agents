@@ -197,7 +197,7 @@ class AudioStreamDecoder:
                     raise ValueError("Invalid WAV file: incomplete header")
                 header += chunk
             if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
-                raise ValueError("Invalid WAV file: missing RIFF/WAVE")
+                raise ValueError(f"Invalid WAV file: missing RIFF/WAVE: {header}")
 
             # parse fmt chunk
             fmt_chunk_found = False
