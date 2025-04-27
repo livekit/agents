@@ -182,7 +182,7 @@ class AudioStreamDecoder:
 
     def _decode_wav_loop(self):
         """Decode wav data from the buffer without ffmpeg, parse header and emit PCM frames.
-        
+
         This can be much faster than using ffmpeg, as we are emitting frames as quickly as possible.
         """
 
@@ -220,7 +220,6 @@ class AudioStreamDecoder:
                     )
                     if audio_format != 1:
                         raise ValueError(f"Unsupported WAV audio format: {audio_format}")
-                    sampwidth = bits_per_sample // 8
                     fmt_chunk_found = True
 
             # parse data chunk
