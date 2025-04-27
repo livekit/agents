@@ -41,7 +41,6 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import Gender, SpeechLanguages
 
-_max_session_duration = 240
 BUFFERED_WORDS_COUNT = 3
 NUM_CHANNELS = 1
 DEFAULT_VOICE_NAME = "en-US-Chirp3-HD-Charon"
