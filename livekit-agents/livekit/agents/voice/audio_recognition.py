@@ -64,7 +64,9 @@ class AudioRecognition:
         self._turn_detector = turn_detector
         self._stt = stt
         self._vad = vad
+
         self._manual_turn_detection = manual_turn_detection
+        self._turn_started = True
 
         self._speaking = False
         self._last_speaking_time: float = 0
@@ -94,6 +96,9 @@ class AudioRecognition:
         self.update_vad(None)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if not self._turn_started:
+            self._turn_started = True
+
         if self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
 
@@ -143,6 +148,7 @@ class AudioRecognition:
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        self._turn_started = False
 
         # reset stt to clear the buffer from previous user turn
         stt = self._stt
@@ -150,6 +156,7 @@ class AudioRecognition:
         self.update_stt(stt)
 
     def commit_user_turn(self) -> None:
+        self._turn_started = False
         if self._audio_interim_transcript:
             # append interim transcript in case the final transcript is not ready
             self._audio_transcript = (
@@ -160,6 +167,9 @@ class AudioRecognition:
         self._run_eou_detection(chat_ctx)
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
+        if self._manual_turn_detection and not self._turn_started:
+            return
+
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
