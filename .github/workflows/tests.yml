@@ -22,6 +22,11 @@ jobs:
     name: livekit-plugins-${{ matrix.plugin }}
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Google credentials
+        if: matrix.plugin == 'google'
+        shell: bash
+        run: |
+          printf '%s' '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > tests/google.json
       - name: Run tests
         shell: bash
         env:
@@ -45,7 +50,7 @@ jobs:
           PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
           RIME_API_KEY: ${{ secrets.RIME_API_KEY }}
           SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
-          GOOGLE_APPLICATION_CREDENTIALS: google.json
+          GOOGLE_APPLICATION_CREDENTIALS: tests/google.json
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           NEUPHONIC_API_KEY: ${{ secrets.NEUPHONIC_API_KEY }}

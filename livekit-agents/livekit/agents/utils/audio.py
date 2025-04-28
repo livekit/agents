@@ -11,7 +11,6 @@ from livekit import rtc
 
 from ..log import logger
 from .aio.utils import cancel_and_wait
-from .codecs import AudioStreamDecoder
 
 # deprecated aliases
 AudioBuffer = Union[list[rtc.AudioFrame], rtc.AudioFrame]
@@ -164,6 +163,8 @@ async def audio_frames_from_file(
     Returns:
         AsyncIterable[rtc.AudioFrame]: An async iterable that yields decoded AudioFrame
     """
+    from .codecs import AudioStreamDecoder
+
     decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
 
     async def file_reader():
