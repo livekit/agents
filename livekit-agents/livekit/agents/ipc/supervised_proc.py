@@ -171,10 +171,6 @@ class SupervisedProc(ABC):
             )
 
             if init_res.error:
-                logger.error(
-                    f"process initialization failed: {init_res.error}",
-                    extra=self.logging_extra(),
-                )
                 raise RuntimeError(f"process initialization failed: {init_res.error}")
             else:
                 self._initialize_fut.set_result(None)
@@ -183,7 +179,6 @@ class SupervisedProc(ABC):
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("process initialization timed out")
             )
-            logger.error("initialization timed out, killing process", extra=self.logging_extra())
             self._send_kill_signal()
             raise
         except Exception as e:

@@ -171,10 +171,6 @@ class ThreadJobExecutor:
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("runner initialization timed out")
             )
-            logger.error(
-                "job initialization is taking too much time..",
-                extra=self.logging_extra(),
-            )
             raise
         except Exception as e:  # should be channel.ChannelClosed most of the time
             self._initialize_fut.set_exception(e)
