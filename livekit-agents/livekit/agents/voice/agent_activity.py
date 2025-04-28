@@ -624,7 +624,9 @@ class AgentActivity(RecognitionHooks):
 
     def commit_user_turn(self) -> None:
         assert self._audio_recognition is not None
-        self._audio_recognition.commit_user_turn()
+        self._audio_recognition.commit_user_turn(
+            audio_detached=not self._session.input.audio_enabled
+        )
 
     def _schedule_speech(
         self, speech: SpeechHandle, priority: int, bypass_draining: bool = False
