@@ -3,7 +3,16 @@ import logging
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, JobContext, RoomIO, WorkerOptions, cli
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    JobRequest,
+    RoomInputOptions,
+    RoomIO,
+    WorkerOptions,
+    cli,
+)
 from livekit.agents.llm import ChatContext, ChatMessage, StopResponse
 from livekit.plugins import cartesia, deepgram, openai
 
@@ -40,7 +49,13 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(turn_detection="manual")
-    room_io = RoomIO(session, room=ctx.room)
+    room_io = RoomIO(
+        session,
+        room=ctx.room,
+        input_options=RoomInputOptions(
+            pre_attach_buffer_ms=1000,
+        ),
+    )
     await room_io.start()
 
     agent = MyAgent()
@@ -70,5 +85,13 @@ async def entrypoint(ctx: JobContext):
         logger.info("cancel turn")
 
 
+async def handle_request(request: JobRequest) -> None:
+    await request.accept(
+        identity="ptt-agent",
+        # this attribute communicates to frontend that we support PTT
+        attributes={"push-to-talk": "1"},
+    )
+
+
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, request_fnc=handle_request))

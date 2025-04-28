@@ -152,6 +152,49 @@ class AudioByteStream:
         ]
 
 
+class AudioRingBuffer:
+    """Buffer audio data in a ring buffer.
+
+    This class is designed to buffer audio data in a ring buffer,
+    where only the latest `buffer_ms` of audio data is kept.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        num_channels: int,
+        *,
+        buffer_ms: int,
+        samples_per_channel: int | None = None,
+    ):
+        self._sample_rate = sample_rate
+        self._num_channels = num_channels
+        self._buffer_ms = buffer_ms
+        self._samples_per_channel = samples_per_channel
+
+        self._buffer = bytearray()
+        self._buffer_size = int(
+            buffer_ms / 1000 * sample_rate * num_channels * ctypes.sizeof(ctypes.c_int16)
+        )
+
+    def push(self, data: bytes) -> None:
+        if self._buffer_size <= 0:
+            return
+        self._buffer.extend(data)
+        if len(self._buffer) > self._buffer_size:
+            self._buffer = self._buffer[len(self._buffer) - self._buffer_size :]
+
+    def flush(self) -> list[rtc.AudioFrame]:
+        bstream = AudioByteStream(self._sample_rate, self._num_channels, self._samples_per_channel)
+        frames = bstream.push(self._buffer)
+        frames.extend(bstream.flush())
+        self._buffer = bytearray()
+        return frames
+
+    def clear(self) -> None:
+        self._buffer = bytearray()
+
+
 async def audio_frames_from_file(
     file_path: str, sample_rate: int = 48000, num_channels: int = 1
 ) -> AsyncGenerator[rtc.AudioFrame, None]:

@@ -70,6 +70,9 @@ class RoomInputOptions:
     participant_identity: NotGivenOr[str] = NOT_GIVEN
     """The participant to link to. If not provided, link to the first participant.
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
+    pre_attach_buffer_ms: int = 0
+    """Buffer audio frames before attaching to the participant and flushing them
+    when the the input stream is attached."""
 
 
 @dataclass
@@ -147,6 +150,7 @@ class RoomIO:
                 sample_rate=self._input_options.audio_sample_rate,
                 num_channels=self._input_options.audio_num_channels,
                 noise_cancellation=self._input_options.noise_cancellation,
+                pre_attach_buffer_ms=self._input_options.pre_attach_buffer_ms,
             )
 
         def _create_transcription_output(

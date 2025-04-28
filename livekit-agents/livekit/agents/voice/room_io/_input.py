@@ -113,12 +113,16 @@ class _ParticipantInputStream(Generic[T], ABC):
         }
         logger.debug("start reading stream", extra=extra)
         async for event in stream:
-            if not self._attached:
-                # drop frames if the stream is detached
-                continue
-            await self._data_ch.send(event.frame)
+            await self._push_data(event)
 
         logger.debug("stream closed", extra=extra)
+
+    async def _push_data(self, event: rtc.AudioFrameEvent | rtc.VideoFrameEvent) -> None:
+        if not self._attached:
+            # drop frames if the stream is detached
+            return
+
+        await self._data_ch.send(event.frame)
 
     @abstractmethod
     def _create_stream(self, track: rtc.RemoteTrack) -> rtc.VideoStream | rtc.AudioStream: ...
@@ -157,6 +161,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         sample_rate: int,
         num_channels: int,
         noise_cancellation: rtc.NoiseCancellationOptions | None,
+        pre_attach_buffer_ms: int = 0,
     ) -> None:
         _ParticipantInputStream.__init__(
             self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
@@ -164,6 +169,35 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._noise_cancellation = noise_cancellation
+        self._pre_attach_buffer_ms = pre_attach_buffer_ms
+
+        self._pre_attach_buffer: utils.audio.AudioRingBuffer | None = None
+
+    @override
+    def on_detached(self) -> None:
+        super().on_detached()
+        if self._pre_attach_buffer_ms > 0:
+            self._pre_attach_buffer = utils.audio.AudioRingBuffer(
+                sample_rate=self._sample_rate,
+                num_channels=self._num_channels,
+                buffer_ms=self._pre_attach_buffer_ms,
+            )
+
+    @override
+    async def _push_data(self, event: rtc.AudioFrameEvent) -> None:
+        if self._pre_attach_buffer:
+            self._pre_attach_buffer.push(event.frame.data)
+
+        if not self._attached:
+            return
+        elif self._pre_attach_buffer:
+            # push pre-attach buffer frames
+            frames = self._pre_attach_buffer.flush()
+            for frame in frames:
+                self._data_ch.send_nowait(frame)
+            self._pre_attach_buffer = None
+
+        await self._data_ch.send(event.frame)
 
     @override
     def _create_stream(self, track: rtc.Track) -> rtc.AudioStream:
