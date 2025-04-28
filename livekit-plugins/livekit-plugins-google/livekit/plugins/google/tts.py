@@ -80,9 +80,7 @@ class TTS(tts.TTS):
         """  # noqa: E501
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=False,
-            ),
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -105,7 +103,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             voice=voice_params,
             audio_config=texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.OGG_OPUS,
+                audio_encoding=texttospeech.AudioEncoding.PCM,
                 sample_rate_hertz=sample_rate,
                 pitch=pitch,
                 effects_profile_id=effects_profile_id,
@@ -195,9 +193,7 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-
+    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
         try:
             response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
                 input=texttospeech.SynthesisInput(text=self._input_text),
@@ -206,25 +202,15 @@ class ChunkedStream(tts.ChunkedStream):
                 timeout=self._conn_options.timeout,
             )
 
-            # Create AudioStreamDecoder for OGG format
-            decoder = utils.codecs.AudioStreamDecoder(
+            output_emitter.start(
+                request_id=utils.shortuuid(),
                 sample_rate=self._opts.audio_config.sample_rate_hertz,
                 num_channels=1,
+                is_raw_pcm=True,
             )
 
-            try:
-                decoder.push(response.audio_content)
-                decoder.end_input()
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
-                )
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
-            finally:
-                await decoder.aclose()
-
+            output_emitter.push(response.audio_content)
+            output_emitter.flush()
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:

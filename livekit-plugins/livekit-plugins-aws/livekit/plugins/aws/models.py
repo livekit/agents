@@ -1,7 +1,7 @@
 from typing import Literal
 
-TTS_SPEECH_ENGINE = Literal["standard", "neural", "long-form", "generative"]
-TTS_LANGUAGE = Literal[
+TTSSpeechEngine = Literal["standard", "neural", "long-form", "generative"]
+TTSLanguages = Literal[
     "arb",
     "cmn-CN",
     "cy-GB",
@@ -45,4 +45,4 @@ TTS_LANGUAGE = Literal[
     "de-CH",
 ]
 
-TTS_OUTPUT_FORMAT = Literal["mp3"]
+TTSEncoding = Literal["mp3"]

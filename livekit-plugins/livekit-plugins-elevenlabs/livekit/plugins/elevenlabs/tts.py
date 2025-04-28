@@ -20,7 +20,7 @@ import dataclasses
 import json
 import os
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import aiohttp
@@ -28,6 +28,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -210,27 +211,15 @@ class TTS(tts.TTS):
             self._opts.language = language
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-            opts=self._opts,
-            session=self._ensure_session(),
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            opts=self._opts,
-            session=self._ensure_session(),
+            tts=self, conn_options=conn_options, opts=self._opts, session=self._ensure_session()
         )
         self._streams.add(stream)
         return stream
@@ -238,27 +227,19 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
+
         self._streams.clear()
-        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        opts: _TTSOptions,
-        conn_options: APIConnectOptions,
-        session: aiohttp.ClientSession,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts, self._session = opts, session
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
+    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice_settings))
             if is_given(self._opts.voice_settings)
@@ -270,14 +251,8 @@ class ChunkedStream(tts.ChunkedStream):
             "voice_settings": voice_settings,
         }
 
-        decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-        )
-
-        decode_task: asyncio.Task | None = None
         try:
-            async with self._session.post(
+            async with self._tts._ensure_session().post(
                 _synthesize_url(self._opts),
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
                 json=data,
@@ -286,26 +261,21 @@ class ChunkedStream(tts.ChunkedStream):
                     sock_connect=self._conn_options.timeout,
                 ),
             ) as resp:
+                resp.raise_for_status()
+
                 if not resp.content_type.startswith("audio/"):
                     content = await resp.text()
-                    logger.error("11labs returned non-audio data: %s", content)
-                    return
+                    raise APIError(message="11labs returned non-audio data", body=content)
 
-                async def _decode_loop():
-                    try:
-                        async for bytes_data, _ in resp.content.iter_chunks():
-                            decoder.push(bytes_data)
-                    finally:
-                        decoder.end_input()
-
-                decode_task = asyncio.create_task(_decode_loop())
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
+                output_emitter.start(
+                    request_id=utils.shortuuid(), sample_rate=self._opts.sample_rate, num_channels=1
                 )
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
+
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
+
+                output_emitter.flush()
+
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
@@ -317,10 +287,6 @@ class ChunkedStream(tts.ChunkedStream):
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            if decode_task:
-                await utils.aio.gracefully_cancel(decode_task)
-            await decoder.aclose()
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -356,8 +322,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if word_stream is not None:
                         word_stream.end_input()
                     word_stream = None
+
             if word_stream is not None:
                 word_stream.end_input()
+
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)

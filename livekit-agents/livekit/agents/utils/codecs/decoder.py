@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import io
@@ -92,13 +94,12 @@ class AudioStreamDecoder:
     _max_workers: int = 10
     _executor: Optional[ThreadPoolExecutor] = None
 
-    def __init__(self, *, sample_rate: int = 48000, num_channels: int = 1):
+    def __init__(self, *, sample_rate: int | None = 48000, num_channels: int | None = 1):
         self._sample_rate = sample_rate
+
         self._layout = "mono"
         if num_channels == 2:
             self._layout = "stereo"
-        elif num_channels != 1:
-            raise ValueError(f"Invalid number of channels: {num_channels}")
 
         self._output_ch = aio.Chan[rtc.AudioFrame]()
         self._closed = False
@@ -131,21 +132,33 @@ class AudioStreamDecoder:
                 raise ValueError("no audio stream found")
 
             audio_stream = container.streams.audio[0]
-            resampler = av.AudioResampler(format="s16", layout=self._layout, rate=self._sample_rate)
+
+            # Set up resampler only if needed
+            if self._sample_rate is not None and self._layout is not None:
+                resampler = av.AudioResampler(
+                    format="s16",
+                    layout=self._layout,
+                    rate=self._sample_rate,
+                )
 
             for frame in container.decode(audio_stream):
                 if self._closed:
                     return
 
-                for resampled_frame in resampler.resample(frame):
-                    nchannels = len(resampled_frame.layout.channels)
+                if resampler:
+                    frames = resampler.resample(frame)
+                else:
+                    frames = [frame]
+
+                for f in frames:
+                    nchannels = len(f.layout.channels)
                     self._loop.call_soon_threadsafe(
                         self._output_ch.send_nowait,
                         rtc.AudioFrame(
-                            data=resampled_frame.to_ndarray().tobytes(),
+                            data=f.to_ndarray().tobytes(),
                             num_channels=nchannels,
-                            sample_rate=int(resampled_frame.sample_rate),
-                            samples_per_channel=int(resampled_frame.samples / nchannels),
+                            sample_rate=int(f.sample_rate),
+                            samples_per_channel=int(f.samples / nchannels),
                         ),
                     )
 
@@ -169,7 +182,9 @@ class AudioStreamDecoder:
         self.end_input()
         self._closed = True
         self._input_buf.close()
-        # wait for decode loop to finish, only if anything's been pushed
-        with contextlib.suppress(aio.ChanClosed):
-            if self._started:
-                await self._output_ch.recv()
+
+        if not self._started:
+            return
+
+        async for _ in self._output_ch:
+            pass

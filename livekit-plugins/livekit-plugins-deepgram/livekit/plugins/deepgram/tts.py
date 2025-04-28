@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlencode
 
 import aiohttp
@@ -37,6 +37,8 @@ class _TTSOptions:
     encoding: str
     sample_rate: int
     word_tokenizer: tokenize.WordTokenizer
+    base_url: str
+    api_key: str
 
 
 class TTS(tts.TTS):
@@ -46,7 +48,7 @@ class TTS(tts.TTS):
         model: str = "aura-asteria-en",
         encoding: str = "linear16",
         sample_rate: int = 24000,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_key: str | None = None,
         base_url: str = BASE_URL,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
@@ -70,8 +72,8 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        self._api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        if not self._api_key:
+        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
+        if not api_key:
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
         if not is_given(word_tokenizer):
@@ -82,10 +84,12 @@ class TTS(tts.TTS):
             encoding=encoding,
             sample_rate=sample_rate,
             word_tokenizer=word_tokenizer,
+            base_url=base_url,
+            api_key=api_key,
         )
         self._session = http_session
-        self._base_url = base_url
         self._streams = weakref.WeakSet[SynthesizeStream]()
+
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -102,8 +106,8 @@ class TTS(tts.TTS):
         }
         return await asyncio.wait_for(
             session.ws_connect(
-                _to_deepgram_url(config, self._base_url, websocket=True),
-                headers={"Authorization": f"Token {self._api_key}"},
+                _to_deepgram_url(config, self._opts.base_url, websocket=True),
+                headers={"Authorization": f"Token {self._opts.api_key}"},
             ),
             self._conn_options.timeout,
         )
@@ -138,20 +142,9 @@ class TTS(tts.TTS):
             )
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            base_url=self._base_url,
-            api_key=self._api_key,
-            conn_options=conn_options,
-            opts=self._opts,
-            session=self._ensure_session(),
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -173,82 +166,60 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
+
         self._streams.clear()
+
         await self._pool.aclose()
-        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        base_url: str,
-        api_key: str,
-        input_text: str,
-        opts: _TTSOptions,
-        session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts = opts
-        self._session = session
-        self._base_url = base_url
-        self._api_key = api_key
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-        audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
-
+    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
         try:
-            config = {
-                "encoding": self._opts.encoding,
-                "model": self._opts.model,
-                "sample_rate": self._opts.sample_rate,
-            }
-            async with self._session.post(
-                _to_deepgram_url(config, self._base_url, websocket=False),
+            async with self._tts._ensure_session().post(
+                _to_deepgram_url(
+                    {
+                        "encoding": self._opts.encoding,
+                        "model": self._opts.model,
+                        "sample_rate": self._opts.sample_rate,
+                    },
+                    self._opts.base_url,
+                    websocket=False,
+                ),
                 headers={
-                    "Authorization": f"Token {self._api_key}",
+                    "Authorization": f"Token {self._opts.api_key}",
                     "Content-Type": "application/json",
                 },
                 json={"text": self._input_text},
-                timeout=self._conn_options.timeout,
-            ) as res:
-                if res.status != 200:
-                    raise APIStatusError(
-                        message=res.reason or "Unknown error occurred.",
-                        status_code=res.status,
-                        request_id=request_id,
-                        body=await res.json(),
-                    )
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+            ) as resp:
+                resp.raise_for_status()
 
-                async for bytes_data, _ in res.content.iter_chunks():
-                    for frame in audio_bstream.write(bytes_data):
-                        self._event_ch.send_nowait(
-                            tts.SynthesizedAudio(
-                                request_id=request_id,
-                                frame=frame,
-                            )
-                        )
+                output_emitter.start(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                    is_raw_pcm=True,
+                )
 
-                for frame in audio_bstream.flush():
-                    self._event_ch.send_nowait(
-                        tts.SynthesizedAudio(request_id=request_id, frame=frame)
-                    )
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
 
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+                output_emitter.flush()
+
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=request_id,
+                request_id=None,
                 body=None,
-            ) from e
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
 

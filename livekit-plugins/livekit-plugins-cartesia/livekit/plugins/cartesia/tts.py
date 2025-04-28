@@ -19,7 +19,7 @@ import base64
 import json
 import os
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import aiohttp
@@ -207,18 +207,14 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return SynthesizeStream(
-            tts=self,
-            pool=self._pool,
-            opts=self._opts,
-        )
+        return SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
+
         self._streams.clear()
         await self._pool.aclose()
-        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -229,19 +225,13 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        opts: _TTSOptions,
-        session: aiohttp.ClientSession,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts, self._session = opts, session
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-        bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate, num_channels=NUM_CHANNELS
-        )
-
+    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
         json = _to_cartesia_options(self._opts)
         json["transcript"] = self._input_text
 
@@ -251,27 +241,25 @@ class ChunkedStream(tts.ChunkedStream):
         }
 
         try:
-            async with self._session.post(
+            async with self._tts._ensure_session().post(
                 self._opts.get_http_url("/tts/bytes"),
                 headers=headers,
                 json=json,
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
                 resp.raise_for_status()
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
-                )
-                async for data, _ in resp.content.iter_chunks():
-                    for frame in bstream.write(data):
-                        emitter.push(frame)
 
-                for frame in bstream.flush():
-                    emitter.push(frame)
-                emitter.flush()
+                output_emitter.start(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                    is_raw_pcm=True,
+                )
+
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
+
+                output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:

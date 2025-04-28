@@ -226,9 +226,9 @@ class ChunkedStream(tts.ChunkedStream):
                     total=30,
                     sock_connect=self._conn_options.timeout,
                 ),
-            ) as response:
-                response.raise_for_status()
-                response_json = await response.json()
+            ) as resp:
+                resp.raise_for_status()
+                response_json = await resp.json()
 
                 # Check for success
                 if not response_json.get("success", False):
@@ -236,7 +236,7 @@ class ChunkedStream(tts.ChunkedStream):
                     error_msg = "; ".join(issues)
                     raise APIStatusError(
                         message=f"Resemble API returned failure: {error_msg}",
-                        status_code=response.status,
+                        status_code=resp.status,
                         request_id=request_id,
                         body=json.dumps(response_json),
                     )
@@ -246,7 +246,7 @@ class ChunkedStream(tts.ChunkedStream):
                 if not audio_content_b64:
                     raise APIStatusError(
                         message="No audio content in response",
-                        status_code=response.status,
+                        status_code=resp.status,
                         request_id=request_id,
                         body=json.dumps(response_json),
                     )
@@ -262,8 +262,8 @@ class ChunkedStream(tts.ChunkedStream):
                 )
                 async for frame in decoder:
                     emitter.push(frame)
-                emitter.flush()
 
+                emitter.flush()
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,

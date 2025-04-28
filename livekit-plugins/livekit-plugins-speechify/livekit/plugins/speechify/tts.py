@@ -25,6 +25,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    APIError,
     tts,
     utils,
 )
@@ -232,10 +233,8 @@ class ChunkedStream(tts.ChunkedStream):
         }
 
         decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
+            sample_rate=self._opts.sample_rate, num_channels=1
         )
-
         decode_task: asyncio.Task | None = None
         try:
             async with self._session.post(
@@ -244,10 +243,11 @@ class ChunkedStream(tts.ChunkedStream):
                 json=data,
                 timeout=self._conn_options.timeout,
             ) as resp:
+                resp.raise_for_status()
+
                 if not resp.content_type.startswith("audio/"):
                     content = await resp.text()
-                    logger.error("speechify returned non-audio data: %s", content)
-                    return
+                    raise APIError(message="Speechify returned non-audio data", body=content)
 
                 async def _decode_loop():
                     try:
@@ -263,7 +263,9 @@ class ChunkedStream(tts.ChunkedStream):
                 )
                 async for frame in decoder:
                     emitter.push(frame)
+
                 emitter.flush()
+
                 await decode_task
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -279,6 +281,7 @@ class ChunkedStream(tts.ChunkedStream):
         finally:
             if decode_task:
                 await utils.aio.gracefully_cancel(decode_task)
+
             await decoder.aclose()
 
 

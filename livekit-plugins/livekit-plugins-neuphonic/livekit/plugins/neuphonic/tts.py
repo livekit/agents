@@ -293,14 +293,14 @@ class ChunkedStream(tts.ChunkedStream):
                 read_bufsize=10
                 * 1024
                 * 1024,  # large read_bufsize to avoid `ValueError: Chunk too big`
-            ) as response:
-                response.raise_for_status()
+            ) as resp:
+                resp.raise_for_status()
                 emitter = tts.SynthesizedAudioEmitter(
                     event_ch=self._event_ch,
                     request_id=request_id,
                 )
 
-                async for line in response.content:
+                async for line in resp.content:
                     message = line.decode("utf-8").strip()
                     if message:
                         parsed_message = _parse_sse_message(message)
@@ -316,6 +316,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 for frame in bstream.flush():
                     emitter.push(frame)
+
                 emitter.flush()
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e

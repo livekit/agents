@@ -178,17 +178,16 @@ class ChunkedStream(tts.ChunkedStream):
 
         decode_task: asyncio.Task | None = None
         try:
-            async with self._session.post(
-                DEFAULT_API_URL, headers=headers, json=payload
-            ) as response:
-                if not response.content_type.startswith("audio"):
-                    content = await response.text()
-                    logger.error("Rime returned non-audio data: %s", content)
-                    return
+            async with self._session.post(DEFAULT_API_URL, headers=headers, json=payload) as resp:
+                resp.raise_for_status()
+
+                if not resp.content_type.startswith("audio"):
+                    content = await resp.text()
+                    raise APIError(message="Rime returned non-audio data", body=content)
 
                 async def _decode_loop():
                     try:
-                        async for bytes_data, _ in response.content.iter_chunks():
+                        async for bytes_data, _ in resp.content.iter_chunks():
                             decoder.push(bytes_data)
                     finally:
                         decoder.end_input()
@@ -201,8 +200,10 @@ class ChunkedStream(tts.ChunkedStream):
                 )
                 async for frame in decoder:
                     emitter.push(frame)
+
                 emitter.flush()
 
+                await decode_task
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
@@ -217,4 +218,5 @@ class ChunkedStream(tts.ChunkedStream):
         finally:
             if decode_task:
                 await utils.aio.gracefully_cancel(decode_task)
+
             await decoder.aclose()
