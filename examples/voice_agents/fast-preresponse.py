@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
@@ -20,7 +22,10 @@ load_dotenv()
 
 class PreResponseAgent(Agent):
     def __init__(self):
-        super().__init__(instructions="You are a helpful assistant")
+        super().__init__(
+            instructions="You are a helpful assistant",
+            llm=groq.LLM(model="llama-3.3-70b-versatile"),
+        )
         self._fast_llm = groq.LLM(model="llama-3.1-8b-instant")
         self._fast_llm_prompt = llm.ChatMessage(
             role="system",
@@ -39,22 +44,31 @@ class PreResponseAgent(Agent):
         fast_llm_ctx.items.insert(0, self._fast_llm_prompt)
         fast_llm_ctx.items.append(new_message)
 
-        # Intentionally not awaiting SpeechHandle to allow the main response generation to
-        # run concurrently
-        self.session.say(
-            self._fast_llm.chat(chat_ctx=fast_llm_ctx).to_str_iterable(),
-            add_to_chat_ctx=False,
-        )
+        # # Intentionally not awaiting SpeechHandle to allow the main response generation to
+        # # run concurrently
+        # self.session.say(
+        #     self._fast_llm.chat(chat_ctx=fast_llm_ctx).to_str_iterable(),
+        #     add_to_chat_ctx=False,
+        # )
 
         # Alternatively, if you want the reply to be aware of this "silence filler" response,
-        # you can await the say method—but the tradeoff is that it may be slower since it won’t
-        # execute concurrently with the main response generation:
-        #
-        # speech_handle = await self.session.say(
-        #     self._fast_llm.chat(chat_ctx=fast_llm_ctx).to_str_iterable()
-        # )
-        # assert speech_handle.chat_message is not None, "say method always returns a chat message"
-        # turn_ctx.items.append(speech_handle.chat_message)
+        # you can await the fast llm done and add the message to the turn context. But note
+        # that not all llm supports completing from an existing assistant message.
+
+        fast_llm_fut = asyncio.Future[str]()
+
+        async def _fast_llm_reply() -> AsyncIterable[str]:
+            filler_response: str = ""
+            async for chunk in self._fast_llm.chat(chat_ctx=fast_llm_ctx).to_str_iterable():
+                filler_response += chunk
+                yield chunk
+            fast_llm_fut.set_result(filler_response)
+
+        self.session.say(_fast_llm_reply(), add_to_chat_ctx=False)
+
+        filler_response = await fast_llm_fut
+        logger.info(f"Fast response: {filler_response}")
+        turn_ctx.add_message(role="assistant", content=filler_response, interrupted=False)
 
 
 async def entrypoint(ctx: JobContext):
@@ -62,7 +76,6 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         stt=deepgram.STT(),
-        llm=openai.LLM(),
         tts=openai.TTS(),
         vad=silero.VAD.load(),
     )

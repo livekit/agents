@@ -75,7 +75,6 @@ async def entrypoint(ctx: JobContext):
     # each log entry will include these fields
     ctx.log_context_fields = {
         "room": ctx.room.name,
-        "user_id": "your user_id",
     }
     await ctx.connect()
 
