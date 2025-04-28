@@ -2,4 +2,4 @@
 "livekit-agents": patch
 ---
 
-ignore transcript after user turn end (#2147)
+flush stt and wait for final transcription when commit_user_turn (#2147)
