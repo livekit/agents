@@ -197,7 +197,7 @@ class AudioRecognition:
                 or ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
             )
         ):
-            # ignore stt event if user turn already committed and EOU task is done 
+            # ignore stt event if user turn already committed and EOU task is done
             # or it's an interim transcript
             return
 
