@@ -46,7 +46,6 @@ class _TTSOptions:
     base_url: str
     model: TTSModels | str
     lang_code: TTSLangCodes | str
-    encoding: TTSEncodings | str
     sample_rate: int
     speed: float
     voice_id: str | None
@@ -60,7 +59,6 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         voice_id: str | None = None,
         lang_code: TTSLangCodes | str = "en",
-        encoding: TTSEncodings | str = "pcm_linear",
         speed: float = 1.0,
         sample_rate: int = 22050,
         http_session: aiohttp.ClientSession | None = None,
@@ -96,7 +94,6 @@ class TTS(tts.TTS):
             model=model,
             voice_id=voice_id,
             lang_code=lang_code,
-            encoding=encoding,
             speed=speed,
             sample_rate=sample_rate,
             base_url=base_url,
@@ -116,7 +113,6 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels] = NOT_GIVEN,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         lang_code: NotGivenOr[TTSLangCodes] = NOT_GIVEN,
-        encoding: NotGivenOr[TTSEncodings] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -141,8 +137,6 @@ class TTS(tts.TTS):
             self._opts.voice_id = voice_id
         if is_given(lang_code):
             self._opts.lang_code = lang_code
-        if is_given(encoding):
-            self._opts.encoding = encoding
         if is_given(speed):
             self._opts.speed = speed
         if is_given(sample_rate):
@@ -180,7 +174,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "voice_id": self._opts.voice_id,
                     "model": self._opts.model,
                     "lang_code": self._opts.lang_code,
-                    "encoding": self._opts.encoding,
+                    "encoding": "pcm_linear",
                     "sampling_rate": self._opts.sample_rate,
                     "speed": self._opts.speed,
                 },
