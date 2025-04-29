@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import multiprocessing as mp
 import socket
 from collections.abc import Awaitable
@@ -114,6 +115,10 @@ class ProcJobExecutor(SupervisedProc):
             async for msg in ipc_ch:
                 if isinstance(msg, proto.InferenceRequest):
                     self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+                elif isinstance(msg, proto.TracingResponse):
+                    fut = self._tracing_requests.pop(msg.request_id)
+                    with contextlib.suppress(asyncio.InvalidStateError):
+                        fut.set_result(msg)
         finally:
             await aio.cancel_and_wait(*self._inference_tasks)
 

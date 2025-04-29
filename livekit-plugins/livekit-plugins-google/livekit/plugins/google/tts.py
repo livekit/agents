@@ -130,11 +130,11 @@ class TTS(tts.TTS):
         """  # noqa: E501
         params = {}
         if is_given(language):
-            params["language"] = language
+            params["language_code"] = str(language)
         if is_given(gender):
-            params["gender"] = gender
+            params["ssml_gender"] = _gender_from_str(str(gender))
         if is_given(voice_name):
-            params["voice_name"] = voice_name
+            params["name"] = voice_name
 
         if params:
             self._opts.voice = texttospeech.VoiceSelectionParams(**params)

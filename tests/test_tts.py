@@ -172,7 +172,9 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": rime.TTS(),
+            "tts": rime.TTS(
+                model="mistv2",
+            ),
             "proxy-upstream": "users.rime.ai:443",
         },
         id="rime",

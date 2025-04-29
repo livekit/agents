@@ -10,6 +10,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     AgentSession,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
@@ -123,15 +124,18 @@ class AvatarSession:
                 ) as response:
                     if not response.ok:
                         text = await response.text()
-                        logger.warning(
-                            "failed to start avatar session",
-                            extra={"status": response.status, "error": text, "tried": i + 1},
+                        raise APIStatusError(
+                            "Server returned an error", status_code=response.status, body=text
                         )
-                        raise APIStatusError()
                     return
-            except Exception:
-                await asyncio.sleep(self._conn_options.retry_interval)
 
-        raise APIStatusError(
-            f"Failed to start Bey Avatar Session after {self._conn_options.max_retry} retries"
-        )
+            except Exception as e:
+                if isinstance(e, APIConnectionError):
+                    logger.warning("failed to call bey presence api", extra={"error": str(e)})
+                else:
+                    logger.exception("failed to call bey presence api")
+
+                if i < self._conn_options.max_retry - 1:
+                    await asyncio.sleep(self._conn_options.retry_interval)
+
+        raise APIConnectionError("Failed to start Bey Avatar Session after all retries")

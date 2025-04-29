@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 from typing import Callable
 
-from .. import utils
+from .. import llm, utils
 
 
 class SpeechHandle:
@@ -30,6 +30,8 @@ class SpeechHandle:
         self._authorize_fut = asyncio.Future()
         self._playout_done_fut = asyncio.Future()
         self._parent = parent
+
+        self._chat_message: llm.ChatMessage | None = None
 
     @staticmethod
     def create(
@@ -59,6 +61,17 @@ class SpeechHandle:
     @property
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
+
+    @property
+    def chat_message(self) -> llm.ChatMessage | None:
+        """
+        Returns the assistant's generated chat message associated with this speech handle.
+
+        Only available once the speech playout is complete.
+        """
+        return self._chat_message
+
+    # TODO(theomonnom): should we introduce chat_items property as well for generated tools?
 
     @property
     def parent(self) -> SpeechHandle | None:
@@ -120,3 +133,12 @@ class SpeechHandle:
         with contextlib.suppress(asyncio.InvalidStateError):
             # will raise InvalidStateError if the future is already done (interrupted)
             self._playout_done_fut.set_result(None)
+
+    def _set_chat_message(self, chat_message: llm.ChatMessage) -> None:
+        if self.done():
+            raise RuntimeError("Cannot set chat message after speech has been played")
+
+        if self._chat_message is not None:
+            raise RuntimeError("Chat message already set")
+
+        self._chat_message = chat_message
