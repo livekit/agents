@@ -45,11 +45,12 @@ class _STTOptions:
 
 
 class STT(stt.STT):
-    def __init__(self,
-                 api_key: NotGivenOr[str] = NOT_GIVEN,
-                 base_url: NotGivenOr[str] = NOT_GIVEN,
-                 http_session: aiohttp.ClientSession | None = None,
-                 language_code: NotGivenOr[str] = NOT_GIVEN
+    def __init__(
+        self,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        language_code: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -71,7 +72,7 @@ class STT(stt.STT):
         self._opts = _STTOptions(
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
-            language_code=language_code
+            language_code=language_code,
         )
         self._session = http_session
 
@@ -88,28 +89,23 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-
         if is_given(language):
             self._opts.language_code = language
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
         form = aiohttp.FormData()
-        form.add_field(
-            'file',
-            wav_bytes,
-            filename='audio.wav',
-            content_type='audio/x-wav'
-        )
-        form.add_field('model_id', 'scribe_v1')
-        form.add_field('language_code', self._opts.language_code)
+        form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
+        form.add_field("model_id", "scribe_v1")
+        form.add_field("language_code", self._opts.language_code)
 
         try:
             async with self._ensure_session().post(
-                f"{API_BASE_URL_V1}/speech-to-text", data=form,
-                headers={AUTHORIZATION_HEADER: self._opts.api_key}
+                f"{API_BASE_URL_V1}/speech-to-text",
+                data=form,
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
                 response_json = await response.json()
-                extracted_text = response_json.get('text')
+                extracted_text = response_json.get("text")
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
