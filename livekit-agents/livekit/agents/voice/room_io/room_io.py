@@ -73,7 +73,7 @@ class RoomInputOptions:
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
     pre_connect_audio: NotGivenOr[PreConnectAudioData] = NOT_GIVEN
     """Pre-connect audio data. If provided, audio from the buffer will be pushed first."""
-    pre_connect_audio_timeout: float = 2.0
+    pre_connect_audio_timeout: float = 5.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
 
 

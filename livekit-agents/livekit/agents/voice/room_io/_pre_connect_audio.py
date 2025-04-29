@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from livekit import rtc
@@ -15,40 +14,15 @@ class PreConnectAudioData:
     received_fut: asyncio.Future[None]
     frames: list[rtc.AudioFrame] = field(default_factory=list)
 
-    def read_audio(
-        self, *, timeout: float = 2.0, sample_rate: int | None = None
-    ) -> AsyncIterator[rtc.AudioFrame]:
-        async def _read_audio():
-            if self.received_fut.done() and not self.frames:
-                return
+    async def wait_for_data(self, *, timeout: float) -> list[rtc.AudioFrame]:
+        try:
+            if self.received_fut.done():
+                return self.frames.copy()
 
-            try:
-                await asyncio.wait_for(self.received_fut, timeout)
-            except asyncio.TimeoutError:
-                logger.warning("timeout waiting for pre-connect audio buffer")
-                return
-            except Exception as e:
-                logger.error("error reading pre-connect audio buffer", extra={"error": e})
-                return
-
-            resampler: rtc.AudioResampler | None = None
-            for frame in self.frames:
-                if not resampler and sample_rate is not None and frame.sample_rate != sample_rate:
-                    resampler = rtc.AudioResampler(
-                        input_rate=frame.sample_rate,
-                        output_rate=sample_rate,
-                    )
-                if resampler:
-                    for f in resampler.push(frame):
-                        yield f
-                else:
-                    yield frame
-            if resampler:
-                for f in resampler.flush():
-                    yield f
+            await asyncio.wait_for(self.received_fut, timeout)
+            return self.frames.copy()
+        finally:
             self.frames.clear()
-
-        return _read_audio()
 
 
 class PreConnectAudioHandler:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from typing import Generic, TypeVar, Union
 
 from typing_extensions import override
@@ -182,17 +182,45 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
     @override
     async def _forward_task(self, old_task: asyncio.Task | None, stream: rtc.AudioStream) -> None:
         if self._pre_connect_audio:
-            duration = 0
-            async for frame in self._pre_connect_audio.read_audio(
-                sample_rate=self._sample_rate, timeout=self._pre_connect_audio_timeout
-            ):
-                if self._attached:
-                    await self._data_ch.send(frame)
-                    duration += frame.duration
-            if duration > 0:
-                logger.debug("pre-connect audio buffer pushed", extra={"duration": duration})
+            try:
+                duration = 0
+                frames = await self._pre_connect_audio.wait_for_data(
+                    timeout=self._pre_connect_audio_timeout
+                )
+                for frame in self._resample_frames(frames):
+                    if self._attached:
+                        await self._data_ch.send(frame)
+                        duration += frame.duration
+                if duration > 0:
+                    logger.debug("pre-connect audio buffer pushed", extra={"duration": duration})
+
+            except asyncio.TimeoutError:
+                logger.warning("timeout waiting for pre-connect audio buffer")
+
+            except Exception as e:
+                logger.error("error reading pre-connect audio buffer", extra={"error": e})
 
         await super()._forward_task(old_task, stream)
+
+    def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
+        resampler: rtc.AudioResampler | None = None
+        for frame in frames:
+            if (
+                not resampler
+                and self._sample_rate is not None
+                and frame.sample_rate != self._sample_rate
+            ):
+                resampler = rtc.AudioResampler(
+                    input_rate=frame.sample_rate, output_rate=self._sample_rate
+                )
+
+            if resampler:
+                yield from resampler.push(frame)
+            else:
+                yield frame
+
+        if resampler:
+            yield from resampler.flush()
 
 
 class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):
