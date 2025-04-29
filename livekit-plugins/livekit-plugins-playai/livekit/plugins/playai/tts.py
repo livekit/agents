@@ -14,11 +14,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    NotGivenOr,
-)
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .models import TTSModel
@@ -122,6 +118,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "voice": self._opts.voice,
                     "voice_engine": self._opts.model,
                     "output_format": "wav",
+                    "sample_rate": self._opts.sample_rate,
                 },
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
