@@ -9,6 +9,10 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   tests:
     # don't run tests for PRs on forks
@@ -67,7 +71,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lk-dump-${{ matrix.plugin }}
-          path: tests/lk_dump/**
+          path: lk_dump/**
           if-no-files-found: ignore
           retention-days: 1 
 
