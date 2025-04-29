@@ -56,6 +56,7 @@ services:
       - NEUPHONIC_API_KEY
       - RESEMBLE_API_KEY
       - SPEECHIFY_API_KEY
+      - HUME_API_KEY
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"
@@ -71,6 +72,7 @@ services:
       - "api.play.ht:172.30.0.10"
       - "f.cluster.resemble.ai:172.30.0.10"
       - "users.rime.ai:172.30.0.10"
+      - "api.hume.ai:172.30.0.10"
     networks:
       - toxinet
 

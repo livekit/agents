@@ -29,6 +29,7 @@ from livekit.plugins import (
     resemble,
     rime,
     speechify,
+    hume,
 )
 
 from .fake_tts import FakeTTS
@@ -183,6 +184,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.sws.speechify.com:443",
         },
         id="speechify",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": hume.TTS(),
+            "proxy-upstream": "api.hume.ai:443",
+        },
+        id="hume",
     ),
 ]
 

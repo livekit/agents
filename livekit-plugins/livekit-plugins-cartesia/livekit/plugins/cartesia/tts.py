@@ -79,6 +79,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
+        api_key: str | None = None,
         model: TTSModels | str = "sonic-2",
         language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
@@ -86,7 +87,6 @@ class TTS(tts.TTS):
         speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
         emotion: NotGivenOr[list[TTSVoiceEmotion | str]] = NOT_GIVEN,
         sample_rate: int = 24000,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
     ) -> None:
@@ -113,7 +113,7 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=1,
         )
-        cartesia_api_key = api_key if is_given(api_key) else os.environ.get("CARTESIA_API_KEY")
+        cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
             raise ValueError("CARTESIA_API_KEY must be set")
 
