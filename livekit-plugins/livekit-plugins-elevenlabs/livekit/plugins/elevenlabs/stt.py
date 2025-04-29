@@ -131,4 +131,3 @@ class STT(stt.STT):
             type=SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[stt.SpeechData(text=text, language=self._opts.language_code)],
         )
-    

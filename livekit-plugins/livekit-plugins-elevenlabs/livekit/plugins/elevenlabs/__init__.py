@@ -18,8 +18,8 @@ from .stt import STT
 from .version import __version__
 
 __all__ = [
+    "STT",
     "TTS",
-    'STT',
     "Voice",
     "VoiceSettings",
     "TTSEncoding",
