@@ -30,7 +30,7 @@ class SynthesizedAudio:
     request_id: str
     """Request ID (one segment could be made up of multiple requests)"""
     is_final: bool = False
-    """Whether this is latest frame of the segment (streaming only)"""
+    """Whether this is latest frame of the segment"""
     segment_id: str = ""
     """Segment ID, each segment is separated by a flush (streaming only)"""
     delta_text: str = ""
