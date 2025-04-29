@@ -19,6 +19,7 @@ from ...types import (
 from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
+from ._pre_connect_audio import PreConnectAudioData
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -70,6 +71,10 @@ class RoomInputOptions:
     participant_identity: NotGivenOr[str] = NOT_GIVEN
     """The participant to link to. If not provided, link to the first participant.
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
+    pre_connect_audio: NotGivenOr[PreConnectAudioData] = NOT_GIVEN
+    """Pre-connect audio data. If provided, audio from the buffer will be pushed first."""
+    pre_connect_audio_timeout: float = 2.0
+    """The pre-connect audio will be ignored if it doesn't arrive within this time."""
 
 
 @dataclass
@@ -147,6 +152,8 @@ class RoomIO:
                 sample_rate=self._input_options.audio_sample_rate,
                 num_channels=self._input_options.audio_num_channels,
                 noise_cancellation=self._input_options.noise_cancellation,
+                pre_connect_audio=self._input_options.pre_connect_audio or None,
+                pre_connect_audio_timeout=self._input_options.pre_connect_audio_timeout,
             )
 
         def _create_transcription_output(
@@ -197,10 +204,6 @@ class RoomIO:
         if self._audio_output:
             await self._audio_output.start()
 
-        # wait for the specified participant or the first participant joined
-        input_participant = await self._participant_available_fut
-        self.set_participant(input_participant.identity)
-
         if self.audio_input:
             self._agent_session.input.audio = self.audio_input
 
@@ -216,6 +219,10 @@ class RoomIO:
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session._room_io = self
+
+        # wait for the specified participant or the first participant joined
+        input_participant = await self._participant_available_fut
+        self.set_participant(input_participant.identity)
 
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)

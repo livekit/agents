@@ -12,6 +12,7 @@ from livekit.agents import utils
 
 from ...log import logger
 from ..io import AudioInput, VideoInput
+from ._pre_connect_audio import PreConnectAudioData
 
 T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
 
@@ -157,6 +158,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         sample_rate: int,
         num_channels: int,
         noise_cancellation: rtc.NoiseCancellationOptions | None,
+        pre_connect_audio: PreConnectAudioData | None,
+        pre_connect_audio_timeout: float,
     ) -> None:
         _ParticipantInputStream.__init__(
             self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
@@ -164,6 +167,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._noise_cancellation = noise_cancellation
+        self._pre_connect_audio = pre_connect_audio
+        self._pre_connect_audio_timeout = pre_connect_audio_timeout
 
     @override
     def _create_stream(self, track: rtc.Track) -> rtc.AudioStream:
@@ -173,6 +178,21 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             num_channels=self._num_channels,
             noise_cancellation=self._noise_cancellation,
         )
+
+    @override
+    async def _forward_task(self, old_task: asyncio.Task | None, stream: rtc.AudioStream) -> None:
+        if self._pre_connect_audio:
+            duration = 0
+            async for frame in self._pre_connect_audio.read_audio(
+                sample_rate=self._sample_rate, timeout=self._pre_connect_audio_timeout
+            ):
+                if self._attached:
+                    await self._data_ch.send(frame)
+                    duration += frame.duration
+            if duration > 0:
+                logger.debug("pre-connect audio buffer pushed", extra={"duration": duration})
+
+        await super()._forward_task(old_task, stream)
 
 
 class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):

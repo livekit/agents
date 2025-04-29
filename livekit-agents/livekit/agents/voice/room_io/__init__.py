@@ -1,3 +1,4 @@
+from ._pre_connect_audio import PreConnectAudioData, PreConnectAudioHandler
 from .room_io import (
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     DEFAULT_ROOM_INPUT_OPTIONS,
@@ -14,4 +15,6 @@ __all__ = [
     "RoomInputOptions",
     "RoomOutputOptions",
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
+    "PreConnectAudioData",
+    "PreConnectAudioHandler",
 ]
