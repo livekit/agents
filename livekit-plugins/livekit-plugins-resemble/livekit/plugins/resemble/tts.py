@@ -19,13 +19,14 @@ import base64
 import json
 import os
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import aiohttp
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -147,19 +148,9 @@ class TTS(tts.TTS):
         self._opts.sample_rate = sample_rate or self._opts.sample_rate
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions | None = None,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options or DEFAULT_API_CONNECT_OPTIONS,
-            opts=self._opts,
-            api_key=self._api_key,
-            session=self._ensure_session(),
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
         stream = SynthesizeStream(
@@ -174,54 +165,34 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
+
         self._streams.clear()
         await self._pool.aclose()
-        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize text into speech in one go using Resemble AI's REST API."""
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        opts: _TTSOptions,
-        conn_options: APIConnectOptions,
-        api_key: str,
-        session: aiohttp.ClientSession,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts, self._session, self._api_key = opts, session, api_key
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-
-        # Create request headers
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",  # Expect JSON response
-        }
-
-        # Create request payload
-        payload = {
-            "voice_uuid": self._opts.voice_uuid,
-            "data": self._input_text,
-            "sample_rate": self._opts.sample_rate,
-            "precision": "PCM_16",
-        }
-        decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
-
+    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
         try:
-            async with self._session.post(
+            async with self._tts._ensure_session().post(
                 RESEMBLE_REST_API_URL,
-                headers=headers,
-                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._tts._api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json={
+                    "voice_uuid": self._opts.voice_uuid,
+                    "data": self._input_text,
+                    "sample_rate": self._opts.sample_rate,
+                    "precision": "PCM_16",
+                },
                 timeout=aiohttp.ClientTimeout(
                     total=30,
                     sock_connect=self._conn_options.timeout,
@@ -230,57 +201,35 @@ class ChunkedStream(tts.ChunkedStream):
                 resp.raise_for_status()
                 response_json = await resp.json()
 
-                # Check for success
                 if not response_json.get("success", False):
                     issues = response_json.get("issues", ["Unknown error"])
                     error_msg = "; ".join(issues)
-                    raise APIStatusError(
+                    raise APIError(
                         message=f"Resemble API returned failure: {error_msg}",
-                        status_code=resp.status,
-                        request_id=request_id,
                         body=json.dumps(response_json),
                     )
 
-                # Extract base64-encoded audio content
-                audio_content_b64 = response_json.get("audio_content")
-                if not audio_content_b64:
-                    raise APIStatusError(
-                        message="No audio content in response",
-                        status_code=resp.status,
-                        request_id=request_id,
-                        body=json.dumps(response_json),
-                    )
-
-                # Decode base64 to get raw audio bytes
-                audio_bytes = base64.b64decode(audio_content_b64)
-                decoder.push(audio_bytes)
-                decoder.end_input()
-
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
+                output_emitter.start(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                    format="audio/pcm",
                 )
-                async for frame in decoder:
-                    emitter.push(frame)
 
-                emitter.flush()
+                audio_b64 = response_json["audio_content"]
+                audio_bytes = base64.b64decode(audio_b64)
+
+                output_emitter.push(audio_bytes)
+                output_emitter.flush()
+
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=f"resemble api error: {str(e)}",
-            ) from e
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
-        except aiohttp.ClientError as e:
-            raise APIConnectionError(
-                message=f"Resemble API connection error: {str(e)}",
-            ) from e
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
-            raise APIConnectionError(f"Error during synthesis: {str(e)}") from e
-        finally:
-            await decoder.aclose()
+            raise APIConnectionError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
