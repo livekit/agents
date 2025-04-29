@@ -53,12 +53,21 @@ class _ParticipantInputStream(Generic[T], ABC):
     def __aiter__(self) -> AsyncIterator[T]:
         return self
 
+    @property
+    def publication_source(self) -> rtc.TrackSource.ValueType:
+        if not self._publication:
+            return rtc.TrackSource.SOURCE_UNKNOWN
+        return self._publication.source
+
     def on_attached(self) -> None:
         logger.debug(
             "input stream attached",
             extra={
                 "participant": self._participant_identity,
-                "sources": [rtc.TrackSource.Name(source) for source in self._accepted_sources],
+                "source": rtc.TrackSource.Name(self.publication_source),
+                "accepted_sources": [
+                    rtc.TrackSource.Name(source) for source in self._accepted_sources
+                ],
             },
         )
         self._attached = True
@@ -68,7 +77,10 @@ class _ParticipantInputStream(Generic[T], ABC):
             "input stream detached",
             extra={
                 "participant": self._participant_identity,
-                "sources": [rtc.TrackSource.Name(source) for source in self._accepted_sources],
+                "source": rtc.TrackSource.Name(self.publication_source),
+                "accepted_sources": [
+                    rtc.TrackSource.Name(source) for source in self._accepted_sources
+                ],
             },
         )
         self._attached = False
