@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
@@ -78,18 +79,25 @@ class PreConnectAudioHandler:
             sample_rate = int(reader.info.attributes["sampleRate"])
             num_channels = int(reader.info.attributes["channels"])
             logger.debug(
-                "received pre-connect audio",
+                "pre-connect audio connected",
                 extra={"sample_rate": sample_rate, "num_channels": num_channels},
             )
 
+            duration = 0
             audio_stream = utils.audio.AudioByteStream(sample_rate, num_channels)
             async for chunk in reader:
                 for frame in audio_stream.push(chunk):
                     self._data.frames.append(frame)
+                    duration += frame.duration
 
             for frame in audio_stream.flush():
                 self._data.frames.append(frame)
+                duration += frame.duration
 
-            self._data.received_fut.set_result(None)
+            logger.debug("pre-connect audio received", extra={"duration": duration})
+
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._data.received_fut.set_result(None)
         except Exception as e:
-            self._data.received_fut.set_exception(e)
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._data.received_fut.set_exception(e)
