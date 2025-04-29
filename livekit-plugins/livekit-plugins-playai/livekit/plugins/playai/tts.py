@@ -108,10 +108,11 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._tts._ensure_session().post(
                 url="https://api.play.ht/api/v2/tts/stream",
+                # headers from https://github.com/playht/pyht/blob/master/pyht/client.py
                 headers={
                     "authorization": f"Bearer {self._tts._api_key}",
                     "x-user-id": self._tts._user_id,
-                    "accept": "*/*",
+                    "accept": "audio/wav",
                 },
                 json={
                     "text": self._input_text,
