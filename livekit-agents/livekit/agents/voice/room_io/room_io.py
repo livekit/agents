@@ -176,6 +176,7 @@ class RoomIO:
             self._user_tr_output = _create_transcription_output(
                 is_delta_stream=False, participant=self._participant_identity
             )
+            # TODO(long): add next in the chain for session.output.transcription
             self._agent_tr_output = _create_transcription_output(
                 is_delta_stream=True, participant=self._room.local_participant
             )
