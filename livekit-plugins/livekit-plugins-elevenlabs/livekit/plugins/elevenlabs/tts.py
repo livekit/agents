@@ -245,17 +245,15 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(self._opts.voice_settings)
             else None
         )
-        data = {
-            "text": self._input_text,
-            "model_id": self._opts.model,
-            "voice_settings": voice_settings,
-        }
-
         try:
             async with self._tts._ensure_session().post(
                 _synthesize_url(self._opts),
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
-                json=data,
+                json={
+                    "text": self._input_text,
+                    "model_id": self._opts.model,
+                    "voice_settings": voice_settings,
+                },
                 timeout=aiohttp.ClientTimeout(
                     total=30,
                     sock_connect=self._conn_options.timeout,
