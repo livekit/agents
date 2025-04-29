@@ -14,10 +14,11 @@
 
 from __future__ import annotations
 
-import aiohttp
 import asyncio
 import os
 from dataclasses import dataclass
+
+import aiohttp
 
 from livekit import rtc
 from livekit.agents import (
@@ -26,13 +27,10 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    stt
+    stt,
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
-from livekit.agents.types import (
-    NOT_GIVEN,
-    NotGivenOr,
-)
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
