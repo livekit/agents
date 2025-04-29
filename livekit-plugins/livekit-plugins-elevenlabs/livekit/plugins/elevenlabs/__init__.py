@@ -14,10 +14,12 @@
 
 from .models import TTSEncoding, TTSModels
 from .tts import DEFAULT_VOICE_ID, TTS, Voice, VoiceSettings
+from .stt import STT
 from .version import __version__
 
 __all__ = [
     "TTS",
+    'STT',
     "Voice",
     "VoiceSettings",
     "TTSEncoding",
