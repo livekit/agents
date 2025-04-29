@@ -206,7 +206,7 @@ class ChunkedStream(tts.ChunkedStream):
                 request_id=utils.shortuuid(),
                 sample_rate=self._opts.audio_config.sample_rate_hertz,
                 num_channels=1,
-                is_raw_pcm=True,
+                format="audio/pcm",
             )
 
             output_emitter.push(response.audio_content)

@@ -201,7 +201,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=stream.request_id or "",
                     sample_rate=SAMPLE_RATE,
                     num_channels=NUM_CHANNELS,
-                    is_raw_pcm=self._opts.response_format == "pcm",
+                    format="audio/pcm" if self._opts.response_format == "pcm" else None,
                 )
 
                 async for data in stream.iter_bytes():

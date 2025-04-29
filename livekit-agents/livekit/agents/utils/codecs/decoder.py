@@ -100,7 +100,7 @@ class AudioStreamDecoder:
         *,
         sample_rate: int | None = 48000,
         num_channels: int | None = 1,
-        format: Optional[str] = None,
+        format: str | None = None,
     ):
         self._sample_rate = sample_rate
 
@@ -145,6 +145,7 @@ class AudioStreamDecoder:
             container = av.open(
                 self._input_buf,
                 mode="r",
+                format=self._format,
                 buffer_size=1024,
                 options={
                     "fflags": "nobuffer+flush_packets",

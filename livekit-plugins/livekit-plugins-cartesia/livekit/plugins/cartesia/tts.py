@@ -253,7 +253,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    is_raw_pcm=True,
+                    format="audio/pcm",
                 )
 
                 async for data, _ in resp.content.iter_chunks():
@@ -264,10 +264,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
+                message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
             raise APIConnectionError() from e

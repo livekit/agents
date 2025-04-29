@@ -203,6 +203,7 @@ class ChunkedStream(ABC):
             try:
                 await self._run(output_emitter)
 
+                output_emitter.flush()
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
@@ -504,14 +505,21 @@ class SynthesizedAudioEmitter:
         segment_id: str | None = None,
         sample_rate: int | None = None,
         num_channels: int | None = None,
-        is_raw_pcm: bool = False,
+        format: str | None = None,
         frame_size_ms: int = 200,
     ) -> None:
         if self._started:
             raise RuntimeError("AudioEmitter already started")
 
+        is_raw_pcm = False
+        if format is not None:
+            format = format.lower().strip()
+            is_raw_pcm = format.startswith("audio/pcm") or format.startswith("audio/raw")
+
         if is_raw_pcm and (sample_rate is None or num_channels is None):
-            raise ValueError("sample_rate and num_channels must be provided if is_raw_pcm is True")
+            raise ValueError(
+                "sample_rate and num_channels must be provided if the format is headless"
+            )
 
         if not request_id:
             logger.warning("No request_id provided for TTS %s", self._label)
@@ -556,8 +564,8 @@ class SynthesizedAudioEmitter:
                 for f in self._audio_byte_stream.flush():
                     self._emit_frame(f)
         else:
-            assert self._sample_rate is not None, "sample_rate isn't None if is_raw_pcm is True"
-            assert self._num_channels is not None, "num_channels isn't None if is_raw_pcm is True"
+            assert self._sample_rate is not None, "sample_rate isn't None if format is headless"
+            assert self._num_channels is not None, "num_channels isn't None if format is headless"
             self._audio_byte_stream = audio.AudioByteStream(
                 sample_rate=self._sample_rate,
                 num_channels=self._num_channels,

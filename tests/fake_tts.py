@@ -97,7 +97,7 @@ class FakeChunkedStream(ChunkedStream):
             request_id=utils.shortuuid("fake_tts_"),
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            is_raw_pcm=True,
+            format="audio/pcm",
         )
 
         if self._tts._fake_timeout is not None:

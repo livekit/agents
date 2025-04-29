@@ -203,7 +203,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    is_raw_pcm=True,
+                    format="audio/pcm",
                 )
 
                 async for data, _ in resp.content.iter_chunks():
