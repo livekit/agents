@@ -12,28 +12,34 @@ PRE_CONNECT_AUDIO_BUFFER_STREAM = "lk.agent.pre-connect-audio-buffer"
 
 @dataclass
 class _PreConnectBuffer:
-    timestamp: float = 0
-    recv_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
+    timestamp: float
     frames: list[rtc.AudioFrame] = field(default_factory=list)
 
 
 @dataclass
 class PreConnectAudioData:
-    buffers: dict[str, _PreConnectBuffer] = field(default_factory=dict)
+    buffers: dict[str, asyncio.Future[_PreConnectBuffer]] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def wait_for_data(
         self, *, timeout: float, participant_identity: str
     ) -> list[rtc.AudioFrame]:
         async with self._lock:
-            self.buffers.setdefault(participant_identity, _PreConnectBuffer())
-            buf = self.buffers[participant_identity]
+            self.buffers.setdefault(participant_identity, asyncio.Future())
+            fut = self.buffers[participant_identity]
 
         try:
-            if buf.recv_fut.done() and time.time() - buf.timestamp < 0.5:
+            if fut.done():
+                buf = fut.result()
+                if (delta := time.time() - buf.timestamp) > 1.0:
+                    logger.warning(
+                        "pre-connect audio buffer is too old",
+                        extra={"participant": participant_identity, "delta_time": delta},
+                    )
+                    return []
                 return buf.frames
 
-            await asyncio.wait_for(buf.recv_fut, timeout)
+            buf = await asyncio.wait_for(fut, timeout)
             return buf.frames
         finally:
             async with self._lock:
@@ -62,14 +68,14 @@ class PreConnectAudioHandler:
     @utils.log_exceptions(logger=logger)
     async def _read_audio_task(self, reader: rtc.ByteStreamReader, participant_id: str):
         async with self._data._lock:
-            if (buf := self._data.buffers.get(participant_id)) and buf.recv_fut.done():
-                # reset the buffer if it's already received
+            if (fut := self._data.buffers.get(participant_id)) and fut.done():
+                # reset the buffer if it's already set
                 self._data.buffers.pop(participant_id)
-            self._data.buffers.setdefault(participant_id, _PreConnectBuffer())
-            buf = self._data.buffers[participant_id]
+            self._data.buffers.setdefault(participant_id, asyncio.Future())
+            fut = self._data.buffers[participant_id]
 
+        buf = _PreConnectBuffer(timestamp=time.time())
         try:
-            buf.timestamp = time.time()
             sample_rate = int(reader.info.attributes["sampleRate"])
             num_channels = int(reader.info.attributes["channels"])
             logger.debug(
@@ -98,7 +104,7 @@ class PreConnectAudioHandler:
             )
 
             with contextlib.suppress(asyncio.InvalidStateError):
-                buf.recv_fut.set_result(None)
+                fut.set_result(buf)
         except Exception as e:
             with contextlib.suppress(asyncio.InvalidStateError):
-                buf.recv_fut.set_exception(e)
+                fut.set_exception(e)
