@@ -621,6 +621,8 @@ class RealtimeSession(
                     elif event["type"] == "error":
                         self._handle_error(ErrorEvent.construct(**event))
                 except Exception:
+                    if event["type"] == "response.audio.delta":
+                        event["delta"] = event["delta"][:10] + "..."
                     logger.exception("failed to handle event", extra={"event": event})
 
         tasks = [
@@ -944,7 +946,13 @@ class RealtimeSession(
 
         if handle := self._response_created_futures.pop(response_id, None):
             generation_ev.user_initiated = True
-            handle.done_fut.set_result(generation_ev)
+            try:
+                handle.done_fut.set_result(generation_ev)
+            except asyncio.InvalidStateError:
+                # in case the generation comes after the reply timeout
+                logger.warning(
+                    "response received after timeout", extra={"response_id": response_id}
+                )
 
         self.emit("generation_created", generation_ev)
 
