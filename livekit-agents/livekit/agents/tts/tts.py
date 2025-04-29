@@ -220,11 +220,7 @@ class ChunkedStream(ABC):
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
-                        extra={
-                            "tts": self._tts._label,
-                            "attempt": i + 1,
-                            "streamed": False,
-                        },
+                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
                     )
 
                 await asyncio.sleep(retry_interval)

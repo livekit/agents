@@ -13,7 +13,7 @@ import pytest
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APITimeoutError, metrics
+from livekit.agents import APIConnectOptions, APITimeoutError, metrics, APIError
 from livekit.agents.tts import TTS
 from livekit.agents.utils import AudioBuffer
 from livekit.plugins import (
@@ -31,6 +31,8 @@ from livekit.plugins import (
     rime,
     speechify,
 )
+
+from .fake_tts import FakeTTS
 
 from .toxic_proxy import Proxy, Toxiproxy
 from .utils import EventCollector, wer
@@ -293,5 +295,18 @@ async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
         assert metrics_collected_events.count == 0, (
             "expected 0 metrics collected events, got {metrics_collected_events.count}"
         )
+    finally:
+        await tts.aclose()
+
+
+async def test_error_prop():
+    tts = FakeTTS(fake_audio_duration=0.0)
+    try:
+        with pytest.raises(APIError, match="no audio frames"):
+            await _do_synthesis(tts, conn_options=APIConnectOptions(max_retry=0, timeout=0.5))
+
+        tts.update_options(fake_exception=RuntimeError("test error"))
+        with pytest.raises(RuntimeError, match="test error"):
+            await _do_synthesis(tts, conn_options=APIConnectOptions(max_retry=0, timeout=0.5))
     finally:
         await tts.aclose()
