@@ -725,17 +725,10 @@ class SpeechStream(stt.SpeechStream):
                     sock_connect=self._conn_options.timeout,
                 ),
             ) as res:
-                # Gladia returns 201 Created when successfully creating a session
-                if res.status not in (200, 201):
-                    raise APIStatusError(
-                        message=f"Failed to initialize Gladia session: {res.status}",
-                        status_code=res.status,
-                        request_id=None,
-                        body=await res.text(),
-                    )
+                res.raise_for_status()
                 return await res.json()
+
         except Exception as e:
-            logger.exception(f"Failed to initialize Gladia session: {e}")
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
     async def _send_audio_task(self):

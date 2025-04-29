@@ -35,10 +35,7 @@ def wer(hypothesis: str, reference: str) -> float:
 
 
 async def read_mp3_file(path) -> rtc.AudioFrame:
-    decoder = utils.codecs.AudioStreamDecoder(
-        sample_rate=48000,
-        num_channels=1,
-    )
+    decoder = utils.codecs.AudioStreamDecoder(sample_rate=48000, num_channels=1)
     frames: list[rtc.AudioFrame] = []
     with open(path, "rb") as file:
         while True:
@@ -51,6 +48,23 @@ async def read_mp3_file(path) -> rtc.AudioFrame:
         frames.append(frame)
 
     return rtc.combine_audio_frames(frames)  # merging just for ease of use
+
+
+class EventCollector:
+    def __init__(self, emitter: rtc.EventEmitter, event: str) -> None:
+        emitter.on(event, self._on_event)
+        self._events = []
+
+    def _on_event(self, *args, **kwargs) -> None:
+        self._events.append((args, kwargs))
+
+    @property
+    def events(self) -> list[tuple[tuple, dict]]:
+        return self._events
+
+    @property
+    def count(self) -> int:
+        return len(self._events)
 
 
 async def make_test_speech(

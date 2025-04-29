@@ -19,7 +19,7 @@ import base64
 import json
 import os
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import aiohttp
@@ -53,7 +53,6 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
 
-NUM_CHANNELS = 1
 BUFFERED_WORDS_COUNT = 3
 
 
@@ -80,6 +79,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
+        api_key: str | None = None,
         model: TTSModels | str = "sonic-2",
         language: str = "en",
         encoding: TTSEncoding = "pcm_s16le",
@@ -87,7 +87,6 @@ class TTS(tts.TTS):
         speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
         emotion: NotGivenOr[list[TTSVoiceEmotion | str]] = NOT_GIVEN,
         sample_rate: int = 24000,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
     ) -> None:
@@ -112,9 +111,9 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
+            num_channels=1,
         )
-        cartesia_api_key = api_key if is_given(api_key) else os.environ.get("CARTESIA_API_KEY")
+        cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
             raise ValueError("CARTESIA_API_KEY must be set")
 
@@ -191,34 +190,21 @@ class TTS(tts.TTS):
             self._opts.emotion = emotion
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-            opts=self._opts,
-            session=self._ensure_session(),
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return SynthesizeStream(
-            tts=self,
-            pool=self._pool,
-            opts=self._opts,
-        )
+        return SynthesizeStream(tts=self, pool=self._pool, opts=self._opts)
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
+
         self._streams.clear()
         await self._pool.aclose()
-        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -229,57 +215,44 @@ class ChunkedStream(tts.ChunkedStream):
         *,
         tts: TTS,
         input_text: str,
-        opts: _TTSOptions,
-        session: aiohttp.ClientSession,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts, self._session = opts, session
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-        bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate, num_channels=NUM_CHANNELS
-        )
-
+    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
         json = _to_cartesia_options(self._opts)
         json["transcript"] = self._input_text
 
-        headers = {
-            API_AUTH_HEADER: self._opts.api_key,
-            API_VERSION_HEADER: API_VERSION,
-        }
-
         try:
-            async with self._session.post(
+            async with self._tts._ensure_session().post(
                 self._opts.get_http_url("/tts/bytes"),
-                headers=headers,
+                headers={
+                    API_AUTH_HEADER: self._opts.api_key,
+                    API_VERSION_HEADER: API_VERSION,
+                },
                 json=json,
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
                 resp.raise_for_status()
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
-                )
-                async for data, _ in resp.content.iter_chunks():
-                    for frame in bstream.write(data):
-                        emitter.push(frame)
 
-                for frame in bstream.flush():
-                    emitter.push(frame)
-                emitter.flush()
+                output_emitter.start(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=1,
+                    format="audio/pcm",
+                )
+
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
+
+                output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
+                message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
@@ -329,7 +302,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
+                num_channels=1,
             )
             emitter = tts.SynthesizedAudioEmitter(
                 event_ch=self._event_ch,

@@ -13,30 +13,12 @@
 # limitations under the License.
 
 from __future__ import annotations
-
-__version__ = "1.0.0"
-
-# make imports available
-from hume.tts import (
-    Format,
-    PostedContext,
-    PostedUtterance,
-    PostedUtteranceVoiceWithId,
-    PostedUtteranceVoiceWithName,
-)
+from .version import __version__
 from livekit.agents import Plugin
 
-from .tts import TTS
+from .tts import TTS, PostedContext, PostedUtterance
 
-# all exports
-__all__ = [
-    "TTS",
-    "Format",
-    "PostedUtterance",
-    "PostedContext",
-    "PostedUtteranceVoiceWithName",
-    "PostedUtteranceVoiceWithId",
-]
+__all__ = ["TTS", "PostedContext", "PostedUtterance"]
 
 
 class HumeAIPlugin(Plugin):
