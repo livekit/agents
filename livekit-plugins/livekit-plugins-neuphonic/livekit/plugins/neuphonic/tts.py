@@ -33,8 +33,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
-from .models import TTSEncodings, TTSLangCodes, TTSModels
+from .models import TTSLangCodes, TTSModels
 
 API_BASE_URL = "api.neuphonic.com"
 AUTHORIZATION_HEADER = "X-API-KEY"
