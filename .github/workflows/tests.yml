@@ -22,11 +22,13 @@ jobs:
     name: livekit-plugins-${{ matrix.plugin }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Google credentials
         if: matrix.plugin == 'google'
         shell: bash
         run: |
           printf '%s' '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > tests/google.json
+
       - name: Run tests
         shell: bash
         env:
@@ -59,3 +61,36 @@ jobs:
           HUME_API_KEY: ${{ secrets.HUME_API_KEY }}
         working-directory: tests
         run: make test
+
+      - name: Upload LiveKit dump
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lk-dump-${{ matrix.plugin }}
+          path: tests/lk_dump/**
+          if-no-files-found: ignore
+          retention-days: 1 
+
+
+  aggregate-dumps:
+    if: always()
+    needs: tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all dump shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lk-dump-*
+          path: all_lk_dump
+          merge-multiple: true
+
+      - name: Create tarball
+        run: tar -czf lk-dump-all.tar.gz -C all_lk_dump .
+
+      - name: Upload merged dump
+        uses: actions/upload-artifact@v4
+        with:
+          name: lk-dump-all
+          path: lk-dump-all.tar.gz
+          retention-days: 5
