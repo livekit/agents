@@ -33,7 +33,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .models import TTSLangCodes, TTSModels
+from .models import TTSLangCodes
 
 API_BASE_URL = "api.neuphonic.com"
 AUTHORIZATION_HEADER = "X-API-KEY"
@@ -43,7 +43,6 @@ NUM_CHANNELS = 1
 @dataclass
 class _TTSOptions:
     base_url: str
-    model: TTSModels | str
     lang_code: TTSLangCodes | str
     sample_rate: int
     speed: float
@@ -54,9 +53,8 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: TTSModels | str = "neu_hq",
+        voice_id: str = "8e9c4bc8-3979-48ab-8626-df53befc2090",
         api_key: str | None = None,
-        voice_id: str | None = None,
         lang_code: TTSLangCodes | str = "en",
         speed: float = 1.0,
         sample_rate: int = 22050,
@@ -69,7 +67,6 @@ class TTS(tts.TTS):
         See https://docs.neuphonic.com for more documentation on all of these options, or go to https://app.neuphonic.com/ to test out different options.
 
         Args:
-            model (TTSModels | str, optional): The Neuphonic model to use. See Defaults to "neu_hq".
             voice_id (str, optional): The voice ID for the desired voice. Defaults to None.
             lang_code (TTSLanguages | str, optional): The language code for synthesis. Defaults to "en".
             encoding (TTSEncodings | str, optional): The audio encoding format. Defaults to "pcm_mulaw".
@@ -90,7 +87,6 @@ class TTS(tts.TTS):
             raise ValueError("API key must be provided or set in NEUPHONIC_API_KEY")
 
         self._opts = _TTSOptions(
-            model=model,
             voice_id=voice_id,
             lang_code=lang_code,
             speed=speed,
@@ -109,7 +105,6 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: NotGivenOr[TTSModels] = NOT_GIVEN,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         lang_code: NotGivenOr[TTSLangCodes] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
@@ -130,8 +125,6 @@ class TTS(tts.TTS):
             speed (float, optional): The audio playback speed.
             sample_rate (int, optional): The audio sample rate in Hz.
         """  # noqa: E501
-        if is_given(model):
-            self._opts.model = model
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(lang_code):
@@ -171,7 +164,6 @@ class ChunkedStream(tts.ChunkedStream):
                 json={
                     "text": self._input_text,
                     "voice_id": self._opts.voice_id,
-                    "model": self._opts.model,
                     "lang_code": self._opts.lang_code,
                     "encoding": "pcm_linear",
                     "sampling_rate": self._opts.sample_rate,
