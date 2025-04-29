@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, NotGivenOr, utils, tts
+from livekit.agents import NOT_GIVEN, NotGivenOr, tts, utils
 from livekit.agents.tts import (
     TTS,
     ChunkedStream,

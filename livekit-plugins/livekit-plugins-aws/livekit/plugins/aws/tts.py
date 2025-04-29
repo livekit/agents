@@ -12,30 +12,24 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, replace
 
-
-from aiobotocore.config import AioConfig
-import botocore
 import aioboto3
-import aiohttp
-
+import botocore
 import botocore.exceptions
+from aiobotocore.config import AioConfig
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     APITimeoutError,
     tts,
-    utils,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
 
 from .models import TTSLanguages, TTSSpeechEngine
 from .utils import _strip_nones, get_aws_async_session

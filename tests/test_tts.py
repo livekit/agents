@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import logging
+import os
 import pathlib
 import ssl
 import time
 
 import aiohttp
-import numpy as np
 import pytest
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APITimeoutError, metrics, APIError
+from livekit.agents import APIConnectOptions, APIError, APITimeoutError
 from livekit.agents.tts import TTS
 from livekit.agents.utils import AudioBuffer
 from livekit.plugins import (
@@ -33,7 +32,6 @@ from livekit.plugins import (
 )
 
 from .fake_tts import FakeTTS
-
 from .toxic_proxy import Proxy, Toxiproxy
 from .utils import EventCollector, wer
 
@@ -213,7 +211,7 @@ async def _do_synthesis(tts_v: TTS, *, conn_options: APIConnectOptions) -> list[
     first_id = audio_events[0].request_id
     assert first_id, "expected to have a request_id"
     assert all(e.request_id == first_id for e in audio_events), (
-        f"expected all frames to have the same request_id, "
+        "expected all frames to have the same request_id, "
     )
 
     frames = [event.frame for event in audio_events]

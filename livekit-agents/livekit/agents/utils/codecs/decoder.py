@@ -15,13 +15,11 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import io
 import struct
 import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
 
 import av
 import av.container
@@ -93,7 +91,7 @@ class AudioStreamDecoder:
     """
 
     _max_workers: int = 10
-    _executor: Optional[ThreadPoolExecutor] = None
+    _executor: ThreadPoolExecutor | None = None
 
     def __init__(
         self,

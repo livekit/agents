@@ -53,7 +53,6 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
 
-NUM_CHANNELS = 1
 BUFFERED_WORDS_COUNT = 3
 
 
@@ -112,7 +111,7 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
+            num_channels=1,
         )
         cartesia_api_key = api_key if is_given(api_key) else os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
@@ -226,15 +225,13 @@ class ChunkedStream(tts.ChunkedStream):
         json = _to_cartesia_options(self._opts)
         json["transcript"] = self._input_text
 
-        headers = {
-            API_AUTH_HEADER: self._opts.api_key,
-            API_VERSION_HEADER: API_VERSION,
-        }
-
         try:
             async with self._tts._ensure_session().post(
                 self._opts.get_http_url("/tts/bytes"),
-                headers=headers,
+                headers={
+                    API_AUTH_HEADER: self._opts.api_key,
+                    API_VERSION_HEADER: API_VERSION,
+                },
                 json=json,
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
@@ -243,7 +240,7 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.start(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
-                    num_channels=NUM_CHANNELS,
+                    num_channels=1,
                     format="audio/pcm",
                 )
 
@@ -305,7 +302,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
+                num_channels=1,
             )
             emitter = tts.SynthesizedAudioEmitter(
                 event_ch=self._event_ch,

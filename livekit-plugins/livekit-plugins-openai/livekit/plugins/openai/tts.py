@@ -26,7 +26,6 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     tts,
-    utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given

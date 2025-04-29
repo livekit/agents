@@ -23,9 +23,9 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
-    APIError,
     tts,
     utils,
 )
@@ -36,7 +36,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import TTSModels, TTSVoices
 
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"

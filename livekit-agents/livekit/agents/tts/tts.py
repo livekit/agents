@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import asyncio
 import datetime
 import os
@@ -19,7 +18,7 @@ from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from ..utils import aio, codecs, audio, log_exceptions
+from ..utils import aio, audio, codecs, log_exceptions
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
