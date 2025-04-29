@@ -106,6 +106,8 @@ class AudioRecognition:
 
     async def aclose(self) -> None:
         await aio.cancel_and_wait(*self._tasks)
+        if self._commit_user_turn_atask is not None:
+            await aio.cancel_and_wait(self._commit_user_turn_atask)
 
         if self._stt_atask is not None:
             await aio.cancel_and_wait(self._stt_atask)
