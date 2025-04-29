@@ -134,11 +134,9 @@ class AudioStreamDecoder:
             audio_stream = container.streams.audio[0]
 
             # Set up resampler only if needed
-            if self._sample_rate is not None and self._layout is not None:
+            if self._sample_rate is not None or self._layout is not None:
                 resampler = av.AudioResampler(
-                    format="s16",
-                    layout=self._layout,
-                    rate=self._sample_rate,
+                    format="s16", layout=self._layout, rate=self._sample_rate
                 )
 
             for frame in container.decode(audio_stream):
