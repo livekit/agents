@@ -34,8 +34,8 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         user_id: str | None = None,
-        model: TTSModel | str = "PlayDialog",
-        voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
+        model: TTSModel | str = "PlayDialog-turbo",
+        voice: str = "Atlas-PlayAI",
         language: str = "english",
         sample_rate: int = 24000,
         http_session: aiohttp.ClientSession | None = None,
@@ -46,7 +46,7 @@ class TTS(tts.TTS):
         Args:
             api_key (str): PlayAI API key.
             user_id (str): PlayAI user ID.
-            model (TTSModel): TTS model, defaults to "PlayDialog".
+            model (TTSModel): TTS model, defaults to "PlayDialog-turbo".
             voice (str): Voice manifest URL.
             language (str): language, defaults to "english".
             sample_rate (int): sample rate (Hz), A number greater than or equal to 8000,
