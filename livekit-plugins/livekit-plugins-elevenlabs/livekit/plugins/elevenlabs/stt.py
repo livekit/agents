@@ -34,21 +34,21 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, http_context, is_given
-from .log import logger
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
+
 
 @dataclass
 class _STTOptions:
     api_key: str
     base_url: str
     language_code: str = "en"
-    
+
 
 class STT(stt.STT):
-    def __init__(self, 
-                 api_key: NotGivenOr[str] = NOT_GIVEN, 
+    def __init__(self,
+                 api_key: NotGivenOr[str] = NOT_GIVEN,
                  base_url: NotGivenOr[str] = NOT_GIVEN,
                  http_session: aiohttp.ClientSession | None = None,
                  language_code: NotGivenOr[str] = NOT_GIVEN
@@ -63,7 +63,7 @@ class STT(stt.STT):
             language (NotGivenOr[str]): Language code for the STT model. Optional.
         """  # noqa: E501
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
-        
+
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
             raise ValueError(
@@ -72,7 +72,7 @@ class STT(stt.STT):
             )
         self._opts = _STTOptions(
             api_key=elevenlabs_api_key,
-            base_url=base_url if is_given(base_url) else API_BASE_URL_V1, 
+            base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             language_code=language_code
         )
         self._session = http_session
@@ -82,7 +82,7 @@ class STT(stt.STT):
             self._session = http_context.http_session()
 
         return self._session
-    
+
     async def _recognize_impl(
         self,
         buffer: AudioBuffer,
@@ -125,7 +125,7 @@ class STT(stt.STT):
             raise APIConnectionError() from e
 
         return self._transcription_to_speech_event(text=extracted_text)
-            
+
     def _transcription_to_speech_event(self, text: str) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,

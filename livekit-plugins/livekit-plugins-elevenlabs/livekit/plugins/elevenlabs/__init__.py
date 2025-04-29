@@ -13,8 +13,8 @@
 # limitations under the License.
 
 from .models import TTSEncoding, TTSModels
-from .tts import DEFAULT_VOICE_ID, TTS, Voice, VoiceSettings
 from .stt import STT
+from .tts import DEFAULT_VOICE_ID, TTS, Voice, VoiceSettings
 from .version import __version__
 
 __all__ = [
