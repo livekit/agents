@@ -60,6 +60,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.25.3" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "ruff" },
+    { name = "scipy", specifier = ">=1.13.1" },
 ]
 
 [[package]]
@@ -1178,15 +1179,20 @@ wheels = [
 
 [[package]]
 name = "hume"
-version = "0.4.2"
+version = "0.8.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "requests" },
+    { name = "aiofiles" },
+    { name = "eval-type-backport" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
     { name = "typing-extensions" },
+    { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/cf/f834b3e1505b84c3daa4a5055c03b23eb7c2f05c2a78d7f5b7ddb3fa477d/hume-0.4.2.tar.gz", hash = "sha256:3a3c05a7081d2d6a4824c746a1e5b4935ac7060d025d5142aa1e68a3589fb3e7", size = 19826 }
+sdist = { url = "https://files.pythonhosted.org/packages/85/a7/13dcfa5eb32b8ff8a4d13f20fd72b01f86b048a0ee540b3c6189cfa0fc5f/hume-0.8.3.tar.gz", hash = "sha256:43faf4ea645c3784f8cc302641ac3f38af6f5b9d769c91658714602b2e09b963", size = 136851 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/43/4592759e302ce014b55e8d7be7161db4b29eed44df3e6a300d0f24dfb771/hume-0.4.2-py3-none-any.whl", hash = "sha256:64a59db184d090e39146c028f5c018a20c8d49ceda547ec5994320edd06d74f2", size = 31817 },
+    { url = "https://files.pythonhosted.org/packages/01/07/f25ae894713b4a92cb992bd14ea97c6b1e64399bc94b5c80a76a8ba407cd/hume-0.8.3-py3-none-any.whl", hash = "sha256:ceac4a2494908bb733dc68481128b2f2c0b54237ae67b287dafbd961ab88174b", size = 328010 },
 ]
 
 [[package]]
@@ -1803,7 +1809,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
-    { name = "hume" },
+    { name = "hume", specifier = ">=0.8.3" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
