@@ -47,7 +47,7 @@ async def entrypoint(ctx: JobContext):
         input_options=RoomInputOptions(pre_connect_audio=True, pre_connect_audio_timeout=5.0),
     )
 
-    # connect to room first to receive pre-connect audio buffer,
+    # connect to room first to notify the client to send pre-connect audio buffer,
     # then start room_io to collect ongoing audio and combine with the buffer
     await ctx.connect()
     await room_io.start()
