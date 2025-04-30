@@ -180,7 +180,6 @@ class TTS(tts.TTS):
                 If disabled, each chunk’s audio will be its own audio file, each with its headers.
         """
 
-
         if is_given(voice):
             self._opts.voice = voice
         if is_given(description):
@@ -246,7 +245,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 utterance_kwargs = {
                     "text": self._input_text,
-                    **{k: v for k, v in utterance_options.items() if v is not None}
+                    **{k: v for k, v in utterance_options.items() if v is not None},
                 }
 
                 try:
