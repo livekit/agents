@@ -124,23 +124,20 @@ class RoomIO:
         self._tr_synchronizer: TranscriptSynchronizer | None = None
 
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._participant_linked = False  # if the first participant linked
 
         self._tasks: set[asyncio.Task] = set()
         self._update_state_task: asyncio.Task | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
-        if input_options.pre_connect_audio:
-            self._pre_connect_audio_handler = PreConnectAudioHandler(
-                room=self._room,
-                timeout=input_options.pre_connect_audio_timeout,
-            )
 
     async def start(self) -> None:
-        self._room.on("participant_connected", self._on_participant_connected)
-        self._room.on("participant_disconnected", self._on_participant_disconnected)
-
-        for participant in self._room.remote_participants.values():
-            self._on_participant_connected(participant)
+        # -- create inputs --
+        if self._input_options.pre_connect_audio:
+            self._pre_connect_audio_handler = PreConnectAudioHandler(
+                room=self._room,
+                timeout=self._input_options.pre_connect_audio_timeout,
+            )
 
         if self._input_options.text_enabled:
             try:
@@ -166,21 +163,7 @@ class RoomIO:
                 ),
             )
 
-        def _create_transcription_output(
-            is_delta_stream: bool, participant: rtc.Participant | str | None = None
-        ) -> _ParallelTextOutput:
-            return _ParallelTextOutput(
-                [
-                    _ParticipantLegacyTranscriptionOutput(
-                        room=self._room, is_delta_stream=is_delta_stream, participant=participant
-                    ),
-                    _ParticipantTranscriptionOutput(
-                        room=self._room, is_delta_stream=is_delta_stream, participant=participant
-                    ),
-                ],
-                next_in_chain=None,
-            )
-
+        # -- create outputs --
         if self._output_options.audio_enabled:
             self._audio_output = _ParticipantAudioOutput(
                 self._room,
@@ -190,12 +173,12 @@ class RoomIO:
             )
 
         if self._output_options.transcription_enabled:
-            self._user_tr_output = _create_transcription_output(
+            self._user_tr_output = self._create_transcription_output(
                 is_delta_stream=False, participant=self._participant_identity
             )
             # TODO(long): add next in the chain for session.output.transcription
-            self._agent_tr_output = _create_transcription_output(
-                is_delta_stream=True, participant=self._room.local_participant
+            self._agent_tr_output = self._create_transcription_output(
+                is_delta_stream=True, participant=None
             )
 
             # use the RoomIO's audio output if available, otherwise use the agent's audio output
@@ -211,15 +194,13 @@ class RoomIO:
                     next_in_chain_audio=audio_output, next_in_chain_text=self._agent_tr_output
                 )
 
-        # wait for the specified participant or the first participant joined
-        input_participant = await self._participant_available_fut
-        self.set_participant(input_participant.identity)
+        # -- set the room event handlers --
+        self._room.on("participant_connected", self._on_participant_connected)
+        self._room.on("connection_state_changed", self._on_connection_state_changed)
+        if self._room.isconnected():
+            self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
-        # TODO(theomonnom): ideally we're consistent and every input/output has a start method
-        # wait for the audio output to be published and subscribed
-        if self._audio_output:
-            await self._audio_output.start()
-
+        # -- attach to the agent session --
         if self.audio_input:
             self._agent_session.input.audio = self.audio_input
 
@@ -238,7 +219,7 @@ class RoomIO:
 
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
-        self._room.off("participant_disconnected", self._on_participant_disconnected)
+        self._room.off("connection_state_changed", self._on_connection_state_changed)
         if self._pre_connect_audio_handler:
             await self._pre_connect_audio_handler.aclose()
 
@@ -288,6 +269,9 @@ class RoomIO:
             self.unset_participant()
             return
 
+        if not self._participant_linked:
+            self._participant_linked = True
+
         if (
             self._participant_identity is not None
             and self._participant_identity != participant_identity
@@ -308,7 +292,7 @@ class RoomIO:
         if self._video_input:
             self._video_input.set_participant(participant_identity)
 
-        self._update_user_transcription(participant_identity)
+        self._update_transcription_output(self._user_tr_output, participant_identity)
 
     def unset_participant(self) -> None:
         self._participant_identity = None
@@ -317,7 +301,17 @@ class RoomIO:
             self._audio_input.set_participant(None)
         if self._video_input:
             self._video_input.set_participant(None)
-        self._update_user_transcription(None)
+        self._update_transcription_output(self._user_tr_output, None)
+
+    def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
+        if state != rtc.ConnectionState.CONN_CONNECTED:
+            return
+
+        self._update_transcription_output(
+            self._agent_tr_output, self._room.local_participant.identity
+        )
+        for participant in self._room.remote_participants.values():
+            self._on_participant_connected(participant)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
@@ -339,10 +333,9 @@ class RoomIO:
             return
 
         self._participant_available_fut.set_result(participant)
-
-    def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
-        if self._participant_identity is None or self._participant_identity != participant.identity:
-            return
+        if not self._participant_linked:
+            # automatically set the participant at the first time
+            self.set_participant(participant.identity)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         async def _capture_text():
@@ -395,16 +388,29 @@ class RoomIO:
 
         self._update_state_task = asyncio.create_task(_set_state())
 
-    def _update_user_transcription(self, participant_identity: str | None) -> None:
-        if not self._user_tr_output:
+    def _create_transcription_output(
+        self, is_delta_stream: bool, participant: rtc.Participant | str | None = None
+    ) -> _ParallelTextOutput:
+        return _ParallelTextOutput(
+            [
+                _ParticipantLegacyTranscriptionOutput(
+                    room=self._room, is_delta_stream=is_delta_stream, participant=participant
+                ),
+                _ParticipantTranscriptionOutput(
+                    room=self._room, is_delta_stream=is_delta_stream, participant=participant
+                ),
+            ],
+            next_in_chain=None,
+        )
+
+    def _update_transcription_output(
+        self, output: _ParallelTextOutput | None, participant_identity: str | None
+    ) -> None:
+        if output is None:
             return
 
-        for sink in self._user_tr_output._sinks:
-            assert isinstance(
-                sink,
-                (
-                    _ParticipantLegacyTranscriptionOutput,
-                    _ParticipantTranscriptionOutput,
-                ),
-            )
-            sink.set_participant(participant_identity)
+        for sink in output._sinks:
+            if isinstance(
+                sink, (_ParticipantLegacyTranscriptionOutput, _ParticipantTranscriptionOutput)
+            ):
+                sink.set_participant(participant_identity)

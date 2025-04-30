@@ -37,6 +37,8 @@ class PreConnectAudioHandler:
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
 
+        if self._room.isconnected():
+            logger.warning("pre-connect audio handler registered after room is connected")
         self._room.register_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM, _handler)
 
     async def aclose(self):
