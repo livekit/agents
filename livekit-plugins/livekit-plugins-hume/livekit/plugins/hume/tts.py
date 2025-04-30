@@ -39,7 +39,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 # Default audio settings
-DEFAULT_SAMPLE_RATE = 24000
+DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_NUM_CHANNELS = 1
 
 # Default TTS settings
@@ -54,7 +54,6 @@ class _TTSOptions:
     utterance_options: PostedUtterance
     context: PostedContext | None
     format: Format
-    sample_rate: int
     split_utterances: bool
     strip_headers: bool
     num_generations: int
@@ -76,7 +75,6 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         word_tokenizer: tokenize.WordTokenizer | None = None,
         http_session: aiohttp.ClientSession | None = None,
-        sample_rate: int = 24000,
     ) -> None:
         """Initialize the Hume TTS client.
 
@@ -107,14 +105,13 @@ class TTS(tts.TTS):
                 If None, a basic word tokenizer will be used.
             http_session (aiohttp.ClientSession | None): Optional HTTP session for API requests.
                 If None, a new session will be created.
-            sample_rate (int): Audio sample rate in Hz. Defaults to 24000.
         """
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
             ),
-            sample_rate=sample_rate,
+            sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=DEFAULT_NUM_CHANNELS,
         )
 
@@ -134,7 +131,6 @@ class TTS(tts.TTS):
             context=context if is_given(context) else None,
             format=format if is_given(format) else FormatWav(),
             api_key=self._api_key,
-            sample_rate=self.sample_rate,
             split_utterances=split_utterances,
             num_generations=num_generations,
             strip_headers=strip_headers,
@@ -229,7 +225,7 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
 
         decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=self._opts.sample_rate,
+            sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=DEFAULT_NUM_CHANNELS,
         )
 
