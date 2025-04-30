@@ -164,7 +164,6 @@ class RoomIO:
                     if self._pre_connect_audio_handler
                     else None
                 ),
-                pre_connect_audio_timeout=self._input_options.pre_connect_audio_timeout,
             )
 
         def _create_transcription_output(

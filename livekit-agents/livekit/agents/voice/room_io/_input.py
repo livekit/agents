@@ -207,7 +207,6 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         num_channels: int,
         noise_cancellation: rtc.NoiseCancellationOptions | None,
         pre_connect_audio_cb: _WaitPreConnectAudio | None,
-        pre_connect_audio_timeout: float,
     ) -> None:
         _ParticipantInputStream.__init__(
             self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
@@ -216,7 +215,6 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._num_channels = num_channels
         self._noise_cancellation = noise_cancellation
         self._pre_connect_audio_cb = pre_connect_audio_cb
-        self._pre_connect_audio_timeout = pre_connect_audio_timeout
 
     @override
     def _create_stream(self, track: rtc.Track) -> rtc.AudioStream:
