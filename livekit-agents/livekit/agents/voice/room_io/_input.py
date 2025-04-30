@@ -94,9 +94,9 @@ class _ParticipantInputStream(Generic[T], ABC):
             return
 
         self._participant_identity = participant_identity
+        self._close_stream()
 
         if participant_identity is None:
-            self._close_stream()
             return
 
         participant = (
