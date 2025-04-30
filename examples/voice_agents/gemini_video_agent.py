@@ -38,6 +38,7 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession()
 
+    await ctx.wait_for_participant()
     await session.start(
         agent=GeminiAgent(),
         room=ctx.room,
