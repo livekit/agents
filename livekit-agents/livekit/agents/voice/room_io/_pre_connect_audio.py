@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from livekit import rtc
 
@@ -11,27 +13,44 @@ PRE_CONNECT_AUDIO_BUFFER_STREAM = "lk.agent.pre-connect-audio-buffer"
 
 
 @dataclass
-class _PreConnectBuffer:
+class _PreConnectAudioBuffer:
     timestamp: float
     frames: list[rtc.AudioFrame] = field(default_factory=list)
 
 
-@dataclass
-class PreConnectAudioData:
-    buffers: dict[str, asyncio.Future[_PreConnectBuffer]] = field(default_factory=dict)
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+_WaitPreConnectAudio = Callable[[str], Coroutine[Any, Any, list[rtc.AudioFrame]]]
 
-    async def wait_for_data(
-        self, *, timeout: float, participant_identity: str
-    ) -> list[rtc.AudioFrame]:
+
+class PreConnectAudioHandler:
+    def __init__(self, room: rtc.Room, *, timeout: float, max_delta_s: float = 1.0):
+        self._room = room
+        self._timeout = timeout
+        self._max_delta_s = max_delta_s
+
+        self._buffers: dict[str, asyncio.Future[_PreConnectAudioBuffer]] = {}
+        self._lock = asyncio.Lock()
+        self._tasks: set[asyncio.Task] = set()
+
+        def _handler(reader: rtc.ByteStreamReader, participant_id: str):
+            task = asyncio.create_task(self._read_audio_task(reader, participant_id))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+        self._room.register_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM, _handler)
+
+    async def aclose(self):
+        self._room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM)
+        await utils.aio.cancel_and_wait(*self._tasks)
+
+    async def wait_for_data(self, participant_identity: str) -> list[rtc.AudioFrame]:
         async with self._lock:
-            self.buffers.setdefault(participant_identity, asyncio.Future())
-            fut = self.buffers[participant_identity]
+            self._buffers.setdefault(participant_identity, asyncio.Future())
+            fut = self._buffers[participant_identity]
 
         try:
             if fut.done():
                 buf = fut.result()
-                if (delta := time.time() - buf.timestamp) > 1.0:
+                if (delta := time.time() - buf.timestamp) > self._max_delta_s:
                     logger.warning(
                         "pre-connect audio buffer is too old",
                         extra={"participant": participant_identity, "delta_time": delta},
@@ -39,42 +58,22 @@ class PreConnectAudioData:
                     return []
                 return buf.frames
 
-            buf = await asyncio.wait_for(fut, timeout)
+            buf = await asyncio.wait_for(fut, self._timeout)
             return buf.frames
         finally:
             async with self._lock:
-                self.buffers.pop(participant_identity)
-
-
-class PreConnectAudioHandler:
-    def __init__(self, room: rtc.Room):
-        self._room = room
-        self._data = PreConnectAudioData()
-        self._tasks: set[asyncio.Task] = set()
-
-    def register(self) -> PreConnectAudioData:
-        def _on_audio_buffer(reader: rtc.ByteStreamReader, participant_id: str):
-            task = asyncio.create_task(self._read_audio_task(reader, participant_id))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-
-        self._room.register_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM, _on_audio_buffer)
-        return self._data
-
-    async def aclose(self):
-        self._room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM)
-        await utils.aio.cancel_and_wait(*self._tasks)
+                self._buffers.pop(participant_identity)
 
     @utils.log_exceptions(logger=logger)
     async def _read_audio_task(self, reader: rtc.ByteStreamReader, participant_id: str):
-        async with self._data._lock:
-            if (fut := self._data.buffers.get(participant_id)) and fut.done():
+        async with self._lock:
+            if (fut := self._buffers.get(participant_id)) and fut.done():
                 # reset the buffer if it's already set
-                self._data.buffers.pop(participant_id)
-            self._data.buffers.setdefault(participant_id, asyncio.Future())
-            fut = self._data.buffers[participant_id]
+                self._buffers.pop(participant_id)
+            self._buffers.setdefault(participant_id, asyncio.Future())
+            fut = self._buffers[participant_id]
 
-        buf = _PreConnectBuffer(timestamp=time.time())
+        buf = _PreConnectAudioBuffer(timestamp=time.time())
         try:
             sample_rate = int(reader.info.attributes["sampleRate"])
             num_channels = int(reader.info.attributes["channels"])

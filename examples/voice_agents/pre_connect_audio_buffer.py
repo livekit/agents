@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
-from livekit.agents.voice.room_io import PreConnectAudioHandler, RoomInputOptions
+from livekit.agents.voice.room_io import RoomInputOptions, RoomIO
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -30,12 +30,6 @@ def prewarm(proc: JobProcess):
 
 
 async def entrypoint(ctx: JobContext):
-    # register a pre-connect audio handler before connecting to the room so that
-    # it won't miss the audio buffer (TODO (long): does this makes sense?)
-    pre_connect_audio = PreConnectAudioHandler(ctx.room).register()
-
-    await ctx.connect()
-
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
@@ -46,14 +40,22 @@ async def entrypoint(ctx: JobContext):
         turn_detection=MultilingualModel(),
     )
 
-    await session.start(
-        agent=MyAgent(),
+    # create room_io with pre-connect audio enabled to register the byte stream handler
+    room_io = RoomIO(
+        agent_session=session,
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            pre_connect_audio=pre_connect_audio,
-            pre_connect_audio_timeout=5.0,
-        ),
+        input_options=RoomInputOptions(pre_connect_audio=True, pre_connect_audio_timeout=5.0),
     )
+
+    # connect to room first to receive pre-connect audio buffer,
+    # then start room_io to collect ongoing audio and combine with the buffer
+    await ctx.connect()
+    await room_io.start()
+
+    # put the time consuming model/knowledge loading here
+    # user audio buffering starts after the room_io is started
+
+    await session.start(agent=MyAgent())
 
 
 if __name__ == "__main__":

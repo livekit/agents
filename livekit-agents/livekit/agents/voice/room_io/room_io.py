@@ -19,7 +19,7 @@ from ...types import (
 from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
-from ._pre_connect_audio import PreConnectAudioData
+from ._pre_connect_audio import PreConnectAudioHandler
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -71,8 +71,8 @@ class RoomInputOptions:
     participant_identity: NotGivenOr[str] = NOT_GIVEN
     """The participant to link to. If not provided, link to the first participant.
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
-    pre_connect_audio: NotGivenOr[PreConnectAudioData] = NOT_GIVEN
-    """Pre-connect audio data. If provided, audio from the buffer will be pushed first."""
+    pre_connect_audio: bool = False
+    """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 5.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
 
@@ -128,6 +128,13 @@ class RoomIO:
         self._tasks: set[asyncio.Task] = set()
         self._update_state_task: asyncio.Task | None = None
 
+        self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
+        if input_options.pre_connect_audio:
+            self._pre_connect_audio_handler = PreConnectAudioHandler(
+                room=self._room,
+                timeout=input_options.pre_connect_audio_timeout,
+            )
+
     async def start(self) -> None:
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
@@ -152,7 +159,11 @@ class RoomIO:
                 sample_rate=self._input_options.audio_sample_rate,
                 num_channels=self._input_options.audio_num_channels,
                 noise_cancellation=self._input_options.noise_cancellation,
-                pre_connect_audio=self._input_options.pre_connect_audio or None,
+                pre_connect_audio_cb=(
+                    self._pre_connect_audio_handler.wait_for_data
+                    if self._pre_connect_audio_handler
+                    else None
+                ),
                 pre_connect_audio_timeout=self._input_options.pre_connect_audio_timeout,
             )
 
@@ -201,7 +212,12 @@ class RoomIO:
                     next_in_chain_audio=audio_output, next_in_chain_text=self._agent_tr_output
                 )
 
+        # wait for the specified participant or the first participant joined
+        input_participant = await self._participant_available_fut
+        self.set_participant(input_participant.identity)
+
         # TODO(theomonnom): ideally we're consistent and every input/output has a start method
+        # wait for the audio output to be published and subscribed
         if self._audio_output:
             await self._audio_output.start()
 
@@ -221,13 +237,11 @@ class RoomIO:
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session._room_io = self
 
-        # wait for the specified participant or the first participant joined
-        input_participant = await self._participant_available_fut
-        self.set_participant(input_participant.identity)
-
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
+        if self._pre_connect_audio_handler:
+            await self._pre_connect_audio_handler.aclose()
 
         if self._audio_input:
             await self._audio_input.aclose()
