@@ -56,7 +56,6 @@ class _TTSOptions:
     format: Format
     split_utterances: bool
     strip_headers: bool
-    num_generations: int
     instant_mode: bool
     word_tokenizer: tokenize.WordTokenizer
 
@@ -69,7 +68,6 @@ class TTS(tts.TTS):
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         format: NotGivenOr[Format] = NOT_GIVEN,
         split_utterances: bool = False,
-        num_generations: int = 1,
         instant_mode: bool = False,
         strip_headers: bool = True,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -91,8 +89,6 @@ class TTS(tts.TTS):
                 When enabled (True), input utterances are split into natural-sounding segments.
                 When disabled (False), maintains one-to-one mapping between input and output.
                 Defaults to False.
-            num_generations (int): Number of generations of the audio to produce.
-                Must be between 1 and 5. Defaults to 1.
             instant_mode (bool): Enables ultra-low latency streaming, reducing time to first chunk.
                 Recommended for real-time applications. Only for streaming endpoints.
                 With this enabled, requests incur 10% higher cost. Defaults to False.
@@ -132,7 +128,6 @@ class TTS(tts.TTS):
             format=format if is_given(format) else FormatWav(),
             api_key=self._api_key,
             split_utterances=split_utterances,
-            num_generations=num_generations,
             strip_headers=strip_headers,
             instant_mode=instant_mode,
             word_tokenizer=word_tokenizer,
@@ -153,7 +148,6 @@ class TTS(tts.TTS):
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         format: NotGivenOr[Format] = NOT_GIVEN,
         split_utterances: NotGivenOr[bool] = NOT_GIVEN,
-        num_generations: NotGivenOr[int] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         strip_headers: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
@@ -168,7 +162,6 @@ class TTS(tts.TTS):
             split_utterances (NotGivenOr[bool]): Controls how audio output is segmented.
                 When True, utterances are split into natural-sounding segments.
                 When False, maintains one-to-one mapping between input and output.
-            num_generations (NotGivenOr[int]): Number of speech generations to produce (1-5).
             instant_mode (NotGivenOr[bool]): Enables ultra-low latency streaming.
                 Reduces time to first audio chunk, recommended for real-time applications.
                 Note: Incurs 10% higher cost when enabled.
@@ -185,8 +178,6 @@ class TTS(tts.TTS):
             self._opts.context = context
         if is_given(split_utterances):
             self._opts.split_utterances = split_utterances
-        if is_given(num_generations):
-            self._opts.num_generations = num_generations
         if is_given(instant_mode):
             self._opts.instant_mode = instant_mode
         if is_given(strip_headers):
@@ -248,7 +239,6 @@ class ChunkedStream(tts.ChunkedStream):
                         ],
                         context=self._opts.context,
                         format=self._opts.format,
-                        num_generations=self._opts.num_generations,
                         split_utterances=self._opts.split_utterances,
                         instant_mode=self._opts.instant_mode,
                         strip_headers=self._opts.strip_headers,
