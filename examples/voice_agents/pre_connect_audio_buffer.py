@@ -7,13 +7,17 @@ from livekit.agents.voice.room_io import RoomInputOptions, RoomIO
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-# uncomment to enable Krisp background voice/noise cancellation
-# currently supported on Linux and MacOS
-# from livekit.plugins import noise_cancellation
-
-logger = logging.getLogger("basic-agent")
+logger = logging.getLogger("pre-connect-audio-agent")
 
 load_dotenv()
+
+
+# This example demonstrates the pre-connect audio buffer for instant connect feature.
+# It captures what users say during connection time so they don't need to wait for the connection.
+# The process works in three steps:
+# 1. RoomIO is set up with pre_connect_audio=True
+# 2. When connecting to the room, the client sends any audio spoken before connection
+# 3. This pre-connection audio is combined with new audio after connection is established
 
 
 class MyAgent(Agent):
