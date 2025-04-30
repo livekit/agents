@@ -84,8 +84,7 @@ class TextStreamPrinter:
                     and self._segment_to_stream[chunk.segment_id] != chunk.stream_id
                     else "new"
                 )
-                # type = "transcript" if chunk.track_id else "chat"
-                type = str(chunk.track_id)
+                type = "transcript" if chunk.track_id else "chat"
 
                 # header: [participant_identity][type][segment_id]
                 line_header = header.format(
