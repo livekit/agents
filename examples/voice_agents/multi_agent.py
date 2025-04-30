@@ -162,7 +162,6 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(log_usage)
 
-    await ctx.wait_for_participant()
     await session.start(
         agent=IntroAgent(),
         room=ctx.room,

@@ -322,7 +322,6 @@ async def entrypoint(ctx: JobContext):
         # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 
-    await ctx.wait_for_participant()
     await session.start(
         agent=userdata.agents["greeter"],
         room=ctx.room,
