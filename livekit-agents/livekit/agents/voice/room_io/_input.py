@@ -128,13 +128,13 @@ class _ParticipantInputStream(Generic[T], ABC):
         old_task: asyncio.Task | None,
         stream: rtc.VideoStream | rtc.AudioStream,
         track_source: rtc.TrackSource.ValueType,
-        participant_identity: str,
+        participant: rtc.RemoteParticipant,
     ) -> None:
         if old_task:
             await utils.aio.cancel_and_wait(old_task)
 
         extra = {
-            "participant": participant_identity,
+            "participant": participant.identity,
             "source": rtc.TrackSource.Name(track_source),
         }
         logger.debug("start reading stream", extra=extra)
@@ -174,9 +174,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = self._create_stream(track)
         self._publication = publication
         self._forward_atask = asyncio.create_task(
-            self._forward_task(
-                self._forward_atask, self._stream, publication.source, participant.identity
-            )
+            self._forward_task(self._forward_atask, self._stream, publication.source, participant)
         )
         return True
 
@@ -231,35 +229,35 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         old_task: asyncio.Task | None,
         stream: rtc.AudioStream,
         track_source: rtc.TrackSource.ValueType,
-        participant_identity: str,
+        participant: rtc.RemoteParticipant,
     ) -> None:
         if self._pre_connect_audio_cb:
             try:
                 duration = 0
-                frames = await self._pre_connect_audio_cb(participant_identity)
+                frames = await self._pre_connect_audio_cb(participant)
                 for frame in self._resample_frames(frames):
                     if self._attached:
                         await self._data_ch.send(frame)
                         duration += frame.duration
-                if duration > 0:
+                if frames:
                     logger.debug(
                         "pre-connect audio buffer pushed",
-                        extra={"duration": duration, "participant": participant_identity},
+                        extra={"duration": duration, "participant": participant.identity},
                     )
 
             except asyncio.TimeoutError:
                 logger.warning(
                     "timeout waiting for pre-connect audio buffer",
-                    extra={"participant": participant_identity},
+                    extra={"participant": participant.identity},
                 )
 
             except Exception as e:
                 logger.error(
                     "error reading pre-connect audio buffer",
-                    extra={"error": e, "participant": participant_identity},
+                    extra={"error": e, "participant": participant.identity},
                 )
 
-        await super()._forward_task(old_task, stream, track_source, participant_identity)
+        await super()._forward_task(old_task, stream, track_source, participant)
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None

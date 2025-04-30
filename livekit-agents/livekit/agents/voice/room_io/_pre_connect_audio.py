@@ -10,6 +10,7 @@ from livekit import rtc
 from ..agent import logger, utils
 
 PRE_CONNECT_AUDIO_BUFFER_STREAM = "lk.agent.pre-connect-audio-buffer"
+PRE_CONNECT_AUDIO_ATTRIBUTE = "lk.agent.pre-connect-audio"
 
 
 @dataclass
@@ -18,7 +19,7 @@ class _PreConnectAudioBuffer:
     frames: list[rtc.AudioFrame] = field(default_factory=list)
 
 
-_WaitPreConnectAudio = Callable[[str], Coroutine[Any, Any, list[rtc.AudioFrame]]]
+_WaitPreConnectAudio = Callable[[rtc.RemoteParticipant], Coroutine[Any, Any, list[rtc.AudioFrame]]]
 
 
 class PreConnectAudioHandler:
@@ -42,7 +43,11 @@ class PreConnectAudioHandler:
         self._room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM)
         await utils.aio.cancel_and_wait(*self._tasks)
 
-    async def wait_for_data(self, participant_identity: str) -> list[rtc.AudioFrame]:
+    async def wait_for_data(self, participant: rtc.RemoteParticipant) -> list[rtc.AudioFrame]:
+        if not participant.attributes.get(PRE_CONNECT_AUDIO_ATTRIBUTE) == "true":
+            return []
+
+        participant_identity = participant.identity
         async with self._lock:
             self._buffers.setdefault(participant_identity, asyncio.Future())
             fut = self._buffers[participant_identity]
