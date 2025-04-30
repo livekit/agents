@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import aiohttp
 
 from hume import AsyncHumeClient
-from hume.tts import Format, FormatWav, PostedContext, PostedUtterance
+from hume.tts import Format, FormatWav, PostedContext, PostedUtterance, PostedUtteranceVoice
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -42,16 +42,15 @@ from livekit.agents.utils import is_given
 DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_NUM_CHANNELS = 1
 
-# Default TTS settings
-DEFAULT_UTTERANCE = PostedUtterance(text="")
-
 
 @dataclass
 class _TTSOptions:
     """TTS options for Hume API"""
 
     api_key: str
-    utterance_options: PostedUtterance
+    voice: PostedUtteranceVoice | None
+    description: str | None
+    speed: float | None
     context: PostedContext | None
     format: Format
     strip_headers: bool
@@ -63,7 +62,9 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
+        voice: NotGivenOr[PostedUtteranceVoice] = NOT_GIVEN,
+        description: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         format: NotGivenOr[Format] = NOT_GIVEN,
         instant_mode: bool = False,
@@ -77,8 +78,17 @@ class TTS(tts.TTS):
         See https://dev.hume.ai/reference/text-to-speech-tts/synthesize-json-streaming for API doc
 
         Args:
-            utterance_options (NotGivenOr[PostedUtterance]): Default options for utterances,
-                including description, voice, and delivery controls.
+            voice (NotGivenOr[PostedUtteranceVoice]): The voice, specified by name or id, to be
+                used. When no voice is specified, a novel voice will be generated based on the
+                text and optionally provided description.
+            description (NotGivenOr[str]): Natural language instructions describing how the
+                synthesized speech should sound, including but not limited to tone, intonation,
+                pacing, and accent. If a Voice is specified in the request, this description
+                serves as acting instructions. If no Voice is specified, a new voice is generated
+                based on this description.
+            speed: (NotGivenOr[float]): Adjusts the relative speaking rate on a non-linear scale
+                from 0.25 (much slower) to 3.0 (much faster), where 1.0 represents normal speaking
+                pace.
             context (NotGivenOr[PostedContext]): Utterances to use as context for generating
                 consistent speech style and prosody across multiple requests.
             format (NotGivenOr[Format]): Specifies the output audio file format (WAV, MP3 or PCM).
@@ -115,9 +125,9 @@ class TTS(tts.TTS):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
         self._opts = _TTSOptions(
-            utterance_options=utterance_options
-            if is_given(utterance_options)
-            else DEFAULT_UTTERANCE,
+            voice=voice if is_given(voice) else None,
+            description=description if is_given(description) else None,
+            speed=speed if is_given(speed) else None,
             context=context if is_given(context) else None,
             format=format if is_given(format) else FormatWav(),
             api_key=self._api_key,
@@ -137,7 +147,9 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
+        voice: NotGivenOr[PostedUtteranceVoice] = NOT_GIVEN,
+        description: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         format: NotGivenOr[Format] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
@@ -146,8 +158,17 @@ class TTS(tts.TTS):
         """Update TTS options for synthesizing speech.
 
         Args:
-            utterance_options (NotGivenOr[PostedUtterance]): Options for utterances,
-                including text, description, voice, and additional controls.
+            voice (NotGivenOr[PostedUtteranceVoice]): The voice, specified by name or id, to be
+                used. When no voice is specified, a novel voice will be generated based on the
+                text and optionally provided description.
+            description (NotGivenOr[str]): Natural language instructions describing how the
+                synthesized speech should sound, including but not limited to tone, intonation,
+                pacing, and accent. If a Voice is specified in the request, this description
+                serves as acting instructions. If no Voice is specified, a new voice is generated
+                based on this description.
+            speed: (NotGivenOr[float]): Adjusts the relative speaking rate on a non-linear scale
+                from 0.25 (much slower) to 3.0 (much faster), where 1.0 represents normal speaking
+                pace.
             context (Optional[PostedContext]): Utterances to use as context for generating
                 consistent speech style and prosody across multiple requests.
             format (NotGivenOr[Format]): Specifies the output audio file format (WAV, MP3 or PCM).
@@ -159,8 +180,13 @@ class TTS(tts.TTS):
                 If disabled, each chunk’s audio will be its own audio file, each with its headers.
         """
 
-        if is_given(utterance_options):
-            self._opts.utterance_options = utterance_options
+
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(description):
+            self._opts.description = description
+        if is_given(speed):
+            self._opts.speed = speed
         if is_given(format):
             self._opts.format = format
         if is_given(context):
@@ -212,18 +238,22 @@ class ChunkedStream(tts.ChunkedStream):
         try:
 
             async def _decode_loop():
+                utterance_options = {
+                    "voice": self._opts.voice,
+                    "description": self._opts.description,
+                    "speed": self._opts.speed,
+                }
+
+                utterance_kwargs = {
+                    "text": self._input_text,
+                    **{k: v for k, v in utterance_options.items() if v is not None}
+                }
+
                 try:
+                    utterance = PostedUtterance(**utterance_kwargs)
+
                     async for chunk in self._client.tts.synthesize_json_streaming(
-                        utterances=[
-                            PostedUtterance(
-                                text=self._input_text,
-                                **{
-                                    k: v
-                                    for k, v in self._opts.utterance_options.__dict__.items()
-                                    if v is not None and k != "text"
-                                },
-                            )
-                        ],
+                        utterances=[utterance],
                         context=self._opts.context,
                         format=self._opts.format,
                         instant_mode=self._opts.instant_mode,
