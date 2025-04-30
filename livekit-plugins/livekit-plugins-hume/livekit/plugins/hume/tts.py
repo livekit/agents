@@ -54,7 +54,6 @@ class _TTSOptions:
     utterance_options: PostedUtterance
     context: PostedContext | None
     format: Format
-    split_utterances: bool
     strip_headers: bool
     instant_mode: bool
     word_tokenizer: tokenize.WordTokenizer
@@ -67,7 +66,6 @@ class TTS(tts.TTS):
         utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         format: NotGivenOr[Format] = NOT_GIVEN,
-        split_utterances: bool = False,
         instant_mode: bool = False,
         strip_headers: bool = True,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -85,10 +83,6 @@ class TTS(tts.TTS):
                 consistent speech style and prosody across multiple requests.
             format (NotGivenOr[Format]): Specifies the output audio file format (WAV, MP3 or PCM).
                 Defaults to WAV format.
-            split_utterances (bool): Controls how audio output is segmented in the response.
-                When enabled (True), input utterances are split into natural-sounding segments.
-                When disabled (False), maintains one-to-one mapping between input and output.
-                Defaults to False.
             instant_mode (bool): Enables ultra-low latency streaming, reducing time to first chunk.
                 Recommended for real-time applications. Only for streaming endpoints.
                 With this enabled, requests incur 10% higher cost. Defaults to False.
@@ -127,7 +121,6 @@ class TTS(tts.TTS):
             context=context if is_given(context) else None,
             format=format if is_given(format) else FormatWav(),
             api_key=self._api_key,
-            split_utterances=split_utterances,
             strip_headers=strip_headers,
             instant_mode=instant_mode,
             word_tokenizer=word_tokenizer,
@@ -147,7 +140,6 @@ class TTS(tts.TTS):
         utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         format: NotGivenOr[Format] = NOT_GIVEN,
-        split_utterances: NotGivenOr[bool] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         strip_headers: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
@@ -159,9 +151,6 @@ class TTS(tts.TTS):
             context (Optional[PostedContext]): Utterances to use as context for generating
                 consistent speech style and prosody across multiple requests.
             format (NotGivenOr[Format]): Specifies the output audio file format (WAV, MP3 or PCM).
-            split_utterances (NotGivenOr[bool]): Controls how audio output is segmented.
-                When True, utterances are split into natural-sounding segments.
-                When False, maintains one-to-one mapping between input and output.
             instant_mode (NotGivenOr[bool]): Enables ultra-low latency streaming.
                 Reduces time to first audio chunk, recommended for real-time applications.
                 Note: Incurs 10% higher cost when enabled.
@@ -176,8 +165,6 @@ class TTS(tts.TTS):
             self._opts.format = format
         if is_given(context):
             self._opts.context = context
-        if is_given(split_utterances):
-            self._opts.split_utterances = split_utterances
         if is_given(instant_mode):
             self._opts.instant_mode = instant_mode
         if is_given(strip_headers):
@@ -239,7 +226,6 @@ class ChunkedStream(tts.ChunkedStream):
                         ],
                         context=self._opts.context,
                         format=self._opts.format,
-                        split_utterances=self._opts.split_utterances,
                         instant_mode=self._opts.instant_mode,
                         strip_headers=self._opts.strip_headers,
                     ):
