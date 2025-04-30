@@ -41,14 +41,16 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._pushed_duration: float = 0.0
         self._interrupted: bool = False
 
-        self._room.on("connection_state_changed", self._on_connection_state_changed)
         if self._room.isconnected():
-            self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
+            self._on_reconnected()
+        self._room.on("connection_state_changed", self._on_connection_state_changed)
+        self._room.on("reconnected", self._on_reconnected)
 
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
-        if state != rtc.ConnectionState.CONN_CONNECTED:
-            return
+        if not self._publish_task and state == rtc.ConnectionState.CONN_CONNECTED:
+            self._on_reconnected()
 
+    def _on_reconnected(self) -> None:
         async def _publish_track() -> rtc.LocalTrackPublication:
             async with self._lock:
                 track = rtc.LocalAudioTrack.create_audio_track("roomio_audio", self._audio_source)
@@ -58,6 +60,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 return publication
 
         if self._publish_task:
+            logger.warning("cancelling publish_track")
             self._publish_task.cancel()
         self._publish_task = asyncio.create_task(_publish_track())
 
@@ -65,17 +68,21 @@ class _ParticipantAudioOutput(io.AudioOutput):
         if self._publish_task:
             self._publish_task.cancel()
         self._room.off("connection_state_changed", self._on_connection_state_changed)
+        self._room.off("reconnected", self._on_reconnected)
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         if not self._published:
             if not self._publish_task:
                 raise RuntimeError("capture_frame called before room connected")
 
+            log_task = asyncio.get_event_loop().call_later(
+                5, logger.warning, "audio track publishing takes longer than expected..."
+            )
             try:
                 publication = await self._publish_task
-            except asyncio.CancelledError:
-                logger.error("publish_track was cancelled during capture_frame")
-                return
+            finally:
+                log_task.cancel()
+
             await publication.wait_for_subscription()
             self._published = True
 

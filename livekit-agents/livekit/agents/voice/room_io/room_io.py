@@ -125,6 +125,7 @@ class RoomIO:
 
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
         self._participant_linked = False  # if the first participant linked
+        self._room_connected = False
 
         self._tasks: set[asyncio.Task] = set()
         self._update_state_task: asyncio.Task | None = None
@@ -304,9 +305,10 @@ class RoomIO:
         self._update_transcription_output(self._user_tr_output, None)
 
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
-        if state != rtc.ConnectionState.CONN_CONNECTED:
+        if state != rtc.ConnectionState.CONN_CONNECTED or self._room_connected:
             return
 
+        self._room_connected = True
         self._update_transcription_output(
             self._agent_tr_output, self._room.local_participant.identity
         )
