@@ -352,8 +352,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(
                     room=room,
                     agent_session=self,
-                    input_options=(room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS),
-                    output_options=(room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS),
+                    input_options=room_input_options,
+                    output_options=room_output_options,
                 )
                 await self._room_io.start()
 
