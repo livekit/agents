@@ -134,6 +134,8 @@ class RoomIO:
                 room=self._room,
                 timeout=input_options.pre_connect_audio_timeout,
             )
+            # TODO: move this to start()
+            self._pre_connect_audio_handler.register()
 
     async def start(self) -> None:
         self._room.on("participant_connected", self._on_participant_connected)

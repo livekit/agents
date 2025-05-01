@@ -32,11 +32,14 @@ class PreConnectAudioHandler:
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
 
+    def register(self):
         def _handler(reader: rtc.ByteStreamReader, participant_id: str):
             task = asyncio.create_task(self._read_audio_task(reader, participant_id))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
 
+        if self._room.isconnected():
+            logger.warning("pre-connect audio handler registered after room is connected")
         self._room.register_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM, _handler)
 
     async def aclose(self):
