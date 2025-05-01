@@ -119,9 +119,9 @@ class RoomIO:
         self._tr_synchronizer: TranscriptSynchronizer | None = None
 
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
-        self._participant_linked = False  # if the first participant linked
-        self._room_connected = False
+        self._room_connected_fut = asyncio.Future[None]()
 
+        self._init_atask: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
         self._update_state_task: asyncio.Task | None = None
 
@@ -183,6 +183,8 @@ class RoomIO:
         if self._room.isconnected():
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
+        self._init_atask = asyncio.create_task(self._init_task())
+
         # -- attach to the agent session --
         if self.audio_input:
             self._agent_session.input.audio = self.audio_input
@@ -203,6 +205,9 @@ class RoomIO:
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
+
+        if self._init_atask:
+            await utils.aio.cancel_and_wait(self._init_atask)
 
         if self._audio_input:
             await self._audio_input.aclose()
@@ -250,9 +255,6 @@ class RoomIO:
             self.unset_participant()
             return
 
-        if not self._participant_linked:
-            self._participant_linked = True
-
         if (
             self._participant_identity is not None
             and self._participant_identity != participant_identity
@@ -284,16 +286,27 @@ class RoomIO:
             self._video_input.set_participant(None)
         self._update_transcription_output(self._user_tr_output, None)
 
-    def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
-        if state != rtc.ConnectionState.CONN_CONNECTED or self._room_connected:
-            return
+    @utils.log_exceptions(logger=logger)
+    async def _init_task(self) -> None:
+        await self._room_connected_fut
 
-        self._room_connected = True
+        # check existing participants
+        for participant in self._room.remote_participants.values():
+            self._on_participant_connected(participant)
+
+        participant = await self._participant_available_fut
+        self.set_participant(participant.identity)
+
+        # init outputs
         self._update_transcription_output(
             self._agent_tr_output, self._room.local_participant.identity
         )
-        for participant in self._room.remote_participants.values():
-            self._on_participant_connected(participant)
+        if self._audio_output:
+            await self._audio_output.start()
+
+    def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
+        if self._room.isconnected() and not self._room_connected_fut.done():
+            self._room_connected_fut.set_result(None)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
@@ -315,9 +328,6 @@ class RoomIO:
             return
 
         self._participant_available_fut.set_result(participant)
-        if not self._participant_linked:
-            # automatically set the participant at the first time
-            self.set_participant(participant.identity)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         async def _capture_text():

@@ -32,61 +32,37 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._lock = asyncio.Lock()
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
         self._publish_options = track_publish_options
-        self._publish_task: asyncio.Task[rtc.LocalTrackPublication] | None = None
-        self._published: bool = False
+        self._publication: rtc.LocalTrackPublication | None = None
+        self._started_fut = asyncio.Future[None]()
 
+        self._republish_task: asyncio.Task | None = None  # used to republish track on reconnection
         self._flush_task: asyncio.Task | None = None
         self._interrupted_event = asyncio.Event()
 
         self._pushed_duration: float = 0.0
         self._interrupted: bool = False
 
-        if self._room.isconnected():
-            self._on_reconnected()
-        self._room.on("connection_state_changed", self._on_connection_state_changed)
-        self._room.on("reconnected", self._on_reconnected)
+    async def _publish_track(self) -> None:
+        async with self._lock:
+            track = rtc.LocalAudioTrack.create_audio_track("roomio_audio", self._audio_source)
+            self._publication = await self._room.local_participant.publish_track(
+                track, self._publish_options
+            )
+            await self._publication.wait_for_subscription()
 
-    def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
-        if not self._publish_task and state == rtc.ConnectionState.CONN_CONNECTED:
-            self._on_reconnected()
+    async def start(self) -> None:
+        await self._publish_track()
+        self._started_fut.set_result(None)
 
-    def _on_reconnected(self) -> None:
-        async def _publish_track() -> rtc.LocalTrackPublication:
-            async with self._lock:
-                track = rtc.LocalAudioTrack.create_audio_track("roomio_audio", self._audio_source)
-                publication = await self._room.local_participant.publish_track(
-                    track, self._publish_options
-                )
-                return publication
+        def _on_reconnected() -> None:
+            if self._republish_task:
+                self._republish_task.cancel()
+            self._republish_task = asyncio.create_task(self._publish_track())
 
-        if self._publish_task:
-            logger.warning("cancelling publish_track")
-            self._publish_task.cancel()
-        self._publish_task = asyncio.create_task(_publish_track())
-
-    async def aclose(self) -> None:
-        if self._publish_task:
-            self._publish_task.cancel()
-        self._room.off("connection_state_changed", self._on_connection_state_changed)
-        self._room.off("reconnected", self._on_reconnected)
+        self._room.on("reconnected", _on_reconnected)
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        if not self._published:
-            if not self._publish_task:
-                raise RuntimeError("capture_frame called before room connected")
-
-            # local_participant.publish_track stuck if republish the track without reconnecting
-            # add a log here in case this happens again for debugging
-            log_task = asyncio.get_event_loop().call_later(
-                5, logger.warning, "audio track publishing takes longer than expected..."
-            )
-            try:
-                publication = await self._publish_task
-            finally:
-                log_task.cancel()
-
-            await publication.wait_for_subscription()
-            self._published = True
+        await self._started_fut
 
         await super().capture_frame(frame)
 
