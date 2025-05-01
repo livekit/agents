@@ -75,6 +75,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
             if not self._publish_task:
                 raise RuntimeError("capture_frame called before room connected")
 
+            # local_participant.publish_track stuck if republish the track without reconnecting
+            # add a log here in case this happens again for debugging
             log_task = asyncio.get_event_loop().call_later(
                 5, logger.warning, "audio track publishing takes longer than expected..."
             )
