@@ -12,7 +12,7 @@ from livekit.agents import utils
 
 from ...log import logger
 from ..io import AudioInput, VideoInput
-from ._pre_connect_audio import _WaitPreConnectAudio
+from ._pre_connect_audio import PreConnectAudioHandler
 
 T = TypeVar("T", bound=Union[rtc.AudioFrame, rtc.VideoFrame])
 
@@ -204,7 +204,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         sample_rate: int,
         num_channels: int,
         noise_cancellation: rtc.NoiseCancellationOptions | None,
-        pre_connect_audio_cb: _WaitPreConnectAudio | None,
+        pre_connect_audio_handler: PreConnectAudioHandler | None,
     ) -> None:
         _ParticipantInputStream.__init__(
             self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
@@ -212,7 +212,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._noise_cancellation = noise_cancellation
-        self._pre_connect_audio_cb = pre_connect_audio_cb
+        self._pre_connect_audio_handler = pre_connect_audio_handler
 
     @override
     def _create_stream(self, track: rtc.Track) -> rtc.AudioStream:
@@ -231,10 +231,10 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         track_source: rtc.TrackSource.ValueType,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        if self._pre_connect_audio_cb:
+        if self._pre_connect_audio_handler:
             try:
                 duration = 0
-                frames = await self._pre_connect_audio_cb(participant)
+                frames = await self._pre_connect_audio_handler.wait_for_data(participant)
                 for frame in self._resample_frames(frames):
                     if self._attached:
                         await self._data_ch.send(frame)

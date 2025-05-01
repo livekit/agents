@@ -131,16 +131,18 @@ class RoomIO:
         self._update_state_task: asyncio.Task | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
-        if input_options.pre_connect_audio:
-            self._pre_connect_audio_handler = PreConnectAudioHandler(
-                room=self._room,
-                timeout=input_options.pre_connect_audio_timeout,
-            )
-            # TODO: move this to start()
-            self._pre_connect_audio_handler.register()
 
     async def start(self) -> None:
         # -- create inputs --
+        if self._input_options.pre_connect_audio:
+            self._pre_connect_audio_handler = PreConnectAudioHandler(
+                room=self._room,
+                timeout=self._input_options.pre_connect_audio_timeout,
+            )
+            if self._room.isconnected():
+                logger.warning("pre-connect audio handler registered after room is connected")
+            self._pre_connect_audio_handler.register()
+
         if self._input_options.text_enabled:
             try:
                 self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
@@ -158,11 +160,7 @@ class RoomIO:
                 sample_rate=self._input_options.audio_sample_rate,
                 num_channels=self._input_options.audio_num_channels,
                 noise_cancellation=self._input_options.noise_cancellation,
-                pre_connect_audio_cb=(
-                    self._pre_connect_audio_handler.wait_for_data
-                    if self._pre_connect_audio_handler
-                    else None
-                ),
+                pre_connect_audio_handler=self._pre_connect_audio_handler,
             )
 
         # -- create outputs --
