@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import aiohttp
 
 from hume import AsyncHumeClient
-from hume.tts import Format, FormatWav, PostedContext, PostedUtterance, PostedUtteranceVoiceWithName
+from hume.tts import Format, FormatWav, PostedContext, PostedUtterance
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -43,13 +43,7 @@ DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_NUM_CHANNELS = 1
 
 # Default TTS settings
-DEFAULT_VOICE = PostedUtteranceVoiceWithName(name="Colton Rivers", provider="HUME_AI")
-
-# text is required in PostedUtterance but it is declared as an empty string
-# it will be overwritten when input tokens are received
-DEFAULT_UTTERANCE = PostedUtterance(
-    voice=DEFAULT_VOICE, speed=1, trailing_silence=0.35, description="", text=""
-)
+DEFAULT_UTTERANCE = PostedUtterance(text="")
 
 
 @dataclass
@@ -188,17 +182,7 @@ class TTS(tts.TTS):
         """
 
         if is_given(utterance_options):
-            # text is required in PostedUtterance but it is declared as an empty string
-            # it will be overwritten when input tokens are received
-            self._opts.utterance_options = PostedUtterance(
-                description=utterance_options.description if utterance_options.description else "",
-                voice=utterance_options.voice if utterance_options.voice else DEFAULT_VOICE,
-                speed=utterance_options.speed if utterance_options.speed else 1,
-                trailing_silence=utterance_options.trailing_silence
-                if utterance_options.trailing_silence
-                else 0.35,
-                text="",
-            )
+            self._opts.utterance_options = utterance_options
         if is_given(format):
             self._opts.format = format
         if is_given(context):
@@ -259,10 +243,11 @@ class ChunkedStream(tts.ChunkedStream):
                         utterances=[
                             PostedUtterance(
                                 text=self._input_text,
-                                description=self._opts.utterance_options.description,
-                                voice=self._opts.utterance_options.voice,
-                                speed=self._opts.utterance_options.speed,
-                                trailing_silence=self._opts.utterance_options.trailing_silence,
+                                **{
+                                    k: v
+                                    for k, v in self._opts.utterance_options.__dict__.items()
+                                    if v is not None and k != "text"
+                                },
                             )
                         ],
                         context=self._opts.context,
