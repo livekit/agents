@@ -72,8 +72,18 @@ class RetrievalAgent(Agent):
             node_content = node.get_content(metadata_mode=MetadataMode.LLM)
             instructions += f"\n\n{node_content}"
 
+        # update the instructions for this turn, you may use some different methods
+        # to inject the context into the chat_ctx that fits the LLM you are using
+        system_msg = chat_ctx.items[0]
+        if isinstance(system_msg, llm.ChatMessage) and system_msg.role == "system":
+            # TODO(long): provide an api to update the instructions of chat_ctx
+            system_msg.content.append(instructions)
+        else:
+            chat_ctx.items.insert(0, llm.ChatMessage(role="system", content=[instructions]))
         print(f"update instructions: {instructions[:100].replace('\n', '\\n')}...")
-        await self.update_instructions(instructions)
+
+        # update the instructions for agent
+        # await self.update_instructions(instructions)
 
         return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
