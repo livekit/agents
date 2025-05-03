@@ -120,7 +120,8 @@ class STT(stt.STT):
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
             sample_rate(int): the sample rate of the audio default: 16000
-            min_confidence_threshold(float): minimum confidence threshold for recognition (default: 0.65)
+            min_confidence_threshold(float): minimum confidence threshold for recognition
+            (default: 0.65)
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
