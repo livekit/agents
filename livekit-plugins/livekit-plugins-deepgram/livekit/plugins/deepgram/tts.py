@@ -76,7 +76,7 @@ class TTS(tts.TTS):
             )
 
         if model.startswith("aura-2") and use_streaming:
-            raise ValueError(
+            logger.warning(
                 "Deepgram Aura-2 models do not support streaming yet, set use_streaming=False to use Aura-2 models. For more information see: https://developers.deepgram.com/docs/streaming-text-to-speech."
             )
 
