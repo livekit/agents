@@ -54,7 +54,7 @@ LanguageCode = Union[LgType, list[LgType]]
 _max_session_duration = 240
 
 # Google is very sensitive to background noise, so we'll ignore results with low confidence
-_min_confidence = 0.65
+_default_min_confidence = 0.65
 
 
 # This class is only be used internally to encapsulate the options
@@ -67,6 +67,7 @@ class STTOptions:
     spoken_punctuation: bool
     model: SpeechModels | str
     sample_rate: int
+    min_confidence_threshold: float
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
@@ -98,6 +99,7 @@ class STT(stt.STT):
         model: SpeechModels | str = "latest_long",
         location: str = "global",
         sample_rate: int = 16000,
+        min_confidence_threshold: float = _default_min_confidence,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
@@ -118,6 +120,8 @@ class STT(stt.STT):
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
             sample_rate(int): the sample rate of the audio default: 16000
+            min_confidence_threshold(float): minimum confidence threshold for recognition
+            (default: 0.65)
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
@@ -149,6 +153,7 @@ class STT(stt.STT):
             spoken_punctuation=spoken_punctuation,
             model=model,
             sample_rate=sample_rate,
+            min_confidence_threshold=min_confidence_threshold,
             keywords=keywords,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -343,6 +348,7 @@ class SpeechStream(stt.SpeechStream):
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
     ):
         if is_given(languages):
@@ -359,6 +365,8 @@ class SpeechStream(stt.SpeechStream):
             self._config.spoken_punctuation = spoken_punctuation
         if is_given(model):
             self._config.model = model
+        if is_given(min_confidence_threshold):
+            self._config.min_confidence_threshold = min_confidence_threshold
         if is_given(keywords):
             self._config.keywords = keywords
 
@@ -405,7 +413,10 @@ class SpeechStream(stt.SpeechStream):
                     == cloud_speech.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED  # noqa: E501
                 ):
                     result = resp.results[0]
-                    speech_data = _streaming_recognize_response_to_speech_data(resp)
+                    speech_data = _streaming_recognize_response_to_speech_data(
+                        resp,
+                        min_confidence_threshold=self._config.min_confidence_threshold,
+                    )
                     if speech_data is None:
                         continue
 
@@ -530,6 +541,8 @@ def _recognize_response_to_speech_event(
 
 def _streaming_recognize_response_to_speech_data(
     resp: cloud_speech.StreamingRecognizeResponse,
+    *,
+    min_confidence_threshold: float,
 ) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
@@ -542,7 +555,7 @@ def _streaming_recognize_response_to_speech_data(
     confidence /= len(resp.results)
     lg = resp.results[0].language_code
 
-    if confidence < _min_confidence:
+    if confidence < min_confidence_threshold:
         return None
     if text == "":
         return None
