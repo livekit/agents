@@ -42,6 +42,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         api_key: str | None = None,
         base_url: str = BASE_URL,
+        use_streaming: bool = True,
         word_tokenizer: tokenize.WordTokenizer = tokenize.basic.WordTokenizer(
             ignore_punctuation=False
         ),
@@ -55,13 +56,15 @@ class TTS(tts.TTS):
             encoding (str): Audio encoding to use. Defaults to "linear16".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
-            base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak"
+            base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak".
+            use_streaming (bool): Whether to use WebSocket-based streaming instead of the REST API. Defaults to True.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
 
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            # checking if the model is from aura-2 family (Aura-2 is currently available for the TTS REST API only.)
+            capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -70,6 +73,11 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError(
                 "Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key."
+            )
+
+        if model.startswith("aura-2") and use_streaming:
+            logger.warning(
+                "Deepgram Aura-2 models do not support streaming yet, set use_streaming=False to use Aura-2 models. For more information see: https://developers.deepgram.com/docs/streaming-text-to-speech."
             )
 
         self._opts = _TTSOptions(
