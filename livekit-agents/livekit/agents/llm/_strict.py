@@ -5,9 +5,6 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypeGuard
 
-from ..types import NOT_GIVEN
-from ..utils import is_given
-
 _T = TypeVar("_T")
 
 
