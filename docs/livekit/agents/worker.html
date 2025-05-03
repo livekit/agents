@@ -1,0 +1,1609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.worker API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.worker</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.worker.SimulateJobInfo"><code class="flex name class">
+<span>class <span class="ident">SimulateJobInfo</span></span>
+<span>(</span><span>room: str, participant_identity: str | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class SimulateJobInfo:
+    room: str
+    participant_identity: str | None = None</code></pre>
+</details>
+<div class="desc"><p>SimulateJobInfo(room: 'str', participant_identity: 'str | None' = None)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.worker.SimulateJobInfo.participant_identity"><code class="name">var <span class="ident">participant_identity</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.worker.SimulateJobInfo.room"><code class="name">var <span class="ident">room</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.worker.Worker"><code class="flex name class">
+<span>class <span class="ident">Worker</span></span>
+<span>(</span><span>opts: <a title="livekit.agents.worker.WorkerOptions" href="#livekit.agents.worker.WorkerOptions">WorkerOptions</a>,<br>*,<br>devmode: bool = True,<br>register: bool = True,<br>loop: asyncio.AbstractEventLoop | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class Worker(utils.EventEmitter[EventTypes]):
+    def __init__(
+        self,
+        opts: WorkerOptions,
+        *,
+        devmode: bool = True,
+        register: bool = True,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -&gt; None:
+        super().__init__()
+        opts.ws_url = opts.ws_url or os.environ.get(&#34;LIVEKIT_URL&#34;) or &#34;&#34;
+        opts.api_key = opts.api_key or os.environ.get(&#34;LIVEKIT_API_KEY&#34;) or &#34;&#34;
+        opts.api_secret = opts.api_secret or os.environ.get(&#34;LIVEKIT_API_SECRET&#34;) or &#34;&#34;
+
+        if not opts.ws_url:
+            raise ValueError(&#34;ws_url is required, or add LIVEKIT_URL in your environment&#34;)
+
+        if not opts.api_key:
+            raise ValueError(&#34;api_key is required, or add LIVEKIT_API_KEY in your environment&#34;)
+
+        if not opts.api_secret:
+            raise ValueError(
+                &#34;api_secret is required, or add LIVEKIT_API_SECRET in your environment&#34;
+            )
+
+        if opts.job_memory_limit_mb &gt; 0 and opts.job_executor_type != JobExecutorType.PROCESS:
+            logger.warning(
+                &#34;max_job_memory_usage is only supported for process-based job executors, &#34;
+                &#34;ignoring max_job_memory_usage&#34;
+            )
+
+        if not is_given(opts.http_proxy):
+            opts.http_proxy = os.environ.get(&#34;HTTPS_PROXY&#34;) or os.environ.get(&#34;HTTP_PROXY&#34;)
+
+        self._opts = opts
+        self._loop = loop or asyncio.get_event_loop()
+
+        self._id = &#34;unregistered&#34;
+        self._closed, self._draining, self._connecting = True, False, False
+        self._tasks = set[asyncio.Task[Any]]()
+        self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
+        self._close_future: asyncio.Future[None] | None = None
+        self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
+        self._devmode = devmode
+        self._register = register
+
+        # using spawn context for all platforms. We may have further optimizations for
+        # Linux with forkserver, but for now, this is the safest option
+        mp_ctx = mp.get_context(&#34;spawn&#34;)
+
+        self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = None
+        if len(_InferenceRunner.registered_runners) &gt; 0:
+            self._inference_executor = ipc.inference_proc_executor.InferenceProcExecutor(
+                runners=_InferenceRunner.registered_runners,
+                initialize_timeout=30,
+                close_timeout=5,
+                memory_warn_mb=2000,
+                memory_limit_mb=0,  # no limit
+                ping_interval=5,
+                ping_timeout=60,
+                high_ping_threshold=2.5,
+                mp_ctx=mp_ctx,
+                loop=self._loop,
+                http_proxy=opts.http_proxy or None,
+            )
+
+        self._proc_pool = ipc.proc_pool.ProcPool(
+            initialize_process_fnc=opts.prewarm_fnc,
+            job_entrypoint_fnc=opts.entrypoint_fnc,
+            num_idle_processes=_WorkerEnvOption.getvalue(opts.num_idle_processes, self._devmode),
+            loop=self._loop,
+            job_executor_type=opts.job_executor_type,
+            inference_executor=self._inference_executor,
+            mp_ctx=mp_ctx,
+            initialize_timeout=opts.initialize_process_timeout,
+            close_timeout=opts.shutdown_process_timeout,
+            memory_warn_mb=opts.job_memory_warn_mb,
+            memory_limit_mb=opts.job_memory_limit_mb,
+            http_proxy=opts.http_proxy or None,
+        )
+
+        self._previous_status = agent.WorkerStatus.WS_AVAILABLE
+
+        self._api: api.LiveKitAPI | None = None
+        self._http_session: aiohttp.ClientSession | None = None
+        self._http_server = http_server.HttpServer(
+            opts.host,
+            _WorkerEnvOption.getvalue(opts.port, self._devmode),
+            loop=self._loop,
+        )
+
+        async def health_check(_: Any):
+            return web.Response(text=&#34;OK&#34;)
+
+        async def worker(_: Any):
+            body = json.dumps(
+                {
+                    &#34;agent_name&#34;: self._opts.agent_name,
+                    &#34;worker_type&#34;: agent.JobType.Name(self._opts.worker_type.value),
+                    &#34;active_jobs&#34;: len(self.active_jobs),
+                }
+            )
+            return web.Response(body=body, content_type=&#34;application/json&#34;)
+
+        self._http_server.app.add_routes([web.get(&#34;/&#34;, health_check)])
+        self._http_server.app.add_routes([web.get(&#34;/worker&#34;, worker)])
+        self._http_server.app.add_subapp(&#34;/debug&#34;, tracing._create_tracing_app(self))
+
+        self._conn_task: asyncio.Task[None] | None = None
+        self._load_task: asyncio.Task[None] | None = None
+
+        self._worker_load: float = 0.0
+        self._worker_load_graph = tracing.Tracing.add_graph(
+            title=&#34;worker_load&#34;,
+            x_label=&#34;time&#34;,
+            y_label=&#34;load&#34;,
+            x_type=&#34;time&#34;,
+            y_range=(0, 1),
+            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
+        )
+
+        default_num_idle_processes = _WorkerEnvOption.getvalue(
+            self._opts.num_idle_processes, self._devmode
+        )
+        self._num_idle_target_graph = tracing.Tracing.add_graph(
+            title=&#34;num_idle_processes_target&#34;,
+            x_label=&#34;time&#34;,
+            y_label=&#34;target&#34;,
+            x_type=&#34;time&#34;,
+            y_range=(0, default_num_idle_processes),
+            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
+        )
+
+        self._num_idle_process_graph = tracing.Tracing.add_graph(
+            title=&#34;num_idle_processes&#34;,
+            x_label=&#34;time&#34;,
+            y_label=&#34;idle&#34;,
+            x_type=&#34;time&#34;,
+            y_range=(0, default_num_idle_processes),
+            max_data_points=int(1 / UPDATE_LOAD_INTERVAL * 30),
+        )
+
+    @property
+    def worker_info(self) -&gt; WorkerInfo:
+        return WorkerInfo(http_port=self._http_server.port)
+
+    async def run(self):
+        if not self._closed:
+            raise Exception(&#34;worker is already running&#34;)
+
+        logger.info(
+            &#34;starting worker&#34;,
+            extra={&#34;version&#34;: __version__, &#34;rtc-version&#34;: rtc.__version__},
+        )
+
+        if self._inference_executor is not None:
+            logger.info(&#34;starting inference executor&#34;)
+            await self._inference_executor.start()
+            await self._inference_executor.initialize()
+
+        self._closed = False
+
+        def _update_job_status(proc: ipc.job_executor.JobExecutor) -&gt; None:
+            t = self._loop.create_task(self._update_job_status(proc))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
+
+        await self._http_server.start()
+
+        self._proc_pool.on(&#34;process_started&#34;, _update_job_status)
+        self._proc_pool.on(&#34;process_closed&#34;, _update_job_status)
+        self._proc_pool.on(&#34;process_job_launched&#34;, _update_job_status)
+        await self._proc_pool.start()
+
+        self._http_session = aiohttp.ClientSession(proxy=self._opts.http_proxy or None)
+        self._api = api.LiveKitAPI(
+            self._opts.ws_url, self._opts.api_key, self._opts.api_secret, session=self._http_session
+        )
+        self._close_future = asyncio.Future(loop=self._loop)
+
+        @utils.log_exceptions(logger=logger)
+        async def _load_task():
+            &#34;&#34;&#34;periodically check load&#34;&#34;&#34;
+            interval = utils.aio.interval(UPDATE_LOAD_INTERVAL)
+            while True:
+                await interval.tick()
+
+                def load_fnc():
+                    signature = inspect.signature(self._opts.load_fnc)
+                    parameters = list(signature.parameters.values())
+                    if len(parameters) == 0:
+                        return self._opts.load_fnc()  # type: ignore
+
+                    return self._opts.load_fnc(self)  # type: ignore
+
+                self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+
+                load_threshold = _WorkerEnvOption.getvalue(self._opts.load_threshold, self._devmode)
+                default_num_idle_processes = _WorkerEnvOption.getvalue(
+                    self._opts.num_idle_processes, self._devmode
+                )
+
+                if not math.isinf(load_threshold):
+                    active_jobs = len(self.active_jobs)
+                    if active_jobs &gt; 0:
+                        job_load = self._worker_load / len(self.active_jobs)
+                        if job_load &gt; 0.0:
+                            available_load = max(load_threshold - self._worker_load, 0.0)
+                            available_job = min(
+                                math.ceil(available_load / job_load), default_num_idle_processes
+                            )
+                            self._proc_pool.set_target_idle_processes(available_job)
+                    else:
+                        self._proc_pool.set_target_idle_processes(default_num_idle_processes)
+
+                self._num_idle_target_graph.plot(time.time(), self._proc_pool.target_idle_processes)
+                self._num_idle_process_graph.plot(
+                    time.time(), self._proc_pool._warmed_proc_queue.qsize()
+                )
+                self._worker_load_graph.plot(time.time(), self._worker_load)
+
+        tasks = []
+        self._load_task = asyncio.create_task(_load_task(), name=&#34;load_task&#34;)
+        tasks.append(self._load_task)
+
+        if self._register:
+            self._conn_task = asyncio.create_task(self._connection_task(), name=&#34;worker_conn_task&#34;)
+            tasks.append(self._conn_task)
+
+        self.emit(&#34;worker_started&#34;)
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+            if not self._close_future.done():
+                self._close_future.set_result(None)
+
+    @property
+    def id(self) -&gt; str:
+        return self._id
+
+    @property
+    def active_jobs(self) -&gt; list[RunningJobInfo]:
+        return [proc.running_job for proc in self._proc_pool.processes if proc.running_job]
+
+    async def drain(self, timeout: int | None = None) -&gt; None:
+        &#34;&#34;&#34;When timeout isn&#39;t None, it will raise asyncio.TimeoutError if the processes didn&#39;t finish in time.&#34;&#34;&#34;  # noqa: E501
+        if self._draining:
+            return
+
+        logger.info(&#34;draining worker&#34;, extra={&#34;id&#34;: self.id, &#34;timeout&#34;: timeout})
+        self._draining = True
+        await self._update_worker_status()
+
+        async def _join_jobs():
+            for proc in self._proc_pool.processes:
+                if proc.running_job:
+                    await proc.join()
+
+        if timeout:
+            await asyncio.wait_for(_join_jobs(), timeout)  # raises asyncio.TimeoutError on timeout
+        else:
+            await _join_jobs()
+
+    async def simulate_job(
+        self,
+        info: SimulateJobInfo | str,
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Simulate a job by creating a room and participant.
+
+        Args:
+            info: SimulateJobInfo or a join token for an existing room
+        &#34;&#34;&#34;
+        assert self._api is not None
+        # TODO(theomonnom): some fake information can still be found in the token
+
+        from livekit.protocol.models import Room
+
+        room = info.room if isinstance(info, SimulateJobInfo) else &#34;unknown-room&#34;
+        participant_identity = (
+            info.participant_identity
+            if isinstance(info, SimulateJobInfo)
+            else &#34;unknown-participant&#34;
+        )
+        agent_id = utils.shortuuid(&#34;simulated-agent-&#34;)
+
+        room_info = Room(sid=utils.shortuuid(&#34;RM_&#34;), name=room)
+        participant_info = None
+
+        if isinstance(info, SimulateJobInfo):
+            from .cli import cli
+
+            if cli.CLI_ARGUMENTS is None or not cli.CLI_ARGUMENTS.console:
+                room_info = await self._api.room.create_room(api.CreateRoomRequest(name=room))
+                if participant_identity:
+                    participant_info = await self._api.room.get_participant(
+                        api.RoomParticipantIdentity(room=room, identity=participant_identity)
+                    )
+
+            token = (
+                api.AccessToken(self._opts.api_key, self._opts.api_secret)
+                .with_identity(agent_id)
+                .with_kind(&#34;agent&#34;)
+                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                .to_jwt()
+            )
+        else:
+            token = info
+
+        job = agent.Job(
+            id=utils.shortuuid(&#34;simulated-job-&#34;),
+            room=room_info,
+            type=agent.JobType.JT_ROOM,
+            participant=participant_info,
+        )
+
+        running_info = RunningJobInfo(
+            worker_id=self._id,
+            accept_arguments=JobAcceptArguments(identity=agent_id, name=&#34;&#34;, metadata=&#34;&#34;),
+            job=job,
+            url=self._opts.ws_url,
+            token=token,
+        )
+
+        await self._proc_pool.launch_job(running_info)
+
+    async def aclose(self) -&gt; None:
+        if self._closed:
+            if self._close_future is not None:
+                await self._close_future
+            return
+
+        logger.info(&#34;shutting down worker&#34;, extra={&#34;id&#34;: self.id})
+
+        assert self._close_future is not None
+        assert self._http_session is not None
+        assert self._api is not None
+
+        self._closed = True
+
+        if self._conn_task is not None:
+            await utils.aio.cancel_and_wait(self._conn_task)
+
+        if self._load_task is not None:
+            await utils.aio.cancel_and_wait(self._load_task)
+
+        await self._proc_pool.aclose()
+
+        if self._inference_executor is not None:
+            await self._inference_executor.aclose()
+
+        await self._http_session.close()
+        await self._http_server.aclose()
+        await self._api.aclose()
+
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
+        self._msg_chan.close()
+        await self._close_future
+
+    async def _queue_msg(self, msg: agent.WorkerMessage) -&gt; None:
+        &#34;&#34;&#34;_queue_msg raises aio.ChanClosed when the worker is closing/closed&#34;&#34;&#34;
+        if self._connecting:
+            which = msg.WhichOneof(&#34;message&#34;)
+            if which == &#34;update_worker&#34;:
+                return
+            elif which == &#34;ping&#34;:
+                return
+
+        await self._msg_chan.send(msg)
+
+    @utils.log_exceptions(logger=logger)
+    async def _connection_task(self) -&gt; None:
+        assert self._http_session is not None
+
+        retry_count = 0
+        ws: aiohttp.ClientWebSocketResponse | None = None
+        while not self._closed:
+            try:
+                self._connecting = True
+                join_jwt = (
+                    api.AccessToken(self._opts.api_key, self._opts.api_secret)
+                    .with_grants(api.VideoGrants(agent=True))
+                    .to_jwt()
+                )
+
+                headers = {&#34;Authorization&#34;: f&#34;Bearer {join_jwt}&#34;}
+
+                parse = urlparse(self._opts.ws_url)
+                scheme = parse.scheme
+                if scheme.startswith(&#34;http&#34;):
+                    scheme = scheme.replace(&#34;http&#34;, &#34;ws&#34;)
+
+                path_parts = [f&#34;{scheme}://{parse.netloc}&#34;, parse.path, &#34;/agent&#34;]
+                agent_url = reduce(urljoin, path_parts)
+
+                ws = await self._http_session.ws_connect(
+                    agent_url, headers=headers, autoping=True, proxy=self._opts.http_proxy or None
+                )
+
+                retry_count = 0
+
+                # register the worker
+                req = agent.WorkerMessage()
+                req.register.type = self._opts.worker_type.value
+                req.register.allowed_permissions.CopyFrom(
+                    models.ParticipantPermission(
+                        can_publish=self._opts.permissions.can_publish,
+                        can_subscribe=self._opts.permissions.can_subscribe,
+                        can_publish_data=self._opts.permissions.can_publish_data,
+                        can_update_metadata=self._opts.permissions.can_update_metadata,
+                        can_publish_sources=self._opts.permissions.can_publish_sources,
+                        hidden=self._opts.permissions.hidden,
+                        agent=True,
+                    )
+                )
+                req.register.agent_name = self._opts.agent_name
+                req.register.version = __version__
+                await ws.send_bytes(req.SerializeToString())
+
+                # wait for the register response before running this connection
+                first_msg_b = await ws.receive_bytes()
+                msg = agent.ServerMessage()
+                msg.ParseFromString(first_msg_b)
+
+                if not msg.HasField(&#34;register&#34;):
+                    raise Exception(&#34;expected register response as first message&#34;)
+
+                self._handle_register(msg.register)
+                self._connecting = False
+
+                await self._run_ws(ws)
+            except Exception as e:
+                if self._closed:
+                    break
+
+                if retry_count &gt;= self._opts.max_retry:
+                    raise RuntimeError(
+                        f&#34;failed to connect to livekit after {retry_count} attempts&#34;,
+                    ) from None
+
+                retry_delay = min(retry_count * 2, 10)
+                retry_count += 1
+
+                logger.warning(
+                    f&#34;failed to connect to livekit, retrying in {retry_delay}s&#34;, exc_info=e
+                )
+                await asyncio.sleep(retry_delay)
+            finally:
+                if ws is not None:
+                    await ws.close()
+
+    async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        closing_ws = False
+
+        async def _load_task():
+            &#34;&#34;&#34;periodically update worker status&#34;&#34;&#34;
+            interval = utils.aio.interval(UPDATE_STATUS_INTERVAL)
+            while True:
+                await interval.tick()
+                await self._update_worker_status()
+
+        async def _send_task():
+            nonlocal closing_ws
+            while True:
+                try:
+                    msg = await self._msg_chan.recv()
+                    await ws.send_bytes(msg.SerializeToString())
+                except utils.aio.ChanClosed:
+                    closing_ws = True
+                    return
+
+        async def _recv_task():
+            nonlocal closing_ws
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if closing_ws:
+                        return
+
+                    raise Exception(&#34;worker connection closed unexpectedly&#34;)
+
+                if msg.type != aiohttp.WSMsgType.BINARY:
+                    logger.warning(&#34;unexpected message type: %s&#34;, msg.type)
+                    continue
+
+                data = msg.data
+                msg = agent.ServerMessage()
+                msg.ParseFromString(data)
+                which = msg.WhichOneof(&#34;message&#34;)
+                if which == &#34;availability&#34;:
+                    self._handle_availability(msg.availability)
+                elif which == &#34;assignment&#34;:
+                    self._handle_assignment(msg.assignment)
+                elif which == &#34;termination&#34;:
+                    user_task = self._loop.create_task(
+                        self._handle_termination(msg.termination),
+                        name=&#34;agent_job_termination&#34;,
+                    )
+                    self._tasks.add(user_task)
+                    user_task.add_done_callback(self._tasks.discard)
+
+        tasks = [
+            asyncio.create_task(_load_task()),
+            asyncio.create_task(_send_task()),
+            asyncio.create_task(_recv_task()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+
+    async def _reload_jobs(self, jobs: list[RunningJobInfo]) -&gt; None:
+        if not self._opts.api_secret:
+            raise RuntimeError(&#34;api_secret is required to reload jobs&#34;)
+
+        for aj in jobs:
+            logger.log(
+                DEV_LEVEL,
+                &#34;reloading job&#34;,
+                extra={&#34;job_id&#34;: aj.job.id, &#34;agent_name&#34;: aj.job.agent_name},
+            )
+
+            # take the original jwt token and extend it while keeping all the same data that was generated  # noqa: E501
+            # by the SFU for the original join token.
+            original_token = aj.token
+            decoded = jwt.decode(original_token, self._opts.api_secret, algorithms=[&#34;HS256&#34;])
+            decoded[&#34;exp&#34;] = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600
+            running_info = RunningJobInfo(
+                accept_arguments=aj.accept_arguments,
+                job=aj.job,
+                url=self._opts.ws_url,
+                token=jwt.encode(decoded, self._opts.api_secret, algorithm=&#34;HS256&#34;),
+                worker_id=aj.worker_id,
+            )
+            await self._proc_pool.launch_job(running_info)
+
+    def _handle_register(self, reg: agent.RegisterWorkerResponse):
+        self._id = reg.worker_id
+        logger.info(
+            &#34;registered worker&#34;,
+            extra={
+                &#34;id&#34;: reg.worker_id,
+                &#34;url&#34;: self._opts.ws_url,
+                &#34;region&#34;: reg.server_info.region,
+                &#34;protocol&#34;: reg.server_info.protocol,
+            },
+        )
+        self.emit(&#34;worker_registered&#34;, reg.worker_id, reg.server_info)
+
+    def _handle_availability(self, msg: agent.AvailabilityRequest):
+        task = self._loop.create_task(self._answer_availability(msg))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _answer_availability(self, msg: agent.AvailabilityRequest):
+        &#34;&#34;&#34;Ask the user if they want to accept this job and forward the answer to the server.
+        If we get the job assigned, we start a new process.&#34;&#34;&#34;
+
+        answered = False
+
+        async def _on_reject() -&gt; None:
+            nonlocal answered
+            answered = True
+
+            availability_resp = agent.WorkerMessage()
+            availability_resp.availability.job_id = msg.job.id
+            availability_resp.availability.available = False
+            await self._queue_msg(availability_resp)
+
+        async def _on_accept(args: JobAcceptArguments) -&gt; None:
+            nonlocal answered
+            answered = True
+
+            availability_resp = agent.WorkerMessage()
+            availability_resp.availability.job_id = msg.job.id
+            availability_resp.availability.available = True
+            availability_resp.availability.participant_identity = args.identity
+            availability_resp.availability.participant_name = args.name
+            availability_resp.availability.participant_metadata = args.metadata
+            if args.attributes:
+                availability_resp.availability.participant_attributes.update(args.attributes)
+            await self._queue_msg(availability_resp)
+
+            wait_assignment = asyncio.Future[agent.JobAssignment]()
+            self._pending_assignments[job_req.id] = wait_assignment
+
+            # the job was accepted by the user, wait for the server assignment
+            try:
+                await asyncio.wait_for(wait_assignment, ASSIGNMENT_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f&#34;assignment for job {job_req.id} timed out&#34;,
+                    extra={&#34;job_request&#34;: job_req, &#34;agent_name&#34;: self._opts.agent_name},
+                )
+                raise AssignmentTimeoutError() from None
+
+            job_assign = wait_assignment.result()
+            running_info = RunningJobInfo(
+                accept_arguments=args,
+                job=msg.job,
+                url=job_assign.url or self._opts.ws_url,
+                token=job_assign.token,
+                worker_id=self._id,
+            )
+
+            await self._proc_pool.launch_job(running_info)
+
+        job_req = JobRequest(job=msg.job, on_reject=_on_reject, on_accept=_on_accept)
+
+        logger.info(
+            &#34;received job request&#34;,
+            extra={
+                &#34;job_id&#34;: msg.job.id,
+                &#34;dispatch_id&#34;: msg.job.dispatch_id,
+                &#34;room_name&#34;: msg.job.room.name,
+                &#34;agent_name&#34;: self._opts.agent_name,
+                &#34;resuming&#34;: msg.resuming,
+            },
+        )
+
+        @utils.log_exceptions(logger=logger)
+        async def _job_request_task():
+            try:
+                await self._opts.request_fnc(job_req)
+            except Exception:
+                logger.exception(
+                    &#34;job_request_fnc failed&#34;,
+                    extra={&#34;job_request&#34;: job_req, &#34;agent_name&#34;: self._opts.agent_name},
+                )
+
+            if not answered:
+                logger.warning(
+                    &#34;no answer was given inside the job_request_fnc, automatically rejecting the job&#34;,  # noqa: E501
+                    extra={&#34;job_request&#34;: job_req, &#34;agent_name&#34;: self._opts.agent_name},
+                )
+                await _on_reject()
+
+        user_task = self._loop.create_task(_job_request_task(), name=&#34;job_request&#34;)
+        self._tasks.add(user_task)
+        user_task.add_done_callback(self._tasks.discard)
+
+    def _handle_assignment(self, assignment: agent.JobAssignment):
+        if assignment.job.id in self._pending_assignments:
+            with contextlib.suppress(asyncio.InvalidStateError):
+                fut = self._pending_assignments.pop(assignment.job.id)
+                fut.set_result(assignment)
+        else:
+            logger.warning(
+                &#34;received assignment for an unknown job&#34;,
+                extra={&#34;job&#34;: assignment.job, &#34;agent_name&#34;: self._opts.agent_name},
+            )
+
+    async def _handle_termination(self, msg: agent.JobTermination):
+        proc = self._proc_pool.get_by_job_id(msg.job_id)
+        if not proc:
+            # safe to ignore
+            return
+        await proc.aclose()
+
+    async def _update_worker_status(self):
+        job_cnt = len(self.active_jobs)
+        if self._draining:
+            update = agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL, job_count=job_cnt)
+            msg = agent.WorkerMessage(update_worker=update)
+            await self._queue_msg(msg)
+            return
+
+        load_threshold = _WorkerEnvOption.getvalue(self._opts.load_threshold, self._devmode)
+        is_full = self._worker_load &gt;= load_threshold
+        currently_available = not is_full and not self._draining
+
+        status = (
+            agent.WorkerStatus.WS_AVAILABLE if currently_available else agent.WorkerStatus.WS_FULL
+        )
+
+        update = agent.UpdateWorkerStatus(load=self._worker_load, status=status, job_count=job_cnt)
+
+        # only log if status has changed
+        if self._previous_status != status and not self._draining:
+            self._previous_status = status
+            extra = {
+                &#34;load&#34;: self._worker_load,
+                &#34;threshold&#34;: self._opts.load_threshold,
+            }
+            if is_full:
+                logger.info(
+                    &#34;worker is at full capacity, marking as unavailable&#34;,
+                    extra=extra,
+                )
+            else:
+                logger.info(
+                    &#34;worker is below capacity, marking as available&#34;,
+                    extra=extra,
+                )
+
+        msg = agent.WorkerMessage(update_worker=update)
+        with contextlib.suppress(utils.aio.ChanClosed):
+            await self._queue_msg(msg)
+
+    async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -&gt; None:
+        job_info = proc.running_job
+        if job_info is None:
+            return
+
+        status: agent.JobStatus = agent.JobStatus.JS_RUNNING
+        if proc.status == ipc.job_executor.JobStatus.FAILED:
+            status = agent.JobStatus.JS_FAILED
+        elif proc.status == ipc.job_executor.JobStatus.SUCCESS:
+            status = agent.JobStatus.JS_SUCCESS
+        elif proc.status == ipc.job_executor.JobStatus.RUNNING:
+            status = agent.JobStatus.JS_RUNNING
+
+        update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error=&#34;&#34;)
+        msg = agent.WorkerMessage(update_job=update)
+        await self._queue_msg(msg)</code></pre>
+</details>
+<div class="desc"><p>Abstract base class for generic types.</p>
+<p>On Python 3.12 and newer, generic classes implicitly inherit from
+Generic when they declare a parameter list after the class's name::</p>
+<pre><code>class Mapping[KT, VT]:
+    def __getitem__(self, key: KT) -&gt; VT:
+        ...
+    # Etc.
+</code></pre>
+<p>On older versions of Python, however, generic classes have to
+explicitly inherit from Generic.</p>
+<p>After a class has been declared to be generic, it can then be used as
+follows::</p>
+<pre><code>def lookup_name[KT, VT](mapping: Mapping[KT, VT], key: KT, default: VT) -&gt; VT:
+    try:
+        return mapping[key]
+    except KeyError:
+        return default
+</code></pre>
+<p>Initialize a new instance of EventEmitter.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.worker.Worker.active_jobs"><code class="name">prop <span class="ident">active_jobs</span> : list[RunningJobInfo]</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def active_jobs(self) -&gt; list[RunningJobInfo]:
+    return [proc.running_job for proc in self._proc_pool.processes if proc.running_job]</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.worker.Worker.id"><code class="name">prop <span class="ident">id</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def id(self) -&gt; str:
+    return self._id</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.worker.Worker.worker_info"><code class="name">prop <span class="ident">worker_info</span> : <a title="livekit.agents.worker.WorkerInfo" href="#livekit.agents.worker.WorkerInfo">WorkerInfo</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def worker_info(self) -&gt; WorkerInfo:
+    return WorkerInfo(http_port=self._http_server.port)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.worker.Worker.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    if self._closed:
+        if self._close_future is not None:
+            await self._close_future
+        return
+
+    logger.info(&#34;shutting down worker&#34;, extra={&#34;id&#34;: self.id})
+
+    assert self._close_future is not None
+    assert self._http_session is not None
+    assert self._api is not None
+
+    self._closed = True
+
+    if self._conn_task is not None:
+        await utils.aio.cancel_and_wait(self._conn_task)
+
+    if self._load_task is not None:
+        await utils.aio.cancel_and_wait(self._load_task)
+
+    await self._proc_pool.aclose()
+
+    if self._inference_executor is not None:
+        await self._inference_executor.aclose()
+
+    await self._http_session.close()
+    await self._http_server.aclose()
+    await self._api.aclose()
+
+    await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
+    self._msg_chan.close()
+    await self._close_future</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.worker.Worker.drain"><code class="name flex">
+<span>async def <span class="ident">drain</span></span>(<span>self, timeout: int | None = None) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def drain(self, timeout: int | None = None) -&gt; None:
+    &#34;&#34;&#34;When timeout isn&#39;t None, it will raise asyncio.TimeoutError if the processes didn&#39;t finish in time.&#34;&#34;&#34;  # noqa: E501
+    if self._draining:
+        return
+
+    logger.info(&#34;draining worker&#34;, extra={&#34;id&#34;: self.id, &#34;timeout&#34;: timeout})
+    self._draining = True
+    await self._update_worker_status()
+
+    async def _join_jobs():
+        for proc in self._proc_pool.processes:
+            if proc.running_job:
+                await proc.join()
+
+    if timeout:
+        await asyncio.wait_for(_join_jobs(), timeout)  # raises asyncio.TimeoutError on timeout
+    else:
+        await _join_jobs()</code></pre>
+</details>
+<div class="desc"><p>When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time.</p></div>
+</dd>
+<dt id="livekit.agents.worker.Worker.run"><code class="name flex">
+<span>async def <span class="ident">run</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def run(self):
+    if not self._closed:
+        raise Exception(&#34;worker is already running&#34;)
+
+    logger.info(
+        &#34;starting worker&#34;,
+        extra={&#34;version&#34;: __version__, &#34;rtc-version&#34;: rtc.__version__},
+    )
+
+    if self._inference_executor is not None:
+        logger.info(&#34;starting inference executor&#34;)
+        await self._inference_executor.start()
+        await self._inference_executor.initialize()
+
+    self._closed = False
+
+    def _update_job_status(proc: ipc.job_executor.JobExecutor) -&gt; None:
+        t = self._loop.create_task(self._update_job_status(proc))
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
+
+    await self._http_server.start()
+
+    self._proc_pool.on(&#34;process_started&#34;, _update_job_status)
+    self._proc_pool.on(&#34;process_closed&#34;, _update_job_status)
+    self._proc_pool.on(&#34;process_job_launched&#34;, _update_job_status)
+    await self._proc_pool.start()
+
+    self._http_session = aiohttp.ClientSession(proxy=self._opts.http_proxy or None)
+    self._api = api.LiveKitAPI(
+        self._opts.ws_url, self._opts.api_key, self._opts.api_secret, session=self._http_session
+    )
+    self._close_future = asyncio.Future(loop=self._loop)
+
+    @utils.log_exceptions(logger=logger)
+    async def _load_task():
+        &#34;&#34;&#34;periodically check load&#34;&#34;&#34;
+        interval = utils.aio.interval(UPDATE_LOAD_INTERVAL)
+        while True:
+            await interval.tick()
+
+            def load_fnc():
+                signature = inspect.signature(self._opts.load_fnc)
+                parameters = list(signature.parameters.values())
+                if len(parameters) == 0:
+                    return self._opts.load_fnc()  # type: ignore
+
+                return self._opts.load_fnc(self)  # type: ignore
+
+            self._worker_load = await asyncio.get_event_loop().run_in_executor(None, load_fnc)
+
+            load_threshold = _WorkerEnvOption.getvalue(self._opts.load_threshold, self._devmode)
+            default_num_idle_processes = _WorkerEnvOption.getvalue(
+                self._opts.num_idle_processes, self._devmode
+            )
+
+            if not math.isinf(load_threshold):
+                active_jobs = len(self.active_jobs)
+                if active_jobs &gt; 0:
+                    job_load = self._worker_load / len(self.active_jobs)
+                    if job_load &gt; 0.0:
+                        available_load = max(load_threshold - self._worker_load, 0.0)
+                        available_job = min(
+                            math.ceil(available_load / job_load), default_num_idle_processes
+                        )
+                        self._proc_pool.set_target_idle_processes(available_job)
+                else:
+                    self._proc_pool.set_target_idle_processes(default_num_idle_processes)
+
+            self._num_idle_target_graph.plot(time.time(), self._proc_pool.target_idle_processes)
+            self._num_idle_process_graph.plot(
+                time.time(), self._proc_pool._warmed_proc_queue.qsize()
+            )
+            self._worker_load_graph.plot(time.time(), self._worker_load)
+
+    tasks = []
+    self._load_task = asyncio.create_task(_load_task(), name=&#34;load_task&#34;)
+    tasks.append(self._load_task)
+
+    if self._register:
+        self._conn_task = asyncio.create_task(self._connection_task(), name=&#34;worker_conn_task&#34;)
+        tasks.append(self._conn_task)
+
+    self.emit(&#34;worker_started&#34;)
+
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        await utils.aio.cancel_and_wait(*tasks)
+        if not self._close_future.done():
+            self._close_future.set_result(None)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.worker.Worker.simulate_job"><code class="name flex">
+<span>async def <span class="ident">simulate_job</span></span>(<span>self,<br>info: <a title="livekit.agents.worker.SimulateJobInfo" href="#livekit.agents.worker.SimulateJobInfo">SimulateJobInfo</a> | str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def simulate_job(
+    self,
+    info: SimulateJobInfo | str,
+) -&gt; None:
+    &#34;&#34;&#34;
+    Simulate a job by creating a room and participant.
+
+    Args:
+        info: SimulateJobInfo or a join token for an existing room
+    &#34;&#34;&#34;
+    assert self._api is not None
+    # TODO(theomonnom): some fake information can still be found in the token
+
+    from livekit.protocol.models import Room
+
+    room = info.room if isinstance(info, SimulateJobInfo) else &#34;unknown-room&#34;
+    participant_identity = (
+        info.participant_identity
+        if isinstance(info, SimulateJobInfo)
+        else &#34;unknown-participant&#34;
+    )
+    agent_id = utils.shortuuid(&#34;simulated-agent-&#34;)
+
+    room_info = Room(sid=utils.shortuuid(&#34;RM_&#34;), name=room)
+    participant_info = None
+
+    if isinstance(info, SimulateJobInfo):
+        from .cli import cli
+
+        if cli.CLI_ARGUMENTS is None or not cli.CLI_ARGUMENTS.console:
+            room_info = await self._api.room.create_room(api.CreateRoomRequest(name=room))
+            if participant_identity:
+                participant_info = await self._api.room.get_participant(
+                    api.RoomParticipantIdentity(room=room, identity=participant_identity)
+                )
+
+        token = (
+            api.AccessToken(self._opts.api_key, self._opts.api_secret)
+            .with_identity(agent_id)
+            .with_kind(&#34;agent&#34;)
+            .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+            .to_jwt()
+        )
+    else:
+        token = info
+
+    job = agent.Job(
+        id=utils.shortuuid(&#34;simulated-job-&#34;),
+        room=room_info,
+        type=agent.JobType.JT_ROOM,
+        participant=participant_info,
+    )
+
+    running_info = RunningJobInfo(
+        worker_id=self._id,
+        accept_arguments=JobAcceptArguments(identity=agent_id, name=&#34;&#34;, metadata=&#34;&#34;),
+        job=job,
+        url=self._opts.ws_url,
+        token=token,
+    )
+
+    await self._proc_pool.launch_job(running_info)</code></pre>
+</details>
+<div class="desc"><p>Simulate a job by creating a room and participant.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>info</code></strong></dt>
+<dd>SimulateJobInfo or a join token for an existing room</dd>
+</dl></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.worker.WorkerInfo"><code class="flex name class">
+<span>class <span class="ident">WorkerInfo</span></span>
+<span>(</span><span>http_port: int)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class WorkerInfo:
+    http_port: int</code></pre>
+</details>
+<div class="desc"><p>WorkerInfo(http_port: 'int')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.worker.WorkerInfo.http_port"><code class="name">var <span class="ident">http_port</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions"><code class="flex name class">
+<span>class <span class="ident">WorkerOptions</span></span>
+<span>(</span><span>entrypoint_fnc: Callable[[JobContext], Awaitable[None]],<br>request_fnc: Callable[[JobRequest], Awaitable[None]] = &lt;function _default_request_fnc&gt;,<br>prewarm_fnc: Callable[[JobProcess], Any] = &lt;function _default_initialize_process_fnc&gt;,<br>load_fnc: Callable[[<a title="livekit.agents.worker.Worker" href="#livekit.agents.worker.Worker">Worker</a>], float] | Callable[[], float] = &lt;bound method _DefaultLoadCalc.get_load of &lt;class &#x27;livekit.agents.worker._DefaultLoadCalc&#x27;&gt;&gt;,<br>job_executor_type: JobExecutorType = JobExecutorType.PROCESS,<br>load_threshold: float | _WorkerEnvOption[float] = _WorkerEnvOption(dev_default=inf, prod_default=0.75),<br>job_memory_warn_mb: float = 500,<br>job_memory_limit_mb: float = 0,<br>num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=0, prod_default=12),<br>shutdown_process_timeout: float = 60.0,<br>initialize_process_timeout: float = 10.0,<br>permissions: <a title="livekit.agents.worker.WorkerPermissions" href="#livekit.agents.worker.WorkerPermissions">WorkerPermissions</a> = &lt;factory&gt;,<br>agent_name: str = '',<br>worker_type: <a title="livekit.agents.worker.WorkerType" href="#livekit.agents.worker.WorkerType">WorkerType</a> = WorkerType.ROOM,<br>max_retry: int = 16,<br>ws_url: str = 'ws://localhost:7880',<br>api_key: str | None = None,<br>api_secret: str | None = None,<br>host: str = '',<br>port: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=0, prod_default=8081),<br>http_proxy: NotGivenOr[str | None] = NOT_GIVEN)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class WorkerOptions:
+    entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
+    &#34;&#34;&#34;Entrypoint function that will be called when a job is assigned to this worker.&#34;&#34;&#34;
+    request_fnc: Callable[[JobRequest], Awaitable[None]] = _default_request_fnc
+    &#34;&#34;&#34;Inspect the request and decide if the current worker should handle it.
+
+    When left empty, all jobs are accepted.&#34;&#34;&#34;
+    prewarm_fnc: Callable[[JobProcess], Any] = _default_initialize_process_fnc
+    &#34;&#34;&#34;A function to perform any necessary initialization before the job starts.&#34;&#34;&#34;
+    load_fnc: Callable[[Worker], float] | Callable[[], float] = _DefaultLoadCalc.get_load
+    &#34;&#34;&#34;Called to determine the current load of the worker. Should return a value between 0 and 1.&#34;&#34;&#34;
+    job_executor_type: JobExecutorType = _default_job_executor_type
+    &#34;&#34;&#34;Which executor to use to run jobs. (currently thread or process are supported)&#34;&#34;&#34;
+    load_threshold: float | _WorkerEnvOption[float] = _WorkerEnvOption(
+        dev_default=math.inf, prod_default=0.75
+    )
+    &#34;&#34;&#34;When the load exceeds this threshold, the worker will be marked as unavailable.
+
+    Defaults to 0.75 on &#34;production&#34; mode, and is disabled in &#34;development&#34; mode.
+    &#34;&#34;&#34;
+
+    job_memory_warn_mb: float = 500
+    &#34;&#34;&#34;Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged.&#34;&#34;&#34;  # noqa: E501
+    job_memory_limit_mb: float = 0
+    &#34;&#34;&#34;Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
+    Defaults to 0 (disabled).
+    &#34;&#34;&#34;  # noqa: E501
+
+    &#34;&#34;&#34;Number of idle processes to keep warm.&#34;&#34;&#34;
+    num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
+        dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
+    )
+    &#34;&#34;&#34;Number of idle processes to keep warm.&#34;&#34;&#34;
+    shutdown_process_timeout: float = 60.0
+    &#34;&#34;&#34;Maximum amount of time to wait for a job to shut down gracefully&#34;&#34;&#34;
+    initialize_process_timeout: float = 10.0
+    &#34;&#34;&#34;Maximum amount of time to wait for a process to initialize/prewarm&#34;&#34;&#34;
+    permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
+    &#34;&#34;&#34;Permissions that the agent should join the room with.&#34;&#34;&#34;
+    agent_name: str = &#34;&#34;
+    &#34;&#34;&#34;Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user&#39;s token, or use the AgentDispatch.createDispatch API&#34;&#34;&#34;  # noqa: E501
+    worker_type: WorkerType = WorkerType.ROOM
+    &#34;&#34;&#34;Whether to spin up an agent for each room or publisher.&#34;&#34;&#34;
+    max_retry: int = 16
+    &#34;&#34;&#34;Maximum number of times to retry connecting to LiveKit.&#34;&#34;&#34;
+    ws_url: str = &#34;ws://localhost:7880&#34;
+    &#34;&#34;&#34;URL to connect to the LiveKit server.
+
+    By default it uses ``LIVEKIT_URL`` from environment&#34;&#34;&#34;
+    api_key: str | None = None
+    &#34;&#34;&#34;API key to authenticate with LiveKit.
+
+    By default it uses ``LIVEKIT_API_KEY`` from environment&#34;&#34;&#34;
+    api_secret: str | None = None
+    &#34;&#34;&#34;API secret to authenticate with LiveKit.
+
+    By default it uses ``LIVEKIT_API_SECRET`` from environment&#34;&#34;&#34;
+    host: str = &#34;&#34;  # default to all interfaces
+    port: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=0, prod_default=8081)
+    &#34;&#34;&#34;Port for local HTTP server to listen on.
+
+    The HTTP server is used as a health check endpoint.
+    &#34;&#34;&#34;
+
+    http_proxy: NotGivenOr[str | None] = NOT_GIVEN
+    &#34;&#34;&#34;HTTP proxy used to connect to the LiveKit server.
+
+    By default it uses ``HTTP_PROXY`` or ``HTTPS_PROXY`` from environment
+    &#34;&#34;&#34;
+
+    def validate_config(self, devmode: bool):
+        load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
+        if load_threshold &gt; 1 and not devmode:
+            logger.warning(
+                f&#34;load_threshold in prod env must be less than 1, current value: {load_threshold}&#34;
+            )</code></pre>
+</details>
+<div class="desc"><p>WorkerOptions(entrypoint_fnc: 'Callable[[JobContext], Awaitable[None]]', request_fnc: 'Callable[[JobRequest], Awaitable[None]]' = <function _default_request_fnc at 0x113acb9c0>, prewarm_fnc: 'Callable[[JobProcess], Any]' = <function _default_initialize_process_fnc at 0x1137fd1c0>, load_fnc: 'Callable[[Worker], float] | Callable[[], float]' = <bound method _DefaultLoadCalc.get_load of \<class 'livekit.agents.worker._DefaultLoadCalc'>>, job_executor_type: 'JobExecutorType' = <JobExecutorType.PROCESS: 'process'>, load_threshold: 'float | _WorkerEnvOption[float]' = _WorkerEnvOption(dev_default=inf, prod_default=0.75), job_memory_warn_mb: 'float' = 500, job_memory_limit_mb: 'float' = 0, num_idle_processes: 'int | _WorkerEnvOption[int]' = _WorkerEnvOption(dev_default=0, prod_default=12), shutdown_process_timeout: 'float' = 60.0, initialize_process_timeout: 'float' = 10.0, permissions: 'WorkerPermissions' = <factory>, agent_name: 'str' = '', worker_type: 'WorkerType' = <WorkerType.ROOM: 0>, max_retry: 'int' = 16, ws_url: 'str' = 'ws://localhost:7880', api_key: 'str | None' = None, api_secret: 'str | None' = None, host: 'str' = '', port: 'int | _WorkerEnvOption[int]' = _WorkerEnvOption(dev_default=0, prod_default=8081), http_proxy: 'NotGivenOr[str | None]' = NOT_GIVEN)</p></div>
+<h3>Static methods</h3>
+<dl>
+<dt id="livekit.agents.worker.WorkerOptions.load_fnc"><code class="name flex">
+<span>def <span class="ident">load_fnc</span></span>(<span>worker: <a title="livekit.agents.worker.Worker" href="#livekit.agents.worker.Worker">Worker</a>) ‑> float</span>
+</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.worker.WorkerOptions.agent_name"><code class="name">var <span class="ident">agent_name</span> : str</code></dt>
+<dd>
+<div class="desc"><p>Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.api_key"><code class="name">var <span class="ident">api_key</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>API key to authenticate with LiveKit.</p>
+<p>By default it uses <code>LIVEKIT_API_KEY</code> from environment</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.api_secret"><code class="name">var <span class="ident">api_secret</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>API secret to authenticate with LiveKit.</p>
+<p>By default it uses <code>LIVEKIT_API_SECRET</code> from environment</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.entrypoint_fnc"><code class="name">var <span class="ident">entrypoint_fnc</span> : Callable[[<a title="livekit.agents.job.JobContext" href="job.html#livekit.agents.job.JobContext">JobContext</a>], Awaitable[None]]</code></dt>
+<dd>
+<div class="desc"><p>Entrypoint function that will be called when a job is assigned to this worker.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.host"><code class="name">var <span class="ident">host</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.http_proxy"><code class="name">var <span class="ident">http_proxy</span> : str | <a title="livekit.agents.types.NotGiven" href="types.html#livekit.agents.types.NotGiven">NotGiven</a> | None</code></dt>
+<dd>
+<div class="desc"><p>HTTP proxy used to connect to the LiveKit server.</p>
+<p>By default it uses <code>HTTP_PROXY</code> or <code>HTTPS_PROXY</code> from environment</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.initialize_process_timeout"><code class="name">var <span class="ident">initialize_process_timeout</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Maximum amount of time to wait for a process to initialize/prewarm</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.job_executor_type"><code class="name">var <span class="ident">job_executor_type</span> : <a title="livekit.agents.job.JobExecutorType" href="job.html#livekit.agents.job.JobExecutorType">JobExecutorType</a></code></dt>
+<dd>
+<div class="desc"><p>Which executor to use to run jobs. (currently thread or process are supported)</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.job_memory_limit_mb"><code class="name">var <span class="ident">job_memory_limit_mb</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
+Defaults to 0 (disabled).</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.job_memory_warn_mb"><code class="name">var <span class="ident">job_memory_warn_mb</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.load_threshold"><code class="name">var <span class="ident">load_threshold</span> : float | livekit.agents.worker._WorkerEnvOption[float]</code></dt>
+<dd>
+<div class="desc"><p>When the load exceeds this threshold, the worker will be marked as unavailable.</p>
+<p>Defaults to 0.75 on "production" mode, and is disabled in "development" mode.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.max_retry"><code class="name">var <span class="ident">max_retry</span> : int</code></dt>
+<dd>
+<div class="desc"><p>Maximum number of times to retry connecting to LiveKit.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.num_idle_processes"><code class="name">var <span class="ident">num_idle_processes</span> : int | livekit.agents.worker._WorkerEnvOption[int]</code></dt>
+<dd>
+<div class="desc"><p>Number of idle processes to keep warm.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.permissions"><code class="name">var <span class="ident">permissions</span> : <a title="livekit.agents.worker.WorkerPermissions" href="#livekit.agents.worker.WorkerPermissions">WorkerPermissions</a></code></dt>
+<dd>
+<div class="desc"><p>Permissions that the agent should join the room with.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.port"><code class="name">var <span class="ident">port</span> : int | livekit.agents.worker._WorkerEnvOption[int]</code></dt>
+<dd>
+<div class="desc"><p>Port for local HTTP server to listen on.</p>
+<p>The HTTP server is used as a health check endpoint.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.shutdown_process_timeout"><code class="name">var <span class="ident">shutdown_process_timeout</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Maximum amount of time to wait for a job to shut down gracefully</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.worker_type"><code class="name">var <span class="ident">worker_type</span> : <a title="livekit.agents.worker.WorkerType" href="#livekit.agents.worker.WorkerType">WorkerType</a></code></dt>
+<dd>
+<div class="desc"><p>Whether to spin up an agent for each room or publisher.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.ws_url"><code class="name">var <span class="ident">ws_url</span> : str</code></dt>
+<dd>
+<div class="desc"><p>URL to connect to the LiveKit server.</p>
+<p>By default it uses <code>LIVEKIT_URL</code> from environment</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.worker.WorkerOptions.prewarm_fnc"><code class="name flex">
+<span>def <span class="ident">prewarm_fnc</span></span>(<span>proc: JobProcess) ‑> Any</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def _default_initialize_process_fnc(proc: JobProcess) -&gt; Any:
+    return</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.request_fnc"><code class="name flex">
+<span>async def <span class="ident">request_fnc</span></span>(<span>ctx: JobRequest) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def _default_request_fnc(ctx: JobRequest) -&gt; None:
+    await ctx.accept()</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerOptions.validate_config"><code class="name flex">
+<span>def <span class="ident">validate_config</span></span>(<span>self, devmode: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def validate_config(self, devmode: bool):
+    load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
+    if load_threshold &gt; 1 and not devmode:
+        logger.warning(
+            f&#34;load_threshold in prod env must be less than 1, current value: {load_threshold}&#34;
+        )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.worker.WorkerPermissions"><code class="flex name class">
+<span>class <span class="ident">WorkerPermissions</span></span>
+<span>(</span><span>can_publish: bool = True,<br>can_subscribe: bool = True,<br>can_publish_data: bool = True,<br>can_update_metadata: bool = True,<br>can_publish_sources: list[models.TrackSource] = &lt;factory&gt;,<br>hidden: bool = False)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class WorkerPermissions:
+    can_publish: bool = True
+    can_subscribe: bool = True
+    can_publish_data: bool = True
+    can_update_metadata: bool = True
+    can_publish_sources: list[models.TrackSource] = field(default_factory=list)
+    hidden: bool = False</code></pre>
+</details>
+<div class="desc"><p>WorkerPermissions(can_publish: 'bool' = True, can_subscribe: 'bool' = True, can_publish_data: 'bool' = True, can_update_metadata: 'bool' = True, can_publish_sources: 'list[models.TrackSource]' = <factory>, hidden: 'bool' = False)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.worker.WorkerPermissions.can_publish"><code class="name">var <span class="ident">can_publish</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerPermissions.can_publish_data"><code class="name">var <span class="ident">can_publish_data</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerPermissions.can_publish_sources"><code class="name">var <span class="ident">can_publish_sources</span> : list[<google.protobuf.internal.enum_type_wrapper.EnumTypeWrapper object at 0x10497a250>]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerPermissions.can_subscribe"><code class="name">var <span class="ident">can_subscribe</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerPermissions.can_update_metadata"><code class="name">var <span class="ident">can_update_metadata</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerPermissions.hidden"><code class="name">var <span class="ident">hidden</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.worker.WorkerType"><code class="flex name class">
+<span>class <span class="ident">WorkerType</span></span>
+<span>(</span><span>*args, **kwds)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class WorkerType(Enum):
+    ROOM = agent.JobType.JT_ROOM
+    PUBLISHER = agent.JobType.JT_PUBLISHER</code></pre>
+</details>
+<div class="desc"><p>Create a collection of name/value pairs.</p>
+<p>Example enumeration:</p>
+<pre><code class="language-python-repl">&gt;&gt;&gt; class Color(Enum):
+...     RED = 1
+...     BLUE = 2
+...     GREEN = 3
+</code></pre>
+<p>Access them by:</p>
+<ul>
+<li>attribute access:</li>
+</ul>
+<blockquote>
+<blockquote>
+<blockquote>
+<p>Color.RED
+<Color.RED: 1></p>
+</blockquote>
+</blockquote>
+</blockquote>
+<ul>
+<li>value lookup:</li>
+</ul>
+<blockquote>
+<blockquote>
+<blockquote>
+<p>Color(1)
+<Color.RED: 1></p>
+</blockquote>
+</blockquote>
+</blockquote>
+<ul>
+<li>name lookup:</li>
+</ul>
+<blockquote>
+<blockquote>
+<blockquote>
+<p>Color['RED']
+<Color.RED: 1></p>
+</blockquote>
+</blockquote>
+</blockquote>
+<p>Enumerations can be iterated over, and know how many members they have:</p>
+<pre><code class="language-python-repl">&gt;&gt;&gt; len(Color)
+3
+</code></pre>
+<pre><code class="language-python-repl">&gt;&gt;&gt; list(Color)
+[&lt;Color.RED: 1&gt;, &lt;Color.BLUE: 2&gt;, &lt;Color.GREEN: 3&gt;]
+</code></pre>
+<p>Methods can be added to enumerations, and members can have their own
+attributes &ndash; see the documentation for details.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>enum.Enum</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.worker.WorkerType.PUBLISHER"><code class="name">var <span class="ident">PUBLISHER</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.worker.WorkerType.ROOM"><code class="name">var <span class="ident">ROOM</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents" href="index.html">livekit.agents</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.worker.SimulateJobInfo" href="#livekit.agents.worker.SimulateJobInfo">SimulateJobInfo</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.worker.SimulateJobInfo.participant_identity" href="#livekit.agents.worker.SimulateJobInfo.participant_identity">participant_identity</a></code></li>
+<li><code><a title="livekit.agents.worker.SimulateJobInfo.room" href="#livekit.agents.worker.SimulateJobInfo.room">room</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.worker.Worker" href="#livekit.agents.worker.Worker">Worker</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.worker.Worker.aclose" href="#livekit.agents.worker.Worker.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.worker.Worker.active_jobs" href="#livekit.agents.worker.Worker.active_jobs">active_jobs</a></code></li>
+<li><code><a title="livekit.agents.worker.Worker.drain" href="#livekit.agents.worker.Worker.drain">drain</a></code></li>
+<li><code><a title="livekit.agents.worker.Worker.id" href="#livekit.agents.worker.Worker.id">id</a></code></li>
+<li><code><a title="livekit.agents.worker.Worker.run" href="#livekit.agents.worker.Worker.run">run</a></code></li>
+<li><code><a title="livekit.agents.worker.Worker.simulate_job" href="#livekit.agents.worker.Worker.simulate_job">simulate_job</a></code></li>
+<li><code><a title="livekit.agents.worker.Worker.worker_info" href="#livekit.agents.worker.Worker.worker_info">worker_info</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.worker.WorkerInfo" href="#livekit.agents.worker.WorkerInfo">WorkerInfo</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.worker.WorkerInfo.http_port" href="#livekit.agents.worker.WorkerInfo.http_port">http_port</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.worker.WorkerOptions" href="#livekit.agents.worker.WorkerOptions">WorkerOptions</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.worker.WorkerOptions.agent_name" href="#livekit.agents.worker.WorkerOptions.agent_name">agent_name</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.api_key" href="#livekit.agents.worker.WorkerOptions.api_key">api_key</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.api_secret" href="#livekit.agents.worker.WorkerOptions.api_secret">api_secret</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.entrypoint_fnc" href="#livekit.agents.worker.WorkerOptions.entrypoint_fnc">entrypoint_fnc</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.host" href="#livekit.agents.worker.WorkerOptions.host">host</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.http_proxy" href="#livekit.agents.worker.WorkerOptions.http_proxy">http_proxy</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.initialize_process_timeout" href="#livekit.agents.worker.WorkerOptions.initialize_process_timeout">initialize_process_timeout</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.job_executor_type" href="#livekit.agents.worker.WorkerOptions.job_executor_type">job_executor_type</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.job_memory_limit_mb" href="#livekit.agents.worker.WorkerOptions.job_memory_limit_mb">job_memory_limit_mb</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.job_memory_warn_mb" href="#livekit.agents.worker.WorkerOptions.job_memory_warn_mb">job_memory_warn_mb</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.load_fnc" href="#livekit.agents.worker.WorkerOptions.load_fnc">load_fnc</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.load_threshold" href="#livekit.agents.worker.WorkerOptions.load_threshold">load_threshold</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.max_retry" href="#livekit.agents.worker.WorkerOptions.max_retry">max_retry</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.num_idle_processes" href="#livekit.agents.worker.WorkerOptions.num_idle_processes">num_idle_processes</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.permissions" href="#livekit.agents.worker.WorkerOptions.permissions">permissions</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.port" href="#livekit.agents.worker.WorkerOptions.port">port</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.prewarm_fnc" href="#livekit.agents.worker.WorkerOptions.prewarm_fnc">prewarm_fnc</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.request_fnc" href="#livekit.agents.worker.WorkerOptions.request_fnc">request_fnc</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.shutdown_process_timeout" href="#livekit.agents.worker.WorkerOptions.shutdown_process_timeout">shutdown_process_timeout</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.validate_config" href="#livekit.agents.worker.WorkerOptions.validate_config">validate_config</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.worker_type" href="#livekit.agents.worker.WorkerOptions.worker_type">worker_type</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerOptions.ws_url" href="#livekit.agents.worker.WorkerOptions.ws_url">ws_url</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.worker.WorkerPermissions" href="#livekit.agents.worker.WorkerPermissions">WorkerPermissions</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.worker.WorkerPermissions.can_publish" href="#livekit.agents.worker.WorkerPermissions.can_publish">can_publish</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerPermissions.can_publish_data" href="#livekit.agents.worker.WorkerPermissions.can_publish_data">can_publish_data</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerPermissions.can_publish_sources" href="#livekit.agents.worker.WorkerPermissions.can_publish_sources">can_publish_sources</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerPermissions.can_subscribe" href="#livekit.agents.worker.WorkerPermissions.can_subscribe">can_subscribe</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerPermissions.can_update_metadata" href="#livekit.agents.worker.WorkerPermissions.can_update_metadata">can_update_metadata</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerPermissions.hidden" href="#livekit.agents.worker.WorkerPermissions.hidden">hidden</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.worker.WorkerType" href="#livekit.agents.worker.WorkerType">WorkerType</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.worker.WorkerType.PUBLISHER" href="#livekit.agents.worker.WorkerType.PUBLISHER">PUBLISHER</a></code></li>
+<li><code><a title="livekit.agents.worker.WorkerType.ROOM" href="#livekit.agents.worker.WorkerType.ROOM">ROOM</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

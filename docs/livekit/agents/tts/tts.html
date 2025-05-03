@@ -1,0 +1,1186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.tts.tts API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.tts.tts</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.tts.tts.ChunkedStream"><code class="flex name class">
+<span>class <span class="ident">ChunkedStream</span></span>
+<span>(</span><span>*,<br>tts: <a title="livekit.agents.tts.tts.TTS" href="#livekit.agents.tts.tts.TTS">TTS</a>,<br>input_text: str,<br>conn_options: APIConnectOptions | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ChunkedStream(ABC):
+    &#34;&#34;&#34;Used by the non-streamed synthesize API, some providers support chunked http responses&#34;&#34;&#34;
+
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions | None = None,
+    ) -&gt; None:
+        self._input_text = input_text
+        self._tts = tts
+        self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
+        self._event_ch = aio.Chan[SynthesizedAudio]()
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._current_attempt_has_error = False
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name=&#34;TTS._metrics_task&#34;
+        )
+        self._synthesize_task = asyncio.create_task(self._main_task(), name=&#34;TTS._synthesize_task&#34;)
+        self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
+
+    @property
+    def input_text(self) -&gt; str:
+        return self._input_text
+
+    @property
+    def done(self) -&gt; bool:
+        return self._synthesize_task.done()
+
+    @property
+    def exception(self) -&gt; BaseException | None:
+        return self._synthesize_task.exception()
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -&gt; None:
+        &#34;&#34;&#34;Task used to collect metrics&#34;&#34;&#34;
+
+        start_time = time.perf_counter()
+        audio_duration = 0.0
+        ttfb = -1.0
+        request_id = &#34;&#34;
+
+        async for ev in event_aiter:
+            request_id = ev.request_id
+            if ttfb == -1.0:
+                ttfb = time.perf_counter() - start_time
+
+            audio_duration += ev.frame.duration
+
+        duration = time.perf_counter() - start_time
+
+        if self._current_attempt_has_error:
+            return
+
+        metrics = TTSMetrics(
+            timestamp=time.time(),
+            request_id=request_id,
+            ttfb=ttfb,
+            duration=duration,
+            characters_count=len(self._input_text),
+            audio_duration=audio_duration,
+            cancelled=self._synthesize_task.cancelled(),
+            label=self._tts._label,
+            streamed=False,
+        )
+        self._tts.emit(&#34;metrics_collected&#34;, metrics)
+
+    async def collect(self) -&gt; rtc.AudioFrame:
+        &#34;&#34;&#34;Utility method to collect every frame in a single call&#34;&#34;&#34;
+        frames = []
+        async for ev in self:
+            frames.append(ev.frame)
+
+        return rtc.combine_audio_frames(frames)
+
+    @abstractmethod
+    async def _run(self) -&gt; None: ...
+
+    async def _main_task(self) -&gt; None:
+        for i in range(self._conn_options.max_retry + 1):
+            try:
+                return await self._run()
+            except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
+                if self._conn_options.max_retry == 0:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif i == self._conn_options.max_retry:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f&#34;failed to synthesize speech after {self._conn_options.max_retry + 1} attempts&#34;,  # noqa: E501
+                    ) from e
+                else:
+                    self._emit_error(e, recoverable=True)
+                    logger.warning(
+                        f&#34;failed to synthesize speech, retrying in {retry_interval}s&#34;,
+                        exc_info=e,
+                        extra={
+                            &#34;tts&#34;: self._tts._label,
+                            &#34;attempt&#34;: i + 1,
+                            &#34;streamed&#34;: False,
+                        },
+                    )
+
+                await asyncio.sleep(retry_interval)
+                # Reset the flag when retrying
+                self._current_attempt_has_error = False
+
+    def _emit_error(self, api_error: APIError, recoverable: bool):
+        self._current_attempt_has_error = True
+        self._tts.emit(
+            &#34;error&#34;,
+            TTSError(
+                timestamp=time.time(),
+                label=self._tts._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
+    async def aclose(self) -&gt; None:
+        &#34;&#34;&#34;Close is automatically called if the stream is completely collected&#34;&#34;&#34;
+        await aio.cancel_and_wait(self._synthesize_task)
+        self._event_ch.close()
+        await self._metrics_task
+
+    async def __anext__(self) -&gt; SynthesizedAudio:
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
+                raise exc  # noqa: B904
+
+            raise StopAsyncIteration from None
+
+        return val
+
+    def __aiter__(self) -&gt; AsyncIterator[SynthesizedAudio]:
+        return self
+
+    async def __aenter__(self) -&gt; ChunkedStream:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -&gt; None:
+        await self.aclose()</code></pre>
+</details>
+<div class="desc"><p>Used by the non-streamed synthesize API, some providers support chunked http responses</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.tts.fallback_adapter.FallbackChunkedStream" href="fallback_adapter.html#livekit.agents.tts.fallback_adapter.FallbackChunkedStream">FallbackChunkedStream</a></li>
+<li><a title="livekit.plugins.aws.tts.ChunkedStream" href="../../plugins/aws/tts.html#livekit.plugins.aws.tts.ChunkedStream">ChunkedStream</a></li>
+<li>livekit.plugins.azure.tts.ChunkedStream</li>
+<li>livekit.plugins.cartesia.tts.ChunkedStream</li>
+<li>livekit.plugins.deepgram.tts.ChunkedStream</li>
+<li>livekit.plugins.elevenlabs.tts.ChunkedStream</li>
+<li>livekit.plugins.google.tts.ChunkedStream</li>
+<li><a title="livekit.plugins.groq.tts.ChunkedStream" href="../../plugins/groq/tts.html#livekit.plugins.groq.tts.ChunkedStream">ChunkedStream</a></li>
+<li>livekit.plugins.hume.tts.ChunkedStream</li>
+<li>livekit.plugins.neuphonic.tts.ChunkedStream</li>
+<li>livekit.plugins.openai.tts.ChunkedStream</li>
+<li>livekit.plugins.playai.tts.ChunkedStream</li>
+<li>livekit.plugins.resemble.tts.ChunkedStream</li>
+<li>livekit.plugins.rime.tts.ChunkedStream</li>
+<li>livekit.plugins.speechify.tts.ChunkedStream</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.ChunkedStream.done"><code class="name">prop <span class="ident">done</span> : bool</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def done(self) -&gt; bool:
+    return self._synthesize_task.done()</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.tts.tts.ChunkedStream.exception"><code class="name">prop <span class="ident">exception</span> : BaseException | None</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def exception(self) -&gt; BaseException | None:
+    return self._synthesize_task.exception()</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.tts.tts.ChunkedStream.input_text"><code class="name">prop <span class="ident">input_text</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def input_text(self) -&gt; str:
+    return self._input_text</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.ChunkedStream.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    &#34;&#34;&#34;Close is automatically called if the stream is completely collected&#34;&#34;&#34;
+    await aio.cancel_and_wait(self._synthesize_task)
+    self._event_ch.close()
+    await self._metrics_task</code></pre>
+</details>
+<div class="desc"><p>Close is automatically called if the stream is completely collected</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.ChunkedStream.collect"><code class="name flex">
+<span>async def <span class="ident">collect</span></span>(<span>self) ‑> <a title="livekit.rtc.audio_frame.AudioFrame" href="../../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def collect(self) -&gt; rtc.AudioFrame:
+    &#34;&#34;&#34;Utility method to collect every frame in a single call&#34;&#34;&#34;
+    frames = []
+    async for ev in self:
+        frames.append(ev.frame)
+
+    return rtc.combine_audio_frames(frames)</code></pre>
+</details>
+<div class="desc"><p>Utility method to collect every frame in a single call</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizeStream"><code class="flex name class">
+<span>class <span class="ident">SynthesizeStream</span></span>
+<span>(</span><span>*,<br>tts: <a title="livekit.agents.tts.tts.TTS" href="#livekit.agents.tts.tts.TTS">TTS</a>,<br>conn_options: APIConnectOptions | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class SynthesizeStream(ABC):
+    class _FlushSentinel: ...
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions | None = None) -&gt; None:
+        super().__init__()
+        self._tts = tts
+        self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
+        self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
+        self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._event_aiter, self._monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+
+        self._task = asyncio.create_task(self._main_task(), name=&#34;TTS._main_task&#34;)
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._metrics_task: asyncio.Task | None = None  # started on first push
+        self._current_attempt_has_error = False
+        self._started_time: float = 0
+
+        # used to track metrics
+        self._mtc_pending_texts: list[str] = []
+        self._mtc_text = &#34;&#34;
+
+    @abstractmethod
+    async def _run(self) -&gt; None: ...
+
+    async def _main_task(self) -&gt; None:
+        for i in range(self._conn_options.max_retry + 1):
+            try:
+                return await self._run()
+            except APIError as e:
+                retry_interval = self._conn_options._interval_for_retry(i)
+                if self._conn_options.max_retry == 0:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif i == self._conn_options.max_retry:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f&#34;failed to synthesize speech after {self._conn_options.max_retry + 1} attempts&#34;,  # noqa: E501
+                    ) from e
+                else:
+                    self._emit_error(e, recoverable=True)
+                    logger.warning(
+                        f&#34;failed to synthesize speech, retrying in {retry_interval}s&#34;,
+                        exc_info=e,
+                        extra={
+                            &#34;tts&#34;: self._tts._label,
+                            &#34;attempt&#34;: i + 1,
+                            &#34;streamed&#34;: True,
+                        },
+                    )
+
+                await asyncio.sleep(retry_interval)
+                # Reset the flag when retrying
+                self._current_attempt_has_error = False
+
+    def _emit_error(self, api_error: APIError, recoverable: bool):
+        self._current_attempt_has_error = True
+        self._tts.emit(
+            &#34;error&#34;,
+            TTSError(
+                timestamp=time.time(),
+                label=self._tts._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
+    def _mark_started(self) -&gt; None:
+        # only set the started time once, it&#39;ll get reset after we emit metrics
+        if self._started_time == 0:
+            self._started_time = time.perf_counter()
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -&gt; None:
+        &#34;&#34;&#34;Task used to collect metrics&#34;&#34;&#34;
+        audio_duration = 0.0
+        ttfb = -1.0
+        request_id = &#34;&#34;
+
+        def _emit_metrics():
+            nonlocal audio_duration, ttfb, request_id
+
+            if not self._started_time or self._current_attempt_has_error:
+                return
+
+            duration = time.perf_counter() - self._started_time
+
+            if not self._mtc_pending_texts:
+                return
+
+            text = self._mtc_pending_texts.pop(0)
+            if not text:
+                return
+
+            metrics = TTSMetrics(
+                timestamp=time.time(),
+                request_id=request_id,
+                ttfb=ttfb,
+                duration=duration,
+                characters_count=len(text),
+                audio_duration=audio_duration,
+                cancelled=self._task.cancelled(),
+                label=self._tts._label,
+                streamed=True,
+            )
+            self._tts.emit(&#34;metrics_collected&#34;, metrics)
+
+            audio_duration = 0.0
+            ttfb = -1.0
+            request_id = &#34;&#34;
+            self._started_time = 0
+
+        async for ev in event_aiter:
+            if ttfb == -1.0:
+                ttfb = time.perf_counter() - self._started_time
+
+            audio_duration += ev.frame.duration
+            request_id = ev.request_id
+
+            if ev.is_final:
+                _emit_metrics()
+
+        if request_id:
+            _emit_metrics()
+
+    def push_text(self, token: str) -&gt; None:
+        &#34;&#34;&#34;Push some text to be synthesized&#34;&#34;&#34;
+        if self._metrics_task is None:
+            self._metrics_task = asyncio.create_task(
+                self._metrics_monitor_task(self._monitor_aiter),
+                name=&#34;TTS._metrics_task&#34;,
+            )
+
+        self._mtc_text += token
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(token)
+
+    def flush(self) -&gt; None:
+        &#34;&#34;&#34;Mark the end of the current segment&#34;&#34;&#34;
+        if self._mtc_text:
+            self._mtc_pending_texts.append(self._mtc_text)
+            self._mtc_text = &#34;&#34;
+
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -&gt; None:
+        &#34;&#34;&#34;Mark the end of input, no more text will be pushed&#34;&#34;&#34;
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -&gt; None:
+        &#34;&#34;&#34;Close ths stream immediately&#34;&#34;&#34;
+        self._input_ch.close()
+        await aio.cancel_and_wait(self._task)
+
+        if self._metrics_task is not None:
+            await self._metrics_task
+
+    def _check_not_closed(self) -&gt; None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f&#34;{cls.__module__}.{cls.__name__} is closed&#34;)
+
+    def _check_input_not_ended(self) -&gt; None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f&#34;{cls.__module__}.{cls.__name__} input ended&#34;)
+
+    async def __anext__(self) -&gt; SynthesizedAudio:
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+
+            raise StopAsyncIteration from None
+
+        return val
+
+    def __aiter__(self) -&gt; AsyncIterator[SynthesizedAudio]:
+        return self
+
+    async def __aenter__(self) -&gt; SynthesizeStream:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -&gt; None:
+        await self.aclose()</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.tts.fallback_adapter.FallbackSynthesizeStream" href="fallback_adapter.html#livekit.agents.tts.fallback_adapter.FallbackSynthesizeStream">FallbackSynthesizeStream</a></li>
+<li><a title="livekit.agents.tts.stream_adapter.StreamAdapterWrapper" href="stream_adapter.html#livekit.agents.tts.stream_adapter.StreamAdapterWrapper">StreamAdapterWrapper</a></li>
+<li>livekit.plugins.cartesia.tts.SynthesizeStream</li>
+<li>livekit.plugins.deepgram.tts.SynthesizeStream</li>
+<li>livekit.plugins.elevenlabs.tts.SynthesizeStream</li>
+<li>livekit.plugins.neuphonic.tts.SynthesizeStream</li>
+<li>livekit.plugins.playai.tts.SynthesizeStream</li>
+<li>livekit.plugins.resemble.tts.SynthesizeStream</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.SynthesizeStream.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    &#34;&#34;&#34;Close ths stream immediately&#34;&#34;&#34;
+    self._input_ch.close()
+    await aio.cancel_and_wait(self._task)
+
+    if self._metrics_task is not None:
+        await self._metrics_task</code></pre>
+</details>
+<div class="desc"><p>Close ths stream immediately</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizeStream.end_input"><code class="name flex">
+<span>def <span class="ident">end_input</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def end_input(self) -&gt; None:
+    &#34;&#34;&#34;Mark the end of input, no more text will be pushed&#34;&#34;&#34;
+    self.flush()
+    self._input_ch.close()</code></pre>
+</details>
+<div class="desc"><p>Mark the end of input, no more text will be pushed</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizeStream.flush"><code class="name flex">
+<span>def <span class="ident">flush</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def flush(self) -&gt; None:
+    &#34;&#34;&#34;Mark the end of the current segment&#34;&#34;&#34;
+    if self._mtc_text:
+        self._mtc_pending_texts.append(self._mtc_text)
+        self._mtc_text = &#34;&#34;
+
+    self._check_input_not_ended()
+    self._check_not_closed()
+    self._input_ch.send_nowait(self._FlushSentinel())</code></pre>
+</details>
+<div class="desc"><p>Mark the end of the current segment</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizeStream.push_text"><code class="name flex">
+<span>def <span class="ident">push_text</span></span>(<span>self, token: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def push_text(self, token: str) -&gt; None:
+    &#34;&#34;&#34;Push some text to be synthesized&#34;&#34;&#34;
+    if self._metrics_task is None:
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(self._monitor_aiter),
+            name=&#34;TTS._metrics_task&#34;,
+        )
+
+    self._mtc_text += token
+    self._check_input_not_ended()
+    self._check_not_closed()
+    self._input_ch.send_nowait(token)</code></pre>
+</details>
+<div class="desc"><p>Push some text to be synthesized</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizedAudio"><code class="flex name class">
+<span>class <span class="ident">SynthesizedAudio</span></span>
+<span>(</span><span>frame: rtc.AudioFrame,<br>request_id: str,<br>is_final: bool = False,<br>segment_id: str = '',<br>delta_text: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class SynthesizedAudio:
+    frame: rtc.AudioFrame
+    &#34;&#34;&#34;Synthesized audio frame&#34;&#34;&#34;
+    request_id: str
+    &#34;&#34;&#34;Request ID (one segment could be made up of multiple requests)&#34;&#34;&#34;
+    is_final: bool = False
+    &#34;&#34;&#34;Whether this is latest frame of the segment (streaming only)&#34;&#34;&#34;
+    segment_id: str = &#34;&#34;
+    &#34;&#34;&#34;Segment ID, each segment is separated by a flush (streaming only)&#34;&#34;&#34;
+    delta_text: str = &#34;&#34;
+    &#34;&#34;&#34;Current segment of the synthesized audio (streaming only)&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>SynthesizedAudio(frame: 'rtc.AudioFrame', request_id: 'str', is_final: 'bool' = False, segment_id: 'str' = '', delta_text: 'str' = '')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.SynthesizedAudio.delta_text"><code class="name">var <span class="ident">delta_text</span> : str</code></dt>
+<dd>
+<div class="desc"><p>Current segment of the synthesized audio (streaming only)</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizedAudio.frame"><code class="name">var <span class="ident">frame</span> : <a title="livekit.rtc.audio_frame.AudioFrame" href="../../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a></code></dt>
+<dd>
+<div class="desc"><p>Synthesized audio frame</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizedAudio.is_final"><code class="name">var <span class="ident">is_final</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether this is latest frame of the segment (streaming only)</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizedAudio.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>Request ID (one segment could be made up of multiple requests)</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizedAudio.segment_id"><code class="name">var <span class="ident">segment_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>Segment ID, each segment is separated by a flush (streaming only)</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizedAudioEmitter"><code class="flex name class">
+<span>class <span class="ident">SynthesizedAudioEmitter</span></span>
+<span>(</span><span>*,<br>event_ch: aio.Chan[<a title="livekit.agents.tts.tts.SynthesizedAudio" href="#livekit.agents.tts.tts.SynthesizedAudio">SynthesizedAudio</a>],<br>request_id: str,<br>segment_id: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class SynthesizedAudioEmitter:
+    &#34;&#34;&#34;Utility for buffering and emitting audio frames with metadata to a channel.
+
+    This class helps TTS implementers to correctly handle is_final logic when streaming responses.
+    &#34;&#34;&#34;
+
+    def __init__(
+        self,
+        *,
+        event_ch: aio.Chan[SynthesizedAudio],
+        request_id: str,
+        segment_id: str = &#34;&#34;,
+    ) -&gt; None:
+        self._event_ch = event_ch
+        self._frame: rtc.AudioFrame | None = None
+        self._request_id = request_id
+        self._segment_id = segment_id
+
+    def push(self, frame: rtc.AudioFrame | None):
+        &#34;&#34;&#34;Emits any buffered frame and stores the new frame for later emission.
+
+        The buffered frame is emitted as not final.
+        &#34;&#34;&#34;
+        self._emit_frame(is_final=False)
+        self._frame = frame
+
+    def _emit_frame(self, is_final: bool = False):
+        &#34;&#34;&#34;Sends the buffered frame to the event channel if one exists.&#34;&#34;&#34;
+        if self._frame is None:
+            return
+        self._event_ch.send_nowait(
+            SynthesizedAudio(
+                frame=self._frame,
+                request_id=self._request_id,
+                segment_id=self._segment_id,
+                is_final=is_final,
+            )
+        )
+        self._frame = None
+
+    def flush(self):
+        &#34;&#34;&#34;Emits any buffered frame as final.&#34;&#34;&#34;
+        self._emit_frame(is_final=True)</code></pre>
+</details>
+<div class="desc"><p>Utility for buffering and emitting audio frames with metadata to a channel.</p>
+<p>This class helps TTS implementers to correctly handle is_final logic when streaming responses.</p></div>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.SynthesizedAudioEmitter.flush"><code class="name flex">
+<span>def <span class="ident">flush</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def flush(self):
+    &#34;&#34;&#34;Emits any buffered frame as final.&#34;&#34;&#34;
+    self._emit_frame(is_final=True)</code></pre>
+</details>
+<div class="desc"><p>Emits any buffered frame as final.</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.SynthesizedAudioEmitter.push"><code class="name flex">
+<span>def <span class="ident">push</span></span>(<span>self, frame: rtc.AudioFrame | None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def push(self, frame: rtc.AudioFrame | None):
+    &#34;&#34;&#34;Emits any buffered frame and stores the new frame for later emission.
+
+    The buffered frame is emitted as not final.
+    &#34;&#34;&#34;
+    self._emit_frame(is_final=False)
+    self._frame = frame</code></pre>
+</details>
+<div class="desc"><p>Emits any buffered frame and stores the new frame for later emission.</p>
+<p>The buffered frame is emitted as not final.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.tts.tts.TTS"><code class="flex name class">
+<span>class <span class="ident">TTS</span></span>
+<span>(</span><span>*,<br>capabilities: <a title="livekit.agents.tts.tts.TTSCapabilities" href="#livekit.agents.tts.tts.TTSCapabilities">TTSCapabilities</a>,<br>sample_rate: int,<br>num_channels: int,<br>conn_options: APIConnectOptions | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TTS(
+    ABC,
+    rtc.EventEmitter[Union[Literal[&#34;metrics_collected&#34;, &#34;error&#34;], TEvent]],
+    Generic[TEvent],
+):
+    def __init__(
+        self,
+        *,
+        capabilities: TTSCapabilities,
+        sample_rate: int,
+        num_channels: int,
+        conn_options: APIConnectOptions | None = None,
+    ) -&gt; None:
+        super().__init__()
+        self._capabilities = capabilities
+        self._sample_rate = sample_rate
+        self._num_channels = num_channels
+        self._label = f&#34;{type(self).__module__}.{type(self).__name__}&#34;
+        self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
+
+    @property
+    def label(self) -&gt; str:
+        return self._label
+
+    @property
+    def capabilities(self) -&gt; TTSCapabilities:
+        return self._capabilities
+
+    @property
+    def sample_rate(self) -&gt; int:
+        return self._sample_rate
+
+    @property
+    def num_channels(self) -&gt; int:
+        return self._num_channels
+
+    @abstractmethod
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions | None = None,
+    ) -&gt; ChunkedStream: ...
+
+    def stream(self, *, conn_options: APIConnectOptions | None = None) -&gt; SynthesizeStream:
+        raise NotImplementedError(
+            &#34;streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter&#34;  # noqa: E501
+        )
+
+    def prewarm(self) -&gt; None:
+        &#34;&#34;&#34;Pre-warm connection to the TTS service&#34;&#34;&#34;
+        pass
+
+    async def aclose(self) -&gt; None: ...
+
+    async def __aenter__(self) -&gt; TTS:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -&gt; None:
+        await self.aclose()</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.tts.fallback_adapter.FallbackAdapter" href="fallback_adapter.html#livekit.agents.tts.fallback_adapter.FallbackAdapter">FallbackAdapter</a></li>
+<li><a title="livekit.agents.tts.stream_adapter.StreamAdapter" href="stream_adapter.html#livekit.agents.tts.stream_adapter.StreamAdapter">StreamAdapter</a></li>
+<li><a title="livekit.plugins.aws.tts.TTS" href="../../plugins/aws/tts.html#livekit.plugins.aws.tts.TTS">TTS</a></li>
+<li>livekit.plugins.azure.tts.TTS</li>
+<li>livekit.plugins.cartesia.tts.TTS</li>
+<li>livekit.plugins.deepgram.tts.TTS</li>
+<li>livekit.plugins.elevenlabs.tts.TTS</li>
+<li>livekit.plugins.google.tts.TTS</li>
+<li><a title="livekit.plugins.groq.tts.TTS" href="../../plugins/groq/tts.html#livekit.plugins.groq.tts.TTS">TTS</a></li>
+<li>livekit.plugins.hume.tts.TTS</li>
+<li>livekit.plugins.neuphonic.tts.TTS</li>
+<li>livekit.plugins.openai.tts.TTS</li>
+<li>livekit.plugins.playai.tts.TTS</li>
+<li>livekit.plugins.resemble.tts.TTS</li>
+<li>livekit.plugins.rime.tts.TTS</li>
+<li>livekit.plugins.speechify.tts.TTS</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.TTS.capabilities"><code class="name">prop <span class="ident">capabilities</span> : <a title="livekit.agents.tts.tts.TTSCapabilities" href="#livekit.agents.tts.tts.TTSCapabilities">TTSCapabilities</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def capabilities(self) -&gt; TTSCapabilities:
+    return self._capabilities</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTS.label"><code class="name">prop <span class="ident">label</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def label(self) -&gt; str:
+    return self._label</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTS.num_channels"><code class="name">prop <span class="ident">num_channels</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def num_channels(self) -&gt; int:
+    return self._num_channels</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTS.sample_rate"><code class="name">prop <span class="ident">sample_rate</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def sample_rate(self) -&gt; int:
+    return self._sample_rate</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.TTS.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTS.prewarm"><code class="name flex">
+<span>def <span class="ident">prewarm</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def prewarm(self) -&gt; None:
+    &#34;&#34;&#34;Pre-warm connection to the TTS service&#34;&#34;&#34;
+    pass</code></pre>
+</details>
+<div class="desc"><p>Pre-warm connection to the TTS service</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTS.stream"><code class="name flex">
+<span>def <span class="ident">stream</span></span>(<span>self, *, conn_options: APIConnectOptions | None = None) ‑> <a title="livekit.agents.tts.tts.SynthesizeStream" href="#livekit.agents.tts.tts.SynthesizeStream">SynthesizeStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def stream(self, *, conn_options: APIConnectOptions | None = None) -&gt; SynthesizeStream:
+    raise NotImplementedError(
+        &#34;streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter&#34;  # noqa: E501
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTS.synthesize"><code class="name flex">
+<span>def <span class="ident">synthesize</span></span>(<span>self, text: str, *, conn_options: APIConnectOptions | None = None) ‑> <a title="livekit.agents.tts.tts.ChunkedStream" href="#livekit.agents.tts.tts.ChunkedStream">ChunkedStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def synthesize(
+    self,
+    text: str,
+    *,
+    conn_options: APIConnectOptions | None = None,
+) -&gt; ChunkedStream: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.tts.tts.TTSCapabilities"><code class="flex name class">
+<span>class <span class="ident">TTSCapabilities</span></span>
+<span>(</span><span>streaming: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class TTSCapabilities:
+    streaming: bool
+    &#34;&#34;&#34;Whether this TTS supports streaming (generally using websockets)&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>TTSCapabilities(streaming: 'bool')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.TTSCapabilities.streaming"><code class="name">var <span class="ident">streaming</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether this TTS supports streaming (generally using websockets)</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.tts.tts.TTSError"><code class="flex name class">
+<span>class <span class="ident">TTSError</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TTSError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal[&#34;tts_error&#34;] = &#34;tts_error&#34;
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.tts.tts.TTSError.error"><code class="name">var <span class="ident">error</span> : livekit.agents._exceptions.APIError</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTSError.label"><code class="name">var <span class="ident">label</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTSError.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTSError.recoverable"><code class="name">var <span class="ident">recoverable</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTSError.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.tts.tts.TTSError.type"><code class="name">var <span class="ident">type</span> : Literal['tts_error']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.tts" href="index.html">livekit.agents.tts</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.tts.tts.ChunkedStream" href="#livekit.agents.tts.tts.ChunkedStream">ChunkedStream</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.tts.tts.ChunkedStream.aclose" href="#livekit.agents.tts.tts.ChunkedStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.ChunkedStream.collect" href="#livekit.agents.tts.tts.ChunkedStream.collect">collect</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.ChunkedStream.done" href="#livekit.agents.tts.tts.ChunkedStream.done">done</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.ChunkedStream.exception" href="#livekit.agents.tts.tts.ChunkedStream.exception">exception</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.ChunkedStream.input_text" href="#livekit.agents.tts.tts.ChunkedStream.input_text">input_text</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.tts.tts.SynthesizeStream" href="#livekit.agents.tts.tts.SynthesizeStream">SynthesizeStream</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.tts.tts.SynthesizeStream.aclose" href="#livekit.agents.tts.tts.SynthesizeStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.SynthesizeStream.end_input" href="#livekit.agents.tts.tts.SynthesizeStream.end_input">end_input</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.SynthesizeStream.flush" href="#livekit.agents.tts.tts.SynthesizeStream.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.SynthesizeStream.push_text" href="#livekit.agents.tts.tts.SynthesizeStream.push_text">push_text</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.tts.tts.SynthesizedAudio" href="#livekit.agents.tts.tts.SynthesizedAudio">SynthesizedAudio</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.tts.tts.SynthesizedAudio.delta_text" href="#livekit.agents.tts.tts.SynthesizedAudio.delta_text">delta_text</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.SynthesizedAudio.frame" href="#livekit.agents.tts.tts.SynthesizedAudio.frame">frame</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.SynthesizedAudio.is_final" href="#livekit.agents.tts.tts.SynthesizedAudio.is_final">is_final</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.SynthesizedAudio.request_id" href="#livekit.agents.tts.tts.SynthesizedAudio.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.SynthesizedAudio.segment_id" href="#livekit.agents.tts.tts.SynthesizedAudio.segment_id">segment_id</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.tts.tts.SynthesizedAudioEmitter" href="#livekit.agents.tts.tts.SynthesizedAudioEmitter">SynthesizedAudioEmitter</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.tts.tts.SynthesizedAudioEmitter.flush" href="#livekit.agents.tts.tts.SynthesizedAudioEmitter.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.SynthesizedAudioEmitter.push" href="#livekit.agents.tts.tts.SynthesizedAudioEmitter.push">push</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.tts.tts.TTS" href="#livekit.agents.tts.tts.TTS">TTS</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.tts.tts.TTS.aclose" href="#livekit.agents.tts.tts.TTS.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.capabilities" href="#livekit.agents.tts.tts.TTS.capabilities">capabilities</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.label" href="#livekit.agents.tts.tts.TTS.label">label</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.num_channels" href="#livekit.agents.tts.tts.TTS.num_channels">num_channels</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.prewarm" href="#livekit.agents.tts.tts.TTS.prewarm">prewarm</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.sample_rate" href="#livekit.agents.tts.tts.TTS.sample_rate">sample_rate</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.stream" href="#livekit.agents.tts.tts.TTS.stream">stream</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.synthesize" href="#livekit.agents.tts.tts.TTS.synthesize">synthesize</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.tts.tts.TTSCapabilities" href="#livekit.agents.tts.tts.TTSCapabilities">TTSCapabilities</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.tts.tts.TTSCapabilities.streaming" href="#livekit.agents.tts.tts.TTSCapabilities.streaming">streaming</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.tts.tts.TTSError" href="#livekit.agents.tts.tts.TTSError">TTSError</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.tts.tts.TTSError.error" href="#livekit.agents.tts.tts.TTSError.error">error</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTSError.label" href="#livekit.agents.tts.tts.TTSError.label">label</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTSError.model_config" href="#livekit.agents.tts.tts.TTSError.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTSError.recoverable" href="#livekit.agents.tts.tts.TTSError.recoverable">recoverable</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTSError.timestamp" href="#livekit.agents.tts.tts.TTSError.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTSError.type" href="#livekit.agents.tts.tts.TTSError.type">type</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

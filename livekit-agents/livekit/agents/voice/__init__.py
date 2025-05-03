@@ -36,3 +36,9 @@ __all__ = [
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
 ]
+
+__pdoc__ = {}
+NOT_IN_ALL = [m for m in dir() if not m.startswith("_")]
+
+for n in NOT_IN_ALL:
+    __pdoc__[n] = False

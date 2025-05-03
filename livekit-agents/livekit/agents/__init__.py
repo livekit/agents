@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""LiveKit Agents for Python
+
+See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quickstarts, documentation, and examples.
+"""
+
 from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad  # noqa: F401
 from ._exceptions import (
     APIConnectionError,
@@ -62,9 +67,10 @@ from .voice import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     io,
+    avatar
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
-from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
+from .voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomInputOptions, RoomIO, RoomOutputOptions
 from .worker import SimulateJobInfo, Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
@@ -86,6 +92,7 @@ __all__ = [
     "RoomIO",
     "RoomInputOptions",
     "RoomOutputOptions",
+    "ATTRIBUTE_PUBLISH_ON_BEHALF",
     "ChatMessage",
     "ChatRole",
     "ChatContent",
@@ -97,7 +104,6 @@ __all__ = [
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
     "MetricsCollectedEvent",
-    "io",
     "FunctionCall",
     "FunctionCallOutput",
     "StopResponse",
@@ -122,6 +128,17 @@ __all__ = [
     "BuiltinAudioClip",
     "AudioConfig",
     "SimulateJobInfo",
+    "io",
+    "avatar",
+    "cli",
+    "ipc",
+    "llm",
+    "metrics",
+    "stt",
+    "tokenize",
+    "tts",
+    "utils",
+    "vad",
 ]
 
 # Cleanup docs of unexported modules

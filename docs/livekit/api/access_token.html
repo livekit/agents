@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.api.access_token API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.api.access_token</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-functions">Functions</h2>
+<dl>
+<dt id="livekit.api.access_token.camel_to_snake"><code class="name flex">
+<span>def <span class="ident">camel_to_snake</span></span>(<span>t: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def camel_to_snake(t: str):
+    return re.sub(r&#34;(?&lt;!^)(?=[A-Z])&#34;, &#34;_&#34;, t).lower()</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.snake_to_lower_camel"><code class="name flex">
+<span>def <span class="ident">snake_to_lower_camel</span></span>(<span>t: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def snake_to_lower_camel(t: str):
+    return &#34;&#34;.join(word.capitalize() if i else word for i, word in enumerate(t.split(&#34;_&#34;)))</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.api.access_token.AccessToken"><code class="flex name class">
+<span>class <span class="ident">AccessToken</span></span>
+<span>(</span><span>api_key: str | None = None, api_secret: str | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class AccessToken:
+    ParticipantKind = Literal[&#34;standard&#34;, &#34;egress&#34;, &#34;ingress&#34;, &#34;sip&#34;, &#34;agent&#34;]
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+    ) -&gt; None:
+        api_key = api_key or os.getenv(&#34;LIVEKIT_API_KEY&#34;)
+        api_secret = api_secret or os.getenv(&#34;LIVEKIT_API_SECRET&#34;)
+
+        if not api_key or not api_secret:
+            raise ValueError(&#34;api_key and api_secret must be set&#34;)
+
+        self.api_key = api_key  # iss
+        self.api_secret = api_secret
+        self.claims = Claims()
+
+        # default jwt claims
+        self.identity = &#34;&#34;  # sub
+        self.ttl = DEFAULT_TTL  # exp
+
+    def with_ttl(self, ttl: datetime.timedelta) -&gt; &#34;AccessToken&#34;:
+        self.ttl = ttl
+        return self
+
+    def with_grants(self, grants: VideoGrants) -&gt; &#34;AccessToken&#34;:
+        self.claims.video = grants
+        return self
+
+    def with_sip_grants(self, grants: SIPGrants) -&gt; &#34;AccessToken&#34;:
+        self.claims.sip = grants
+        return self
+
+    def with_identity(self, identity: str) -&gt; &#34;AccessToken&#34;:
+        self.identity = identity
+        return self
+
+    def with_kind(self, kind: ParticipantKind) -&gt; &#34;AccessToken&#34;:
+        self.claims.kind = kind
+        return self
+
+    def with_name(self, name: str) -&gt; &#34;AccessToken&#34;:
+        self.claims.name = name
+        return self
+
+    def with_metadata(self, metadata: str) -&gt; &#34;AccessToken&#34;:
+        self.claims.metadata = metadata
+        return self
+
+    def with_attributes(self, attributes: dict[str, str]) -&gt; &#34;AccessToken&#34;:
+        self.claims.attributes = attributes
+        return self
+
+    def with_sha256(self, sha256: str) -&gt; &#34;AccessToken&#34;:
+        self.claims.sha256 = sha256
+        return self
+
+    def with_room_preset(self, preset: str) -&gt; &#34;AccessToken&#34;:
+        self.claims.room_preset = preset
+        return self
+
+    def with_room_config(self, config: RoomConfiguration) -&gt; &#34;AccessToken&#34;:
+        self.claims.room_config = config
+        return self
+
+    def to_jwt(self) -&gt; str:
+        video = self.claims.video
+        if video and video.room_join and (not self.identity or not video.room):
+            raise ValueError(&#34;identity and room must be set when joining a room&#34;)
+
+        # we want to exclude None values from the token
+        jwt_claims = self.claims.asdict()
+        jwt_claims.update(
+            {
+                &#34;sub&#34;: self.identity,
+                &#34;iss&#34;: self.api_key,
+                &#34;nbf&#34;: calendar.timegm(datetime.datetime.now(datetime.timezone.utc).utctimetuple()),
+                &#34;exp&#34;: calendar.timegm(
+                    (datetime.datetime.now(datetime.timezone.utc) + self.ttl).utctimetuple()
+                ),
+            }
+        )
+        return jwt.encode(jwt_claims, self.api_secret, algorithm=&#34;HS256&#34;)</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.api.access_token.AccessToken.ParticipantKind"><code class="name">var <span class="ident">ParticipantKind</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.api.access_token.AccessToken.to_jwt"><code class="name flex">
+<span>def <span class="ident">to_jwt</span></span>(<span>self) ‑> str</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def to_jwt(self) -&gt; str:
+    video = self.claims.video
+    if video and video.room_join and (not self.identity or not video.room):
+        raise ValueError(&#34;identity and room must be set when joining a room&#34;)
+
+    # we want to exclude None values from the token
+    jwt_claims = self.claims.asdict()
+    jwt_claims.update(
+        {
+            &#34;sub&#34;: self.identity,
+            &#34;iss&#34;: self.api_key,
+            &#34;nbf&#34;: calendar.timegm(datetime.datetime.now(datetime.timezone.utc).utctimetuple()),
+            &#34;exp&#34;: calendar.timegm(
+                (datetime.datetime.now(datetime.timezone.utc) + self.ttl).utctimetuple()
+            ),
+        }
+    )
+    return jwt.encode(jwt_claims, self.api_secret, algorithm=&#34;HS256&#34;)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_attributes"><code class="name flex">
+<span>def <span class="ident">with_attributes</span></span>(<span>self, attributes: dict[str, str]) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_attributes(self, attributes: dict[str, str]) -&gt; &#34;AccessToken&#34;:
+    self.claims.attributes = attributes
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_grants"><code class="name flex">
+<span>def <span class="ident">with_grants</span></span>(<span>self,<br>grants: <a title="livekit.api.access_token.VideoGrants" href="#livekit.api.access_token.VideoGrants">VideoGrants</a>) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_grants(self, grants: VideoGrants) -&gt; &#34;AccessToken&#34;:
+    self.claims.video = grants
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_identity"><code class="name flex">
+<span>def <span class="ident">with_identity</span></span>(<span>self, identity: str) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_identity(self, identity: str) -&gt; &#34;AccessToken&#34;:
+    self.identity = identity
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_kind"><code class="name flex">
+<span>def <span class="ident">with_kind</span></span>(<span>self, kind: Literal['standard', 'egress', 'ingress', 'sip', 'agent']) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_kind(self, kind: ParticipantKind) -&gt; &#34;AccessToken&#34;:
+    self.claims.kind = kind
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_metadata"><code class="name flex">
+<span>def <span class="ident">with_metadata</span></span>(<span>self, metadata: str) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_metadata(self, metadata: str) -&gt; &#34;AccessToken&#34;:
+    self.claims.metadata = metadata
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_name"><code class="name flex">
+<span>def <span class="ident">with_name</span></span>(<span>self, name: str) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_name(self, name: str) -&gt; &#34;AccessToken&#34;:
+    self.claims.name = name
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_room_config"><code class="name flex">
+<span>def <span class="ident">with_room_config</span></span>(<span>self, config: room.RoomConfiguration) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_room_config(self, config: RoomConfiguration) -&gt; &#34;AccessToken&#34;:
+    self.claims.room_config = config
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_room_preset"><code class="name flex">
+<span>def <span class="ident">with_room_preset</span></span>(<span>self, preset: str) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_room_preset(self, preset: str) -&gt; &#34;AccessToken&#34;:
+    self.claims.room_preset = preset
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_sha256"><code class="name flex">
+<span>def <span class="ident">with_sha256</span></span>(<span>self, sha256: str) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_sha256(self, sha256: str) -&gt; &#34;AccessToken&#34;:
+    self.claims.sha256 = sha256
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_sip_grants"><code class="name flex">
+<span>def <span class="ident">with_sip_grants</span></span>(<span>self,<br>grants: <a title="livekit.api.access_token.SIPGrants" href="#livekit.api.access_token.SIPGrants">SIPGrants</a>) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_sip_grants(self, grants: SIPGrants) -&gt; &#34;AccessToken&#34;:
+    self.claims.sip = grants
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.access_token.AccessToken.with_ttl"><code class="name flex">
+<span>def <span class="ident">with_ttl</span></span>(<span>self, ttl: datetime.timedelta) ‑> <a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_ttl(self, ttl: datetime.timedelta) -&gt; &#34;AccessToken&#34;:
+    self.ttl = ttl
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.access_token.Claims"><code class="flex name class">
+<span>class <span class="ident">Claims</span></span>
+<span>(</span><span>identity: str = '',<br>name: str = '',<br>kind: str = '',<br>metadata: str = '',<br>video: <a title="livekit.api.access_token.VideoGrants" href="#livekit.api.access_token.VideoGrants">VideoGrants</a> | None = None,<br>sip: <a title="livekit.api.access_token.SIPGrants" href="#livekit.api.access_token.SIPGrants">SIPGrants</a> | None = None,<br>attributes: dict[str, str] | None = None,<br>sha256: str | None = None,<br>room_preset: str | None = None,<br>room_config: room.RoomConfiguration | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclasses.dataclass
+class Claims:
+    identity: str = &#34;&#34;
+    name: str = &#34;&#34;
+    kind: str = &#34;&#34;
+    metadata: str = &#34;&#34;
+    video: Optional[VideoGrants] = None
+    sip: Optional[SIPGrants] = None
+    attributes: Optional[dict[str, str]] = None
+    sha256: Optional[str] = None
+    room_preset: Optional[str] = None
+    room_config: Optional[RoomConfiguration] = None
+
+    def asdict(self) -&gt; dict:
+        # in order to produce minimal JWT size, exclude None or empty values
+        claims = dataclasses.asdict(
+            self,
+            dict_factory=lambda items: {
+                snake_to_lower_camel(k): v for k, v in items if v is not None and v != &#34;&#34;
+            },
+        )
+        if self.room_config:
+            claims[&#34;roomConfig&#34;] = MessageToDict(self.room_config)
+        return claims</code></pre>
+</details>
+<div class="desc"><p>Claims(identity: str = '', name: str = '', kind: str = '', metadata: str = '', video: Optional[livekit.api.access_token.VideoGrants] = None, sip: Optional[livekit.api.access_token.SIPGrants] = None, attributes: Optional[dict[str, str]] = None, sha256: Optional[str] = None, room_preset: Optional[str] = None, room_config: Optional[room.RoomConfiguration] = None)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.api.access_token.Claims.attributes"><code class="name">var <span class="ident">attributes</span> : dict[str, str] | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.identity"><code class="name">var <span class="ident">identity</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.kind"><code class="name">var <span class="ident">kind</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.metadata"><code class="name">var <span class="ident">metadata</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.name"><code class="name">var <span class="ident">name</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.room_config"><code class="name">var <span class="ident">room_config</span> : room.RoomConfiguration | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.room_preset"><code class="name">var <span class="ident">room_preset</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.sha256"><code class="name">var <span class="ident">sha256</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.sip"><code class="name">var <span class="ident">sip</span> : <a title="livekit.api.access_token.SIPGrants" href="#livekit.api.access_token.SIPGrants">SIPGrants</a> | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.Claims.video"><code class="name">var <span class="ident">video</span> : <a title="livekit.api.access_token.VideoGrants" href="#livekit.api.access_token.VideoGrants">VideoGrants</a> | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.api.access_token.Claims.asdict"><code class="name flex">
+<span>def <span class="ident">asdict</span></span>(<span>self) ‑> dict</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def asdict(self) -&gt; dict:
+    # in order to produce minimal JWT size, exclude None or empty values
+    claims = dataclasses.asdict(
+        self,
+        dict_factory=lambda items: {
+            snake_to_lower_camel(k): v for k, v in items if v is not None and v != &#34;&#34;
+        },
+    )
+    if self.room_config:
+        claims[&#34;roomConfig&#34;] = MessageToDict(self.room_config)
+    return claims</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.access_token.RoomConfiguration"><code class="flex name class">
+<span>class <span class="ident">RoomConfiguration</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>google._upb._message.Message</li>
+<li>google.protobuf.message.Message</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.api.access_token.RoomConfiguration.DESCRIPTOR"><code class="name">var <span class="ident">DESCRIPTOR</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.access_token.SIPGrants"><code class="flex name class">
+<span>class <span class="ident">SIPGrants</span></span>
+<span>(</span><span>admin: bool = False, call: bool = False)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclasses.dataclass
+class SIPGrants:
+    # manage sip resources
+    admin: bool = False
+    # make outbound calls
+    call: bool = False</code></pre>
+</details>
+<div class="desc"><p>SIPGrants(admin: bool = False, call: bool = False)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.api.access_token.SIPGrants.admin"><code class="name">var <span class="ident">admin</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.SIPGrants.call"><code class="name">var <span class="ident">call</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.access_token.TokenVerifier"><code class="flex name class">
+<span>class <span class="ident">TokenVerifier</span></span>
+<span>(</span><span>api_key: str | None = None,<br>api_secret: str | None = None,<br>*,<br>leeway: datetime.timedelta = datetime.timedelta(seconds=60))</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TokenVerifier:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        *,
+        leeway: datetime.timedelta = DEFAULT_LEEWAY,
+    ) -&gt; None:
+        api_key = api_key or os.getenv(&#34;LIVEKIT_API_KEY&#34;)
+        api_secret = api_secret or os.getenv(&#34;LIVEKIT_API_SECRET&#34;)
+
+        if not api_key or not api_secret:
+            raise ValueError(&#34;api_key and api_secret must be set&#34;)
+
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self._leeway = leeway
+
+    def verify(self, token: str) -&gt; Claims:
+        claims = jwt.decode(
+            token,
+            self.api_secret,
+            issuer=self.api_key,
+            algorithms=[&#34;HS256&#34;],
+            leeway=self._leeway.total_seconds(),
+        )
+
+        video_dict = claims.get(&#34;video&#34;, dict())
+        video_dict = {camel_to_snake(k): v for k, v in video_dict.items()}
+        video_dict = {k: v for k, v in video_dict.items() if k in VideoGrants.__dataclass_fields__}
+        video = VideoGrants(**video_dict)
+
+        sip_dict = claims.get(&#34;sip&#34;, dict())
+        sip_dict = {camel_to_snake(k): v for k, v in sip_dict.items()}
+        sip_dict = {k: v for k, v in sip_dict.items() if k in SIPGrants.__dataclass_fields__}
+        sip = SIPGrants(**sip_dict)
+
+        grant_claims = Claims(
+            identity=claims.get(&#34;sub&#34;, &#34;&#34;),
+            name=claims.get(&#34;name&#34;, &#34;&#34;),
+            video=video,
+            sip=sip,
+            attributes=claims.get(&#34;attributes&#34;, {}),
+            metadata=claims.get(&#34;metadata&#34;, &#34;&#34;),
+            sha256=claims.get(&#34;sha256&#34;, &#34;&#34;),
+        )
+
+        if claims.get(&#34;roomPreset&#34;):
+            grant_claims.room_preset = claims.get(&#34;roomPreset&#34;)
+        if claims.get(&#34;roomConfig&#34;):
+            grant_claims.room_config = ParseDict(
+                claims.get(&#34;roomConfig&#34;),
+                RoomConfiguration(),
+                ignore_unknown_fields=True,
+            )
+
+        return grant_claims</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.api.access_token.TokenVerifier.verify"><code class="name flex">
+<span>def <span class="ident">verify</span></span>(<span>self, token: str) ‑> <a title="livekit.api.access_token.Claims" href="#livekit.api.access_token.Claims">Claims</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def verify(self, token: str) -&gt; Claims:
+    claims = jwt.decode(
+        token,
+        self.api_secret,
+        issuer=self.api_key,
+        algorithms=[&#34;HS256&#34;],
+        leeway=self._leeway.total_seconds(),
+    )
+
+    video_dict = claims.get(&#34;video&#34;, dict())
+    video_dict = {camel_to_snake(k): v for k, v in video_dict.items()}
+    video_dict = {k: v for k, v in video_dict.items() if k in VideoGrants.__dataclass_fields__}
+    video = VideoGrants(**video_dict)
+
+    sip_dict = claims.get(&#34;sip&#34;, dict())
+    sip_dict = {camel_to_snake(k): v for k, v in sip_dict.items()}
+    sip_dict = {k: v for k, v in sip_dict.items() if k in SIPGrants.__dataclass_fields__}
+    sip = SIPGrants(**sip_dict)
+
+    grant_claims = Claims(
+        identity=claims.get(&#34;sub&#34;, &#34;&#34;),
+        name=claims.get(&#34;name&#34;, &#34;&#34;),
+        video=video,
+        sip=sip,
+        attributes=claims.get(&#34;attributes&#34;, {}),
+        metadata=claims.get(&#34;metadata&#34;, &#34;&#34;),
+        sha256=claims.get(&#34;sha256&#34;, &#34;&#34;),
+    )
+
+    if claims.get(&#34;roomPreset&#34;):
+        grant_claims.room_preset = claims.get(&#34;roomPreset&#34;)
+    if claims.get(&#34;roomConfig&#34;):
+        grant_claims.room_config = ParseDict(
+            claims.get(&#34;roomConfig&#34;),
+            RoomConfiguration(),
+            ignore_unknown_fields=True,
+        )
+
+    return grant_claims</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants"><code class="flex name class">
+<span>class <span class="ident">VideoGrants</span></span>
+<span>(</span><span>room_create: bool | None = None,<br>room_list: bool | None = None,<br>room_record: bool | None = None,<br>room_admin: bool | None = None,<br>room_join: bool | None = None,<br>room: str = '',<br>can_publish: bool = True,<br>can_subscribe: bool = True,<br>can_publish_data: bool = True,<br>can_publish_sources: List[str] | None = None,<br>can_update_own_metadata: bool | None = None,<br>ingress_admin: bool | None = None,<br>hidden: bool | None = None,<br>recorder: bool | None = None,<br>agent: bool | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclasses.dataclass
+class VideoGrants:
+    # actions on rooms
+    room_create: Optional[bool] = None
+    room_list: Optional[bool] = None
+    room_record: Optional[bool] = None
+
+    # actions on a particular room
+    room_admin: Optional[bool] = None
+    room_join: Optional[bool] = None
+    room: str = &#34;&#34;
+
+    # permissions within a room
+    can_publish: bool = True
+    can_subscribe: bool = True
+    can_publish_data: bool = True
+
+    # TrackSource types that a participant may publish.
+    # When set, it supersedes CanPublish. Only sources explicitly set here can be
+    # published
+    can_publish_sources: Optional[List[str]] = None
+
+    # by default, a participant is not allowed to update its own metadata
+    can_update_own_metadata: Optional[bool] = None
+
+    # actions on ingresses
+    ingress_admin: Optional[bool] = None  # applies to all ingress
+
+    # participant is not visible to other participants (useful when making bots)
+    hidden: Optional[bool] = None
+
+    # [deprecated] indicates to the room that current participant is a recorder
+    recorder: Optional[bool] = None
+
+    # indicates that the holder can register as an Agent framework worker
+    agent: Optional[bool] = None</code></pre>
+</details>
+<div class="desc"><p>VideoGrants(room_create: Optional[bool] = None, room_list: Optional[bool] = None, room_record: Optional[bool] = None, room_admin: Optional[bool] = None, room_join: Optional[bool] = None, room: str = '', can_publish: bool = True, can_subscribe: bool = True, can_publish_data: bool = True, can_publish_sources: Optional[List[str]] = None, can_update_own_metadata: Optional[bool] = None, ingress_admin: Optional[bool] = None, hidden: Optional[bool] = None, recorder: Optional[bool] = None, agent: Optional[bool] = None)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.api.access_token.VideoGrants.agent"><code class="name">var <span class="ident">agent</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.can_publish"><code class="name">var <span class="ident">can_publish</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.can_publish_data"><code class="name">var <span class="ident">can_publish_data</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.can_publish_sources"><code class="name">var <span class="ident">can_publish_sources</span> : List[str] | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.can_subscribe"><code class="name">var <span class="ident">can_subscribe</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.can_update_own_metadata"><code class="name">var <span class="ident">can_update_own_metadata</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.hidden"><code class="name">var <span class="ident">hidden</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.ingress_admin"><code class="name">var <span class="ident">ingress_admin</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.recorder"><code class="name">var <span class="ident">recorder</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.room"><code class="name">var <span class="ident">room</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.room_admin"><code class="name">var <span class="ident">room_admin</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.room_create"><code class="name">var <span class="ident">room_create</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.room_join"><code class="name">var <span class="ident">room_join</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.room_list"><code class="name">var <span class="ident">room_list</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.access_token.VideoGrants.room_record"><code class="name">var <span class="ident">room_record</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.api" href="index.html">livekit.api</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-functions">Functions</a></h3>
+<ul class="">
+<li><code><a title="livekit.api.access_token.camel_to_snake" href="#livekit.api.access_token.camel_to_snake">camel_to_snake</a></code></li>
+<li><code><a title="livekit.api.access_token.snake_to_lower_camel" href="#livekit.api.access_token.snake_to_lower_camel">snake_to_lower_camel</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.api.access_token.AccessToken" href="#livekit.api.access_token.AccessToken">AccessToken</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.api.access_token.AccessToken.ParticipantKind" href="#livekit.api.access_token.AccessToken.ParticipantKind">ParticipantKind</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.to_jwt" href="#livekit.api.access_token.AccessToken.to_jwt">to_jwt</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_attributes" href="#livekit.api.access_token.AccessToken.with_attributes">with_attributes</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_grants" href="#livekit.api.access_token.AccessToken.with_grants">with_grants</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_identity" href="#livekit.api.access_token.AccessToken.with_identity">with_identity</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_kind" href="#livekit.api.access_token.AccessToken.with_kind">with_kind</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_metadata" href="#livekit.api.access_token.AccessToken.with_metadata">with_metadata</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_name" href="#livekit.api.access_token.AccessToken.with_name">with_name</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_room_config" href="#livekit.api.access_token.AccessToken.with_room_config">with_room_config</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_room_preset" href="#livekit.api.access_token.AccessToken.with_room_preset">with_room_preset</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_sha256" href="#livekit.api.access_token.AccessToken.with_sha256">with_sha256</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_sip_grants" href="#livekit.api.access_token.AccessToken.with_sip_grants">with_sip_grants</a></code></li>
+<li><code><a title="livekit.api.access_token.AccessToken.with_ttl" href="#livekit.api.access_token.AccessToken.with_ttl">with_ttl</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.access_token.Claims" href="#livekit.api.access_token.Claims">Claims</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.api.access_token.Claims.asdict" href="#livekit.api.access_token.Claims.asdict">asdict</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.attributes" href="#livekit.api.access_token.Claims.attributes">attributes</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.identity" href="#livekit.api.access_token.Claims.identity">identity</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.kind" href="#livekit.api.access_token.Claims.kind">kind</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.metadata" href="#livekit.api.access_token.Claims.metadata">metadata</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.name" href="#livekit.api.access_token.Claims.name">name</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.room_config" href="#livekit.api.access_token.Claims.room_config">room_config</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.room_preset" href="#livekit.api.access_token.Claims.room_preset">room_preset</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.sha256" href="#livekit.api.access_token.Claims.sha256">sha256</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.sip" href="#livekit.api.access_token.Claims.sip">sip</a></code></li>
+<li><code><a title="livekit.api.access_token.Claims.video" href="#livekit.api.access_token.Claims.video">video</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.access_token.RoomConfiguration" href="#livekit.api.access_token.RoomConfiguration">RoomConfiguration</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.access_token.RoomConfiguration.DESCRIPTOR" href="#livekit.api.access_token.RoomConfiguration.DESCRIPTOR">DESCRIPTOR</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.access_token.SIPGrants" href="#livekit.api.access_token.SIPGrants">SIPGrants</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.access_token.SIPGrants.admin" href="#livekit.api.access_token.SIPGrants.admin">admin</a></code></li>
+<li><code><a title="livekit.api.access_token.SIPGrants.call" href="#livekit.api.access_token.SIPGrants.call">call</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.access_token.TokenVerifier" href="#livekit.api.access_token.TokenVerifier">TokenVerifier</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.access_token.TokenVerifier.verify" href="#livekit.api.access_token.TokenVerifier.verify">verify</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.access_token.VideoGrants" href="#livekit.api.access_token.VideoGrants">VideoGrants</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.access_token.VideoGrants.agent" href="#livekit.api.access_token.VideoGrants.agent">agent</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.can_publish" href="#livekit.api.access_token.VideoGrants.can_publish">can_publish</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.can_publish_data" href="#livekit.api.access_token.VideoGrants.can_publish_data">can_publish_data</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.can_publish_sources" href="#livekit.api.access_token.VideoGrants.can_publish_sources">can_publish_sources</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.can_subscribe" href="#livekit.api.access_token.VideoGrants.can_subscribe">can_subscribe</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.can_update_own_metadata" href="#livekit.api.access_token.VideoGrants.can_update_own_metadata">can_update_own_metadata</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.hidden" href="#livekit.api.access_token.VideoGrants.hidden">hidden</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.ingress_admin" href="#livekit.api.access_token.VideoGrants.ingress_admin">ingress_admin</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.recorder" href="#livekit.api.access_token.VideoGrants.recorder">recorder</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.room" href="#livekit.api.access_token.VideoGrants.room">room</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.room_admin" href="#livekit.api.access_token.VideoGrants.room_admin">room_admin</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.room_create" href="#livekit.api.access_token.VideoGrants.room_create">room_create</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.room_join" href="#livekit.api.access_token.VideoGrants.room_join">room_join</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.room_list" href="#livekit.api.access_token.VideoGrants.room_list">room_list</a></code></li>
+<li><code><a title="livekit.api.access_token.VideoGrants.room_record" href="#livekit.api.access_token.VideoGrants.room_record">room_record</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

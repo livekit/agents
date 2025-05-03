@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.vad API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.vad</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.vad.VAD"><code class="flex name class">
+<span>class <span class="ident">VAD</span></span>
+<span>(</span><span>*,<br>capabilities: <a title="livekit.agents.vad.VADCapabilities" href="#livekit.agents.vad.VADCapabilities">VADCapabilities</a>)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class VAD(ABC, rtc.EventEmitter[Literal[&#34;metrics_collected&#34;]]):
+    def __init__(self, *, capabilities: VADCapabilities) -&gt; None:
+        super().__init__()
+        self._capabilities = capabilities
+        self._label = f&#34;{type(self).__module__}.{type(self).__name__}&#34;
+
+    @property
+    def capabilities(self) -&gt; VADCapabilities:
+        return self._capabilities
+
+    @abstractmethod
+    def stream(self) -&gt; VADStream: ...</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li>livekit.plugins.silero.vad.VAD</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.vad.VAD.capabilities"><code class="name">prop <span class="ident">capabilities</span> : <a title="livekit.agents.vad.VADCapabilities" href="#livekit.agents.vad.VADCapabilities">VADCapabilities</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def capabilities(self) -&gt; VADCapabilities:
+    return self._capabilities</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.vad.VAD.stream"><code class="name flex">
+<span>def <span class="ident">stream</span></span>(<span>self) ‑> <a title="livekit.agents.vad.VADStream" href="#livekit.agents.vad.VADStream">VADStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def stream(self) -&gt; VADStream: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.vad.VADCapabilities"><code class="flex name class">
+<span>class <span class="ident">VADCapabilities</span></span>
+<span>(</span><span>update_interval: float)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class VADCapabilities:
+    update_interval: float</code></pre>
+</details>
+<div class="desc"><p>VADCapabilities(update_interval: 'float')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.vad.VADCapabilities.update_interval"><code class="name">var <span class="ident">update_interval</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.vad.VADEvent"><code class="flex name class">
+<span>class <span class="ident">VADEvent</span></span>
+<span>(</span><span>type: <a title="livekit.agents.vad.VADEventType" href="#livekit.agents.vad.VADEventType">VADEventType</a>,<br>samples_index: int,<br>timestamp: float,<br>speech_duration: float,<br>silence_duration: float,<br>frames: list[rtc.AudioFrame] = &lt;factory&gt;,<br>probability: float = 0.0,<br>inference_duration: float = 0.0,<br>speaking: bool = False,<br>raw_accumulated_silence: float = 0.0,<br>raw_accumulated_speech: float = 0.0)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class VADEvent:
+    &#34;&#34;&#34;
+    Represents an event detected by the Voice Activity Detector (VAD).
+    &#34;&#34;&#34;
+
+    type: VADEventType
+    &#34;&#34;&#34;Type of the VAD event (e.g., start of speech, end of speech, inference done).&#34;&#34;&#34;
+
+    samples_index: int
+    &#34;&#34;&#34;Index of the audio sample where the event occurred, relative to the inference sample rate.&#34;&#34;&#34;
+
+    timestamp: float
+    &#34;&#34;&#34;Timestamp (in seconds) when the event was fired.&#34;&#34;&#34;
+
+    speech_duration: float
+    &#34;&#34;&#34;Duration of the speech segment in seconds.&#34;&#34;&#34;
+
+    silence_duration: float
+    &#34;&#34;&#34;Duration of the silence segment in seconds.&#34;&#34;&#34;
+
+    frames: list[rtc.AudioFrame] = field(default_factory=list)
+    &#34;&#34;&#34;
+    List of audio frames associated with the speech.
+
+    - For `start_of_speech` events, this contains the audio chunks that triggered the detection.
+    - For `inference_done` events, this contains the audio chunks that were processed.
+    - For `end_of_speech` events, this contains the complete user speech.
+    &#34;&#34;&#34;
+
+    probability: float = 0.0
+    &#34;&#34;&#34;Probability that speech is present (only for `INFERENCE_DONE` events).&#34;&#34;&#34;
+
+    inference_duration: float = 0.0
+    &#34;&#34;&#34;Time taken to perform the inference, in seconds (only for `INFERENCE_DONE` events).&#34;&#34;&#34;
+
+    speaking: bool = False
+    &#34;&#34;&#34;Indicates whether speech was detected in the frames.&#34;&#34;&#34;
+
+    raw_accumulated_silence: float = 0.0
+    &#34;&#34;&#34;Threshold used to detect silence.&#34;&#34;&#34;
+
+    raw_accumulated_speech: float = 0.0
+    &#34;&#34;&#34;Threshold used to detect speech.&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>Represents an event detected by the Voice Activity Detector (VAD).</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.vad.VADEvent.frames"><code class="name">var <span class="ident">frames</span> : list[<a title="livekit.rtc.audio_frame.AudioFrame" href="../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a>]</code></dt>
+<dd>
+<div class="desc"><p>List of audio frames associated with the speech.</p>
+<ul>
+<li>For <code>start_of_speech</code> events, this contains the audio chunks that triggered the detection.</li>
+<li>For <code>inference_done</code> events, this contains the audio chunks that were processed.</li>
+<li>For <code>end_of_speech</code> events, this contains the complete user speech.</li>
+</ul></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.inference_duration"><code class="name">var <span class="ident">inference_duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Time taken to perform the inference, in seconds (only for <code>INFERENCE_DONE</code> events).</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.probability"><code class="name">var <span class="ident">probability</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Probability that speech is present (only for <code>INFERENCE_DONE</code> events).</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.raw_accumulated_silence"><code class="name">var <span class="ident">raw_accumulated_silence</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Threshold used to detect silence.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.raw_accumulated_speech"><code class="name">var <span class="ident">raw_accumulated_speech</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Threshold used to detect speech.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.samples_index"><code class="name">var <span class="ident">samples_index</span> : int</code></dt>
+<dd>
+<div class="desc"><p>Index of the audio sample where the event occurred, relative to the inference sample rate.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.silence_duration"><code class="name">var <span class="ident">silence_duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Duration of the silence segment in seconds.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.speaking"><code class="name">var <span class="ident">speaking</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Indicates whether speech was detected in the frames.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.speech_duration"><code class="name">var <span class="ident">speech_duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Duration of the speech segment in seconds.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Timestamp (in seconds) when the event was fired.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEvent.type"><code class="name">var <span class="ident">type</span> : <a title="livekit.agents.vad.VADEventType" href="#livekit.agents.vad.VADEventType">VADEventType</a></code></dt>
+<dd>
+<div class="desc"><p>Type of the VAD event (e.g., start of speech, end of speech, inference done).</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.vad.VADEventType"><code class="flex name class">
+<span>class <span class="ident">VADEventType</span></span>
+<span>(</span><span>*args, **kwds)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@unique
+class VADEventType(str, Enum):
+    START_OF_SPEECH = &#34;start_of_speech&#34;
+    INFERENCE_DONE = &#34;inference_done&#34;
+    END_OF_SPEECH = &#34;end_of_speech&#34;</code></pre>
+</details>
+<div class="desc"><p>str(object='') -&gt; str
+str(bytes_or_buffer[, encoding[, errors]]) -&gt; str</p>
+<p>Create a new string object from the given object. If encoding or
+errors is specified, then the object must expose a data buffer
+that will be decoded using the given encoding and error handler.
+Otherwise, returns the result of object.<strong>str</strong>() (if defined)
+or repr(object).
+encoding defaults to 'utf-8'.
+errors defaults to 'strict'.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.str</li>
+<li>enum.Enum</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.vad.VADEventType.END_OF_SPEECH"><code class="name">var <span class="ident">END_OF_SPEECH</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEventType.INFERENCE_DONE"><code class="name">var <span class="ident">INFERENCE_DONE</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADEventType.START_OF_SPEECH"><code class="name">var <span class="ident">START_OF_SPEECH</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.vad.VADStream"><code class="flex name class">
+<span>class <span class="ident">VADStream</span></span>
+<span>(</span><span>vad: <a title="livekit.agents.vad.VAD" href="#livekit.agents.vad.VAD">VAD</a>)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class VADStream(ABC):
+    class _FlushSentinel:
+        pass
+
+    def __init__(self, vad: VAD) -&gt; None:
+        self._vad = vad
+        self._last_activity_time = time.perf_counter()
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, VADStream._FlushSentinel]]()
+        self._event_ch = aio.Chan[VADEvent]()
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name=&#34;TTS._metrics_task&#34;
+        )
+
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    @abstractmethod
+    async def _main_task(self) -&gt; None: ...
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[VADEvent]) -&gt; None:
+        &#34;&#34;&#34;Task used to collect metrics&#34;&#34;&#34;
+
+        inference_duration_total = 0.0
+        inference_count = 0
+
+        async for ev in event_aiter:
+            if ev.type == VADEventType.INFERENCE_DONE:
+                inference_duration_total += ev.inference_duration
+                inference_count += 1
+
+                if inference_count &gt;= 1 / self._vad.capabilities.update_interval:
+                    vad_metrics = VADMetrics(
+                        timestamp=time.time(),
+                        idle_time=time.perf_counter() - self._last_activity_time,
+                        inference_duration_total=inference_duration_total,
+                        inference_count=inference_count,
+                        label=self._vad._label,
+                    )
+                    self._vad.emit(&#34;metrics_collected&#34;, vad_metrics)
+
+                    inference_duration_total = 0.0
+                    inference_count = 0
+            elif ev.type in [VADEventType.START_OF_SPEECH, VADEventType.END_OF_SPEECH]:
+                self._last_activity_time = time.perf_counter()
+
+    def push_frame(self, frame: rtc.AudioFrame) -&gt; None:
+        &#34;&#34;&#34;Push some text to be synthesized&#34;&#34;&#34;
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(frame)
+
+    def flush(self) -&gt; None:
+        &#34;&#34;&#34;Mark the end of the current segment&#34;&#34;&#34;
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -&gt; None:
+        &#34;&#34;&#34;Mark the end of input, no more text will be pushed&#34;&#34;&#34;
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -&gt; None:
+        &#34;&#34;&#34;Close the stream immediately&#34;&#34;&#34;
+        self._input_ch.close()
+        await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
+        await self._metrics_task
+
+    async def __anext__(self) -&gt; VADEvent:
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+
+            raise StopAsyncIteration from None
+
+        return val
+
+    def __aiter__(self) -&gt; AsyncIterator[VADEvent]:
+        return self
+
+    def _check_not_closed(self) -&gt; None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f&#34;{cls.__module__}.{cls.__name__} is closed&#34;)
+
+    def _check_input_not_ended(self) -&gt; None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f&#34;{cls.__module__}.{cls.__name__} input ended&#34;)</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li>livekit.plugins.silero.vad.VADStream</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.vad.VADStream.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    &#34;&#34;&#34;Close the stream immediately&#34;&#34;&#34;
+    self._input_ch.close()
+    await aio.cancel_and_wait(self._task)
+    self._event_ch.close()
+    await self._metrics_task</code></pre>
+</details>
+<div class="desc"><p>Close the stream immediately</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADStream.end_input"><code class="name flex">
+<span>def <span class="ident">end_input</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def end_input(self) -&gt; None:
+    &#34;&#34;&#34;Mark the end of input, no more text will be pushed&#34;&#34;&#34;
+    self.flush()
+    self._input_ch.close()</code></pre>
+</details>
+<div class="desc"><p>Mark the end of input, no more text will be pushed</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADStream.flush"><code class="name flex">
+<span>def <span class="ident">flush</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def flush(self) -&gt; None:
+    &#34;&#34;&#34;Mark the end of the current segment&#34;&#34;&#34;
+    self._check_input_not_ended()
+    self._check_not_closed()
+    self._input_ch.send_nowait(self._FlushSentinel())</code></pre>
+</details>
+<div class="desc"><p>Mark the end of the current segment</p></div>
+</dd>
+<dt id="livekit.agents.vad.VADStream.push_frame"><code class="name flex">
+<span>def <span class="ident">push_frame</span></span>(<span>self, frame: rtc.AudioFrame) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def push_frame(self, frame: rtc.AudioFrame) -&gt; None:
+    &#34;&#34;&#34;Push some text to be synthesized&#34;&#34;&#34;
+    self._check_input_not_ended()
+    self._check_not_closed()
+    self._input_ch.send_nowait(frame)</code></pre>
+</details>
+<div class="desc"><p>Push some text to be synthesized</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents" href="index.html">livekit.agents</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.vad.VAD" href="#livekit.agents.vad.VAD">VAD</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.vad.VAD.capabilities" href="#livekit.agents.vad.VAD.capabilities">capabilities</a></code></li>
+<li><code><a title="livekit.agents.vad.VAD.stream" href="#livekit.agents.vad.VAD.stream">stream</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.vad.VADCapabilities" href="#livekit.agents.vad.VADCapabilities">VADCapabilities</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.vad.VADCapabilities.update_interval" href="#livekit.agents.vad.VADCapabilities.update_interval">update_interval</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.vad.VADEvent" href="#livekit.agents.vad.VADEvent">VADEvent</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.vad.VADEvent.frames" href="#livekit.agents.vad.VADEvent.frames">frames</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.inference_duration" href="#livekit.agents.vad.VADEvent.inference_duration">inference_duration</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.probability" href="#livekit.agents.vad.VADEvent.probability">probability</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.raw_accumulated_silence" href="#livekit.agents.vad.VADEvent.raw_accumulated_silence">raw_accumulated_silence</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.raw_accumulated_speech" href="#livekit.agents.vad.VADEvent.raw_accumulated_speech">raw_accumulated_speech</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.samples_index" href="#livekit.agents.vad.VADEvent.samples_index">samples_index</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.silence_duration" href="#livekit.agents.vad.VADEvent.silence_duration">silence_duration</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.speaking" href="#livekit.agents.vad.VADEvent.speaking">speaking</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.speech_duration" href="#livekit.agents.vad.VADEvent.speech_duration">speech_duration</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.timestamp" href="#livekit.agents.vad.VADEvent.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEvent.type" href="#livekit.agents.vad.VADEvent.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.vad.VADEventType" href="#livekit.agents.vad.VADEventType">VADEventType</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.vad.VADEventType.END_OF_SPEECH" href="#livekit.agents.vad.VADEventType.END_OF_SPEECH">END_OF_SPEECH</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEventType.INFERENCE_DONE" href="#livekit.agents.vad.VADEventType.INFERENCE_DONE">INFERENCE_DONE</a></code></li>
+<li><code><a title="livekit.agents.vad.VADEventType.START_OF_SPEECH" href="#livekit.agents.vad.VADEventType.START_OF_SPEECH">START_OF_SPEECH</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.vad.VADStream" href="#livekit.agents.vad.VADStream">VADStream</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.vad.VADStream.aclose" href="#livekit.agents.vad.VADStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.vad.VADStream.end_input" href="#livekit.agents.vad.VADStream.end_input">end_input</a></code></li>
+<li><code><a title="livekit.agents.vad.VADStream.flush" href="#livekit.agents.vad.VADStream.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.vad.VADStream.push_frame" href="#livekit.agents.vad.VADStream.push_frame">push_frame</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,958 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.rtc.e2ee API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.rtc.e2ee</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.rtc.e2ee.E2EEManager"><code class="flex name class">
+<span>class <span class="ident">E2EEManager</span></span>
+<span>(</span><span>room_handle: int,<br>options: <a title="livekit.rtc.e2ee.E2EEOptions" href="#livekit.rtc.e2ee.E2EEOptions">E2EEOptions</a> | None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class E2EEManager:
+    def __init__(self, room_handle: int, options: Optional[E2EEOptions]):
+        self.options = options
+        self._room_handle = room_handle
+        self._enabled = options is not None
+
+        if options is not None:
+            self._key_provider = KeyProvider(self._room_handle, options.key_provider_options)
+
+    @property
+    def key_provider(self) -&gt; Optional[KeyProvider]:
+        return self._key_provider
+
+    @property
+    def enabled(self) -&gt; bool:
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -&gt; None:
+        &#34;&#34;&#34;Enables or disables end-to-end encryption.
+
+        Parameters:
+            enabled (bool): True to enable, False to disable.
+
+        Example:
+            ```python
+            e2ee_manager.set_enabled(True)
+            ```
+        &#34;&#34;&#34;
+        self._enabled = enabled
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.manager_set_enabled.enabled = enabled
+        FfiClient.instance.request(req)
+
+    def frame_cryptors(self) -&gt; List[FrameCryptor]:
+        &#34;&#34;&#34;Retrieves the list of frame cryptors for participants.
+
+        Returns:
+            List[FrameCryptor]: A list of FrameCryptor instances.
+
+        Example:
+            ```python
+            cryptors = e2ee_manager.frame_cryptors()
+            for cryptor in cryptors:
+                print(cryptor.participant_identity)
+            ```
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+
+        resp = FfiClient.instance.request(req)
+        frame_cryptors = []
+        for frame_cryptor in resp.e2ee.manager_get_frame_cryptors.frame_cryptors:
+            frame_cryptors.append(
+                FrameCryptor(
+                    self._room_handle,
+                    frame_cryptor.participant_identity,
+                    frame_cryptor.key_index,
+                    frame_cryptor.enabled,
+                )
+            )
+        return frame_cryptors</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.e2ee.E2EEManager.enabled"><code class="name">prop <span class="ident">enabled</span> : bool</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def enabled(self) -&gt; bool:
+    return self._enabled</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.e2ee.E2EEManager.key_provider"><code class="name">prop <span class="ident">key_provider</span> : <a title="livekit.rtc.e2ee.KeyProvider" href="#livekit.rtc.e2ee.KeyProvider">KeyProvider</a> | None</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def key_provider(self) -&gt; Optional[KeyProvider]:
+    return self._key_provider</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.e2ee.E2EEManager.frame_cryptors"><code class="name flex">
+<span>def <span class="ident">frame_cryptors</span></span>(<span>self) ‑> List[<a title="livekit.rtc.e2ee.FrameCryptor" href="#livekit.rtc.e2ee.FrameCryptor">FrameCryptor</a>]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def frame_cryptors(self) -&gt; List[FrameCryptor]:
+    &#34;&#34;&#34;Retrieves the list of frame cryptors for participants.
+
+    Returns:
+        List[FrameCryptor]: A list of FrameCryptor instances.
+
+    Example:
+        ```python
+        cryptors = e2ee_manager.frame_cryptors()
+        for cryptor in cryptors:
+            print(cryptor.participant_identity)
+        ```
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+
+    resp = FfiClient.instance.request(req)
+    frame_cryptors = []
+    for frame_cryptor in resp.e2ee.manager_get_frame_cryptors.frame_cryptors:
+        frame_cryptors.append(
+            FrameCryptor(
+                self._room_handle,
+                frame_cryptor.participant_identity,
+                frame_cryptor.key_index,
+                frame_cryptor.enabled,
+            )
+        )
+    return frame_cryptors</code></pre>
+</details>
+<div class="desc"><p>Retrieves the list of frame cryptors for participants.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>List[<a title="livekit.rtc.e2ee.FrameCryptor" href="#livekit.rtc.e2ee.FrameCryptor">FrameCryptor</a>]</code></dt>
+<dd>A list of FrameCryptor instances.</dd>
+</dl>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">cryptors = e2ee_manager.frame_cryptors()
+for cryptor in cryptors:
+    print(cryptor.participant_identity)
+</code></pre></div>
+</dd>
+<dt id="livekit.rtc.e2ee.E2EEManager.set_enabled"><code class="name flex">
+<span>def <span class="ident">set_enabled</span></span>(<span>self, enabled: bool) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_enabled(self, enabled: bool) -&gt; None:
+    &#34;&#34;&#34;Enables or disables end-to-end encryption.
+
+    Parameters:
+        enabled (bool): True to enable, False to disable.
+
+    Example:
+        ```python
+        e2ee_manager.set_enabled(True)
+        ```
+    &#34;&#34;&#34;
+    self._enabled = enabled
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.manager_set_enabled.enabled = enabled
+    FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"><p>Enables or disables end-to-end encryption.</p>
+<h2 id="parameters">Parameters</h2>
+<p>enabled (bool): True to enable, False to disable.</p>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">e2ee_manager.set_enabled(True)
+</code></pre></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.e2ee.E2EEOptions"><code class="flex name class">
+<span>class <span class="ident">E2EEOptions</span></span>
+<span>(</span><span>key_provider_options: <a title="livekit.rtc.e2ee.KeyProviderOptions" href="#livekit.rtc.e2ee.KeyProviderOptions">KeyProviderOptions</a> = &lt;factory&gt;,<br>encryption_type: int = 1)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class E2EEOptions:
+    key_provider_options: KeyProviderOptions = field(default_factory=KeyProviderOptions)
+    encryption_type: proto_e2ee.EncryptionType.ValueType = proto_e2ee.EncryptionType.GCM</code></pre>
+</details>
+<div class="desc"><p>E2EEOptions(key_provider_options: livekit.rtc.e2ee.KeyProviderOptions = <factory>, encryption_type: int = 1)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.e2ee.E2EEOptions.encryption_type"><code class="name">var <span class="ident">encryption_type</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.e2ee.E2EEOptions.key_provider_options"><code class="name">var <span class="ident">key_provider_options</span> : <a title="livekit.rtc.e2ee.KeyProviderOptions" href="#livekit.rtc.e2ee.KeyProviderOptions">KeyProviderOptions</a></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.e2ee.FrameCryptor"><code class="flex name class">
+<span>class <span class="ident">FrameCryptor</span></span>
+<span>(</span><span>room_handle: int, participant_identity: str, key_index: int, enabled: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class FrameCryptor:
+    def __init__(self, room_handle: int, participant_identity: str, key_index: int, enabled: bool):
+        self._room_handle = room_handle
+        self._enabled = enabled
+        self._participant_identity = participant_identity
+        self._key_index = key_index
+
+    @property
+    def participant_identity(self) -&gt; str:
+        return self._participant_identity
+
+    @property
+    def key_index(self) -&gt; int:
+        return self._key_index
+
+    @property
+    def enabled(self) -&gt; bool:
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -&gt; None:
+        &#34;&#34;&#34;Enables or disables frame encryption.
+
+        Parameters:
+            enabled (bool): True to enable, False to disable.
+
+        Example:
+            ```python
+            frame_cryptor.set_enabled(True)
+            ```
+        &#34;&#34;&#34;
+        self._enabled = enabled
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.cryptor_set_enabled.participant_identity = self._participant_identity
+        req.e2ee.cryptor_set_enabled.enabled = enabled
+        FfiClient.instance.request(req)
+
+    def set_key_index(self, key_index: int) -&gt; None:
+        &#34;&#34;&#34;Sets the key index for encryption/decryption.
+
+        Parameters:
+            key_index (int): The new key index.
+
+        Example:
+            ```python
+            frame_cryptor.set_key_index(3)
+            ```
+        &#34;&#34;&#34;
+        self._key_index = key_index
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.cryptor_set_key_index.participant_identity = self._participant_identity
+        req.e2ee.cryptor_set_key_index.key_index = key_index
+        FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.e2ee.FrameCryptor.enabled"><code class="name">prop <span class="ident">enabled</span> : bool</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def enabled(self) -&gt; bool:
+    return self._enabled</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.e2ee.FrameCryptor.key_index"><code class="name">prop <span class="ident">key_index</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def key_index(self) -&gt; int:
+    return self._key_index</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.e2ee.FrameCryptor.participant_identity"><code class="name">prop <span class="ident">participant_identity</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def participant_identity(self) -&gt; str:
+    return self._participant_identity</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.e2ee.FrameCryptor.set_enabled"><code class="name flex">
+<span>def <span class="ident">set_enabled</span></span>(<span>self, enabled: bool) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_enabled(self, enabled: bool) -&gt; None:
+    &#34;&#34;&#34;Enables or disables frame encryption.
+
+    Parameters:
+        enabled (bool): True to enable, False to disable.
+
+    Example:
+        ```python
+        frame_cryptor.set_enabled(True)
+        ```
+    &#34;&#34;&#34;
+    self._enabled = enabled
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.cryptor_set_enabled.participant_identity = self._participant_identity
+    req.e2ee.cryptor_set_enabled.enabled = enabled
+    FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"><p>Enables or disables frame encryption.</p>
+<h2 id="parameters">Parameters</h2>
+<p>enabled (bool): True to enable, False to disable.</p>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">frame_cryptor.set_enabled(True)
+</code></pre></div>
+</dd>
+<dt id="livekit.rtc.e2ee.FrameCryptor.set_key_index"><code class="name flex">
+<span>def <span class="ident">set_key_index</span></span>(<span>self, key_index: int) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_key_index(self, key_index: int) -&gt; None:
+    &#34;&#34;&#34;Sets the key index for encryption/decryption.
+
+    Parameters:
+        key_index (int): The new key index.
+
+    Example:
+        ```python
+        frame_cryptor.set_key_index(3)
+        ```
+    &#34;&#34;&#34;
+    self._key_index = key_index
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.cryptor_set_key_index.participant_identity = self._participant_identity
+    req.e2ee.cryptor_set_key_index.key_index = key_index
+    FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"><p>Sets the key index for encryption/decryption.</p>
+<h2 id="parameters">Parameters</h2>
+<p>key_index (int): The new key index.</p>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">frame_cryptor.set_key_index(3)
+</code></pre></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProvider"><code class="flex name class">
+<span>class <span class="ident">KeyProvider</span></span>
+<span>(</span><span>room_handle: int,<br>options: <a title="livekit.rtc.e2ee.KeyProviderOptions" href="#livekit.rtc.e2ee.KeyProviderOptions">KeyProviderOptions</a>)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class KeyProvider:
+    def __init__(self, room_handle: int, options: KeyProviderOptions):
+        self._options = options
+        self._room_handle = room_handle
+
+    @property
+    def options(self) -&gt; KeyProviderOptions:
+        return self._options
+
+    def set_shared_key(self, key: bytes, key_index: int) -&gt; None:
+        &#34;&#34;&#34;Sets the shared encryption key.
+
+        Parameters:
+            key (bytes): The new shared key.
+            key_index (int): The index of the key.
+
+        Example:
+            ```python
+            key_provider.set_shared_key(b&#34;my_shared_key&#34;, key_index=1)
+            ```
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.set_shared_key.key_index = key_index
+        req.e2ee.set_shared_key.shared_key = key
+        FfiClient.instance.request(req)
+
+    def export_shared_key(self, key_index: int) -&gt; bytes:
+        &#34;&#34;&#34;Exports the shared encryption key.
+
+        Parameters:
+            key_index (int): The index of the key to export.
+
+        Returns:
+            bytes: The exported shared key.
+
+        Example:
+            ```python
+            key = key_provider.export_shared_key(key_index=1)
+            ```
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.get_shared_key.key_index = key_index
+        resp = FfiClient.instance.request(req)
+        key = resp.e2ee.get_shared_key.key
+        return key
+
+    def ratchet_shared_key(self, key_index: int) -&gt; bytes:
+        &#34;&#34;&#34;Ratchets the shared encryption key to a new key.
+
+        Parameters:
+            key_index (int): The index of the key to ratchet.
+
+        Returns:
+            bytes: The new ratcheted shared key.
+
+        Example:
+            ```python
+            new_key = key_provider.ratchet_shared_key(key_index=1)
+            ```
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.ratchet_shared_key.key_index = key_index
+
+        resp = FfiClient.instance.request(req)
+
+        new_key = resp.e2ee.ratchet_shared_key.new_key
+        return new_key
+
+    def set_key(self, participant_identity: str, key: bytes, key_index: int) -&gt; None:
+        &#34;&#34;&#34;Sets the encryption key for a specific participant.
+
+        Parameters:
+            participant_identity (str): The identity of the participant.
+            key (bytes): The encryption key to set.
+            key_index (int): The index of the key.
+
+        Example:
+            ```python
+            key_provider.set_key(&#34;participant123&#34;, b&#34;participant_key&#34;, key_index=2)
+            ```
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.set_key.participant_identity = participant_identity
+        req.e2ee.set_key.key_index = key_index
+        req.e2ee.set_key.key = key
+
+        self.key_index = key_index
+        FfiClient.instance.request(req)
+
+    def export_key(self, participant_identity: str, key_index: int) -&gt; bytes:
+        &#34;&#34;&#34;Exports the encryption key for a specific participant.
+
+        Parameters:
+            participant_identity (str): The identity of the participant.
+            key_index (int): The index of the key to export.
+
+        Returns:
+            bytes: The exported key.
+
+        Example:
+            ```python
+            key = key_provider.export_key(&#34;participant123&#34;, key_index=2)
+            ```
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.get_key.participant_identity = participant_identity
+        req.e2ee.get_key.key_index = key_index
+        resp = FfiClient.instance.request(req)
+        key = resp.e2ee.get_key.key
+        return key
+
+    def ratchet_key(self, participant_identity: str, key_index: int) -&gt; bytes:
+        &#34;&#34;&#34;Ratchets the encryption key for a specific participant to a new key.
+
+        Parameters:
+            participant_identity (str): The identity of the participant.
+            key_index (int): The index of the key to ratchet.
+
+        Returns:
+            bytes: The new ratcheted key.
+
+        Example:
+            ```python
+            new_key = key_provider.ratchet_key(&#34;participant123&#34;, key_index=2)
+            ```
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.e2ee.room_handle = self._room_handle
+        req.e2ee.ratchet_key.participant_identity = participant_identity
+        req.e2ee.ratchet_key.key_index = key_index
+
+        resp = FfiClient.instance.request(req)
+        new_key = resp.e2ee.ratchet_key.new_key
+        return new_key</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.e2ee.KeyProvider.options"><code class="name">prop <span class="ident">options</span> : <a title="livekit.rtc.e2ee.KeyProviderOptions" href="#livekit.rtc.e2ee.KeyProviderOptions">KeyProviderOptions</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def options(self) -&gt; KeyProviderOptions:
+    return self._options</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.e2ee.KeyProvider.export_key"><code class="name flex">
+<span>def <span class="ident">export_key</span></span>(<span>self, participant_identity: str, key_index: int) ‑> bytes</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def export_key(self, participant_identity: str, key_index: int) -&gt; bytes:
+    &#34;&#34;&#34;Exports the encryption key for a specific participant.
+
+    Parameters:
+        participant_identity (str): The identity of the participant.
+        key_index (int): The index of the key to export.
+
+    Returns:
+        bytes: The exported key.
+
+    Example:
+        ```python
+        key = key_provider.export_key(&#34;participant123&#34;, key_index=2)
+        ```
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.get_key.participant_identity = participant_identity
+    req.e2ee.get_key.key_index = key_index
+    resp = FfiClient.instance.request(req)
+    key = resp.e2ee.get_key.key
+    return key</code></pre>
+</details>
+<div class="desc"><p>Exports the encryption key for a specific participant.</p>
+<h2 id="parameters">Parameters</h2>
+<p>participant_identity (str): The identity of the participant.
+key_index (int): The index of the key to export.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bytes</code></dt>
+<dd>The exported key.</dd>
+</dl>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">key = key_provider.export_key(&quot;participant123&quot;, key_index=2)
+</code></pre></div>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProvider.export_shared_key"><code class="name flex">
+<span>def <span class="ident">export_shared_key</span></span>(<span>self, key_index: int) ‑> bytes</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def export_shared_key(self, key_index: int) -&gt; bytes:
+    &#34;&#34;&#34;Exports the shared encryption key.
+
+    Parameters:
+        key_index (int): The index of the key to export.
+
+    Returns:
+        bytes: The exported shared key.
+
+    Example:
+        ```python
+        key = key_provider.export_shared_key(key_index=1)
+        ```
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.get_shared_key.key_index = key_index
+    resp = FfiClient.instance.request(req)
+    key = resp.e2ee.get_shared_key.key
+    return key</code></pre>
+</details>
+<div class="desc"><p>Exports the shared encryption key.</p>
+<h2 id="parameters">Parameters</h2>
+<p>key_index (int): The index of the key to export.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bytes</code></dt>
+<dd>The exported shared key.</dd>
+</dl>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">key = key_provider.export_shared_key(key_index=1)
+</code></pre></div>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProvider.ratchet_key"><code class="name flex">
+<span>def <span class="ident">ratchet_key</span></span>(<span>self, participant_identity: str, key_index: int) ‑> bytes</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def ratchet_key(self, participant_identity: str, key_index: int) -&gt; bytes:
+    &#34;&#34;&#34;Ratchets the encryption key for a specific participant to a new key.
+
+    Parameters:
+        participant_identity (str): The identity of the participant.
+        key_index (int): The index of the key to ratchet.
+
+    Returns:
+        bytes: The new ratcheted key.
+
+    Example:
+        ```python
+        new_key = key_provider.ratchet_key(&#34;participant123&#34;, key_index=2)
+        ```
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.ratchet_key.participant_identity = participant_identity
+    req.e2ee.ratchet_key.key_index = key_index
+
+    resp = FfiClient.instance.request(req)
+    new_key = resp.e2ee.ratchet_key.new_key
+    return new_key</code></pre>
+</details>
+<div class="desc"><p>Ratchets the encryption key for a specific participant to a new key.</p>
+<h2 id="parameters">Parameters</h2>
+<p>participant_identity (str): The identity of the participant.
+key_index (int): The index of the key to ratchet.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bytes</code></dt>
+<dd>The new ratcheted key.</dd>
+</dl>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">new_key = key_provider.ratchet_key(&quot;participant123&quot;, key_index=2)
+</code></pre></div>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProvider.ratchet_shared_key"><code class="name flex">
+<span>def <span class="ident">ratchet_shared_key</span></span>(<span>self, key_index: int) ‑> bytes</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def ratchet_shared_key(self, key_index: int) -&gt; bytes:
+    &#34;&#34;&#34;Ratchets the shared encryption key to a new key.
+
+    Parameters:
+        key_index (int): The index of the key to ratchet.
+
+    Returns:
+        bytes: The new ratcheted shared key.
+
+    Example:
+        ```python
+        new_key = key_provider.ratchet_shared_key(key_index=1)
+        ```
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.ratchet_shared_key.key_index = key_index
+
+    resp = FfiClient.instance.request(req)
+
+    new_key = resp.e2ee.ratchet_shared_key.new_key
+    return new_key</code></pre>
+</details>
+<div class="desc"><p>Ratchets the shared encryption key to a new key.</p>
+<h2 id="parameters">Parameters</h2>
+<p>key_index (int): The index of the key to ratchet.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bytes</code></dt>
+<dd>The new ratcheted shared key.</dd>
+</dl>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">new_key = key_provider.ratchet_shared_key(key_index=1)
+</code></pre></div>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProvider.set_key"><code class="name flex">
+<span>def <span class="ident">set_key</span></span>(<span>self, participant_identity: str, key: bytes, key_index: int) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_key(self, participant_identity: str, key: bytes, key_index: int) -&gt; None:
+    &#34;&#34;&#34;Sets the encryption key for a specific participant.
+
+    Parameters:
+        participant_identity (str): The identity of the participant.
+        key (bytes): The encryption key to set.
+        key_index (int): The index of the key.
+
+    Example:
+        ```python
+        key_provider.set_key(&#34;participant123&#34;, b&#34;participant_key&#34;, key_index=2)
+        ```
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.set_key.participant_identity = participant_identity
+    req.e2ee.set_key.key_index = key_index
+    req.e2ee.set_key.key = key
+
+    self.key_index = key_index
+    FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"><p>Sets the encryption key for a specific participant.</p>
+<h2 id="parameters">Parameters</h2>
+<p>participant_identity (str): The identity of the participant.
+key (bytes): The encryption key to set.
+key_index (int): The index of the key.</p>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">key_provider.set_key(&quot;participant123&quot;, b&quot;participant_key&quot;, key_index=2)
+</code></pre></div>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProvider.set_shared_key"><code class="name flex">
+<span>def <span class="ident">set_shared_key</span></span>(<span>self, key: bytes, key_index: int) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_shared_key(self, key: bytes, key_index: int) -&gt; None:
+    &#34;&#34;&#34;Sets the shared encryption key.
+
+    Parameters:
+        key (bytes): The new shared key.
+        key_index (int): The index of the key.
+
+    Example:
+        ```python
+        key_provider.set_shared_key(b&#34;my_shared_key&#34;, key_index=1)
+        ```
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.e2ee.room_handle = self._room_handle
+    req.e2ee.set_shared_key.key_index = key_index
+    req.e2ee.set_shared_key.shared_key = key
+    FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"><p>Sets the shared encryption key.</p>
+<h2 id="parameters">Parameters</h2>
+<p>key (bytes): The new shared key.
+key_index (int): The index of the key.</p>
+<h2 id="example">Example</h2>
+<pre><code class="language-python">key_provider.set_shared_key(b&quot;my_shared_key&quot;, key_index=1)
+</code></pre></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProviderOptions"><code class="flex name class">
+<span>class <span class="ident">KeyProviderOptions</span></span>
+<span>(</span><span>shared_key: bytes | None = None,<br>ratchet_salt: bytes = b'LKFrameEncryptionKey',<br>ratchet_window_size: int = 16,<br>failure_tolerance: int = -1)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class KeyProviderOptions:
+    shared_key: Optional[bytes] = None
+    ratchet_salt: bytes = DEFAULT_RATCHET_SALT
+    ratchet_window_size: int = DEFAULT_RATCHET_WINDOW_SIZE
+    failure_tolerance: int = DEFAULT_FAILURE_TOLERANCE</code></pre>
+</details>
+<div class="desc"><p>KeyProviderOptions(shared_key: Optional[bytes] = None, ratchet_salt: bytes = b'LKFrameEncryptionKey', ratchet_window_size: int = 16, failure_tolerance: int = -1)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.e2ee.KeyProviderOptions.failure_tolerance"><code class="name">var <span class="ident">failure_tolerance</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProviderOptions.ratchet_salt"><code class="name">var <span class="ident">ratchet_salt</span> : bytes</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProviderOptions.ratchet_window_size"><code class="name">var <span class="ident">ratchet_window_size</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.e2ee.KeyProviderOptions.shared_key"><code class="name">var <span class="ident">shared_key</span> : bytes | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.rtc" href="index.html">livekit.rtc</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.rtc.e2ee.E2EEManager" href="#livekit.rtc.e2ee.E2EEManager">E2EEManager</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.e2ee.E2EEManager.enabled" href="#livekit.rtc.e2ee.E2EEManager.enabled">enabled</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.E2EEManager.frame_cryptors" href="#livekit.rtc.e2ee.E2EEManager.frame_cryptors">frame_cryptors</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.E2EEManager.key_provider" href="#livekit.rtc.e2ee.E2EEManager.key_provider">key_provider</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.E2EEManager.set_enabled" href="#livekit.rtc.e2ee.E2EEManager.set_enabled">set_enabled</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.e2ee.E2EEOptions" href="#livekit.rtc.e2ee.E2EEOptions">E2EEOptions</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.e2ee.E2EEOptions.encryption_type" href="#livekit.rtc.e2ee.E2EEOptions.encryption_type">encryption_type</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.E2EEOptions.key_provider_options" href="#livekit.rtc.e2ee.E2EEOptions.key_provider_options">key_provider_options</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.e2ee.FrameCryptor" href="#livekit.rtc.e2ee.FrameCryptor">FrameCryptor</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.e2ee.FrameCryptor.enabled" href="#livekit.rtc.e2ee.FrameCryptor.enabled">enabled</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.FrameCryptor.key_index" href="#livekit.rtc.e2ee.FrameCryptor.key_index">key_index</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.FrameCryptor.participant_identity" href="#livekit.rtc.e2ee.FrameCryptor.participant_identity">participant_identity</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.FrameCryptor.set_enabled" href="#livekit.rtc.e2ee.FrameCryptor.set_enabled">set_enabled</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.FrameCryptor.set_key_index" href="#livekit.rtc.e2ee.FrameCryptor.set_key_index">set_key_index</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.e2ee.KeyProvider" href="#livekit.rtc.e2ee.KeyProvider">KeyProvider</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.rtc.e2ee.KeyProvider.export_key" href="#livekit.rtc.e2ee.KeyProvider.export_key">export_key</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProvider.export_shared_key" href="#livekit.rtc.e2ee.KeyProvider.export_shared_key">export_shared_key</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProvider.options" href="#livekit.rtc.e2ee.KeyProvider.options">options</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProvider.ratchet_key" href="#livekit.rtc.e2ee.KeyProvider.ratchet_key">ratchet_key</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProvider.ratchet_shared_key" href="#livekit.rtc.e2ee.KeyProvider.ratchet_shared_key">ratchet_shared_key</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProvider.set_key" href="#livekit.rtc.e2ee.KeyProvider.set_key">set_key</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProvider.set_shared_key" href="#livekit.rtc.e2ee.KeyProvider.set_shared_key">set_shared_key</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.e2ee.KeyProviderOptions" href="#livekit.rtc.e2ee.KeyProviderOptions">KeyProviderOptions</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.e2ee.KeyProviderOptions.failure_tolerance" href="#livekit.rtc.e2ee.KeyProviderOptions.failure_tolerance">failure_tolerance</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProviderOptions.ratchet_salt" href="#livekit.rtc.e2ee.KeyProviderOptions.ratchet_salt">ratchet_salt</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProviderOptions.ratchet_window_size" href="#livekit.rtc.e2ee.KeyProviderOptions.ratchet_window_size">ratchet_window_size</a></code></li>
+<li><code><a title="livekit.rtc.e2ee.KeyProviderOptions.shared_key" href="#livekit.rtc.e2ee.KeyProviderOptions.shared_key">shared_key</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

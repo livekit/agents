@@ -13,9 +13,9 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     metrics,
+    function_tool, 
+    MetricsCollectedEvent
 )
-from livekit.agents.llm import function_tool
-from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 

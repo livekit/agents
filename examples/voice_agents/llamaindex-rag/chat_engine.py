@@ -11,8 +11,7 @@ from llama_index.core import (
 from llama_index.core.chat_engine.types import ChatMode
 from llama_index.core.llms import ChatMessage, MessageRole
 
-from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli, llm
-from livekit.agents.voice.agent import ModelSettings
+from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli, llm, ModelSettings
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()

@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.utils.connection_pool API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.utils.connection_pool</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.utils.connection_pool.ConnectionPool"><code class="flex name class">
+<span>class <span class="ident">ConnectionPool</span></span>
+<span>(</span><span>*,<br>max_session_duration: float | None = None,<br>mark_refreshed_on_get: bool = False,<br>connect_cb: Callable[[], Awaitable[~T]] | None = None,<br>close_cb: Callable[[~T], Awaitable[None]] | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ConnectionPool(Generic[T]):
+    &#34;&#34;&#34;Helper class to manage persistent connections like websockets.
+
+    Handles connection pooling and reconnection after max duration.
+    Can be used as an async context manager to automatically return connections to the pool.
+    &#34;&#34;&#34;
+
+    def __init__(
+        self,
+        *,
+        max_session_duration: Optional[float] = None,
+        mark_refreshed_on_get: bool = False,
+        connect_cb: Optional[Callable[[], Awaitable[T]]] = None,
+        close_cb: Optional[Callable[[T], Awaitable[None]]] = None,
+    ) -&gt; None:
+        &#34;&#34;&#34;Initialize the connection wrapper.
+
+        Args:
+            max_session_duration: Maximum duration in seconds before forcing reconnection
+            mark_refreshed_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
+            connect_cb: Optional async callback to create new connections
+            close_cb: Optional async callback to close connections
+        &#34;&#34;&#34;  # noqa: E501
+        self._max_session_duration = max_session_duration
+        self._mark_refreshed_on_get = mark_refreshed_on_get
+        self._connect_cb = connect_cb
+        self._close_cb = close_cb
+        self._connections: dict[T, float] = {}  # conn -&gt; connected_at timestamp
+        self._available: set[T] = set()
+
+        # store connections to be reaped (closed) later.
+        self._to_close: set[T] = set()
+
+        self._prewarm_task: Optional[weakref.ref[asyncio.Task]] = None
+
+    async def _connect(self) -&gt; T:
+        &#34;&#34;&#34;Create a new connection.
+
+        Returns:
+            The new connection object
+
+        Raises:
+            NotImplementedError: If no connect callback was provided
+        &#34;&#34;&#34;
+        if self._connect_cb is None:
+            raise NotImplementedError(&#34;Must provide connect_cb or implement connect()&#34;)
+        connection = await self._connect_cb()
+        self._connections[connection] = time.time()
+        return connection
+
+    async def _drain_to_close(self) -&gt; None:
+        &#34;&#34;&#34;Drain and close all the connections queued for closing.&#34;&#34;&#34;
+        for conn in list(self._to_close):
+            await self._maybe_close_connection(conn)
+        self._to_close.clear()
+
+    @asynccontextmanager
+    async def connection(self) -&gt; AsyncGenerator[T, None]:
+        &#34;&#34;&#34;Get a connection from the pool and automatically return it when done.
+
+        Yields:
+            An active connection object
+        &#34;&#34;&#34;
+        conn = await self.get()
+        try:
+            yield conn
+        except BaseException:
+            self.remove(conn)
+            raise
+        else:
+            self.put(conn)
+
+    async def get(self) -&gt; T:
+        &#34;&#34;&#34;Get an available connection or create a new one if needed.
+
+        Returns:
+            An active connection object
+        &#34;&#34;&#34;
+        await self._drain_to_close()
+
+        now = time.time()
+
+        # try to reuse an available connection that hasn&#39;t expired
+        while self._available:
+            conn = self._available.pop()
+            if (
+                self._max_session_duration is None
+                or now - self._connections[conn] &lt;= self._max_session_duration
+            ):
+                if self._mark_refreshed_on_get:
+                    self._connections[conn] = now
+                return conn
+            # connection expired; mark it for resetting.
+            self.remove(conn)
+
+        return await self._connect()
+
+    def put(self, conn: T) -&gt; None:
+        &#34;&#34;&#34;Mark a connection as available for reuse.
+
+        If connection has been reset, it will not be added to the pool.
+
+        Args:
+            conn: The connection to make available
+        &#34;&#34;&#34;
+        if conn in self._connections:
+            self._available.add(conn)
+
+    async def _maybe_close_connection(self, conn: T) -&gt; None:
+        &#34;&#34;&#34;Close a connection if close_cb is provided.
+
+        Args:
+            conn: The connection to close
+        &#34;&#34;&#34;
+        if self._close_cb is not None:
+            await self._close_cb(conn)
+
+    def remove(self, conn: T) -&gt; None:
+        &#34;&#34;&#34;Remove a specific connection from the pool.
+
+        Marks the connection to be closed during the next drain cycle.
+
+        Args:
+            conn: The connection to reset
+        &#34;&#34;&#34;
+        self._available.discard(conn)
+        if conn in self._connections:
+            self._to_close.add(conn)
+            self._connections.pop(conn, None)
+
+    def invalidate(self) -&gt; None:
+        &#34;&#34;&#34;Clear all existing connections.
+
+        Marks all current connections to be closed during the next drain cycle.
+        &#34;&#34;&#34;
+        for conn in list(self._connections.keys()):
+            self._to_close.add(conn)
+        self._connections.clear()
+        self._available.clear()
+
+    def prewarm(self) -&gt; None:
+        &#34;&#34;&#34;Initiate prewarming of the connection pool without blocking.
+
+        This method starts a background task that creates a new connection if none exist.
+        The task automatically cleans itself up when the connection pool is closed.
+        &#34;&#34;&#34;
+        if self._prewarm_task is not None or self._connections:
+            return
+
+        async def _prewarm_impl():
+            if not self._connections:
+                conn = await self._connect()
+                self._available.add(conn)
+
+        task = asyncio.create_task(_prewarm_impl())
+        self._prewarm_task = weakref.ref(task)
+
+    async def aclose(self):
+        &#34;&#34;&#34;Close all connections, draining any pending connection closures.&#34;&#34;&#34;
+        if self._prewarm_task is not None:
+            task = self._prewarm_task()
+            if task:
+                await aio.gracefully_cancel(task)
+
+        self.invalidate()
+        await self._drain_to_close()</code></pre>
+</details>
+<div class="desc"><p>Helper class to manage persistent connections like websockets.</p>
+<p>Handles connection pooling and reconnection after max duration.
+Can be used as an async context manager to automatically return connections to the pool.</p>
+<p>Initialize the connection wrapper.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>max_session_duration</code></strong></dt>
+<dd>Maximum duration in seconds before forcing reconnection</dd>
+<dt><strong><code>mark_refreshed_on_get</code></strong></dt>
+<dd>If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.</dd>
+<dt><strong><code>connect_cb</code></strong></dt>
+<dd>Optional async callback to create new connections</dd>
+<dt><strong><code>close_cb</code></strong></dt>
+<dd>Optional async callback to close connections</dd>
+</dl></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>typing.Generic</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.utils.connection_pool.ConnectionPool.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self):
+    &#34;&#34;&#34;Close all connections, draining any pending connection closures.&#34;&#34;&#34;
+    if self._prewarm_task is not None:
+        task = self._prewarm_task()
+        if task:
+            await aio.gracefully_cancel(task)
+
+    self.invalidate()
+    await self._drain_to_close()</code></pre>
+</details>
+<div class="desc"><p>Close all connections, draining any pending connection closures.</p></div>
+</dd>
+<dt id="livekit.agents.utils.connection_pool.ConnectionPool.connection"><code class="name flex">
+<span>async def <span class="ident">connection</span></span>(<span>self) ‑> AsyncGenerator[~T, None]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@asynccontextmanager
+async def connection(self) -&gt; AsyncGenerator[T, None]:
+    &#34;&#34;&#34;Get a connection from the pool and automatically return it when done.
+
+    Yields:
+        An active connection object
+    &#34;&#34;&#34;
+    conn = await self.get()
+    try:
+        yield conn
+    except BaseException:
+        self.remove(conn)
+        raise
+    else:
+        self.put(conn)</code></pre>
+</details>
+<div class="desc"><p>Get a connection from the pool and automatically return it when done.</p>
+<h2 id="yields">Yields</h2>
+<p>An active connection object</p></div>
+</dd>
+<dt id="livekit.agents.utils.connection_pool.ConnectionPool.get"><code class="name flex">
+<span>async def <span class="ident">get</span></span>(<span>self) ‑> ~T</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def get(self) -&gt; T:
+    &#34;&#34;&#34;Get an available connection or create a new one if needed.
+
+    Returns:
+        An active connection object
+    &#34;&#34;&#34;
+    await self._drain_to_close()
+
+    now = time.time()
+
+    # try to reuse an available connection that hasn&#39;t expired
+    while self._available:
+        conn = self._available.pop()
+        if (
+            self._max_session_duration is None
+            or now - self._connections[conn] &lt;= self._max_session_duration
+        ):
+            if self._mark_refreshed_on_get:
+                self._connections[conn] = now
+            return conn
+        # connection expired; mark it for resetting.
+        self.remove(conn)
+
+    return await self._connect()</code></pre>
+</details>
+<div class="desc"><p>Get an available connection or create a new one if needed.</p>
+<h2 id="returns">Returns</h2>
+<p>An active connection object</p></div>
+</dd>
+<dt id="livekit.agents.utils.connection_pool.ConnectionPool.invalidate"><code class="name flex">
+<span>def <span class="ident">invalidate</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def invalidate(self) -&gt; None:
+    &#34;&#34;&#34;Clear all existing connections.
+
+    Marks all current connections to be closed during the next drain cycle.
+    &#34;&#34;&#34;
+    for conn in list(self._connections.keys()):
+        self._to_close.add(conn)
+    self._connections.clear()
+    self._available.clear()</code></pre>
+</details>
+<div class="desc"><p>Clear all existing connections.</p>
+<p>Marks all current connections to be closed during the next drain cycle.</p></div>
+</dd>
+<dt id="livekit.agents.utils.connection_pool.ConnectionPool.prewarm"><code class="name flex">
+<span>def <span class="ident">prewarm</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def prewarm(self) -&gt; None:
+    &#34;&#34;&#34;Initiate prewarming of the connection pool without blocking.
+
+    This method starts a background task that creates a new connection if none exist.
+    The task automatically cleans itself up when the connection pool is closed.
+    &#34;&#34;&#34;
+    if self._prewarm_task is not None or self._connections:
+        return
+
+    async def _prewarm_impl():
+        if not self._connections:
+            conn = await self._connect()
+            self._available.add(conn)
+
+    task = asyncio.create_task(_prewarm_impl())
+    self._prewarm_task = weakref.ref(task)</code></pre>
+</details>
+<div class="desc"><p>Initiate prewarming of the connection pool without blocking.</p>
+<p>This method starts a background task that creates a new connection if none exist.
+The task automatically cleans itself up when the connection pool is closed.</p></div>
+</dd>
+<dt id="livekit.agents.utils.connection_pool.ConnectionPool.put"><code class="name flex">
+<span>def <span class="ident">put</span></span>(<span>self, conn: ~T) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def put(self, conn: T) -&gt; None:
+    &#34;&#34;&#34;Mark a connection as available for reuse.
+
+    If connection has been reset, it will not be added to the pool.
+
+    Args:
+        conn: The connection to make available
+    &#34;&#34;&#34;
+    if conn in self._connections:
+        self._available.add(conn)</code></pre>
+</details>
+<div class="desc"><p>Mark a connection as available for reuse.</p>
+<p>If connection has been reset, it will not be added to the pool.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>conn</code></strong></dt>
+<dd>The connection to make available</dd>
+</dl></div>
+</dd>
+<dt id="livekit.agents.utils.connection_pool.ConnectionPool.remove"><code class="name flex">
+<span>def <span class="ident">remove</span></span>(<span>self, conn: ~T) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def remove(self, conn: T) -&gt; None:
+    &#34;&#34;&#34;Remove a specific connection from the pool.
+
+    Marks the connection to be closed during the next drain cycle.
+
+    Args:
+        conn: The connection to reset
+    &#34;&#34;&#34;
+    self._available.discard(conn)
+    if conn in self._connections:
+        self._to_close.add(conn)
+        self._connections.pop(conn, None)</code></pre>
+</details>
+<div class="desc"><p>Remove a specific connection from the pool.</p>
+<p>Marks the connection to be closed during the next drain cycle.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>conn</code></strong></dt>
+<dd>The connection to reset</dd>
+</dl></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.utils" href="index.html">livekit.agents.utils</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.utils.connection_pool.ConnectionPool" href="#livekit.agents.utils.connection_pool.ConnectionPool">ConnectionPool</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.utils.connection_pool.ConnectionPool.aclose" href="#livekit.agents.utils.connection_pool.ConnectionPool.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.utils.connection_pool.ConnectionPool.connection" href="#livekit.agents.utils.connection_pool.ConnectionPool.connection">connection</a></code></li>
+<li><code><a title="livekit.agents.utils.connection_pool.ConnectionPool.get" href="#livekit.agents.utils.connection_pool.ConnectionPool.get">get</a></code></li>
+<li><code><a title="livekit.agents.utils.connection_pool.ConnectionPool.invalidate" href="#livekit.agents.utils.connection_pool.ConnectionPool.invalidate">invalidate</a></code></li>
+<li><code><a title="livekit.agents.utils.connection_pool.ConnectionPool.prewarm" href="#livekit.agents.utils.connection_pool.ConnectionPool.prewarm">prewarm</a></code></li>
+<li><code><a title="livekit.agents.utils.connection_pool.ConnectionPool.put" href="#livekit.agents.utils.connection_pool.ConnectionPool.put">put</a></code></li>
+<li><code><a title="livekit.agents.utils.connection_pool.ConnectionPool.remove" href="#livekit.agents.utils.connection_pool.ConnectionPool.remove">remove</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

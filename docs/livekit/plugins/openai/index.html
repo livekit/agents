@@ -1,0 +1,2352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.plugins.openai API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.plugins.openai</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+<h2 class="section-title" id="header-submodules">Sub-modules</h2>
+<dl>
+<dt><code class="name"><a title="livekit.plugins.openai.realtime" href="realtime/index.html">livekit.plugins.openai.realtime</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-functions">Functions</h2>
+<dl>
+<dt id="livekit.plugins.openai.create_embeddings"><code class="name flex">
+<span>async def <span class="ident">create_embeddings</span></span>(<span>*,<br>input: list[str],<br>model: models.EmbeddingModels = 'text-embedding-3-small',<br>dimensions: int | None = None,<br>api_key: str | None = None,<br>http_session: aiohttp.ClientSession | None = None) ‑> list[livekit.plugins.openai.embeddings.EmbeddingData]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def create_embeddings(
+    *,
+    input: list[str],
+    model: models.EmbeddingModels = &#34;text-embedding-3-small&#34;,
+    dimensions: int | None = None,
+    api_key: str | None = None,
+    http_session: aiohttp.ClientSession | None = None,
+) -&gt; list[EmbeddingData]:
+    http_session = http_session or utils.http_context.http_session()
+
+    api_key = api_key or os.environ.get(&#34;OPENAI_API_KEY&#34;)
+    if not api_key:
+        raise ValueError(&#34;OPENAI_API_KEY must be set&#34;)
+
+    async with http_session.post(
+        &#34;https://api.openai.com/v1/embeddings&#34;,
+        headers={&#34;Authorization&#34;: f&#34;Bearer {api_key}&#34;},
+        json={
+            &#34;model&#34;: model,
+            &#34;input&#34;: input,
+            &#34;encoding_format&#34;: &#34;base64&#34;,
+            &#34;dimensions&#34;: dimensions,
+        },
+    ) as resp:
+        json = await resp.json()
+        data = json[&#34;data&#34;]
+        list_data = []
+        for d in data:
+            bytes = base64.b64decode(d[&#34;embedding&#34;])
+            num_floats = len(bytes) // 4
+            floats = list(struct.unpack(&#34;f&#34; * num_floats, bytes))
+            list_data.append(EmbeddingData(index=d[&#34;index&#34;], embedding=floats))
+
+        return list_data</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.plugins.openai.EmbeddingData"><code class="flex name class">
+<span>class <span class="ident">EmbeddingData</span></span>
+<span>(</span><span>index: int, embedding: list[float])</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class EmbeddingData:
+    index: int
+    embedding: list[float]</code></pre>
+</details>
+<div class="desc"><p>EmbeddingData(index: 'int', embedding: 'list[float]')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.plugins.openai.EmbeddingData.embedding"><code class="name">var <span class="ident">embedding</span> : list[float]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.EmbeddingData.index"><code class="name">var <span class="ident">index</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.plugins.openai.LLM"><code class="flex name class">
+<span>class <span class="ident">LLM</span></span>
+<span>(</span><span>*,<br>model: str | ChatModels = 'gpt-4o',<br>api_key: NotGivenOr[str] = NOT_GIVEN,<br>base_url: NotGivenOr[str] = NOT_GIVEN,<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,<br>store: NotGivenOr[bool] = NOT_GIVEN,<br>metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,<br>timeout: httpx.Timeout | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LLM(llm.LLM):
+    def __init__(
+        self,
+        *,
+        model: str | ChatModels = &#34;gpt-4o&#34;,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        store: NotGivenOr[bool] = NOT_GIVEN,
+        metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Create a new instance of OpenAI LLM.
+
+        ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
+        ``OPENAI_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+        super().__init__()
+        self._opts = _LLMOptions(
+            model=model,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            store=store,
+            metadata=metadata,
+        )
+        self._client = client or openai.AsyncClient(
+            api_key=api_key if is_given(api_key) else None,
+            base_url=base_url if is_given(base_url) else None,
+            max_retries=0,
+            http_client=httpx.AsyncClient(
+                timeout=timeout
+                if timeout
+                else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=50,
+                    keepalive_expiry=120,
+                ),
+            ),
+        )
+
+    @staticmethod
+    def with_azure(
+        *,
+        model: str | ChatModels = &#34;gpt-4o&#34;,
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+        - `api_key` from `AZURE_OPENAI_API_KEY`
+        - `organization` from `OPENAI_ORG_ID`
+        - `project` from `OPENAI_PROJECT_ID`
+        - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+        - `api_version` from `OPENAI_API_VERSION`
+        - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+        &#34;&#34;&#34;  # noqa: E501
+
+        azure_client = openai.AsyncAzureOpenAI(
+            max_retries=0,
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+        )  # type: ignore
+
+        return LLM(
+            model=model,
+            client=azure_client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_cerebras(
+        *,
+        model: str | CerebrasChatModels = &#34;llama3.1-8b&#34;,
+        api_key: str | None = None,
+        base_url: str = &#34;https://api.cerebras.ai/v1&#34;,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        Create a new instance of Cerebras LLM.
+
+        ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
+        the ``CEREBRAS_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+
+        api_key = api_key or os.environ.get(&#34;CEREBRAS_API_KEY&#34;)
+        if api_key is None:
+            raise ValueError(
+                &#34;Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable&#34;  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_fireworks(
+        *,
+        model: str = &#34;accounts/fireworks/models/llama-v3p3-70b-instruct&#34;,
+        api_key: str | None = None,
+        base_url: str = &#34;https://api.fireworks.ai/inference/v1&#34;,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = &#34;auto&#34;,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        Create a new instance of Fireworks LLM.
+
+        ``api_key`` must be set to your Fireworks API key, either using the argument or by setting
+        the ``FIREWORKS_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+
+        api_key = api_key or os.environ.get(&#34;FIREWORKS_API_KEY&#34;)
+        if api_key is None:
+            raise ValueError(
+                &#34;Fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable&#34;  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_x_ai(
+        *,
+        model: str | XAIChatModels = &#34;grok-2-public&#34;,
+        api_key: str | None = None,
+        base_url: str = &#34;https://api.x.ai/v1&#34;,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = &#34;auto&#34;,
+    ):
+        &#34;&#34;&#34;
+        Create a new instance of XAI LLM.
+
+        ``api_key`` must be set to your XAI API key, either using the argument or by setting
+        the ``XAI_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+        api_key = api_key or os.environ.get(&#34;XAI_API_KEY&#34;)
+        if api_key is None:
+            raise ValueError(
+                &#34;XAI API key is required, either as argument or set XAI_API_KEY environmental variable&#34;  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_deepseek(
+        *,
+        model: str | DeepSeekChatModels = &#34;deepseek-chat&#34;,
+        api_key: str | None = None,
+        base_url: str = &#34;https://api.deepseek.com/v1&#34;,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = &#34;auto&#34;,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        Create a new instance of DeepSeek LLM.
+
+        ``api_key`` must be set to your DeepSeek API key, either using the argument or by setting
+        the ``DEEPSEEK_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+
+        api_key = api_key or os.environ.get(&#34;DEEPSEEK_API_KEY&#34;)
+        if api_key is None:
+            raise ValueError(
+                &#34;DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable&#34;  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_octo(
+        *,
+        model: str | OctoChatModels = &#34;llama-2-13b-chat&#34;,
+        api_key: str | None = None,
+        base_url: str = &#34;https://text.octoai.run/v1&#34;,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = &#34;auto&#34;,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        Create a new instance of OctoAI LLM.
+
+        ``api_key`` must be set to your OctoAI API key, either using the argument or by setting
+        the ``OCTOAI_TOKEN`` environmental variable.
+        &#34;&#34;&#34;
+
+        api_key = api_key or os.environ.get(&#34;OCTOAI_TOKEN&#34;)
+        if api_key is None:
+            raise ValueError(
+                &#34;OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable&#34;  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_ollama(
+        *,
+        model: str = &#34;llama3.1&#34;,
+        base_url: str = &#34;http://localhost:11434/v1&#34;,
+        client: openai.AsyncClient | None = None,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = &#34;auto&#34;,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        Create a new instance of Ollama LLM.
+        &#34;&#34;&#34;
+
+        return LLM(
+            model=model,
+            api_key=&#34;ollama&#34;,
+            base_url=base_url,
+            client=client,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_perplexity(
+        *,
+        model: str | PerplexityChatModels = &#34;llama-3.1-sonar-small-128k-chat&#34;,
+        api_key: str | None = None,
+        base_url: str = &#34;https://api.perplexity.ai&#34;,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = &#34;auto&#34;,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        Create a new instance of PerplexityAI LLM.
+
+        ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
+        the ``PERPLEXITY_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+
+        api_key = api_key or os.environ.get(&#34;PERPLEXITY_API_KEY&#34;)
+        if api_key is None:
+            raise ValueError(
+                &#34;Perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable&#34;  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_together(
+        *,
+        model: str | TogetherChatModels = &#34;meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo&#34;,
+        api_key: str | None = None,
+        base_url: str = &#34;https://api.together.xyz/v1&#34;,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = &#34;auto&#34;,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        Create a new instance of TogetherAI LLM.
+
+        ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
+        the ``TOGETHER_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+
+        api_key = api_key or os.environ.get(&#34;TOGETHER_API_KEY&#34;)
+        if api_key is None:
+            raise ValueError(
+                &#34;Together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable&#34;  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_telnyx(
+        *,
+        model: str | TelnyxChatModels = &#34;meta-llama/Meta-Llama-3.1-70B-Instruct&#34;,
+        api_key: str | None = None,
+        base_url: str = &#34;https://api.telnyx.com/v2/ai&#34;,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = &#34;auto&#34;,
+    ) -&gt; LLM:
+        &#34;&#34;&#34;
+        Create a new instance of Telnyx LLM.
+
+        ``api_key`` must be set to your Telnyx API key, either using the argument or by setting
+        the ``TELNYX_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+
+        api_key = api_key or os.environ.get(&#34;TELNYX_API_KEY&#34;)
+        if api_key is None:
+            raise ValueError(
+                &#34;Telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable&#34;  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[FunctionTool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[
+            completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -&gt; LLMStream:
+        extra = {}
+        if is_given(extra_kwargs):
+            extra.update(extra_kwargs)
+
+        if is_given(self._opts.metadata):
+            extra[&#34;metadata&#34;] = self._opts.metadata
+
+        if is_given(self._opts.user):
+            extra[&#34;user&#34;] = self._opts.user
+
+        parallel_tool_calls = (
+            parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
+        )
+        if is_given(parallel_tool_calls):
+            extra[&#34;parallel_tool_calls&#34;] = parallel_tool_calls
+
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        if is_given(tool_choice):
+            oai_tool_choice: ChatCompletionToolChoiceOptionParam
+            if isinstance(tool_choice, dict):
+                oai_tool_choice = {
+                    &#34;type&#34;: &#34;function&#34;,
+                    &#34;function&#34;: {&#34;name&#34;: tool_choice[&#34;function&#34;][&#34;name&#34;]},
+                }
+                extra[&#34;tool_choice&#34;] = oai_tool_choice
+            elif tool_choice in (&#34;auto&#34;, &#34;required&#34;, &#34;none&#34;):
+                oai_tool_choice = tool_choice
+                extra[&#34;tool_choice&#34;] = oai_tool_choice
+
+        if is_given(response_format):
+            extra[&#34;response_format&#34;] = llm_utils.to_openai_response_format(response_format)
+
+        return LLMStream(
+            self,
+            model=self._opts.model,
+            client=self._client,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+            extra_kwargs=extra,
+        )</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Create a new instance of OpenAI LLM.</p>
+<p><code>api_key</code> must be set to your OpenAI API key, either using the argument or by setting the
+<code>OPENAI_API_KEY</code> environmental variable.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.llm.llm.LLM" href="../../agents/llm/llm.html#livekit.agents.llm.llm.LLM">LLM</a></li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.plugins.groq.services.LLM" href="../groq/services.html#livekit.plugins.groq.services.LLM">LLM</a></li>
+</ul>
+<h3>Static methods</h3>
+<dl>
+<dt id="livekit.plugins.openai.LLM.with_azure"><code class="name flex">
+<span>def <span class="ident">with_azure</span></span>(<span>*,<br>model: str | ChatModels = 'gpt-4o',<br>azure_endpoint: str | None = None,<br>azure_deployment: str | None = None,<br>api_version: str | None = None,<br>api_key: str | None = None,<br>azure_ad_token: str | None = None,<br>azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,<br>organization: str | None = None,<br>project: str | None = None,<br>base_url: str | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,<br>timeout: httpx.Timeout | None = None) ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_azure(
+    *,
+    model: str | ChatModels = &#34;gpt-4o&#34;,
+    azure_endpoint: str | None = None,
+    azure_deployment: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    azure_ad_token: str | None = None,
+    azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+    organization: str | None = None,
+    project: str | None = None,
+    base_url: str | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+    timeout: httpx.Timeout | None = None,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+    - `api_key` from `AZURE_OPENAI_API_KEY`
+    - `organization` from `OPENAI_ORG_ID`
+    - `project` from `OPENAI_PROJECT_ID`
+    - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+    - `api_version` from `OPENAI_API_VERSION`
+    - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+    &#34;&#34;&#34;  # noqa: E501
+
+    azure_client = openai.AsyncAzureOpenAI(
+        max_retries=0,
+        azure_endpoint=azure_endpoint,
+        azure_deployment=azure_deployment,
+        api_version=api_version,
+        api_key=api_key,
+        azure_ad_token=azure_ad_token,
+        azure_ad_token_provider=azure_ad_token_provider,
+        organization=organization,
+        project=project,
+        base_url=base_url,
+        timeout=timeout
+        if timeout
+        else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+    )  # type: ignore
+
+    return LLM(
+        model=model,
+        client=azure_client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+- <code>api_key</code> from <code>AZURE_OPENAI_API_KEY</code>
+- <code>organization</code> from <code>OPENAI_ORG_ID</code>
+- <code>project</code> from <code>OPENAI_PROJECT_ID</code>
+- <code>azure_ad_token</code> from <code>AZURE_OPENAI_AD_TOKEN</code>
+- <code>api_version</code> from <code>OPENAI_API_VERSION</code>
+- <code>azure_endpoint</code> from <code>AZURE_OPENAI_ENDPOINT</code></p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_cerebras"><code class="name flex">
+<span>def <span class="ident">with_cerebras</span></span>(<span>*,<br>model: str | CerebrasChatModels = 'llama3.1-8b',<br>api_key: str | None = None,<br>base_url: str = 'https://api.cerebras.ai/v1',<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN) ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_cerebras(
+    *,
+    model: str | CerebrasChatModels = &#34;llama3.1-8b&#34;,
+    api_key: str | None = None,
+    base_url: str = &#34;https://api.cerebras.ai/v1&#34;,
+    client: openai.AsyncClient | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    Create a new instance of Cerebras LLM.
+
+    ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
+    the ``CEREBRAS_API_KEY`` environmental variable.
+    &#34;&#34;&#34;
+
+    api_key = api_key or os.environ.get(&#34;CEREBRAS_API_KEY&#34;)
+    if api_key is None:
+        raise ValueError(
+            &#34;Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable&#34;  # noqa: E501
+        )
+
+    return LLM(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        client=client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of Cerebras LLM.</p>
+<p><code>api_key</code> must be set to your Cerebras API key, either using the argument or by setting
+the <code>CEREBRAS_API_KEY</code> environmental variable.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_deepseek"><code class="name flex">
+<span>def <span class="ident">with_deepseek</span></span>(<span>*,<br>model: str | DeepSeekChatModels = 'deepseek-chat',<br>api_key: str | None = None,<br>base_url: str = 'https://api.deepseek.com/v1',<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: ToolChoice = 'auto') ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_deepseek(
+    *,
+    model: str | DeepSeekChatModels = &#34;deepseek-chat&#34;,
+    api_key: str | None = None,
+    base_url: str = &#34;https://api.deepseek.com/v1&#34;,
+    client: openai.AsyncClient | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: ToolChoice = &#34;auto&#34;,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    Create a new instance of DeepSeek LLM.
+
+    ``api_key`` must be set to your DeepSeek API key, either using the argument or by setting
+    the ``DEEPSEEK_API_KEY`` environmental variable.
+    &#34;&#34;&#34;
+
+    api_key = api_key or os.environ.get(&#34;DEEPSEEK_API_KEY&#34;)
+    if api_key is None:
+        raise ValueError(
+            &#34;DeepSeek API key is required, either as argument or set DEEPSEEK_API_KEY environmental variable&#34;  # noqa: E501
+        )
+
+    return LLM(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        client=client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of DeepSeek LLM.</p>
+<p><code>api_key</code> must be set to your DeepSeek API key, either using the argument or by setting
+the <code>DEEPSEEK_API_KEY</code> environmental variable.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_fireworks"><code class="name flex">
+<span>def <span class="ident">with_fireworks</span></span>(<span>*,<br>model: str = 'accounts/fireworks/models/llama-v3p3-70b-instruct',<br>api_key: str | None = None,<br>base_url: str = 'https://api.fireworks.ai/inference/v1',<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: ToolChoice = 'auto') ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_fireworks(
+    *,
+    model: str = &#34;accounts/fireworks/models/llama-v3p3-70b-instruct&#34;,
+    api_key: str | None = None,
+    base_url: str = &#34;https://api.fireworks.ai/inference/v1&#34;,
+    client: openai.AsyncClient | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: ToolChoice = &#34;auto&#34;,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    Create a new instance of Fireworks LLM.
+
+    ``api_key`` must be set to your Fireworks API key, either using the argument or by setting
+    the ``FIREWORKS_API_KEY`` environmental variable.
+    &#34;&#34;&#34;
+
+    api_key = api_key or os.environ.get(&#34;FIREWORKS_API_KEY&#34;)
+    if api_key is None:
+        raise ValueError(
+            &#34;Fireworks API key is required, either as argument or set FIREWORKS_API_KEY environmental variable&#34;  # noqa: E501
+        )
+
+    return LLM(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        client=client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of Fireworks LLM.</p>
+<p><code>api_key</code> must be set to your Fireworks API key, either using the argument or by setting
+the <code>FIREWORKS_API_KEY</code> environmental variable.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_octo"><code class="name flex">
+<span>def <span class="ident">with_octo</span></span>(<span>*,<br>model: str | OctoChatModels = 'llama-2-13b-chat',<br>api_key: str | None = None,<br>base_url: str = 'https://text.octoai.run/v1',<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: ToolChoice = 'auto') ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_octo(
+    *,
+    model: str | OctoChatModels = &#34;llama-2-13b-chat&#34;,
+    api_key: str | None = None,
+    base_url: str = &#34;https://text.octoai.run/v1&#34;,
+    client: openai.AsyncClient | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: ToolChoice = &#34;auto&#34;,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    Create a new instance of OctoAI LLM.
+
+    ``api_key`` must be set to your OctoAI API key, either using the argument or by setting
+    the ``OCTOAI_TOKEN`` environmental variable.
+    &#34;&#34;&#34;
+
+    api_key = api_key or os.environ.get(&#34;OCTOAI_TOKEN&#34;)
+    if api_key is None:
+        raise ValueError(
+            &#34;OctoAI API key is required, either as argument or set OCTOAI_TOKEN environmental variable&#34;  # noqa: E501
+        )
+
+    return LLM(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        client=client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of OctoAI LLM.</p>
+<p><code>api_key</code> must be set to your OctoAI API key, either using the argument or by setting
+the <code>OCTOAI_TOKEN</code> environmental variable.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_ollama"><code class="name flex">
+<span>def <span class="ident">with_ollama</span></span>(<span>*,<br>model: str = 'llama3.1',<br>base_url: str = 'http://localhost:11434/v1',<br>client: openai.AsyncClient | None = None,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: ToolChoice = 'auto') ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_ollama(
+    *,
+    model: str = &#34;llama3.1&#34;,
+    base_url: str = &#34;http://localhost:11434/v1&#34;,
+    client: openai.AsyncClient | None = None,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: ToolChoice = &#34;auto&#34;,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    Create a new instance of Ollama LLM.
+    &#34;&#34;&#34;
+
+    return LLM(
+        model=model,
+        api_key=&#34;ollama&#34;,
+        base_url=base_url,
+        client=client,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of Ollama LLM.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_perplexity"><code class="name flex">
+<span>def <span class="ident">with_perplexity</span></span>(<span>*,<br>model: str | PerplexityChatModels = 'llama-3.1-sonar-small-128k-chat',<br>api_key: str | None = None,<br>base_url: str = 'https://api.perplexity.ai',<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: ToolChoice = 'auto') ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_perplexity(
+    *,
+    model: str | PerplexityChatModels = &#34;llama-3.1-sonar-small-128k-chat&#34;,
+    api_key: str | None = None,
+    base_url: str = &#34;https://api.perplexity.ai&#34;,
+    client: openai.AsyncClient | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: ToolChoice = &#34;auto&#34;,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    Create a new instance of PerplexityAI LLM.
+
+    ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
+    the ``PERPLEXITY_API_KEY`` environmental variable.
+    &#34;&#34;&#34;
+
+    api_key = api_key or os.environ.get(&#34;PERPLEXITY_API_KEY&#34;)
+    if api_key is None:
+        raise ValueError(
+            &#34;Perplexity AI API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable&#34;  # noqa: E501
+        )
+
+    return LLM(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        client=client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of PerplexityAI LLM.</p>
+<p><code>api_key</code> must be set to your TogetherAI API key, either using the argument or by setting
+the <code>PERPLEXITY_API_KEY</code> environmental variable.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_telnyx"><code class="name flex">
+<span>def <span class="ident">with_telnyx</span></span>(<span>*,<br>model: str | TelnyxChatModels = 'meta-llama/Meta-Llama-3.1-70B-Instruct',<br>api_key: str | None = None,<br>base_url: str = 'https://api.telnyx.com/v2/ai',<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: ToolChoice = 'auto') ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_telnyx(
+    *,
+    model: str | TelnyxChatModels = &#34;meta-llama/Meta-Llama-3.1-70B-Instruct&#34;,
+    api_key: str | None = None,
+    base_url: str = &#34;https://api.telnyx.com/v2/ai&#34;,
+    client: openai.AsyncClient | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: ToolChoice = &#34;auto&#34;,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    Create a new instance of Telnyx LLM.
+
+    ``api_key`` must be set to your Telnyx API key, either using the argument or by setting
+    the ``TELNYX_API_KEY`` environmental variable.
+    &#34;&#34;&#34;
+
+    api_key = api_key or os.environ.get(&#34;TELNYX_API_KEY&#34;)
+    if api_key is None:
+        raise ValueError(
+            &#34;Telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable&#34;  # noqa: E501
+        )
+
+    return LLM(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        client=client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of Telnyx LLM.</p>
+<p><code>api_key</code> must be set to your Telnyx API key, either using the argument or by setting
+the <code>TELNYX_API_KEY</code> environmental variable.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_together"><code class="name flex">
+<span>def <span class="ident">with_together</span></span>(<span>*,<br>model: str | TogetherChatModels = 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',<br>api_key: str | None = None,<br>base_url: str = 'https://api.together.xyz/v1',<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: ToolChoice = 'auto') ‑> livekit.plugins.openai.llm.LLM</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_together(
+    *,
+    model: str | TogetherChatModels = &#34;meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo&#34;,
+    api_key: str | None = None,
+    base_url: str = &#34;https://api.together.xyz/v1&#34;,
+    client: openai.AsyncClient | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: ToolChoice = &#34;auto&#34;,
+) -&gt; LLM:
+    &#34;&#34;&#34;
+    Create a new instance of TogetherAI LLM.
+
+    ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
+    the ``TOGETHER_API_KEY`` environmental variable.
+    &#34;&#34;&#34;
+
+    api_key = api_key or os.environ.get(&#34;TOGETHER_API_KEY&#34;)
+    if api_key is None:
+        raise ValueError(
+            &#34;Together AI API key is required, either as argument or set TOGETHER_API_KEY environmental variable&#34;  # noqa: E501
+        )
+
+    return LLM(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        client=client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of TogetherAI LLM.</p>
+<p><code>api_key</code> must be set to your TogetherAI API key, either using the argument or by setting
+the <code>TOGETHER_API_KEY</code> environmental variable.</p></div>
+</dd>
+<dt id="livekit.plugins.openai.LLM.with_x_ai"><code class="name flex">
+<span>def <span class="ident">with_x_ai</span></span>(<span>*,<br>model: str | XAIChatModels = 'grok-2-public',<br>api_key: str | None = None,<br>base_url: str = 'https://api.x.ai/v1',<br>client: openai.AsyncClient | None = None,<br>user: NotGivenOr[str] = NOT_GIVEN,<br>temperature: NotGivenOr[float] = NOT_GIVEN,<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: ToolChoice = 'auto')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_x_ai(
+    *,
+    model: str | XAIChatModels = &#34;grok-2-public&#34;,
+    api_key: str | None = None,
+    base_url: str = &#34;https://api.x.ai/v1&#34;,
+    client: openai.AsyncClient | None = None,
+    user: NotGivenOr[str] = NOT_GIVEN,
+    temperature: NotGivenOr[float] = NOT_GIVEN,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: ToolChoice = &#34;auto&#34;,
+):
+    &#34;&#34;&#34;
+    Create a new instance of XAI LLM.
+
+    ``api_key`` must be set to your XAI API key, either using the argument or by setting
+    the ``XAI_API_KEY`` environmental variable.
+    &#34;&#34;&#34;
+    api_key = api_key or os.environ.get(&#34;XAI_API_KEY&#34;)
+    if api_key is None:
+        raise ValueError(
+            &#34;XAI API key is required, either as argument or set XAI_API_KEY environmental variable&#34;  # noqa: E501
+        )
+
+    return LLM(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        client=client,
+        user=user,
+        temperature=temperature,
+        parallel_tool_calls=parallel_tool_calls,
+        tool_choice=tool_choice,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of XAI LLM.</p>
+<p><code>api_key</code> must be set to your XAI API key, either using the argument or by setting
+the <code>XAI_API_KEY</code> environmental variable.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.plugins.openai.LLM.chat"><code class="name flex">
+<span>def <span class="ident">chat</span></span>(<span>self,<br>*,<br>chat_ctx: ChatContext,<br>tools: list[FunctionTool] | None = None,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0),<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,<br>response_format: NotGivenOr[completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]] = NOT_GIVEN,<br>extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN) ‑> livekit.plugins.openai.llm.LLMStream</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def chat(
+    self,
+    *,
+    chat_ctx: ChatContext,
+    tools: list[FunctionTool] | None = None,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+    response_format: NotGivenOr[
+        completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
+    ] = NOT_GIVEN,
+    extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+) -&gt; LLMStream:
+    extra = {}
+    if is_given(extra_kwargs):
+        extra.update(extra_kwargs)
+
+    if is_given(self._opts.metadata):
+        extra[&#34;metadata&#34;] = self._opts.metadata
+
+    if is_given(self._opts.user):
+        extra[&#34;user&#34;] = self._opts.user
+
+    parallel_tool_calls = (
+        parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
+    )
+    if is_given(parallel_tool_calls):
+        extra[&#34;parallel_tool_calls&#34;] = parallel_tool_calls
+
+    tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+    if is_given(tool_choice):
+        oai_tool_choice: ChatCompletionToolChoiceOptionParam
+        if isinstance(tool_choice, dict):
+            oai_tool_choice = {
+                &#34;type&#34;: &#34;function&#34;,
+                &#34;function&#34;: {&#34;name&#34;: tool_choice[&#34;function&#34;][&#34;name&#34;]},
+            }
+            extra[&#34;tool_choice&#34;] = oai_tool_choice
+        elif tool_choice in (&#34;auto&#34;, &#34;required&#34;, &#34;none&#34;):
+            oai_tool_choice = tool_choice
+            extra[&#34;tool_choice&#34;] = oai_tool_choice
+
+    if is_given(response_format):
+        extra[&#34;response_format&#34;] = llm_utils.to_openai_response_format(response_format)
+
+    return LLMStream(
+        self,
+        model=self._opts.model,
+        client=self._client,
+        chat_ctx=chat_ctx,
+        tools=tools or [],
+        conn_options=conn_options,
+        extra_kwargs=extra,
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.llm.llm.LLM" href="../../agents/llm/llm.html#livekit.agents.llm.llm.LLM">LLM</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.llm.llm.LLM.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLM.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLM.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLM.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.plugins.openai.LLMStream"><code class="flex name class">
+<span>class <span class="ident">LLMStream</span></span>
+<span>(</span><span>llm: <a title="livekit.plugins.openai.LLM" href="#livekit.plugins.openai.LLM">LLM</a>,<br>*,<br>model: str | ChatModels,<br>client: openai.AsyncClient,<br>chat_ctx: llm.ChatContext,<br>tools: list[FunctionTool],<br>conn_options: APIConnectOptions,<br>extra_kwargs: dict[str, Any])</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LLMStream(llm.LLMStream):
+    def __init__(
+        self,
+        llm: LLM,
+        *,
+        model: str | ChatModels,
+        client: openai.AsyncClient,
+        chat_ctx: llm.ChatContext,
+        tools: list[FunctionTool],
+        conn_options: APIConnectOptions,
+        extra_kwargs: dict[str, Any],
+    ) -&gt; None:
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._model = model
+        self._client = client
+        self._llm = llm
+        self._extra_kwargs = extra_kwargs
+
+    async def _run(self) -&gt; None:
+        # current function call that we&#39;re waiting for full completion (args are streamed)
+        # (defined inside the _run method to make sure the state is reset for each run/attempt)
+        self._oai_stream: openai.AsyncStream[ChatCompletionChunk] | None = None
+        self._tool_call_id: str | None = None
+        self._fnc_name: str | None = None
+        self._fnc_raw_arguments: str | None = None
+        self._tool_index: int | None = None
+        retryable = True
+
+        try:
+            self._oai_stream = stream = await self._client.chat.completions.create(
+                messages=to_chat_ctx(self._chat_ctx, id(self._llm)),
+                tools=to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN,
+                model=self._model,
+                stream_options={&#34;include_usage&#34;: True},
+                stream=True,
+                **self._extra_kwargs,
+            )
+
+            async with stream:
+                async for chunk in stream:
+                    for choice in chunk.choices:
+                        chat_chunk = self._parse_choice(chunk.id, choice)
+                        if chat_chunk is not None:
+                            retryable = False
+                            self._event_ch.send_nowait(chat_chunk)
+
+                    if chunk.usage is not None:
+                        retryable = False
+                        tokens_details = chunk.usage.prompt_tokens_details
+                        cached_tokens = tokens_details.cached_tokens if tokens_details else 0
+                        chunk = llm.ChatChunk(
+                            id=chunk.id,
+                            usage=llm.CompletionUsage(
+                                completion_tokens=chunk.usage.completion_tokens,
+                                prompt_tokens=chunk.usage.prompt_tokens,
+                                prompt_cached_tokens=cached_tokens or 0,
+                                total_tokens=chunk.usage.total_tokens,
+                            ),
+                        )
+                        self._event_ch.send_nowait(chunk)
+
+        except openai.APITimeoutError:
+            raise APITimeoutError(retryable=retryable) from None
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=e.body,
+                retryable=retryable,
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(retryable=retryable) from e
+
+    def _parse_choice(self, id: str, choice: Choice) -&gt; llm.ChatChunk | None:
+        delta = choice.delta
+
+        # https://github.com/livekit/agents/issues/688
+        # the delta can be None when using Azure OpenAI (content filtering)
+        if delta is None:
+            return None
+
+        if delta.tool_calls:
+            for tool in delta.tool_calls:
+                if not tool.function:
+                    continue
+
+                call_chunk = None
+                if self._tool_call_id and tool.id and tool.index != self._tool_index:
+                    call_chunk = llm.ChatChunk(
+                        id=id,
+                        delta=llm.ChoiceDelta(
+                            role=&#34;assistant&#34;,
+                            content=delta.content,
+                            tool_calls=[
+                                llm.FunctionToolCall(
+                                    arguments=self._fnc_raw_arguments or &#34;&#34;,
+                                    name=self._fnc_name or &#34;&#34;,
+                                    call_id=self._tool_call_id or &#34;&#34;,
+                                )
+                            ],
+                        ),
+                    )
+                    self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+
+                if tool.function.name:
+                    self._tool_index = tool.index
+                    self._tool_call_id = tool.id
+                    self._fnc_name = tool.function.name
+                    self._fnc_raw_arguments = tool.function.arguments or &#34;&#34;
+                elif tool.function.arguments:
+                    self._fnc_raw_arguments += tool.function.arguments  # type: ignore
+
+                if call_chunk is not None:
+                    return call_chunk
+
+        if choice.finish_reason in (&#34;tool_calls&#34;, &#34;stop&#34;) and self._tool_call_id:
+            call_chunk = llm.ChatChunk(
+                id=id,
+                delta=llm.ChoiceDelta(
+                    role=&#34;assistant&#34;,
+                    content=delta.content,
+                    tool_calls=[
+                        llm.FunctionToolCall(
+                            arguments=self._fnc_raw_arguments or &#34;&#34;,
+                            name=self._fnc_name or &#34;&#34;,
+                            call_id=self._tool_call_id or &#34;&#34;,
+                        )
+                    ],
+                ),
+            )
+            self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+            return call_chunk
+
+        return llm.ChatChunk(
+            id=id,
+            delta=llm.ChoiceDelta(content=delta.content, role=&#34;assistant&#34;),
+        )</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.llm.llm.LLMStream" href="../../agents/llm/llm.html#livekit.agents.llm.llm.LLMStream">LLMStream</a></li>
+<li>abc.ABC</li>
+</ul>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.llm.llm.LLMStream" href="../../agents/llm/llm.html#livekit.agents.llm.llm.LLMStream">LLMStream</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.llm.llm.LLMStream.to_str_iterable" href="../../agents/llm/llm.html#livekit.agents.llm.llm.LLMStream.to_str_iterable">to_str_iterable</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.plugins.openai.STT"><code class="flex name class">
+<span>class <span class="ident">STT</span></span>
+<span>(</span><span>*,<br>language: str = 'en',<br>detect_language: bool = False,<br>model: STTModels | str = 'gpt-4o-mini-transcribe',<br>prompt: NotGivenOr[str] = NOT_GIVEN,<br>turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,<br>noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,<br>base_url: NotGivenOr[str] = NOT_GIVEN,<br>api_key: NotGivenOr[str] = NOT_GIVEN,<br>client: openai.AsyncClient | None = None,<br>use_realtime: bool = False)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class STT(stt.STT):
+    def __init__(
+        self,
+        *,
+        language: str = &#34;en&#34;,
+        detect_language: bool = False,
+        model: STTModels | str = &#34;gpt-4o-mini-transcribe&#34;,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        client: openai.AsyncClient | None = None,
+        use_realtime: bool = False,
+    ):
+        &#34;&#34;&#34;
+        Create a new instance of OpenAI STT.
+
+        Args:
+            language: The language code to use for transcription (e.g., &#34;en&#34; for English).
+            detect_language: Whether to automatically detect the language.
+            model: The OpenAI model to use for transcription.
+            prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
+            turn_detection: When using realtime transcription, this controls how model detects the user is done speaking.
+                Final transcripts are generated only after the turn is over. See: https://platform.openai.com/docs/guides/realtime-vad
+            noise_reduction_type: Type of noise reduction to apply. &#34;near_field&#34; or &#34;far_field&#34;
+                This isn&#39;t needed when using LiveKit&#39;s noise cancellation.
+            base_url: Custom base URL for OpenAI API.
+            api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
+            client: Optional pre-configured OpenAI AsyncClient instance.
+            use_realtime: Whether to use the realtime transcription API. (default: False)
+        &#34;&#34;&#34;  # noqa: E501
+
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=use_realtime, interim_results=use_realtime)
+        )
+        if detect_language:
+            language = &#34;&#34;
+
+        if not is_given(turn_detection):
+            turn_detection = {
+                &#34;type&#34;: &#34;server_vad&#34;,
+                &#34;threshold&#34;: 0.5,
+                &#34;prefix_padding_ms&#34;: 600,
+                &#34;silence_duration_ms&#34;: 350,
+            }
+
+        self._opts = _STTOptions(
+            language=language,
+            detect_language=detect_language,
+            model=model,
+            prompt=prompt,
+            turn_detection=turn_detection,
+        )
+        if is_given(noise_reduction_type):
+            self._opts.noise_reduction_type = noise_reduction_type
+
+        self._client = client or openai.AsyncClient(
+            max_retries=0,
+            api_key=api_key if is_given(api_key) else None,
+            base_url=base_url if is_given(base_url) else None,
+            http_client=httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=50,
+                    keepalive_expiry=120,
+                ),
+            ),
+        )
+
+        self._streams = weakref.WeakSet[SpeechStream]()
+        self._session: aiohttp.ClientSession | None = None
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            max_session_duration=_max_session_duration,
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+        )
+
+    @staticmethod
+    def with_azure(
+        *,
+        language: str = &#34;en&#34;,
+        detect_language: bool = False,
+        model: STTModels | str = &#34;gpt-4o-mini-transcribe&#34;,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+        use_realtime: bool = False,
+        timeout: httpx.Timeout | None = None,
+    ) -&gt; STT:
+        &#34;&#34;&#34;
+        Create a new instance of Azure OpenAI STT.
+
+        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+        - `api_key` from `AZURE_OPENAI_API_KEY`
+        - `organization` from `OPENAI_ORG_ID`
+        - `project` from `OPENAI_PROJECT_ID`
+        - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+        - `api_version` from `OPENAI_API_VERSION`
+        - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+        &#34;&#34;&#34;  # noqa: E501
+
+        azure_client = openai.AsyncAzureOpenAI(
+            max_retries=0,
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+        )  # type: ignore
+
+        return STT(
+            language=language,
+            detect_language=detect_language,
+            model=model,
+            prompt=prompt,
+            turn_detection=turn_detection,
+            noise_reduction_type=noise_reduction_type,
+            client=azure_client,
+            use_realtime=use_realtime,
+        )
+
+    @staticmethod
+    def with_groq(
+        *,
+        model: GroqAudioModels | str = &#34;whisper-large-v3-turbo&#34;,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        client: openai.AsyncClient | None = None,
+        language: str = &#34;en&#34;,
+        detect_language: bool = False,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+    ) -&gt; STT:
+        &#34;&#34;&#34;
+        Create a new instance of Groq STT.
+
+        ``api_key`` must be set to your Groq API key, either using the argument or by setting
+        the ``GROQ_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+        groq_api_key = api_key if is_given(api_key) else os.environ.get(&#34;GROQ_API_KEY&#34;)
+        if not groq_api_key:
+            raise ValueError(&#34;Groq API key is required&#34;)
+
+        if not is_given(base_url):
+            base_url = &#34;https://api.groq.com/openai/v1&#34;
+
+        return STT(
+            model=model,
+            api_key=groq_api_key,
+            base_url=base_url,
+            client=client,
+            language=language,
+            detect_language=detect_language,
+            prompt=prompt,
+            use_realtime=False,
+        )
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -&gt; SpeechStream:
+        if is_given(language):
+            self._opts.language = language
+        stream = SpeechStream(
+            stt=self,
+            pool=self._pool,
+            conn_options=conn_options,
+        )
+        self._streams.add(stream)
+        return stream
+
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[STTModels | GroqAudioModels | str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        detect_language: NotGivenOr[bool] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Update the options for the speech stream. Most options are updated at the
+        connection level. SpeechStreams will be recreated when options are updated.
+
+        Args:
+            language: The language to transcribe in.
+            detect_language: Whether to automatically detect the language.
+            model: The model to use for transcription.
+            prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
+            turn_detection: When using realtime, this controls how model detects the user is done speaking.
+            noise_reduction_type: Type of noise reduction to apply. &#34;near_field&#34; or &#34;far_field&#34;
+        &#34;&#34;&#34;  # noqa: E501
+        if is_given(model):
+            self._opts.model = model
+        if is_given(language):
+            self._opts.language = language
+        if is_given(detect_language):
+            self._opts.detect_language = detect_language
+            self._opts.language = &#34;&#34;
+        if is_given(prompt):
+            self._opts.prompt = prompt
+        if is_given(turn_detection):
+            self._opts.turn_detection = turn_detection
+        if is_given(noise_reduction_type):
+            self._opts.noise_reduction_type = noise_reduction_type
+
+        for stream in self._streams:
+            if is_given(language):
+                stream.update_options(language=language)
+
+    async def _connect_ws(self) -&gt; aiohttp.ClientWebSocketResponse:
+        prompt = self._opts.prompt if is_given(self._opts.prompt) else &#34;&#34;
+        realtime_config: dict[str, Any] = {
+            &#34;type&#34;: &#34;transcription_session.update&#34;,
+            &#34;session&#34;: {
+                &#34;input_audio_format&#34;: &#34;pcm16&#34;,
+                &#34;input_audio_transcription&#34;: {
+                    &#34;model&#34;: self._opts.model,
+                    &#34;prompt&#34;: prompt,
+                },
+                &#34;turn_detection&#34;: self._opts.turn_detection,
+            },
+        }
+        if self._opts.language:
+            realtime_config[&#34;session&#34;][&#34;input_audio_transcription&#34;][&#34;language&#34;] = (
+                self._opts.language
+            )
+
+        if self._opts.noise_reduction_type:
+            realtime_config[&#34;session&#34;][&#34;input_audio_noise_reduction&#34;] = {
+                &#34;type&#34;: self._opts.noise_reduction_type
+            }
+
+        query_params: dict[str, str] = {
+            &#34;intent&#34;: &#34;transcription&#34;,
+        }
+        headers = {
+            &#34;User-Agent&#34;: &#34;LiveKit Agents&#34;,
+            &#34;Authorization&#34;: f&#34;Bearer {self._client.api_key}&#34;,
+            &#34;OpenAI-Beta&#34;: &#34;realtime=v1&#34;,
+        }
+        url = f&#34;{str(self._client.base_url).rstrip(&#39;/&#39;)}/realtime?{urlencode(query_params)}&#34;
+        if url.startswith(&#34;http&#34;):
+            url = url.replace(&#34;http&#34;, &#34;ws&#34;, 1)
+
+        session = self._ensure_session()
+        ws = await asyncio.wait_for(
+            session.ws_connect(url, headers=headers),
+            DEFAULT_API_CONNECT_OPTIONS.timeout,
+        )
+        await ws.send_json(realtime_config)
+        return ws
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        await ws.close()
+
+    def _ensure_session(self) -&gt; aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+
+        return self._session
+
+    async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ) -&gt; stt.SpeechEvent:
+        try:
+            if is_given(language):
+                self._opts.language = language
+            data = rtc.combine_audio_frames(buffer).to_wav_bytes()
+            prompt = self._opts.prompt if is_given(self._opts.prompt) else openai.NOT_GIVEN
+
+            format = &#34;json&#34;
+            if self._opts.model == &#34;whisper-1&#34;:
+                # verbose_json returns language and other details, only supported for whisper-1
+                format = &#34;verbose_json&#34;
+
+            resp = await self._client.audio.transcriptions.create(
+                file=(
+                    &#34;file.wav&#34;,
+                    data,
+                    &#34;audio/wav&#34;,
+                ),
+                model=self._opts.model,  # type: ignore
+                language=self._opts.language,
+                prompt=prompt,
+                response_format=format,
+                timeout=httpx.Timeout(30, connect=conn_options.timeout),
+            )
+
+            sd = stt.SpeechData(text=resp.text, language=self._opts.language)
+            if isinstance(resp, TranscriptionVerbose) and resp.language:
+                sd.language = resp.language
+
+            return stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[sd],
+            )
+
+        except openai.APITimeoutError:
+            raise APITimeoutError() from None
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
+        except Exception as e:
+            raise APIConnectionError() from e</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Create a new instance of OpenAI STT.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>language</code></strong></dt>
+<dd>The language code to use for transcription (e.g., "en" for English).</dd>
+<dt><strong><code>detect_language</code></strong></dt>
+<dd>Whether to automatically detect the language.</dd>
+<dt><strong><code>model</code></strong></dt>
+<dd>The OpenAI model to use for transcription.</dd>
+<dt><strong><code>prompt</code></strong></dt>
+<dd>Optional text prompt to guide the transcription. Only supported for whisper-1.</dd>
+<dt><strong><code>turn_detection</code></strong></dt>
+<dd>When using realtime transcription, this controls how model detects the user is done speaking.
+Final transcripts are generated only after the turn is over. See: <a href="https://platform.openai.com/docs/guides/realtime-vad">https://platform.openai.com/docs/guides/realtime-vad</a></dd>
+<dt><strong><code>noise_reduction_type</code></strong></dt>
+<dd>Type of noise reduction to apply. "near_field" or "far_field"
+This isn't needed when using LiveKit's noise cancellation.</dd>
+<dt><strong><code>base_url</code></strong></dt>
+<dd>Custom base URL for OpenAI API.</dd>
+<dt><strong><code>api_key</code></strong></dt>
+<dd>Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.</dd>
+<dt><strong><code>client</code></strong></dt>
+<dd>Optional pre-configured OpenAI AsyncClient instance.</dd>
+<dt><strong><code>use_realtime</code></strong></dt>
+<dd>Whether to use the realtime transcription API. (default: False)</dd>
+</dl></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.stt.STT" href="../../agents/stt/stt.html#livekit.agents.stt.stt.STT">STT</a></li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.plugins.groq.services.STT" href="../groq/services.html#livekit.plugins.groq.services.STT">STT</a></li>
+</ul>
+<h3>Static methods</h3>
+<dl>
+<dt id="livekit.plugins.openai.STT.with_azure"><code class="name flex">
+<span>def <span class="ident">with_azure</span></span>(<span>*,<br>language: str = 'en',<br>detect_language: bool = False,<br>model: STTModels | str = 'gpt-4o-mini-transcribe',<br>prompt: NotGivenOr[str] = NOT_GIVEN,<br>turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,<br>noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,<br>azure_endpoint: str | None = None,<br>azure_deployment: str | None = None,<br>api_version: str | None = None,<br>api_key: str | None = None,<br>azure_ad_token: str | None = None,<br>azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,<br>organization: str | None = None,<br>project: str | None = None,<br>base_url: str | None = None,<br>use_realtime: bool = False,<br>timeout: httpx.Timeout | None = None) ‑> livekit.plugins.openai.stt.STT</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_azure(
+    *,
+    language: str = &#34;en&#34;,
+    detect_language: bool = False,
+    model: STTModels | str = &#34;gpt-4o-mini-transcribe&#34;,
+    prompt: NotGivenOr[str] = NOT_GIVEN,
+    turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+    noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+    azure_endpoint: str | None = None,
+    azure_deployment: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    azure_ad_token: str | None = None,
+    azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+    organization: str | None = None,
+    project: str | None = None,
+    base_url: str | None = None,
+    use_realtime: bool = False,
+    timeout: httpx.Timeout | None = None,
+) -&gt; STT:
+    &#34;&#34;&#34;
+    Create a new instance of Azure OpenAI STT.
+
+    This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+    - `api_key` from `AZURE_OPENAI_API_KEY`
+    - `organization` from `OPENAI_ORG_ID`
+    - `project` from `OPENAI_PROJECT_ID`
+    - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+    - `api_version` from `OPENAI_API_VERSION`
+    - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+    &#34;&#34;&#34;  # noqa: E501
+
+    azure_client = openai.AsyncAzureOpenAI(
+        max_retries=0,
+        azure_endpoint=azure_endpoint,
+        azure_deployment=azure_deployment,
+        api_version=api_version,
+        api_key=api_key,
+        azure_ad_token=azure_ad_token,
+        azure_ad_token_provider=azure_ad_token_provider,
+        organization=organization,
+        project=project,
+        base_url=base_url,
+        timeout=timeout
+        if timeout
+        else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+    )  # type: ignore
+
+    return STT(
+        language=language,
+        detect_language=detect_language,
+        model=model,
+        prompt=prompt,
+        turn_detection=turn_detection,
+        noise_reduction_type=noise_reduction_type,
+        client=azure_client,
+        use_realtime=use_realtime,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of Azure OpenAI STT.</p>
+<p>This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+- <code>api_key</code> from <code>AZURE_OPENAI_API_KEY</code>
+- <code>organization</code> from <code>OPENAI_ORG_ID</code>
+- <code>project</code> from <code>OPENAI_PROJECT_ID</code>
+- <code>azure_ad_token</code> from <code>AZURE_OPENAI_AD_TOKEN</code>
+- <code>api_version</code> from <code>OPENAI_API_VERSION</code>
+- <code>azure_endpoint</code> from <code>AZURE_OPENAI_ENDPOINT</code></p></div>
+</dd>
+<dt id="livekit.plugins.openai.STT.with_groq"><code class="name flex">
+<span>def <span class="ident">with_groq</span></span>(<span>*,<br>model: GroqAudioModels | str = 'whisper-large-v3-turbo',<br>api_key: NotGivenOr[str] = NOT_GIVEN,<br>base_url: NotGivenOr[str] = NOT_GIVEN,<br>client: openai.AsyncClient | None = None,<br>language: str = 'en',<br>detect_language: bool = False,<br>prompt: NotGivenOr[str] = NOT_GIVEN) ‑> livekit.plugins.openai.stt.STT</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_groq(
+    *,
+    model: GroqAudioModels | str = &#34;whisper-large-v3-turbo&#34;,
+    api_key: NotGivenOr[str] = NOT_GIVEN,
+    base_url: NotGivenOr[str] = NOT_GIVEN,
+    client: openai.AsyncClient | None = None,
+    language: str = &#34;en&#34;,
+    detect_language: bool = False,
+    prompt: NotGivenOr[str] = NOT_GIVEN,
+) -&gt; STT:
+    &#34;&#34;&#34;
+    Create a new instance of Groq STT.
+
+    ``api_key`` must be set to your Groq API key, either using the argument or by setting
+    the ``GROQ_API_KEY`` environmental variable.
+    &#34;&#34;&#34;
+    groq_api_key = api_key if is_given(api_key) else os.environ.get(&#34;GROQ_API_KEY&#34;)
+    if not groq_api_key:
+        raise ValueError(&#34;Groq API key is required&#34;)
+
+    if not is_given(base_url):
+        base_url = &#34;https://api.groq.com/openai/v1&#34;
+
+    return STT(
+        model=model,
+        api_key=groq_api_key,
+        base_url=base_url,
+        client=client,
+        language=language,
+        detect_language=detect_language,
+        prompt=prompt,
+        use_realtime=False,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of Groq STT.</p>
+<p><code>api_key</code> must be set to your Groq API key, either using the argument or by setting
+the <code>GROQ_API_KEY</code> environmental variable.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.plugins.openai.STT.stream"><code class="name flex">
+<span>def <span class="ident">stream</span></span>(<span>self,<br>*,<br>language: NotGivenOr[str] = NOT_GIVEN,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0)) ‑> livekit.plugins.openai.stt.SpeechStream</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def stream(
+    self,
+    *,
+    language: NotGivenOr[str] = NOT_GIVEN,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+) -&gt; SpeechStream:
+    if is_given(language):
+        self._opts.language = language
+    stream = SpeechStream(
+        stt=self,
+        pool=self._pool,
+        conn_options=conn_options,
+    )
+    self._streams.add(stream)
+    return stream</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.plugins.openai.STT.update_options"><code class="name flex">
+<span>def <span class="ident">update_options</span></span>(<span>self,<br>*,<br>model: NotGivenOr[STTModels | GroqAudioModels | str] = NOT_GIVEN,<br>language: NotGivenOr[str] = NOT_GIVEN,<br>detect_language: NotGivenOr[bool] = NOT_GIVEN,<br>prompt: NotGivenOr[str] = NOT_GIVEN,<br>turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,<br>noise_reduction_type: NotGivenOr[str] = NOT_GIVEN) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def update_options(
+    self,
+    *,
+    model: NotGivenOr[STTModels | GroqAudioModels | str] = NOT_GIVEN,
+    language: NotGivenOr[str] = NOT_GIVEN,
+    detect_language: NotGivenOr[bool] = NOT_GIVEN,
+    prompt: NotGivenOr[str] = NOT_GIVEN,
+    turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+    noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+) -&gt; None:
+    &#34;&#34;&#34;
+    Update the options for the speech stream. Most options are updated at the
+    connection level. SpeechStreams will be recreated when options are updated.
+
+    Args:
+        language: The language to transcribe in.
+        detect_language: Whether to automatically detect the language.
+        model: The model to use for transcription.
+        prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
+        turn_detection: When using realtime, this controls how model detects the user is done speaking.
+        noise_reduction_type: Type of noise reduction to apply. &#34;near_field&#34; or &#34;far_field&#34;
+    &#34;&#34;&#34;  # noqa: E501
+    if is_given(model):
+        self._opts.model = model
+    if is_given(language):
+        self._opts.language = language
+    if is_given(detect_language):
+        self._opts.detect_language = detect_language
+        self._opts.language = &#34;&#34;
+    if is_given(prompt):
+        self._opts.prompt = prompt
+    if is_given(turn_detection):
+        self._opts.turn_detection = turn_detection
+    if is_given(noise_reduction_type):
+        self._opts.noise_reduction_type = noise_reduction_type
+
+    for stream in self._streams:
+        if is_given(language):
+            stream.update_options(language=language)</code></pre>
+</details>
+<div class="desc"><p>Update the options for the speech stream. Most options are updated at the
+connection level. SpeechStreams will be recreated when options are updated.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>language</code></strong></dt>
+<dd>The language to transcribe in.</dd>
+<dt><strong><code>detect_language</code></strong></dt>
+<dd>Whether to automatically detect the language.</dd>
+<dt><strong><code>model</code></strong></dt>
+<dd>The model to use for transcription.</dd>
+<dt><strong><code>prompt</code></strong></dt>
+<dd>Optional text prompt to guide the transcription. Only supported for whisper-1.</dd>
+<dt><strong><code>turn_detection</code></strong></dt>
+<dd>When using realtime, this controls how model detects the user is done speaking.</dd>
+<dt><strong><code>noise_reduction_type</code></strong></dt>
+<dd>Type of noise reduction to apply. "near_field" or "far_field"</dd>
+</dl></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.stt.stt.STT" href="../../agents/stt/stt.html#livekit.agents.stt.stt.STT">STT</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.stt.stt.STT.aclose" href="../../agents/stt/stt.html#livekit.agents.stt.stt.STT.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.plugins.openai.TTS"><code class="flex name class">
+<span>class <span class="ident">TTS</span></span>
+<span>(</span><span>*,<br>model: TTSModels | str = 'gpt-4o-mini-tts',<br>voice: TTSVoices | str = 'ash',<br>speed: float = 1.0,<br>instructions: NotGivenOr[str] = NOT_GIVEN,<br>base_url: NotGivenOr[str] = NOT_GIVEN,<br>api_key: NotGivenOr[str] = NOT_GIVEN,<br>client: openai.AsyncClient | None = None,<br>response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TTS(tts.TTS):
+    def __init__(
+        self,
+        *,
+        model: TTSModels | str = DEFAULT_MODEL,
+        voice: TTSVoices | str = DEFAULT_VOICE,
+        speed: float = 1.0,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        client: openai.AsyncClient | None = None,
+        response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Create a new instance of OpenAI TTS.
+
+        ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
+        ``OPENAI_API_KEY`` environmental variable.
+        &#34;&#34;&#34;
+        super().__init__(
+            capabilities=tts.TTSCapabilities(
+                streaming=False,
+            ),
+            sample_rate=OPENAI_TTS_SAMPLE_RATE,
+            num_channels=OPENAI_TTS_CHANNELS,
+        )
+
+        self._opts = _TTSOptions(
+            model=model,
+            voice=voice,
+            speed=speed,
+            instructions=instructions if is_given(instructions) else None,
+            response_format=response_format if is_given(response_format) else &#34;opus&#34;,
+        )
+
+        self._client = client or openai.AsyncClient(
+            max_retries=0,
+            api_key=api_key if is_given(api_key) else None,
+            base_url=base_url if is_given(base_url) else None,
+            http_client=httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=50,
+                    keepalive_expiry=120,
+                ),
+            ),
+        )
+
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+    ) -&gt; None:
+        if is_given(model):
+            self._opts.model = model
+        if is_given(voice):
+            self._opts.voice = voice
+        if is_given(speed):
+            self._opts.speed = speed
+        if is_given(instructions):
+            self._opts.instructions = instructions
+
+    @staticmethod
+    def with_azure(
+        *,
+        model: TTSModels | str = DEFAULT_MODEL,
+        voice: TTSVoices | str = DEFAULT_VOICE,
+        speed: float = 1.0,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
+        api_key: str | None = None,
+        azure_ad_token: str | None = None,
+        azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        base_url: str | None = None,
+        response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -&gt; TTS:
+        &#34;&#34;&#34;
+        Create a new instance of Azure OpenAI TTS.
+
+        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+        - `api_key` from `AZURE_OPENAI_API_KEY`
+        - `organization` from `OPENAI_ORG_ID`
+        - `project` from `OPENAI_PROJECT_ID`
+        - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+        - `api_version` from `OPENAI_API_VERSION`
+        - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+        &#34;&#34;&#34;  # noqa: E501
+
+        azure_client = openai.AsyncAzureOpenAI(
+            max_retries=0,
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
+            organization=organization,
+            project=project,
+            base_url=base_url,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+        )  # type: ignore
+
+        return TTS(
+            model=model,
+            voice=voice,
+            speed=speed,
+            instructions=instructions,
+            client=azure_client,
+            response_format=response_format,
+        )
+
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -&gt; ChunkedStream:
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=self._opts,
+            client=self._client,
+        )</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Create a new instance of OpenAI TTS.</p>
+<p><code>api_key</code> must be set to your OpenAI API key, either using the argument or by setting the
+<code>OPENAI_API_KEY</code> environmental variable.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.tts.tts.TTS" href="../../agents/tts/tts.html#livekit.agents.tts.tts.TTS">TTS</a></li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Static methods</h3>
+<dl>
+<dt id="livekit.plugins.openai.TTS.with_azure"><code class="name flex">
+<span>def <span class="ident">with_azure</span></span>(<span>*,<br>model: TTSModels | str = 'gpt-4o-mini-tts',<br>voice: TTSVoices | str = 'ash',<br>speed: float = 1.0,<br>instructions: NotGivenOr[str] = NOT_GIVEN,<br>azure_endpoint: str | None = None,<br>azure_deployment: str | None = None,<br>api_version: str | None = None,<br>api_key: str | None = None,<br>azure_ad_token: str | None = None,<br>azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,<br>organization: str | None = None,<br>project: str | None = None,<br>base_url: str | None = None,<br>response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,<br>timeout: httpx.Timeout | None = None) ‑> livekit.plugins.openai.tts.TTS</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@staticmethod
+def with_azure(
+    *,
+    model: TTSModels | str = DEFAULT_MODEL,
+    voice: TTSVoices | str = DEFAULT_VOICE,
+    speed: float = 1.0,
+    instructions: NotGivenOr[str] = NOT_GIVEN,
+    azure_endpoint: str | None = None,
+    azure_deployment: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    azure_ad_token: str | None = None,
+    azure_ad_token_provider: AsyncAzureADTokenProvider | None = None,
+    organization: str | None = None,
+    project: str | None = None,
+    base_url: str | None = None,
+    response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,
+    timeout: httpx.Timeout | None = None,
+) -&gt; TTS:
+    &#34;&#34;&#34;
+    Create a new instance of Azure OpenAI TTS.
+
+    This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+    - `api_key` from `AZURE_OPENAI_API_KEY`
+    - `organization` from `OPENAI_ORG_ID`
+    - `project` from `OPENAI_PROJECT_ID`
+    - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
+    - `api_version` from `OPENAI_API_VERSION`
+    - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+    &#34;&#34;&#34;  # noqa: E501
+
+    azure_client = openai.AsyncAzureOpenAI(
+        max_retries=0,
+        azure_endpoint=azure_endpoint,
+        azure_deployment=azure_deployment,
+        api_version=api_version,
+        api_key=api_key,
+        azure_ad_token=azure_ad_token,
+        azure_ad_token_provider=azure_ad_token_provider,
+        organization=organization,
+        project=project,
+        base_url=base_url,
+        timeout=timeout
+        if timeout
+        else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+    )  # type: ignore
+
+    return TTS(
+        model=model,
+        voice=voice,
+        speed=speed,
+        instructions=instructions,
+        client=azure_client,
+        response_format=response_format,
+    )</code></pre>
+</details>
+<div class="desc"><p>Create a new instance of Azure OpenAI TTS.</p>
+<p>This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+- <code>api_key</code> from <code>AZURE_OPENAI_API_KEY</code>
+- <code>organization</code> from <code>OPENAI_ORG_ID</code>
+- <code>project</code> from <code>OPENAI_PROJECT_ID</code>
+- <code>azure_ad_token</code> from <code>AZURE_OPENAI_AD_TOKEN</code>
+- <code>api_version</code> from <code>OPENAI_API_VERSION</code>
+- <code>azure_endpoint</code> from <code>AZURE_OPENAI_ENDPOINT</code></p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.plugins.openai.TTS.synthesize"><code class="name flex">
+<span>def <span class="ident">synthesize</span></span>(<span>self,<br>text: str,<br>*,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0)) ‑> livekit.plugins.openai.tts.ChunkedStream</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def synthesize(
+    self,
+    text: str,
+    *,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+) -&gt; ChunkedStream:
+    return ChunkedStream(
+        tts=self,
+        input_text=text,
+        conn_options=conn_options,
+        opts=self._opts,
+        client=self._client,
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.plugins.openai.TTS.update_options"><code class="name flex">
+<span>def <span class="ident">update_options</span></span>(<span>self,<br>*,<br>model: NotGivenOr[TTSModels | str] = NOT_GIVEN,<br>voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,<br>speed: NotGivenOr[float] = NOT_GIVEN,<br>instructions: NotGivenOr[str] = NOT_GIVEN) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def update_options(
+    self,
+    *,
+    model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+    voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+    speed: NotGivenOr[float] = NOT_GIVEN,
+    instructions: NotGivenOr[str] = NOT_GIVEN,
+) -&gt; None:
+    if is_given(model):
+        self._opts.model = model
+    if is_given(voice):
+        self._opts.voice = voice
+    if is_given(speed):
+        self._opts.speed = speed
+    if is_given(instructions):
+        self._opts.instructions = instructions</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.tts.tts.TTS" href="../../agents/tts/tts.html#livekit.agents.tts.tts.TTS">TTS</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.tts.tts.TTS.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.prewarm" href="../../agents/tts/tts.html#livekit.agents.tts.tts.TTS.prewarm">prewarm</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.plugins" href="../index.html">livekit.plugins</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-submodules">Sub-modules</a></h3>
+<ul>
+<li><code><a title="livekit.plugins.openai.realtime" href="realtime/index.html">livekit.plugins.openai.realtime</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-functions">Functions</a></h3>
+<ul class="">
+<li><code><a title="livekit.plugins.openai.create_embeddings" href="#livekit.plugins.openai.create_embeddings">create_embeddings</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.plugins.openai.EmbeddingData" href="#livekit.plugins.openai.EmbeddingData">EmbeddingData</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.plugins.openai.EmbeddingData.embedding" href="#livekit.plugins.openai.EmbeddingData.embedding">embedding</a></code></li>
+<li><code><a title="livekit.plugins.openai.EmbeddingData.index" href="#livekit.plugins.openai.EmbeddingData.index">index</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.plugins.openai.LLM" href="#livekit.plugins.openai.LLM">LLM</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.plugins.openai.LLM.chat" href="#livekit.plugins.openai.LLM.chat">chat</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_azure" href="#livekit.plugins.openai.LLM.with_azure">with_azure</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_cerebras" href="#livekit.plugins.openai.LLM.with_cerebras">with_cerebras</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_deepseek" href="#livekit.plugins.openai.LLM.with_deepseek">with_deepseek</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_fireworks" href="#livekit.plugins.openai.LLM.with_fireworks">with_fireworks</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_octo" href="#livekit.plugins.openai.LLM.with_octo">with_octo</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_ollama" href="#livekit.plugins.openai.LLM.with_ollama">with_ollama</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_perplexity" href="#livekit.plugins.openai.LLM.with_perplexity">with_perplexity</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_telnyx" href="#livekit.plugins.openai.LLM.with_telnyx">with_telnyx</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_together" href="#livekit.plugins.openai.LLM.with_together">with_together</a></code></li>
+<li><code><a title="livekit.plugins.openai.LLM.with_x_ai" href="#livekit.plugins.openai.LLM.with_x_ai">with_x_ai</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.plugins.openai.LLMStream" href="#livekit.plugins.openai.LLMStream">LLMStream</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.plugins.openai.STT" href="#livekit.plugins.openai.STT">STT</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.plugins.openai.STT.stream" href="#livekit.plugins.openai.STT.stream">stream</a></code></li>
+<li><code><a title="livekit.plugins.openai.STT.update_options" href="#livekit.plugins.openai.STT.update_options">update_options</a></code></li>
+<li><code><a title="livekit.plugins.openai.STT.with_azure" href="#livekit.plugins.openai.STT.with_azure">with_azure</a></code></li>
+<li><code><a title="livekit.plugins.openai.STT.with_groq" href="#livekit.plugins.openai.STT.with_groq">with_groq</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.plugins.openai.TTS" href="#livekit.plugins.openai.TTS">TTS</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.plugins.openai.TTS.synthesize" href="#livekit.plugins.openai.TTS.synthesize">synthesize</a></code></li>
+<li><code><a title="livekit.plugins.openai.TTS.update_options" href="#livekit.plugins.openai.TTS.update_options">update_options</a></code></li>
+<li><code><a title="livekit.plugins.openai.TTS.with_azure" href="#livekit.plugins.openai.TTS.with_azure">with_azure</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

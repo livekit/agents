@@ -10,8 +10,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-from livekit.agents.voice.avatar import DataStreamAudioOutput
-from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.avatar import DataStreamAudioOutput
+from livekit.agents.io import PlaybackFinishedEvent
 from livekit.plugins import openai
 
 logger = logging.getLogger("basic-agent")

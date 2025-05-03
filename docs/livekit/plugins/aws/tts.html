@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.plugins.aws.tts API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.plugins.aws.tts</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.plugins.aws.tts.ChunkedStream"><code class="flex name class">
+<span>class <span class="ident">ChunkedStream</span></span>
+<span>(</span><span>*,<br>tts: <a title="livekit.plugins.aws.tts.TTS" href="#livekit.plugins.aws.tts.TTS">TTS</a>,<br>text: str,<br>session: aioboto3.Session,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0),<br>opts: _TTSOptions)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ChunkedStream(tts.ChunkedStream):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        text: str,
+        session: aioboto3.Session,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        opts: _TTSOptions,
+    ) -&gt; None:
+        super().__init__(tts=tts, input_text=text, conn_options=conn_options)
+        self._opts = opts
+        self._segment_id = utils.shortuuid()
+        self._session = session
+
+    async def _run(self):
+        request_id = utils.shortuuid()
+
+        try:
+            async with self._session.client(&#34;polly&#34;) as client:
+                params = {
+                    &#34;Text&#34;: self._input_text,
+                    &#34;OutputFormat&#34;: &#34;mp3&#34;,
+                    &#34;Engine&#34;: self._opts.speech_engine
+                    if is_given(self._opts.speech_engine)
+                    else DEFAULT_SPEECH_ENGINE,
+                    &#34;VoiceId&#34;: self._opts.voice if is_given(self._opts.voice) else DEFAULT_VOICE,
+                    &#34;TextType&#34;: &#34;text&#34;,
+                    &#34;SampleRate&#34;: str(self._opts.sample_rate),
+                    &#34;LanguageCode&#34;: self._opts.language if is_given(self._opts.language) else None,
+                }
+                response = await client.synthesize_speech(**_strip_nones(params))
+                if &#34;AudioStream&#34; in response:
+                    decoder = utils.codecs.AudioStreamDecoder(
+                        sample_rate=self._opts.sample_rate,
+                        num_channels=1,
+                    )
+
+                    # Create a task to push data to the decoder
+                    async def push_data():
+                        try:
+                            async with response[&#34;AudioStream&#34;] as resp:
+                                async for data, _ in resp.content.iter_chunks():
+                                    decoder.push(data)
+                        finally:
+                            decoder.end_input()
+
+                    # Start pushing data to the decoder
+                    push_task = asyncio.create_task(push_data())
+
+                    try:
+                        # Create emitter and process decoded frames
+                        emitter = tts.SynthesizedAudioEmitter(
+                            event_ch=self._event_ch,
+                            request_id=request_id,
+                            segment_id=self._segment_id,
+                        )
+                        async for frame in decoder:
+                            emitter.push(frame)
+                        emitter.flush()
+                        await push_task
+                    finally:
+                        await utils.aio.gracefully_cancel(push_task)
+
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=request_id,
+                body=None,
+            ) from None
+        except Exception as e:
+            raise APIConnectionError() from e</code></pre>
+</details>
+<div class="desc"><p>Used by the non-streamed synthesize API, some providers support chunked http responses</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.tts.tts.ChunkedStream" href="../../agents/tts/tts.html#livekit.agents.tts.tts.ChunkedStream">ChunkedStream</a></li>
+<li>abc.ABC</li>
+</ul>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.tts.tts.ChunkedStream" href="../../agents/tts/tts.html#livekit.agents.tts.tts.ChunkedStream">ChunkedStream</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.tts.tts.ChunkedStream.aclose" href="../../agents/tts/tts.html#livekit.agents.tts.tts.ChunkedStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.ChunkedStream.collect" href="../../agents/tts/tts.html#livekit.agents.tts.tts.ChunkedStream.collect">collect</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.plugins.aws.tts.TTS"><code class="flex name class">
+<span>class <span class="ident">TTS</span></span>
+<span>(</span><span>*,<br>voice: NotGivenOr[str] = NOT_GIVEN,<br>language: NotGivenOr[TTS_LANGUAGE | str] = NOT_GIVEN,<br>speech_engine: NotGivenOr[TTS_SPEECH_ENGINE] = NOT_GIVEN,<br>sample_rate: int = 16000,<br>region: NotGivenOr[str] = NOT_GIVEN,<br>api_key: NotGivenOr[str] = NOT_GIVEN,<br>api_secret: NotGivenOr[str] = NOT_GIVEN,<br>session: aioboto3.Session | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TTS(tts.TTS):
+    def __init__(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[TTS_LANGUAGE | str] = NOT_GIVEN,
+        speech_engine: NotGivenOr[TTS_SPEECH_ENGINE] = NOT_GIVEN,
+        sample_rate: int = DEFAULT_SAMPLE_RATE,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        session: aioboto3.Session | None = None,
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Create a new instance of AWS Polly TTS.
+
+        ``api_key``  and ``api_secret`` must be set to your AWS Access key id and secret access key, either using the argument or by setting the
+        ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` environmental variables.
+
+        See https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html for more details on the the AWS Polly TTS.
+
+        Args:
+            Voice (TTSModels, optional): Voice ID to use for the synthesis. Defaults to &#34;Ruth&#34;.
+            language (TTS_LANGUAGE, optional): language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).
+            sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
+            speech_engine(TTS_SPEECH_ENGINE, optional): The engine to use for the synthesis. Defaults to &#34;generative&#34;.
+            region(str, optional): The region to use for the synthesis. Defaults to &#34;us-east-1&#34;.
+            api_key(str, optional): AWS access key id.
+            api_secret(str, optional): AWS secret access key.
+            session(aioboto3.Session, optional): Optional aioboto3 session to use.
+        &#34;&#34;&#34;  # noqa: E501
+        super().__init__(
+            capabilities=tts.TTSCapabilities(
+                streaming=False,
+            ),
+            sample_rate=sample_rate,
+            num_channels=TTS_NUM_CHANNELS,
+        )
+        self._session = session or get_aws_async_session(
+            api_key=api_key if is_given(api_key) else None,
+            api_secret=api_secret if is_given(api_secret) else None,
+            region=region if is_given(region) else None,
+        )
+        self._opts = _TTSOptions(
+            voice=voice,
+            speech_engine=speech_engine,
+            region=region,
+            language=language,
+            sample_rate=sample_rate,
+        )
+
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -&gt; ChunkedStream:
+        return ChunkedStream(
+            tts=self,
+            text=text,
+            conn_options=conn_options,
+            session=self._session,
+            opts=self._opts,
+        )</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Create a new instance of AWS Polly TTS.</p>
+<p><code>api_key</code>
+and <code>api_secret</code> must be set to your AWS Access key id and secret access key, either using the argument or by setting the
+<code>AWS_ACCESS_KEY_ID</code> and <code>AWS_SECRET_ACCESS_KEY</code> environmental variables.</p>
+<p>See <a href="https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html">https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html</a> for more details on the the AWS Polly TTS.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>Voice</code></strong> :&ensp;<code>TTSModels</code>, optional</dt>
+<dd>Voice ID to use for the synthesis. Defaults to "Ruth".</dd>
+<dt><strong><code>language</code></strong> :&ensp;<code>TTS_LANGUAGE</code>, optional</dt>
+<dd>language code for the Synthesize Speech request. This is only necessary if using a bilingual voice, such as Aditi, which can be used for either Indian English (en-IN) or Hindi (hi-IN).</dd>
+</dl>
+<p>sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
+speech_engine(TTS_SPEECH_ENGINE, optional): The engine to use for the synthesis. Defaults to "generative".
+region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
+api_key(str, optional): AWS access key id.
+api_secret(str, optional): AWS secret access key.
+session(aioboto3.Session, optional): Optional aioboto3 session to use.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.tts.tts.TTS" href="../../agents/tts/tts.html#livekit.agents.tts.tts.TTS">TTS</a></li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.plugins.aws.tts.TTS.synthesize"><code class="name flex">
+<span>def <span class="ident">synthesize</span></span>(<span>self,<br>text: str,<br>*,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0)) ‑> <a title="livekit.plugins.aws.tts.ChunkedStream" href="#livekit.plugins.aws.tts.ChunkedStream">ChunkedStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def synthesize(
+    self,
+    text: str,
+    *,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+) -&gt; ChunkedStream:
+    return ChunkedStream(
+        tts=self,
+        text=text,
+        conn_options=conn_options,
+        session=self._session,
+        opts=self._opts,
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.tts.tts.TTS" href="../../agents/tts/tts.html#livekit.agents.tts.tts.TTS">TTS</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.tts.tts.TTS.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+<li><code><a title="livekit.agents.tts.tts.TTS.prewarm" href="../../agents/tts/tts.html#livekit.agents.tts.tts.TTS.prewarm">prewarm</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.plugins.aws" href="index.html">livekit.plugins.aws</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.plugins.aws.tts.ChunkedStream" href="#livekit.plugins.aws.tts.ChunkedStream">ChunkedStream</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.plugins.aws.tts.TTS" href="#livekit.plugins.aws.tts.TTS">TTS</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.plugins.aws.tts.TTS.synthesize" href="#livekit.plugins.aws.tts.TTS.synthesize">synthesize</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

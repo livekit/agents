@@ -1,0 +1,1275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.api API documentation</title>
+<meta name="description" content="LiveKit Server APIs for Python …">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.api</code></h1>
+</header>
+<section id="section-intro">
+<p>LiveKit Server APIs for Python</p>
+<p><code>pip install livekit-api</code></p>
+<p>Manage rooms, participants, egress, ingress, SIP, and Agent dispatch.</p>
+<p>Primary entry point is <code><a title="livekit.api.LiveKitAPI" href="#livekit.api.LiveKitAPI">LiveKitAPI</a></code>.</p>
+<p>See <a href="https://docs.livekit.io/reference/server/server-apis">https://docs.livekit.io/reference/server/server-apis</a> for more information.</p>
+</section>
+<section>
+<h2 class="section-title" id="header-submodules">Sub-modules</h2>
+<dl>
+<dt><code class="name"><a title="livekit.api.access_token" href="access_token.html">livekit.api.access_token</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.agent_dispatch_service" href="agent_dispatch_service.html">livekit.api.agent_dispatch_service</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.egress_service" href="egress_service.html">livekit.api.egress_service</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.ingress_service" href="ingress_service.html">livekit.api.ingress_service</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.livekit_api" href="livekit_api.html">livekit.api.livekit_api</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.room_service" href="room_service.html">livekit.api.room_service</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.sip_service" href="sip_service.html">livekit.api.sip_service</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.twirp_client" href="twirp_client.html">livekit.api.twirp_client</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.version" href="version.html">livekit.api.version</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.api.webhook" href="webhook.html">livekit.api.webhook</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.api.AccessToken"><code class="flex name class">
+<span>class <span class="ident">AccessToken</span></span>
+<span>(</span><span>api_key: str | None = None, api_secret: str | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class AccessToken:
+    ParticipantKind = Literal[&#34;standard&#34;, &#34;egress&#34;, &#34;ingress&#34;, &#34;sip&#34;, &#34;agent&#34;]
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+    ) -&gt; None:
+        api_key = api_key or os.getenv(&#34;LIVEKIT_API_KEY&#34;)
+        api_secret = api_secret or os.getenv(&#34;LIVEKIT_API_SECRET&#34;)
+
+        if not api_key or not api_secret:
+            raise ValueError(&#34;api_key and api_secret must be set&#34;)
+
+        self.api_key = api_key  # iss
+        self.api_secret = api_secret
+        self.claims = Claims()
+
+        # default jwt claims
+        self.identity = &#34;&#34;  # sub
+        self.ttl = DEFAULT_TTL  # exp
+
+    def with_ttl(self, ttl: datetime.timedelta) -&gt; &#34;AccessToken&#34;:
+        self.ttl = ttl
+        return self
+
+    def with_grants(self, grants: VideoGrants) -&gt; &#34;AccessToken&#34;:
+        self.claims.video = grants
+        return self
+
+    def with_sip_grants(self, grants: SIPGrants) -&gt; &#34;AccessToken&#34;:
+        self.claims.sip = grants
+        return self
+
+    def with_identity(self, identity: str) -&gt; &#34;AccessToken&#34;:
+        self.identity = identity
+        return self
+
+    def with_kind(self, kind: ParticipantKind) -&gt; &#34;AccessToken&#34;:
+        self.claims.kind = kind
+        return self
+
+    def with_name(self, name: str) -&gt; &#34;AccessToken&#34;:
+        self.claims.name = name
+        return self
+
+    def with_metadata(self, metadata: str) -&gt; &#34;AccessToken&#34;:
+        self.claims.metadata = metadata
+        return self
+
+    def with_attributes(self, attributes: dict[str, str]) -&gt; &#34;AccessToken&#34;:
+        self.claims.attributes = attributes
+        return self
+
+    def with_sha256(self, sha256: str) -&gt; &#34;AccessToken&#34;:
+        self.claims.sha256 = sha256
+        return self
+
+    def with_room_preset(self, preset: str) -&gt; &#34;AccessToken&#34;:
+        self.claims.room_preset = preset
+        return self
+
+    def with_room_config(self, config: RoomConfiguration) -&gt; &#34;AccessToken&#34;:
+        self.claims.room_config = config
+        return self
+
+    def to_jwt(self) -&gt; str:
+        video = self.claims.video
+        if video and video.room_join and (not self.identity or not video.room):
+            raise ValueError(&#34;identity and room must be set when joining a room&#34;)
+
+        # we want to exclude None values from the token
+        jwt_claims = self.claims.asdict()
+        jwt_claims.update(
+            {
+                &#34;sub&#34;: self.identity,
+                &#34;iss&#34;: self.api_key,
+                &#34;nbf&#34;: calendar.timegm(datetime.datetime.now(datetime.timezone.utc).utctimetuple()),
+                &#34;exp&#34;: calendar.timegm(
+                    (datetime.datetime.now(datetime.timezone.utc) + self.ttl).utctimetuple()
+                ),
+            }
+        )
+        return jwt.encode(jwt_claims, self.api_secret, algorithm=&#34;HS256&#34;)</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.api.AccessToken.ParticipantKind"><code class="name">var <span class="ident">ParticipantKind</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.api.AccessToken.to_jwt"><code class="name flex">
+<span>def <span class="ident">to_jwt</span></span>(<span>self) ‑> str</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def to_jwt(self) -&gt; str:
+    video = self.claims.video
+    if video and video.room_join and (not self.identity or not video.room):
+        raise ValueError(&#34;identity and room must be set when joining a room&#34;)
+
+    # we want to exclude None values from the token
+    jwt_claims = self.claims.asdict()
+    jwt_claims.update(
+        {
+            &#34;sub&#34;: self.identity,
+            &#34;iss&#34;: self.api_key,
+            &#34;nbf&#34;: calendar.timegm(datetime.datetime.now(datetime.timezone.utc).utctimetuple()),
+            &#34;exp&#34;: calendar.timegm(
+                (datetime.datetime.now(datetime.timezone.utc) + self.ttl).utctimetuple()
+            ),
+        }
+    )
+    return jwt.encode(jwt_claims, self.api_secret, algorithm=&#34;HS256&#34;)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_attributes"><code class="name flex">
+<span>def <span class="ident">with_attributes</span></span>(<span>self, attributes: dict[str, str]) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_attributes(self, attributes: dict[str, str]) -&gt; &#34;AccessToken&#34;:
+    self.claims.attributes = attributes
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_grants"><code class="name flex">
+<span>def <span class="ident">with_grants</span></span>(<span>self,<br>grants: <a title="livekit.api.access_token.VideoGrants" href="access_token.html#livekit.api.access_token.VideoGrants">VideoGrants</a>) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_grants(self, grants: VideoGrants) -&gt; &#34;AccessToken&#34;:
+    self.claims.video = grants
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_identity"><code class="name flex">
+<span>def <span class="ident">with_identity</span></span>(<span>self, identity: str) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_identity(self, identity: str) -&gt; &#34;AccessToken&#34;:
+    self.identity = identity
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_kind"><code class="name flex">
+<span>def <span class="ident">with_kind</span></span>(<span>self, kind: Literal['standard', 'egress', 'ingress', 'sip', 'agent']) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_kind(self, kind: ParticipantKind) -&gt; &#34;AccessToken&#34;:
+    self.claims.kind = kind
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_metadata"><code class="name flex">
+<span>def <span class="ident">with_metadata</span></span>(<span>self, metadata: str) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_metadata(self, metadata: str) -&gt; &#34;AccessToken&#34;:
+    self.claims.metadata = metadata
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_name"><code class="name flex">
+<span>def <span class="ident">with_name</span></span>(<span>self, name: str) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_name(self, name: str) -&gt; &#34;AccessToken&#34;:
+    self.claims.name = name
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_room_config"><code class="name flex">
+<span>def <span class="ident">with_room_config</span></span>(<span>self, config: room.RoomConfiguration) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_room_config(self, config: RoomConfiguration) -&gt; &#34;AccessToken&#34;:
+    self.claims.room_config = config
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_room_preset"><code class="name flex">
+<span>def <span class="ident">with_room_preset</span></span>(<span>self, preset: str) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_room_preset(self, preset: str) -&gt; &#34;AccessToken&#34;:
+    self.claims.room_preset = preset
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_sha256"><code class="name flex">
+<span>def <span class="ident">with_sha256</span></span>(<span>self, sha256: str) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_sha256(self, sha256: str) -&gt; &#34;AccessToken&#34;:
+    self.claims.sha256 = sha256
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_sip_grants"><code class="name flex">
+<span>def <span class="ident">with_sip_grants</span></span>(<span>self,<br>grants: <a title="livekit.api.access_token.SIPGrants" href="access_token.html#livekit.api.access_token.SIPGrants">SIPGrants</a>) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_sip_grants(self, grants: SIPGrants) -&gt; &#34;AccessToken&#34;:
+    self.claims.sip = grants
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.AccessToken.with_ttl"><code class="name flex">
+<span>def <span class="ident">with_ttl</span></span>(<span>self, ttl: datetime.timedelta) ‑> <a title="livekit.api.access_token.AccessToken" href="access_token.html#livekit.api.access_token.AccessToken">AccessToken</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_ttl(self, ttl: datetime.timedelta) -&gt; &#34;AccessToken&#34;:
+    self.ttl = ttl
+    return self</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.LiveKitAPI"><code class="flex name class">
+<span>class <span class="ident">LiveKitAPI</span></span>
+<span>(</span><span>url: str | None = None,<br>api_key: str | None = None,<br>api_secret: str | None = None,<br>*,<br>timeout: aiohttp.client.ClientTimeout | None = None,<br>session: aiohttp.client.ClientSession | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LiveKitAPI:
+    &#34;&#34;&#34;LiveKit Server API Client
+
+    This class is the main entrypoint, which exposes all services.
+
+    Usage:
+
+    ```python
+    from livekit import api
+    lkapi = api.LiveKitAPI()
+    rooms = await lkapi.room.list_rooms(api.proto_room.ListRoomsRequest(names=[&#39;test-room&#39;]))
+    ```
+    &#34;&#34;&#34;
+
+    def __init__(
+        self,
+        url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        *,
+        timeout: Optional[aiohttp.ClientTimeout] = None,
+        session: Optional[aiohttp.ClientSession] = None,
+    ):
+        &#34;&#34;&#34;Create a new LiveKitAPI instance.
+
+        Args:
+            url: LiveKit server URL (read from `LIVEKIT_URL` environment variable if not provided)
+            api_key: API key (read from `LIVEKIT_API_KEY` environment variable if not provided)
+            api_secret: API secret (read from `LIVEKIT_API_SECRET` environment variable if not provided)
+            timeout: Request timeout (default: 60 seconds)
+            session: aiohttp.ClientSession instance to use for requests, if not provided, a new one will be created
+        &#34;&#34;&#34;
+        url = url or os.getenv(&#34;LIVEKIT_URL&#34;)
+        api_key = api_key or os.getenv(&#34;LIVEKIT_API_KEY&#34;)
+        api_secret = api_secret or os.getenv(&#34;LIVEKIT_API_SECRET&#34;)
+
+        if not url:
+            raise ValueError(&#34;url must be set&#34;)
+
+        if not api_key or not api_secret:
+            raise ValueError(&#34;api_key and api_secret must be set&#34;)
+
+        self._custom_session = True
+        self._session = session
+        if not self._session:
+            self._custom_session = False
+            if not timeout:
+                timeout = aiohttp.ClientTimeout(total=60)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+
+        self._room = RoomService(self._session, url, api_key, api_secret)
+        self._ingress = IngressService(self._session, url, api_key, api_secret)
+        self._egress = EgressService(self._session, url, api_key, api_secret)
+        self._sip = SipService(self._session, url, api_key, api_secret)
+        self._agent_dispatch = AgentDispatchService(self._session, url, api_key, api_secret)
+
+    @property
+    def agent_dispatch(self) -&gt; AgentDispatchService:
+        &#34;&#34;&#34;Instance of the AgentDispatchService&#34;&#34;&#34;
+        return self._agent_dispatch
+
+    @property
+    def room(self) -&gt; RoomService:
+        &#34;&#34;&#34;Instance of the RoomService&#34;&#34;&#34;
+        return self._room
+
+    @property
+    def ingress(self) -&gt; IngressService:
+        &#34;&#34;&#34;Instance of the IngressService&#34;&#34;&#34;
+        return self._ingress
+
+    @property
+    def egress(self) -&gt; EgressService:
+        &#34;&#34;&#34;Instance of the EgressService&#34;&#34;&#34;
+        return self._egress
+
+    @property
+    def sip(self) -&gt; SipService:
+        &#34;&#34;&#34;Instance of the SipService&#34;&#34;&#34;
+        return self._sip
+
+    async def aclose(self):
+        &#34;&#34;&#34;Close the API client
+
+        Call this before your application exits or when the API client is no longer needed.&#34;&#34;&#34;
+        # we do not close custom sessions, that&#39;s up to the caller
+        if not self._custom_session:
+            await self._session.close()
+
+    async def __aenter__(self):
+        &#34;&#34;&#34;@private
+
+        Support for `async with`&#34;&#34;&#34;
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        &#34;&#34;&#34;@private
+
+        Support for `async with`&#34;&#34;&#34;
+        await self.aclose()</code></pre>
+</details>
+<div class="desc"><p>LiveKit Server API Client</p>
+<p>This class is the main entrypoint, which exposes all services.</p>
+<p>Usage:</p>
+<pre><code class="language-python">from livekit import api
+lkapi = api.LiveKitAPI()
+rooms = await lkapi.room.list_rooms(api.proto_room.ListRoomsRequest(names=['test-room']))
+</code></pre>
+<p>Create a new LiveKitAPI instance.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>url</code></strong></dt>
+<dd>LiveKit server URL (read from <code>LIVEKIT_URL</code> environment variable if not provided)</dd>
+<dt><strong><code>api_key</code></strong></dt>
+<dd>API key (read from <code>LIVEKIT_API_KEY</code> environment variable if not provided)</dd>
+<dt><strong><code>api_secret</code></strong></dt>
+<dd>API secret (read from <code>LIVEKIT_API_SECRET</code> environment variable if not provided)</dd>
+<dt><strong><code>timeout</code></strong></dt>
+<dd>Request timeout (default: 60 seconds)</dd>
+<dt><strong><code>session</code></strong></dt>
+<dd>aiohttp.ClientSession instance to use for requests, if not provided, a new one will be created</dd>
+</dl></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.api.LiveKitAPI.agent_dispatch"><code class="name">prop <span class="ident">agent_dispatch</span> : <a title="livekit.api.agent_dispatch_service.AgentDispatchService" href="agent_dispatch_service.html#livekit.api.agent_dispatch_service.AgentDispatchService">AgentDispatchService</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def agent_dispatch(self) -&gt; AgentDispatchService:
+    &#34;&#34;&#34;Instance of the AgentDispatchService&#34;&#34;&#34;
+    return self._agent_dispatch</code></pre>
+</details>
+<div class="desc"><p>Instance of the AgentDispatchService</p></div>
+</dd>
+<dt id="livekit.api.LiveKitAPI.egress"><code class="name">prop <span class="ident">egress</span> : <a title="livekit.api.egress_service.EgressService" href="egress_service.html#livekit.api.egress_service.EgressService">EgressService</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def egress(self) -&gt; EgressService:
+    &#34;&#34;&#34;Instance of the EgressService&#34;&#34;&#34;
+    return self._egress</code></pre>
+</details>
+<div class="desc"><p>Instance of the EgressService</p></div>
+</dd>
+<dt id="livekit.api.LiveKitAPI.ingress"><code class="name">prop <span class="ident">ingress</span> : <a title="livekit.api.ingress_service.IngressService" href="ingress_service.html#livekit.api.ingress_service.IngressService">IngressService</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def ingress(self) -&gt; IngressService:
+    &#34;&#34;&#34;Instance of the IngressService&#34;&#34;&#34;
+    return self._ingress</code></pre>
+</details>
+<div class="desc"><p>Instance of the IngressService</p></div>
+</dd>
+<dt id="livekit.api.LiveKitAPI.room"><code class="name">prop <span class="ident">room</span> : <a title="livekit.api.room_service.RoomService" href="room_service.html#livekit.api.room_service.RoomService">RoomService</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def room(self) -&gt; RoomService:
+    &#34;&#34;&#34;Instance of the RoomService&#34;&#34;&#34;
+    return self._room</code></pre>
+</details>
+<div class="desc"><p>Instance of the RoomService</p></div>
+</dd>
+<dt id="livekit.api.LiveKitAPI.sip"><code class="name">prop <span class="ident">sip</span> : <a title="livekit.api.sip_service.SipService" href="sip_service.html#livekit.api.sip_service.SipService">SipService</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def sip(self) -&gt; SipService:
+    &#34;&#34;&#34;Instance of the SipService&#34;&#34;&#34;
+    return self._sip</code></pre>
+</details>
+<div class="desc"><p>Instance of the SipService</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.api.LiveKitAPI.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self):
+    &#34;&#34;&#34;Close the API client
+
+    Call this before your application exits or when the API client is no longer needed.&#34;&#34;&#34;
+    # we do not close custom sessions, that&#39;s up to the caller
+    if not self._custom_session:
+        await self._session.close()</code></pre>
+</details>
+<div class="desc"><p>Close the API client</p>
+<p>Call this before your application exits or when the API client is no longer needed.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.SIPGrants"><code class="flex name class">
+<span>class <span class="ident">SIPGrants</span></span>
+<span>(</span><span>admin: bool = False, call: bool = False)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclasses.dataclass
+class SIPGrants:
+    # manage sip resources
+    admin: bool = False
+    # make outbound calls
+    call: bool = False</code></pre>
+</details>
+<div class="desc"><p>SIPGrants(admin: bool = False, call: bool = False)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.api.SIPGrants.admin"><code class="name">var <span class="ident">admin</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.SIPGrants.call"><code class="name">var <span class="ident">call</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.TokenVerifier"><code class="flex name class">
+<span>class <span class="ident">TokenVerifier</span></span>
+<span>(</span><span>api_key: str | None = None,<br>api_secret: str | None = None,<br>*,<br>leeway: datetime.timedelta = datetime.timedelta(seconds=60))</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TokenVerifier:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        *,
+        leeway: datetime.timedelta = DEFAULT_LEEWAY,
+    ) -&gt; None:
+        api_key = api_key or os.getenv(&#34;LIVEKIT_API_KEY&#34;)
+        api_secret = api_secret or os.getenv(&#34;LIVEKIT_API_SECRET&#34;)
+
+        if not api_key or not api_secret:
+            raise ValueError(&#34;api_key and api_secret must be set&#34;)
+
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self._leeway = leeway
+
+    def verify(self, token: str) -&gt; Claims:
+        claims = jwt.decode(
+            token,
+            self.api_secret,
+            issuer=self.api_key,
+            algorithms=[&#34;HS256&#34;],
+            leeway=self._leeway.total_seconds(),
+        )
+
+        video_dict = claims.get(&#34;video&#34;, dict())
+        video_dict = {camel_to_snake(k): v for k, v in video_dict.items()}
+        video_dict = {k: v for k, v in video_dict.items() if k in VideoGrants.__dataclass_fields__}
+        video = VideoGrants(**video_dict)
+
+        sip_dict = claims.get(&#34;sip&#34;, dict())
+        sip_dict = {camel_to_snake(k): v for k, v in sip_dict.items()}
+        sip_dict = {k: v for k, v in sip_dict.items() if k in SIPGrants.__dataclass_fields__}
+        sip = SIPGrants(**sip_dict)
+
+        grant_claims = Claims(
+            identity=claims.get(&#34;sub&#34;, &#34;&#34;),
+            name=claims.get(&#34;name&#34;, &#34;&#34;),
+            video=video,
+            sip=sip,
+            attributes=claims.get(&#34;attributes&#34;, {}),
+            metadata=claims.get(&#34;metadata&#34;, &#34;&#34;),
+            sha256=claims.get(&#34;sha256&#34;, &#34;&#34;),
+        )
+
+        if claims.get(&#34;roomPreset&#34;):
+            grant_claims.room_preset = claims.get(&#34;roomPreset&#34;)
+        if claims.get(&#34;roomConfig&#34;):
+            grant_claims.room_config = ParseDict(
+                claims.get(&#34;roomConfig&#34;),
+                RoomConfiguration(),
+                ignore_unknown_fields=True,
+            )
+
+        return grant_claims</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.api.TokenVerifier.verify"><code class="name flex">
+<span>def <span class="ident">verify</span></span>(<span>self, token: str) ‑> <a title="livekit.api.access_token.Claims" href="access_token.html#livekit.api.access_token.Claims">Claims</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def verify(self, token: str) -&gt; Claims:
+    claims = jwt.decode(
+        token,
+        self.api_secret,
+        issuer=self.api_key,
+        algorithms=[&#34;HS256&#34;],
+        leeway=self._leeway.total_seconds(),
+    )
+
+    video_dict = claims.get(&#34;video&#34;, dict())
+    video_dict = {camel_to_snake(k): v for k, v in video_dict.items()}
+    video_dict = {k: v for k, v in video_dict.items() if k in VideoGrants.__dataclass_fields__}
+    video = VideoGrants(**video_dict)
+
+    sip_dict = claims.get(&#34;sip&#34;, dict())
+    sip_dict = {camel_to_snake(k): v for k, v in sip_dict.items()}
+    sip_dict = {k: v for k, v in sip_dict.items() if k in SIPGrants.__dataclass_fields__}
+    sip = SIPGrants(**sip_dict)
+
+    grant_claims = Claims(
+        identity=claims.get(&#34;sub&#34;, &#34;&#34;),
+        name=claims.get(&#34;name&#34;, &#34;&#34;),
+        video=video,
+        sip=sip,
+        attributes=claims.get(&#34;attributes&#34;, {}),
+        metadata=claims.get(&#34;metadata&#34;, &#34;&#34;),
+        sha256=claims.get(&#34;sha256&#34;, &#34;&#34;),
+    )
+
+    if claims.get(&#34;roomPreset&#34;):
+        grant_claims.room_preset = claims.get(&#34;roomPreset&#34;)
+    if claims.get(&#34;roomConfig&#34;):
+        grant_claims.room_config = ParseDict(
+            claims.get(&#34;roomConfig&#34;),
+            RoomConfiguration(),
+            ignore_unknown_fields=True,
+        )
+
+    return grant_claims</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.TwirpError"><code class="flex name class">
+<span>class <span class="ident">TwirpError</span></span>
+<span>(</span><span>code: str, msg: str, *, status: int, metadata: Dict[str, str] | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TwirpError(Exception):
+    def __init__(
+        self,
+        code: str,
+        msg: str,
+        *,
+        status: int,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -&gt; None:
+        self._code = code
+        self._msg = msg
+        self._status = status
+        self._metadata = metadata or {}
+
+    @property
+    def code(self) -&gt; str:
+        return self._code
+
+    @property
+    def message(self) -&gt; str:
+        return self._msg
+
+    @property
+    def status(self) -&gt; int:
+        &#34;&#34;&#34;HTTP status code&#34;&#34;&#34;
+        return self._status
+
+    @property
+    def metadata(self) -&gt; Dict[str, str]:
+        &#34;&#34;&#34;Twirp metadata&#34;&#34;&#34;
+        return self._metadata
+
+    def __str__(self) -&gt; str:
+        result = f&#34;TwirpError(code={self.code}, message={self.message}, status={self.status}&#34;
+        if self.metadata:
+            result += f&#34;, metadata={self.metadata}&#34;
+        result += &#34;)&#34;
+        return result</code></pre>
+</details>
+<div class="desc"><p>Common base class for all non-exit exceptions.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.Exception</li>
+<li>builtins.BaseException</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.api.TwirpError.code"><code class="name">prop <span class="ident">code</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def code(self) -&gt; str:
+    return self._code</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.TwirpError.message"><code class="name">prop <span class="ident">message</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def message(self) -&gt; str:
+    return self._msg</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.api.TwirpError.metadata"><code class="name">prop <span class="ident">metadata</span> : Dict[str, str]</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def metadata(self) -&gt; Dict[str, str]:
+    &#34;&#34;&#34;Twirp metadata&#34;&#34;&#34;
+    return self._metadata</code></pre>
+</details>
+<div class="desc"><p>Twirp metadata</p></div>
+</dd>
+<dt id="livekit.api.TwirpError.status"><code class="name">prop <span class="ident">status</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def status(self) -&gt; int:
+    &#34;&#34;&#34;HTTP status code&#34;&#34;&#34;
+    return self._status</code></pre>
+</details>
+<div class="desc"><p>HTTP status code</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.TwirpErrorCode"><code class="flex name class">
+<span>class <span class="ident">TwirpErrorCode</span></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TwirpErrorCode:
+    CANCELED = &#34;canceled&#34;
+    UNKNOWN = &#34;unknown&#34;
+    INVALID_ARGUMENT = &#34;invalid_argument&#34;
+    MALFORMED = &#34;malformed&#34;
+    DEADLINE_EXCEEDED = &#34;deadline_exceeded&#34;
+    NOT_FOUND = &#34;not_found&#34;
+    BAD_ROUTE = &#34;bad_route&#34;
+    ALREADY_EXISTS = &#34;already_exists&#34;
+    PERMISSION_DENIED = &#34;permission_denied&#34;
+    UNAUTHENTICATED = &#34;unauthenticated&#34;
+    RESOURCE_EXHAUSTED = &#34;resource_exhausted&#34;
+    FAILED_PRECONDITION = &#34;failed_precondition&#34;
+    ABORTED = &#34;aborted&#34;
+    OUT_OF_RANGE = &#34;out_of_range&#34;
+    UNIMPLEMENTED = &#34;unimplemented&#34;
+    INTERNAL = &#34;internal&#34;
+    UNAVAILABLE = &#34;unavailable&#34;
+    DATA_LOSS = &#34;dataloss&#34;</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.api.TwirpErrorCode.ABORTED"><code class="name">var <span class="ident">ABORTED</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.ALREADY_EXISTS"><code class="name">var <span class="ident">ALREADY_EXISTS</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.BAD_ROUTE"><code class="name">var <span class="ident">BAD_ROUTE</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.CANCELED"><code class="name">var <span class="ident">CANCELED</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.DATA_LOSS"><code class="name">var <span class="ident">DATA_LOSS</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.DEADLINE_EXCEEDED"><code class="name">var <span class="ident">DEADLINE_EXCEEDED</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.FAILED_PRECONDITION"><code class="name">var <span class="ident">FAILED_PRECONDITION</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.INTERNAL"><code class="name">var <span class="ident">INTERNAL</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.INVALID_ARGUMENT"><code class="name">var <span class="ident">INVALID_ARGUMENT</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.MALFORMED"><code class="name">var <span class="ident">MALFORMED</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.NOT_FOUND"><code class="name">var <span class="ident">NOT_FOUND</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.OUT_OF_RANGE"><code class="name">var <span class="ident">OUT_OF_RANGE</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.PERMISSION_DENIED"><code class="name">var <span class="ident">PERMISSION_DENIED</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.RESOURCE_EXHAUSTED"><code class="name">var <span class="ident">RESOURCE_EXHAUSTED</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.UNAUTHENTICATED"><code class="name">var <span class="ident">UNAUTHENTICATED</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.UNAVAILABLE"><code class="name">var <span class="ident">UNAVAILABLE</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.UNIMPLEMENTED"><code class="name">var <span class="ident">UNIMPLEMENTED</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.TwirpErrorCode.UNKNOWN"><code class="name">var <span class="ident">UNKNOWN</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.VideoGrants"><code class="flex name class">
+<span>class <span class="ident">VideoGrants</span></span>
+<span>(</span><span>room_create: bool | None = None,<br>room_list: bool | None = None,<br>room_record: bool | None = None,<br>room_admin: bool | None = None,<br>room_join: bool | None = None,<br>room: str = '',<br>can_publish: bool = True,<br>can_subscribe: bool = True,<br>can_publish_data: bool = True,<br>can_publish_sources: List[str] | None = None,<br>can_update_own_metadata: bool | None = None,<br>ingress_admin: bool | None = None,<br>hidden: bool | None = None,<br>recorder: bool | None = None,<br>agent: bool | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclasses.dataclass
+class VideoGrants:
+    # actions on rooms
+    room_create: Optional[bool] = None
+    room_list: Optional[bool] = None
+    room_record: Optional[bool] = None
+
+    # actions on a particular room
+    room_admin: Optional[bool] = None
+    room_join: Optional[bool] = None
+    room: str = &#34;&#34;
+
+    # permissions within a room
+    can_publish: bool = True
+    can_subscribe: bool = True
+    can_publish_data: bool = True
+
+    # TrackSource types that a participant may publish.
+    # When set, it supersedes CanPublish. Only sources explicitly set here can be
+    # published
+    can_publish_sources: Optional[List[str]] = None
+
+    # by default, a participant is not allowed to update its own metadata
+    can_update_own_metadata: Optional[bool] = None
+
+    # actions on ingresses
+    ingress_admin: Optional[bool] = None  # applies to all ingress
+
+    # participant is not visible to other participants (useful when making bots)
+    hidden: Optional[bool] = None
+
+    # [deprecated] indicates to the room that current participant is a recorder
+    recorder: Optional[bool] = None
+
+    # indicates that the holder can register as an Agent framework worker
+    agent: Optional[bool] = None</code></pre>
+</details>
+<div class="desc"><p>VideoGrants(room_create: Optional[bool] = None, room_list: Optional[bool] = None, room_record: Optional[bool] = None, room_admin: Optional[bool] = None, room_join: Optional[bool] = None, room: str = '', can_publish: bool = True, can_subscribe: bool = True, can_publish_data: bool = True, can_publish_sources: Optional[List[str]] = None, can_update_own_metadata: Optional[bool] = None, ingress_admin: Optional[bool] = None, hidden: Optional[bool] = None, recorder: Optional[bool] = None, agent: Optional[bool] = None)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.api.VideoGrants.agent"><code class="name">var <span class="ident">agent</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.can_publish"><code class="name">var <span class="ident">can_publish</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.can_publish_data"><code class="name">var <span class="ident">can_publish_data</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.can_publish_sources"><code class="name">var <span class="ident">can_publish_sources</span> : List[str] | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.can_subscribe"><code class="name">var <span class="ident">can_subscribe</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.can_update_own_metadata"><code class="name">var <span class="ident">can_update_own_metadata</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.hidden"><code class="name">var <span class="ident">hidden</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.ingress_admin"><code class="name">var <span class="ident">ingress_admin</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.recorder"><code class="name">var <span class="ident">recorder</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.room"><code class="name">var <span class="ident">room</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.room_admin"><code class="name">var <span class="ident">room_admin</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.room_create"><code class="name">var <span class="ident">room_create</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.room_join"><code class="name">var <span class="ident">room_join</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.room_list"><code class="name">var <span class="ident">room_list</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.api.VideoGrants.room_record"><code class="name">var <span class="ident">room_record</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.api.WebhookReceiver"><code class="flex name class">
+<span>class <span class="ident">WebhookReceiver</span></span>
+<span>(</span><span>token_verifier: <a title="livekit.api.access_token.TokenVerifier" href="access_token.html#livekit.api.access_token.TokenVerifier">TokenVerifier</a>)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class WebhookReceiver:
+    def __init__(self, token_verifier: TokenVerifier):
+        self._verifier = token_verifier
+
+    def receive(self, body: str, auth_token: str) -&gt; WebhookEvent:
+        claims = self._verifier.verify(auth_token)
+        if claims.sha256 is None:
+            raise Exception(&#34;sha256 was not found in the token&#34;)
+
+        body_hash = hashlib.sha256(body.encode()).digest()
+        claims_hash = base64.b64decode(claims.sha256)
+
+        if body_hash != claims_hash:
+            raise Exception(&#34;hash mismatch&#34;)
+
+        return Parse(body, WebhookEvent(), ignore_unknown_fields=True)</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.api.WebhookReceiver.receive"><code class="name flex">
+<span>def <span class="ident">receive</span></span>(<span>self, body: str, auth_token: str) ‑> <a title="livekit.api.webhook.WebhookEvent" href="webhook.html#livekit.api.webhook.WebhookEvent">WebhookEvent</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def receive(self, body: str, auth_token: str) -&gt; WebhookEvent:
+    claims = self._verifier.verify(auth_token)
+    if claims.sha256 is None:
+        raise Exception(&#34;sha256 was not found in the token&#34;)
+
+    body_hash = hashlib.sha256(body.encode()).digest()
+    claims_hash = base64.b64decode(claims.sha256)
+
+    if body_hash != claims_hash:
+        raise Exception(&#34;hash mismatch&#34;)
+
+    return Parse(body, WebhookEvent(), ignore_unknown_fields=True)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit" href="../index.html">livekit</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-submodules">Sub-modules</a></h3>
+<ul>
+<li><code><a title="livekit.api.access_token" href="access_token.html">livekit.api.access_token</a></code></li>
+<li><code><a title="livekit.api.agent_dispatch_service" href="agent_dispatch_service.html">livekit.api.agent_dispatch_service</a></code></li>
+<li><code><a title="livekit.api.egress_service" href="egress_service.html">livekit.api.egress_service</a></code></li>
+<li><code><a title="livekit.api.ingress_service" href="ingress_service.html">livekit.api.ingress_service</a></code></li>
+<li><code><a title="livekit.api.livekit_api" href="livekit_api.html">livekit.api.livekit_api</a></code></li>
+<li><code><a title="livekit.api.room_service" href="room_service.html">livekit.api.room_service</a></code></li>
+<li><code><a title="livekit.api.sip_service" href="sip_service.html">livekit.api.sip_service</a></code></li>
+<li><code><a title="livekit.api.twirp_client" href="twirp_client.html">livekit.api.twirp_client</a></code></li>
+<li><code><a title="livekit.api.version" href="version.html">livekit.api.version</a></code></li>
+<li><code><a title="livekit.api.webhook" href="webhook.html">livekit.api.webhook</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.api.AccessToken" href="#livekit.api.AccessToken">AccessToken</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.api.AccessToken.ParticipantKind" href="#livekit.api.AccessToken.ParticipantKind">ParticipantKind</a></code></li>
+<li><code><a title="livekit.api.AccessToken.to_jwt" href="#livekit.api.AccessToken.to_jwt">to_jwt</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_attributes" href="#livekit.api.AccessToken.with_attributes">with_attributes</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_grants" href="#livekit.api.AccessToken.with_grants">with_grants</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_identity" href="#livekit.api.AccessToken.with_identity">with_identity</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_kind" href="#livekit.api.AccessToken.with_kind">with_kind</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_metadata" href="#livekit.api.AccessToken.with_metadata">with_metadata</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_name" href="#livekit.api.AccessToken.with_name">with_name</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_room_config" href="#livekit.api.AccessToken.with_room_config">with_room_config</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_room_preset" href="#livekit.api.AccessToken.with_room_preset">with_room_preset</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_sha256" href="#livekit.api.AccessToken.with_sha256">with_sha256</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_sip_grants" href="#livekit.api.AccessToken.with_sip_grants">with_sip_grants</a></code></li>
+<li><code><a title="livekit.api.AccessToken.with_ttl" href="#livekit.api.AccessToken.with_ttl">with_ttl</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.LiveKitAPI" href="#livekit.api.LiveKitAPI">LiveKitAPI</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.api.LiveKitAPI.aclose" href="#livekit.api.LiveKitAPI.aclose">aclose</a></code></li>
+<li><code><a title="livekit.api.LiveKitAPI.agent_dispatch" href="#livekit.api.LiveKitAPI.agent_dispatch">agent_dispatch</a></code></li>
+<li><code><a title="livekit.api.LiveKitAPI.egress" href="#livekit.api.LiveKitAPI.egress">egress</a></code></li>
+<li><code><a title="livekit.api.LiveKitAPI.ingress" href="#livekit.api.LiveKitAPI.ingress">ingress</a></code></li>
+<li><code><a title="livekit.api.LiveKitAPI.room" href="#livekit.api.LiveKitAPI.room">room</a></code></li>
+<li><code><a title="livekit.api.LiveKitAPI.sip" href="#livekit.api.LiveKitAPI.sip">sip</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.SIPGrants" href="#livekit.api.SIPGrants">SIPGrants</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.SIPGrants.admin" href="#livekit.api.SIPGrants.admin">admin</a></code></li>
+<li><code><a title="livekit.api.SIPGrants.call" href="#livekit.api.SIPGrants.call">call</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.TokenVerifier" href="#livekit.api.TokenVerifier">TokenVerifier</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.TokenVerifier.verify" href="#livekit.api.TokenVerifier.verify">verify</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.TwirpError" href="#livekit.api.TwirpError">TwirpError</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.TwirpError.code" href="#livekit.api.TwirpError.code">code</a></code></li>
+<li><code><a title="livekit.api.TwirpError.message" href="#livekit.api.TwirpError.message">message</a></code></li>
+<li><code><a title="livekit.api.TwirpError.metadata" href="#livekit.api.TwirpError.metadata">metadata</a></code></li>
+<li><code><a title="livekit.api.TwirpError.status" href="#livekit.api.TwirpError.status">status</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.TwirpErrorCode" href="#livekit.api.TwirpErrorCode">TwirpErrorCode</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.api.TwirpErrorCode.ABORTED" href="#livekit.api.TwirpErrorCode.ABORTED">ABORTED</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.ALREADY_EXISTS" href="#livekit.api.TwirpErrorCode.ALREADY_EXISTS">ALREADY_EXISTS</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.BAD_ROUTE" href="#livekit.api.TwirpErrorCode.BAD_ROUTE">BAD_ROUTE</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.CANCELED" href="#livekit.api.TwirpErrorCode.CANCELED">CANCELED</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.DATA_LOSS" href="#livekit.api.TwirpErrorCode.DATA_LOSS">DATA_LOSS</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.DEADLINE_EXCEEDED" href="#livekit.api.TwirpErrorCode.DEADLINE_EXCEEDED">DEADLINE_EXCEEDED</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.FAILED_PRECONDITION" href="#livekit.api.TwirpErrorCode.FAILED_PRECONDITION">FAILED_PRECONDITION</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.INTERNAL" href="#livekit.api.TwirpErrorCode.INTERNAL">INTERNAL</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.INVALID_ARGUMENT" href="#livekit.api.TwirpErrorCode.INVALID_ARGUMENT">INVALID_ARGUMENT</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.MALFORMED" href="#livekit.api.TwirpErrorCode.MALFORMED">MALFORMED</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.NOT_FOUND" href="#livekit.api.TwirpErrorCode.NOT_FOUND">NOT_FOUND</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.OUT_OF_RANGE" href="#livekit.api.TwirpErrorCode.OUT_OF_RANGE">OUT_OF_RANGE</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.PERMISSION_DENIED" href="#livekit.api.TwirpErrorCode.PERMISSION_DENIED">PERMISSION_DENIED</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.RESOURCE_EXHAUSTED" href="#livekit.api.TwirpErrorCode.RESOURCE_EXHAUSTED">RESOURCE_EXHAUSTED</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.UNAUTHENTICATED" href="#livekit.api.TwirpErrorCode.UNAUTHENTICATED">UNAUTHENTICATED</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.UNAVAILABLE" href="#livekit.api.TwirpErrorCode.UNAVAILABLE">UNAVAILABLE</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.UNIMPLEMENTED" href="#livekit.api.TwirpErrorCode.UNIMPLEMENTED">UNIMPLEMENTED</a></code></li>
+<li><code><a title="livekit.api.TwirpErrorCode.UNKNOWN" href="#livekit.api.TwirpErrorCode.UNKNOWN">UNKNOWN</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.VideoGrants" href="#livekit.api.VideoGrants">VideoGrants</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.VideoGrants.agent" href="#livekit.api.VideoGrants.agent">agent</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.can_publish" href="#livekit.api.VideoGrants.can_publish">can_publish</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.can_publish_data" href="#livekit.api.VideoGrants.can_publish_data">can_publish_data</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.can_publish_sources" href="#livekit.api.VideoGrants.can_publish_sources">can_publish_sources</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.can_subscribe" href="#livekit.api.VideoGrants.can_subscribe">can_subscribe</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.can_update_own_metadata" href="#livekit.api.VideoGrants.can_update_own_metadata">can_update_own_metadata</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.hidden" href="#livekit.api.VideoGrants.hidden">hidden</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.ingress_admin" href="#livekit.api.VideoGrants.ingress_admin">ingress_admin</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.recorder" href="#livekit.api.VideoGrants.recorder">recorder</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.room" href="#livekit.api.VideoGrants.room">room</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.room_admin" href="#livekit.api.VideoGrants.room_admin">room_admin</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.room_create" href="#livekit.api.VideoGrants.room_create">room_create</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.room_join" href="#livekit.api.VideoGrants.room_join">room_join</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.room_list" href="#livekit.api.VideoGrants.room_list">room_list</a></code></li>
+<li><code><a title="livekit.api.VideoGrants.room_record" href="#livekit.api.VideoGrants.room_record">room_record</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.api.WebhookReceiver" href="#livekit.api.WebhookReceiver">WebhookReceiver</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.api.WebhookReceiver.receive" href="#livekit.api.WebhookReceiver.receive">receive</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

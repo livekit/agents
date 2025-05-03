@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.llm.realtime API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.llm.realtime</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.llm.realtime.GenerationCreatedEvent"><code class="flex name class">
+<span>class <span class="ident">GenerationCreatedEvent</span></span>
+<span>(</span><span>message_stream: AsyncIterable[<a title="livekit.agents.llm.realtime.MessageGeneration" href="#livekit.agents.llm.realtime.MessageGeneration">MessageGeneration</a>],<br>function_stream: AsyncIterable[FunctionCall],<br>user_initiated: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class GenerationCreatedEvent:
+    message_stream: AsyncIterable[MessageGeneration]
+    function_stream: AsyncIterable[FunctionCall]
+    user_initiated: bool
+    &#34;&#34;&#34;True if the message was generated by the user using generate_reply()&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>GenerationCreatedEvent(message_stream: 'AsyncIterable[MessageGeneration]', function_stream: 'AsyncIterable[FunctionCall]', user_initiated: 'bool')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.GenerationCreatedEvent.function_stream"><code class="name">var <span class="ident">function_stream</span> : AsyncIterable[<a title="livekit.agents.llm.chat_context.FunctionCall" href="chat_context.html#livekit.agents.llm.chat_context.FunctionCall">FunctionCall</a>]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.GenerationCreatedEvent.message_stream"><code class="name">var <span class="ident">message_stream</span> : AsyncIterable[<a title="livekit.agents.llm.realtime.MessageGeneration" href="#livekit.agents.llm.realtime.MessageGeneration">MessageGeneration</a>]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.GenerationCreatedEvent.user_initiated"><code class="name">var <span class="ident">user_initiated</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>True if the message was generated by the user using generate_reply()</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.realtime.InputSpeechStartedEvent"><code class="flex name class">
+<span>class <span class="ident">InputSpeechStartedEvent</span></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class InputSpeechStartedEvent:
+    pass</code></pre>
+</details>
+<div class="desc"><p>InputSpeechStartedEvent()</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.InputSpeechStoppedEvent"><code class="flex name class">
+<span>class <span class="ident">InputSpeechStoppedEvent</span></span>
+<span>(</span><span>user_transcription_enabled: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class InputSpeechStoppedEvent:
+    user_transcription_enabled: bool</code></pre>
+</details>
+<div class="desc"><p>InputSpeechStoppedEvent(user_transcription_enabled: 'bool')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.InputSpeechStoppedEvent.user_transcription_enabled"><code class="name">var <span class="ident">user_transcription_enabled</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.realtime.InputTranscriptionCompleted"><code class="flex name class">
+<span>class <span class="ident">InputTranscriptionCompleted</span></span>
+<span>(</span><span>item_id: str, transcript: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class InputTranscriptionCompleted:
+    item_id: str
+    &#34;&#34;&#34;id of the item&#34;&#34;&#34;
+    transcript: str
+    &#34;&#34;&#34;transcript of the input audio&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>InputTranscriptionCompleted(item_id: 'str', transcript: 'str')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.InputTranscriptionCompleted.item_id"><code class="name">var <span class="ident">item_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>id of the item</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.InputTranscriptionCompleted.transcript"><code class="name">var <span class="ident">transcript</span> : str</code></dt>
+<dd>
+<div class="desc"><p>transcript of the input audio</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.realtime.MessageGeneration"><code class="flex name class">
+<span>class <span class="ident">MessageGeneration</span></span>
+<span>(</span><span>message_id: str,<br>text_stream: AsyncIterable[str],<br>audio_stream: AsyncIterable[rtc.AudioFrame])</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class MessageGeneration:
+    message_id: str
+    text_stream: AsyncIterable[str]  # could be io.TimedString
+    audio_stream: AsyncIterable[rtc.AudioFrame]</code></pre>
+</details>
+<div class="desc"><p>MessageGeneration(message_id: 'str', text_stream: 'AsyncIterable[str]', audio_stream: 'AsyncIterable[rtc.AudioFrame]')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.MessageGeneration.audio_stream"><code class="name">var <span class="ident">audio_stream</span> : AsyncIterable[<a title="livekit.rtc.audio_frame.AudioFrame" href="../../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a>]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.MessageGeneration.message_id"><code class="name">var <span class="ident">message_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.MessageGeneration.text_stream"><code class="name">var <span class="ident">text_stream</span> : AsyncIterable[str]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeCapabilities"><code class="flex name class">
+<span>class <span class="ident">RealtimeCapabilities</span></span>
+<span>(</span><span>message_truncation: bool, turn_detection: bool, user_transcription: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class RealtimeCapabilities:
+    message_truncation: bool
+    turn_detection: bool
+    user_transcription: bool</code></pre>
+</details>
+<div class="desc"><p>RealtimeCapabilities(message_truncation: 'bool', turn_detection: 'bool', user_transcription: 'bool')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.RealtimeCapabilities.message_truncation"><code class="name">var <span class="ident">message_truncation</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeCapabilities.turn_detection"><code class="name">var <span class="ident">turn_detection</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeCapabilities.user_transcription"><code class="name">var <span class="ident">user_transcription</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeError"><code class="flex name class">
+<span>class <span class="ident">RealtimeError</span></span>
+<span>(</span><span>message: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class RealtimeError(Exception):
+    def __init__(self, message: str) -&gt; None:
+        super().__init__(message)</code></pre>
+</details>
+<div class="desc"><p>Common base class for all non-exit exceptions.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.Exception</li>
+<li>builtins.BaseException</li>
+</ul>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeModel"><code class="flex name class">
+<span>class <span class="ident">RealtimeModel</span></span>
+<span>(</span><span>*,<br>capabilities: <a title="livekit.agents.llm.realtime.RealtimeCapabilities" href="#livekit.agents.llm.realtime.RealtimeCapabilities">RealtimeCapabilities</a>)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class RealtimeModel:
+    def __init__(self, *, capabilities: RealtimeCapabilities) -&gt; None:
+        self._capabilities = capabilities
+        self._label = f&#34;{type(self).__module__}.{type(self).__name__}&#34;
+
+    @property
+    def capabilities(self) -&gt; RealtimeCapabilities:
+        return self._capabilities
+
+    @abstractmethod
+    def session(self) -&gt; RealtimeSession: ...
+
+    @abstractmethod
+    async def aclose(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.plugins.google.beta.realtime.realtime_api.RealtimeModel" href="../../plugins/google/beta/realtime/realtime_api.html#livekit.plugins.google.beta.realtime.realtime_api.RealtimeModel">RealtimeModel</a></li>
+<li><a title="livekit.plugins.openai.realtime.realtime_model.RealtimeModel" href="../../plugins/openai/realtime/realtime_model.html#livekit.plugins.openai.realtime.realtime_model.RealtimeModel">RealtimeModel</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.RealtimeModel.capabilities"><code class="name">prop <span class="ident">capabilities</span> : <a title="livekit.agents.llm.realtime.RealtimeCapabilities" href="#livekit.agents.llm.realtime.RealtimeCapabilities">RealtimeCapabilities</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def capabilities(self) -&gt; RealtimeCapabilities:
+    return self._capabilities</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.RealtimeModel.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+async def aclose(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeModel.session"><code class="name flex">
+<span>def <span class="ident">session</span></span>(<span>self) ‑> <a title="livekit.agents.llm.realtime.RealtimeSession" href="#livekit.agents.llm.realtime.RealtimeSession">RealtimeSession</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def session(self) -&gt; RealtimeSession: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeModelError"><code class="flex name class">
+<span>class <span class="ident">RealtimeModelError</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class RealtimeModelError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal[&#34;realtime_model_error&#34;] = &#34;realtime_model_error&#34;
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.RealtimeModelError.error"><code class="name">var <span class="ident">error</span> : livekit.agents._exceptions.APIError</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeModelError.label"><code class="name">var <span class="ident">label</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeModelError.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeModelError.recoverable"><code class="name">var <span class="ident">recoverable</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeModelError.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeModelError.type"><code class="name">var <span class="ident">type</span> : Literal['realtime_model_error']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession"><code class="flex name class">
+<span>class <span class="ident">RealtimeSession</span></span>
+<span>(</span><span>realtime_model: <a title="livekit.agents.llm.realtime.RealtimeModel" href="#livekit.agents.llm.realtime.RealtimeModel">RealtimeModel</a>)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
+    def __init__(self, realtime_model: RealtimeModel) -&gt; None:
+        super().__init__()
+        self._realtime_model = realtime_model
+
+    @property
+    def realtime_model(self) -&gt; RealtimeModel:
+        return self._realtime_model
+
+    @property
+    @abstractmethod
+    def chat_ctx(self) -&gt; ChatContext: ...
+
+    @property
+    @abstractmethod
+    def tools(self) -&gt; ToolContext: ...
+
+    @abstractmethod
+    async def update_instructions(self, instructions: str) -&gt; None: ...
+
+    @abstractmethod
+    async def update_chat_ctx(
+        self, chat_ctx: ChatContext
+    ) -&gt; None: ...  # can raise RealtimeError on Timeout
+
+    @abstractmethod
+    async def update_tools(self, tools: list[FunctionTool | RawFunctionTool | Any]) -&gt; None: ...
+
+    @abstractmethod
+    def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -&gt; None: ...
+
+    @abstractmethod
+    def push_audio(self, frame: rtc.AudioFrame) -&gt; None: ...
+
+    @abstractmethod
+    def push_video(self, frame: rtc.VideoFrame) -&gt; None: ...
+
+    @abstractmethod
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+    ) -&gt; asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
+
+    # commit the input audio buffer to the server
+    @abstractmethod
+    def commit_audio(self) -&gt; None: ...
+
+    # clear the input audio buffer to the server
+    @abstractmethod
+    def clear_audio(self) -&gt; None: ...
+
+    # cancel the current generation (do nothing if no generation is in progress)
+    @abstractmethod
+    def interrupt(self) -&gt; None: ...
+
+    # message_id is the ID of the message to truncate (inside the ChatCtx)
+    @abstractmethod
+    def truncate(self, *, message_id: str, audio_end_ms: int) -&gt; None: ...
+
+    @abstractmethod
+    async def aclose(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.plugins.google.beta.realtime.realtime_api.RealtimeSession" href="../../plugins/google/beta/realtime/realtime_api.html#livekit.plugins.google.beta.realtime.realtime_api.RealtimeSession">RealtimeSession</a></li>
+<li><a title="livekit.plugins.openai.realtime.realtime_model.RealtimeSession" href="../../plugins/openai/realtime/realtime_model.html#livekit.plugins.openai.realtime.realtime_model.RealtimeSession">RealtimeSession</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.chat_ctx"><code class="name">prop <span class="ident">chat_ctx</span> : ChatContext</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+@abstractmethod
+def chat_ctx(self) -&gt; ChatContext: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.realtime_model"><code class="name">prop <span class="ident">realtime_model</span> : <a title="livekit.agents.llm.realtime.RealtimeModel" href="#livekit.agents.llm.realtime.RealtimeModel">RealtimeModel</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def realtime_model(self) -&gt; RealtimeModel:
+    return self._realtime_model</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.tools"><code class="name">prop <span class="ident">tools</span> : ToolContext</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+@abstractmethod
+def tools(self) -&gt; ToolContext: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+async def aclose(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.clear_audio"><code class="name flex">
+<span>def <span class="ident">clear_audio</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def clear_audio(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.commit_audio"><code class="name flex">
+<span>def <span class="ident">commit_audio</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def commit_audio(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.generate_reply"><code class="name flex">
+<span>def <span class="ident">generate_reply</span></span>(<span>self, *, instructions: NotGivenOr[str] = NOT_GIVEN) ‑> _asyncio.Future[<a title="livekit.agents.llm.realtime.GenerationCreatedEvent" href="#livekit.agents.llm.realtime.GenerationCreatedEvent">GenerationCreatedEvent</a>]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def generate_reply(
+    self,
+    *,
+    instructions: NotGivenOr[str] = NOT_GIVEN,
+) -&gt; asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.interrupt"><code class="name flex">
+<span>def <span class="ident">interrupt</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def interrupt(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.push_audio"><code class="name flex">
+<span>def <span class="ident">push_audio</span></span>(<span>self, frame: rtc.AudioFrame) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def push_audio(self, frame: rtc.AudioFrame) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.push_video"><code class="name flex">
+<span>def <span class="ident">push_video</span></span>(<span>self, frame: rtc.VideoFrame) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def push_video(self, frame: rtc.VideoFrame) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.truncate"><code class="name flex">
+<span>def <span class="ident">truncate</span></span>(<span>self, *, message_id: str, audio_end_ms: int) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def truncate(self, *, message_id: str, audio_end_ms: int) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.update_chat_ctx"><code class="name flex">
+<span>async def <span class="ident">update_chat_ctx</span></span>(<span>self, chat_ctx: ChatContext) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+async def update_chat_ctx(
+    self, chat_ctx: ChatContext
+) -&gt; None: ...  # can raise RealtimeError on Timeout</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.update_instructions"><code class="name flex">
+<span>async def <span class="ident">update_instructions</span></span>(<span>self, instructions: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+async def update_instructions(self, instructions: str) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.update_options"><code class="name flex">
+<span>def <span class="ident">update_options</span></span>(<span>self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.realtime.RealtimeSession.update_tools"><code class="name flex">
+<span>async def <span class="ident">update_tools</span></span>(<span>self, tools: list[FunctionTool | RawFunctionTool | Any]) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+async def update_tools(self, tools: list[FunctionTool | RawFunctionTool | Any]) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.llm" href="index.html">livekit.agents.llm</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.GenerationCreatedEvent" href="#livekit.agents.llm.realtime.GenerationCreatedEvent">GenerationCreatedEvent</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.realtime.GenerationCreatedEvent.function_stream" href="#livekit.agents.llm.realtime.GenerationCreatedEvent.function_stream">function_stream</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.GenerationCreatedEvent.message_stream" href="#livekit.agents.llm.realtime.GenerationCreatedEvent.message_stream">message_stream</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.GenerationCreatedEvent.user_initiated" href="#livekit.agents.llm.realtime.GenerationCreatedEvent.user_initiated">user_initiated</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.InputSpeechStartedEvent" href="#livekit.agents.llm.realtime.InputSpeechStartedEvent">InputSpeechStartedEvent</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.InputSpeechStoppedEvent" href="#livekit.agents.llm.realtime.InputSpeechStoppedEvent">InputSpeechStoppedEvent</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.realtime.InputSpeechStoppedEvent.user_transcription_enabled" href="#livekit.agents.llm.realtime.InputSpeechStoppedEvent.user_transcription_enabled">user_transcription_enabled</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.InputTranscriptionCompleted" href="#livekit.agents.llm.realtime.InputTranscriptionCompleted">InputTranscriptionCompleted</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.realtime.InputTranscriptionCompleted.item_id" href="#livekit.agents.llm.realtime.InputTranscriptionCompleted.item_id">item_id</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.InputTranscriptionCompleted.transcript" href="#livekit.agents.llm.realtime.InputTranscriptionCompleted.transcript">transcript</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.MessageGeneration" href="#livekit.agents.llm.realtime.MessageGeneration">MessageGeneration</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.realtime.MessageGeneration.audio_stream" href="#livekit.agents.llm.realtime.MessageGeneration.audio_stream">audio_stream</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.MessageGeneration.message_id" href="#livekit.agents.llm.realtime.MessageGeneration.message_id">message_id</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.MessageGeneration.text_stream" href="#livekit.agents.llm.realtime.MessageGeneration.text_stream">text_stream</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.RealtimeCapabilities" href="#livekit.agents.llm.realtime.RealtimeCapabilities">RealtimeCapabilities</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.realtime.RealtimeCapabilities.message_truncation" href="#livekit.agents.llm.realtime.RealtimeCapabilities.message_truncation">message_truncation</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeCapabilities.turn_detection" href="#livekit.agents.llm.realtime.RealtimeCapabilities.turn_detection">turn_detection</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeCapabilities.user_transcription" href="#livekit.agents.llm.realtime.RealtimeCapabilities.user_transcription">user_transcription</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.RealtimeError" href="#livekit.agents.llm.realtime.RealtimeError">RealtimeError</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.RealtimeModel" href="#livekit.agents.llm.realtime.RealtimeModel">RealtimeModel</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModel.aclose" href="#livekit.agents.llm.realtime.RealtimeModel.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModel.capabilities" href="#livekit.agents.llm.realtime.RealtimeModel.capabilities">capabilities</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModel.session" href="#livekit.agents.llm.realtime.RealtimeModel.session">session</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.RealtimeModelError" href="#livekit.agents.llm.realtime.RealtimeModelError">RealtimeModelError</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModelError.error" href="#livekit.agents.llm.realtime.RealtimeModelError.error">error</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModelError.label" href="#livekit.agents.llm.realtime.RealtimeModelError.label">label</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModelError.model_config" href="#livekit.agents.llm.realtime.RealtimeModelError.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModelError.recoverable" href="#livekit.agents.llm.realtime.RealtimeModelError.recoverable">recoverable</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModelError.timestamp" href="#livekit.agents.llm.realtime.RealtimeModelError.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeModelError.type" href="#livekit.agents.llm.realtime.RealtimeModelError.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.realtime.RealtimeSession" href="#livekit.agents.llm.realtime.RealtimeSession">RealtimeSession</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.aclose" href="#livekit.agents.llm.realtime.RealtimeSession.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.chat_ctx" href="#livekit.agents.llm.realtime.RealtimeSession.chat_ctx">chat_ctx</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.clear_audio" href="#livekit.agents.llm.realtime.RealtimeSession.clear_audio">clear_audio</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.commit_audio" href="#livekit.agents.llm.realtime.RealtimeSession.commit_audio">commit_audio</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.generate_reply" href="#livekit.agents.llm.realtime.RealtimeSession.generate_reply">generate_reply</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.interrupt" href="#livekit.agents.llm.realtime.RealtimeSession.interrupt">interrupt</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.push_audio" href="#livekit.agents.llm.realtime.RealtimeSession.push_audio">push_audio</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.push_video" href="#livekit.agents.llm.realtime.RealtimeSession.push_video">push_video</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.realtime_model" href="#livekit.agents.llm.realtime.RealtimeSession.realtime_model">realtime_model</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.tools" href="#livekit.agents.llm.realtime.RealtimeSession.tools">tools</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.truncate" href="#livekit.agents.llm.realtime.RealtimeSession.truncate">truncate</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.update_chat_ctx" href="#livekit.agents.llm.realtime.RealtimeSession.update_chat_ctx">update_chat_ctx</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.update_instructions" href="#livekit.agents.llm.realtime.RealtimeSession.update_instructions">update_instructions</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.update_options" href="#livekit.agents.llm.realtime.RealtimeSession.update_options">update_options</a></code></li>
+<li><code><a title="livekit.agents.llm.realtime.RealtimeSession.update_tools" href="#livekit.agents.llm.realtime.RealtimeSession.update_tools">update_tools</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

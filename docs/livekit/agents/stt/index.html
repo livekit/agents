@@ -1,0 +1,1901 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.stt API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.stt</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+<h2 class="section-title" id="header-submodules">Sub-modules</h2>
+<dl>
+<dt><code class="name"><a title="livekit.agents.stt.fallback_adapter" href="fallback_adapter.html">livekit.agents.stt.fallback_adapter</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.agents.stt.stream_adapter" href="stream_adapter.html">livekit.agents.stt.stream_adapter</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt><code class="name"><a title="livekit.agents.stt.stt" href="stt.html">livekit.agents.stt.stt</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.stt.AvailabilityChangedEvent"><code class="flex name class">
+<span>class <span class="ident">AvailabilityChangedEvent</span></span>
+<span>(</span><span>stt: <a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a>,<br>available: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class AvailabilityChangedEvent:
+    stt: STT
+    available: bool</code></pre>
+</details>
+<div class="desc"><p>AvailabilityChangedEvent(stt: 'STT', available: 'bool')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.stt.AvailabilityChangedEvent.available"><code class="name">var <span class="ident">available</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.AvailabilityChangedEvent.stt"><code class="name">var <span class="ident">stt</span> : <a title="livekit.agents.stt.stt.STT" href="stt.html#livekit.agents.stt.stt.STT">STT</a></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.FallbackAdapter"><code class="flex name class">
+<span>class <span class="ident">FallbackAdapter</span></span>
+<span>(</span><span>stt: list[<a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a>],<br>*,<br>attempt_timeout: float = 10.0,<br>max_retry_per_stt: int = 1,<br>retry_interval: float = 5)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class FallbackAdapter(
+    STT[Literal[&#34;stt_availability_changed&#34;]],
+):
+    def __init__(
+        self,
+        stt: list[STT],
+        *,
+        attempt_timeout: float = 10.0,
+        max_retry_per_stt: int = 1,
+        retry_interval: float = 5,
+    ) -&gt; None:
+        if len(stt) &lt; 1:
+            raise ValueError(&#34;At least one STT instance must be provided.&#34;)
+
+        non_streaming_stt = [t for t in stt if not t.capabilities.streaming]
+        if non_streaming_stt:
+            labels = &#34;, &#34;.join(t.label for t in non_streaming_stt)
+            raise ValueError(
+                f&#34;STTs do not support streaming: {labels}. &#34;
+                &#34;Wrap them with stt.StreamAdapter to enable streaming.&#34;
+            )
+
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=True,
+                interim_results=all(t.capabilities.interim_results for t in stt),
+            )
+        )
+
+        self._stt_instances = stt
+        self._attempt_timeout = attempt_timeout
+        self._max_retry_per_stt = max_retry_per_stt
+        self._retry_interval = retry_interval
+
+        self._status: list[_STTStatus] = [
+            _STTStatus(
+                available=True,
+                recovering_synthesize_task=None,
+                recovering_stream_task=None,
+            )
+            for _ in self._stt_instances
+        ]
+
+    async def _try_recognize(
+        self,
+        *,
+        stt: STT,
+        buffer: utils.AudioBuffer,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+        recovering: bool = False,
+    ) -&gt; SpeechEvent:
+        try:
+            return await stt.recognize(
+                buffer,
+                language=language,
+                conn_options=dataclasses.replace(
+                    conn_options,
+                    max_retry=self._max_retry_per_stt,
+                    timeout=self._attempt_timeout,
+                    retry_interval=self._retry_interval,
+                ),
+            )
+        except asyncio.TimeoutError:
+            if recovering:
+                logger.warning(f&#34;{stt.label} recovery timed out&#34;, extra={&#34;streamed&#34;: False})
+                raise
+
+            logger.warning(
+                f&#34;{stt.label} timed out, switching to next STT&#34;,
+                extra={&#34;streamed&#34;: False},
+            )
+
+            raise
+        except APIError as e:
+            if recovering:
+                logger.warning(
+                    f&#34;{stt.label} recovery failed&#34;,
+                    exc_info=e,
+                    extra={&#34;streamed&#34;: False},
+                )
+                raise
+
+            logger.warning(
+                f&#34;{stt.label} failed, switching to next STT&#34;,
+                exc_info=e,
+                extra={&#34;streamed&#34;: False},
+            )
+            raise
+        except Exception:
+            if recovering:
+                logger.exception(
+                    f&#34;{stt.label} recovery unexpected error&#34;, extra={&#34;streamed&#34;: False}
+                )
+                raise
+
+            logger.exception(
+                f&#34;{stt.label} unexpected error, switching to next STT&#34;,
+                extra={&#34;streamed&#34;: False},
+            )
+            raise
+
+    def _try_recovery(
+        self,
+        *,
+        stt: STT,
+        buffer: utils.AudioBuffer,
+        language: NotGivenOr[str],
+        conn_options: APIConnectOptions,
+    ) -&gt; None:
+        stt_status = self._status[self._stt_instances.index(stt)]
+        if (
+            stt_status.recovering_synthesize_task is None
+            or stt_status.recovering_synthesize_task.done()
+        ):
+
+            async def _recover_stt_task(stt: STT) -&gt; None:
+                try:
+                    await self._try_recognize(
+                        stt=stt,
+                        buffer=buffer,
+                        language=language,
+                        conn_options=conn_options,
+                        recovering=True,
+                    )
+
+                    stt_status.available = True
+                    logger.info(f&#34;{stt.label} recovered&#34;)
+                    self.emit(
+                        &#34;stt_availability_changed&#34;,
+                        AvailabilityChangedEvent(stt=stt, available=True),
+                    )
+                except Exception:
+                    return
+
+            stt_status.recovering_synthesize_task = asyncio.create_task(_recover_stt_task(stt))
+
+    async def _recognize_impl(
+        self,
+        buffer: utils.AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ):
+        start_time = time.time()
+
+        all_failed = all(not stt_status.available for stt_status in self._status)
+        if all_failed:
+            logger.error(&#34;all STTs are unavailable, retrying..&#34;)
+
+        for i, stt in enumerate(self._stt_instances):
+            stt_status = self._status[i]
+            if stt_status.available or all_failed:
+                try:
+                    return await self._try_recognize(
+                        stt=stt,
+                        buffer=buffer,
+                        language=language,
+                        conn_options=conn_options,
+                        recovering=False,
+                    )
+                except Exception:  # exceptions already logged inside _try_recognize
+                    if stt_status.available:
+                        stt_status.available = False
+                        self.emit(
+                            &#34;stt_availability_changed&#34;,
+                            AvailabilityChangedEvent(stt=stt, available=False),
+                        )
+
+            self._try_recovery(stt=stt, buffer=buffer, language=language, conn_options=conn_options)
+
+        raise APIConnectionError(
+            f&#34;all STTs failed ({[stt.label for stt in self._stt_instances]}) after {time.time() - start_time} seconds&#34;  # noqa: E501
+        )
+
+    async def recognize(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
+    ) -&gt; SpeechEvent:
+        return await super().recognize(buffer, language=language, conn_options=conn_options)
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
+    ) -&gt; RecognizeStream:
+        return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
+
+    async def aclose(self) -&gt; None:
+        for stt_status in self._status:
+            if stt_status.recovering_synthesize_task is not None:
+                await aio.cancel_and_wait(stt_status.recovering_synthesize_task)
+
+            if stt_status.recovering_stream_task is not None:
+                await aio.cancel_and_wait(stt_status.recovering_stream_task)</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.stt.STT" href="stt.html#livekit.agents.stt.stt.STT">STT</a></li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.stt.FallbackAdapter.recognize"><code class="name flex">
+<span>async def <span class="ident">recognize</span></span>(<span>self,<br>buffer: AudioBuffer,<br>*,<br>language: NotGivenOr[str | None] = NOT_GIVEN,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=0, retry_interval=2.0, timeout=10.0)) ‑> <a title="livekit.agents.stt.stt.SpeechEvent" href="stt.html#livekit.agents.stt.stt.SpeechEvent">SpeechEvent</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def recognize(
+    self,
+    buffer: AudioBuffer,
+    *,
+    language: NotGivenOr[str | None] = NOT_GIVEN,
+    conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
+) -&gt; SpeechEvent:
+    return await super().recognize(buffer, language=language, conn_options=conn_options)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.stt.FallbackAdapter.stream"><code class="name flex">
+<span>def <span class="ident">stream</span></span>(<span>self,<br>*,<br>language: NotGivenOr[str | None] = NOT_GIVEN,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=0, retry_interval=2.0, timeout=10.0)) ‑> <a title="livekit.agents.stt.stt.RecognizeStream" href="stt.html#livekit.agents.stt.stt.RecognizeStream">RecognizeStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def stream(
+    self,
+    *,
+    language: NotGivenOr[str | None] = NOT_GIVEN,
+    conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
+) -&gt; RecognizeStream:
+    return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.stt.stt.STT" href="stt.html#livekit.agents.stt.stt.STT">STT</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.stt.stt.STT.aclose" href="stt.html#livekit.agents.stt.stt.STT.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.stt.RecognitionUsage"><code class="flex name class">
+<span>class <span class="ident">RecognitionUsage</span></span>
+<span>(</span><span>audio_duration: float)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class RecognitionUsage:
+    audio_duration: float</code></pre>
+</details>
+<div class="desc"><p>RecognitionUsage(audio_duration: 'float')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.stt.RecognitionUsage.audio_duration"><code class="name">var <span class="ident">audio_duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.RecognizeStream"><code class="flex name class">
+<span>class <span class="ident">RecognizeStream</span></span>
+<span>(</span><span>*,<br>stt: <a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a>,<br>conn_options: APIConnectOptions,<br>sample_rate: NotGivenOr[int] = NOT_GIVEN)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class RecognizeStream(ABC):
+    class _FlushSentinel:
+        &#34;&#34;&#34;Sentinel to mark when it was flushed&#34;&#34;&#34;
+
+        pass
+
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        conn_options: APIConnectOptions,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+    ):
+        &#34;&#34;&#34;
+        Args:
+        sample_rate : int or None, optional
+            The desired sample rate for the audio input.
+            If specified, the audio input will be automatically resampled to match
+            the given sample rate before being processed for Speech-to-Text.
+            If not provided (None), the input will retain its original sample rate.
+        &#34;&#34;&#34;
+        self._stt = stt
+        self._conn_options = conn_options
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
+        self._event_ch = aio.Chan[SpeechEvent]()
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name=&#34;STT._metrics_task&#34;
+        )
+
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+        self._needed_sr = sample_rate if is_given(sample_rate) else None
+        self._pushed_sr = 0
+        self._resampler: rtc.AudioResampler | None = None
+
+    @abstractmethod
+    async def _run(self) -&gt; None: ...
+
+    async def _main_task(self) -&gt; None:
+        max_retries = self._conn_options.max_retry
+        num_retries = 0
+
+        while num_retries &lt;= max_retries:
+            try:
+                return await self._run()
+            except APIError as e:
+                if max_retries == 0:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif num_retries == max_retries:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f&#34;failed to recognize speech after {num_retries} attempts&#34;,
+                    ) from e
+                else:
+                    self._emit_error(e, recoverable=True)
+
+                    retry_interval = self._conn_options._interval_for_retry(num_retries)
+                    logger.warning(
+                        f&#34;failed to recognize speech, retrying in {retry_interval}s&#34;,
+                        exc_info=e,
+                        extra={
+                            &#34;tts&#34;: self._stt._label,
+                            &#34;attempt&#34;: num_retries,
+                            &#34;streamed&#34;: True,
+                        },
+                    )
+                    await asyncio.sleep(retry_interval)
+
+                num_retries += 1
+
+    def _emit_error(self, api_error: APIError, recoverable: bool):
+        self._stt.emit(
+            &#34;error&#34;,
+            STTError(
+                timestamp=time.time(),
+                label=self._stt._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -&gt; None:
+        &#34;&#34;&#34;Task used to collect metrics&#34;&#34;&#34;
+
+        async for ev in event_aiter:
+            if ev.type == SpeechEventType.RECOGNITION_USAGE:
+                assert ev.recognition_usage is not None, (
+                    &#34;recognition_usage must be provided for RECOGNITION_USAGE event&#34;
+                )
+
+                stt_metrics = STTMetrics(
+                    request_id=ev.request_id,
+                    timestamp=time.time(),
+                    duration=0.0,
+                    label=self._stt._label,
+                    audio_duration=ev.recognition_usage.audio_duration,
+                    streamed=True,
+                )
+
+                self._stt.emit(&#34;metrics_collected&#34;, stt_metrics)
+
+    def push_frame(self, frame: rtc.AudioFrame) -&gt; None:
+        &#34;&#34;&#34;Push audio to be recognized&#34;&#34;&#34;
+        self._check_input_not_ended()
+        self._check_not_closed()
+
+        if self._pushed_sr and self._pushed_sr != frame.sample_rate:
+            raise ValueError(&#34;the sample rate of the input frames must be consistent&#34;)
+
+        self._pushed_sr = frame.sample_rate
+
+        if self._needed_sr and self._needed_sr != frame.sample_rate:
+            if not self._resampler:
+                self._resampler = rtc.AudioResampler(
+                    frame.sample_rate,
+                    self._needed_sr,
+                    quality=rtc.AudioResamplerQuality.HIGH,
+                )
+
+        if self._resampler:
+            frames = self._resampler.push(frame)
+            for frame in frames:
+                self._input_ch.send_nowait(frame)
+        else:
+            self._input_ch.send_nowait(frame)
+
+    def flush(self) -&gt; None:
+        &#34;&#34;&#34;Mark the end of the current segment&#34;&#34;&#34;
+        self._check_input_not_ended()
+        self._check_not_closed()
+
+        if self._resampler:
+            for frame in self._resampler.flush():
+                self._input_ch.send_nowait(frame)
+
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -&gt; None:
+        &#34;&#34;&#34;Mark the end of input, no more audio will be pushed&#34;&#34;&#34;
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -&gt; None:
+        &#34;&#34;&#34;Close ths stream immediately&#34;&#34;&#34;
+        self._input_ch.close()
+        await aio.cancel_and_wait(self._task)
+
+        if self._metrics_task is not None:
+            await self._metrics_task
+
+    async def __anext__(self) -&gt; SpeechEvent:
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+
+            raise StopAsyncIteration from None
+
+        return val
+
+    def __aiter__(self) -&gt; AsyncIterator[SpeechEvent]:
+        return self
+
+    def _check_not_closed(self) -&gt; None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f&#34;{cls.__module__}.{cls.__name__} is closed&#34;)
+
+    def _check_input_not_ended(self) -&gt; None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f&#34;{cls.__module__}.{cls.__name__} input ended&#34;)
+
+    async def __aenter__(self) -&gt; RecognizeStream:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -&gt; None:
+        await self.aclose()</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Args:
+sample_rate : int or None, optional
+The desired sample rate for the audio input.
+If specified, the audio input will be automatically resampled to match
+the given sample rate before being processed for Speech-to-Text.
+If not provided (None), the input will retain its original sample rate.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.fallback_adapter.FallbackRecognizeStream" href="fallback_adapter.html#livekit.agents.stt.fallback_adapter.FallbackRecognizeStream">FallbackRecognizeStream</a></li>
+<li><a title="livekit.agents.stt.stream_adapter.StreamAdapterWrapper" href="stream_adapter.html#livekit.agents.stt.stream_adapter.StreamAdapterWrapper">StreamAdapterWrapper</a></li>
+<li><a title="livekit.plugins.assemblyai.stt.SpeechStream" href="../../plugins/assemblyai/stt.html#livekit.plugins.assemblyai.stt.SpeechStream">SpeechStream</a></li>
+<li><a title="livekit.plugins.aws.stt.SpeechStream" href="../../plugins/aws/stt.html#livekit.plugins.aws.stt.SpeechStream">SpeechStream</a></li>
+<li>livekit.plugins.azure.stt.SpeechStream</li>
+<li>livekit.plugins.deepgram.stt.SpeechStream</li>
+<li>livekit.plugins.gladia.stt.SpeechStream</li>
+<li>livekit.plugins.google.stt.SpeechStream</li>
+<li>livekit.plugins.openai.stt.SpeechStream</li>
+<li><a title="livekit.plugins.speechmatics.stt.SpeechStream" href="../../plugins/speechmatics/stt.html#livekit.plugins.speechmatics.stt.SpeechStream">SpeechStream</a></li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.stt.RecognizeStream.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    &#34;&#34;&#34;Close ths stream immediately&#34;&#34;&#34;
+    self._input_ch.close()
+    await aio.cancel_and_wait(self._task)
+
+    if self._metrics_task is not None:
+        await self._metrics_task</code></pre>
+</details>
+<div class="desc"><p>Close ths stream immediately</p></div>
+</dd>
+<dt id="livekit.agents.stt.RecognizeStream.end_input"><code class="name flex">
+<span>def <span class="ident">end_input</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def end_input(self) -&gt; None:
+    &#34;&#34;&#34;Mark the end of input, no more audio will be pushed&#34;&#34;&#34;
+    self.flush()
+    self._input_ch.close()</code></pre>
+</details>
+<div class="desc"><p>Mark the end of input, no more audio will be pushed</p></div>
+</dd>
+<dt id="livekit.agents.stt.RecognizeStream.flush"><code class="name flex">
+<span>def <span class="ident">flush</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def flush(self) -&gt; None:
+    &#34;&#34;&#34;Mark the end of the current segment&#34;&#34;&#34;
+    self._check_input_not_ended()
+    self._check_not_closed()
+
+    if self._resampler:
+        for frame in self._resampler.flush():
+            self._input_ch.send_nowait(frame)
+
+    self._input_ch.send_nowait(self._FlushSentinel())</code></pre>
+</details>
+<div class="desc"><p>Mark the end of the current segment</p></div>
+</dd>
+<dt id="livekit.agents.stt.RecognizeStream.push_frame"><code class="name flex">
+<span>def <span class="ident">push_frame</span></span>(<span>self, frame: rtc.AudioFrame) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def push_frame(self, frame: rtc.AudioFrame) -&gt; None:
+    &#34;&#34;&#34;Push audio to be recognized&#34;&#34;&#34;
+    self._check_input_not_ended()
+    self._check_not_closed()
+
+    if self._pushed_sr and self._pushed_sr != frame.sample_rate:
+        raise ValueError(&#34;the sample rate of the input frames must be consistent&#34;)
+
+    self._pushed_sr = frame.sample_rate
+
+    if self._needed_sr and self._needed_sr != frame.sample_rate:
+        if not self._resampler:
+            self._resampler = rtc.AudioResampler(
+                frame.sample_rate,
+                self._needed_sr,
+                quality=rtc.AudioResamplerQuality.HIGH,
+            )
+
+    if self._resampler:
+        frames = self._resampler.push(frame)
+        for frame in frames:
+            self._input_ch.send_nowait(frame)
+    else:
+        self._input_ch.send_nowait(frame)</code></pre>
+</details>
+<div class="desc"><p>Push audio to be recognized</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.RecognizeStream"><code class="flex name class">
+<span>class <span class="ident">SpeechStream</span></span>
+<span>(</span><span>*,<br>stt: <a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a>,<br>conn_options: APIConnectOptions,<br>sample_rate: NotGivenOr[int] = NOT_GIVEN)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class RecognizeStream(ABC):
+    class _FlushSentinel:
+        &#34;&#34;&#34;Sentinel to mark when it was flushed&#34;&#34;&#34;
+
+        pass
+
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        conn_options: APIConnectOptions,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+    ):
+        &#34;&#34;&#34;
+        Args:
+        sample_rate : int or None, optional
+            The desired sample rate for the audio input.
+            If specified, the audio input will be automatically resampled to match
+            the given sample rate before being processed for Speech-to-Text.
+            If not provided (None), the input will retain its original sample rate.
+        &#34;&#34;&#34;
+        self._stt = stt
+        self._conn_options = conn_options
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, RecognizeStream._FlushSentinel]]()
+        self._event_ch = aio.Chan[SpeechEvent]()
+
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name=&#34;STT._metrics_task&#34;
+        )
+
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+        self._needed_sr = sample_rate if is_given(sample_rate) else None
+        self._pushed_sr = 0
+        self._resampler: rtc.AudioResampler | None = None
+
+    @abstractmethod
+    async def _run(self) -&gt; None: ...
+
+    async def _main_task(self) -&gt; None:
+        max_retries = self._conn_options.max_retry
+        num_retries = 0
+
+        while num_retries &lt;= max_retries:
+            try:
+                return await self._run()
+            except APIError as e:
+                if max_retries == 0:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif num_retries == max_retries:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f&#34;failed to recognize speech after {num_retries} attempts&#34;,
+                    ) from e
+                else:
+                    self._emit_error(e, recoverable=True)
+
+                    retry_interval = self._conn_options._interval_for_retry(num_retries)
+                    logger.warning(
+                        f&#34;failed to recognize speech, retrying in {retry_interval}s&#34;,
+                        exc_info=e,
+                        extra={
+                            &#34;tts&#34;: self._stt._label,
+                            &#34;attempt&#34;: num_retries,
+                            &#34;streamed&#34;: True,
+                        },
+                    )
+                    await asyncio.sleep(retry_interval)
+
+                num_retries += 1
+
+    def _emit_error(self, api_error: APIError, recoverable: bool):
+        self._stt.emit(
+            &#34;error&#34;,
+            STTError(
+                timestamp=time.time(),
+                label=self._stt._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -&gt; None:
+        &#34;&#34;&#34;Task used to collect metrics&#34;&#34;&#34;
+
+        async for ev in event_aiter:
+            if ev.type == SpeechEventType.RECOGNITION_USAGE:
+                assert ev.recognition_usage is not None, (
+                    &#34;recognition_usage must be provided for RECOGNITION_USAGE event&#34;
+                )
+
+                stt_metrics = STTMetrics(
+                    request_id=ev.request_id,
+                    timestamp=time.time(),
+                    duration=0.0,
+                    label=self._stt._label,
+                    audio_duration=ev.recognition_usage.audio_duration,
+                    streamed=True,
+                )
+
+                self._stt.emit(&#34;metrics_collected&#34;, stt_metrics)
+
+    def push_frame(self, frame: rtc.AudioFrame) -&gt; None:
+        &#34;&#34;&#34;Push audio to be recognized&#34;&#34;&#34;
+        self._check_input_not_ended()
+        self._check_not_closed()
+
+        if self._pushed_sr and self._pushed_sr != frame.sample_rate:
+            raise ValueError(&#34;the sample rate of the input frames must be consistent&#34;)
+
+        self._pushed_sr = frame.sample_rate
+
+        if self._needed_sr and self._needed_sr != frame.sample_rate:
+            if not self._resampler:
+                self._resampler = rtc.AudioResampler(
+                    frame.sample_rate,
+                    self._needed_sr,
+                    quality=rtc.AudioResamplerQuality.HIGH,
+                )
+
+        if self._resampler:
+            frames = self._resampler.push(frame)
+            for frame in frames:
+                self._input_ch.send_nowait(frame)
+        else:
+            self._input_ch.send_nowait(frame)
+
+    def flush(self) -&gt; None:
+        &#34;&#34;&#34;Mark the end of the current segment&#34;&#34;&#34;
+        self._check_input_not_ended()
+        self._check_not_closed()
+
+        if self._resampler:
+            for frame in self._resampler.flush():
+                self._input_ch.send_nowait(frame)
+
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -&gt; None:
+        &#34;&#34;&#34;Mark the end of input, no more audio will be pushed&#34;&#34;&#34;
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -&gt; None:
+        &#34;&#34;&#34;Close ths stream immediately&#34;&#34;&#34;
+        self._input_ch.close()
+        await aio.cancel_and_wait(self._task)
+
+        if self._metrics_task is not None:
+            await self._metrics_task
+
+    async def __anext__(self) -&gt; SpeechEvent:
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+
+            raise StopAsyncIteration from None
+
+        return val
+
+    def __aiter__(self) -&gt; AsyncIterator[SpeechEvent]:
+        return self
+
+    def _check_not_closed(self) -&gt; None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f&#34;{cls.__module__}.{cls.__name__} is closed&#34;)
+
+    def _check_input_not_ended(self) -&gt; None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f&#34;{cls.__module__}.{cls.__name__} input ended&#34;)
+
+    async def __aenter__(self) -&gt; RecognizeStream:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -&gt; None:
+        await self.aclose()</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Args:
+sample_rate : int or None, optional
+The desired sample rate for the audio input.
+If specified, the audio input will be automatically resampled to match
+the given sample rate before being processed for Speech-to-Text.
+If not provided (None), the input will retain its original sample rate.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.fallback_adapter.FallbackRecognizeStream" href="fallback_adapter.html#livekit.agents.stt.fallback_adapter.FallbackRecognizeStream">FallbackRecognizeStream</a></li>
+<li><a title="livekit.agents.stt.stream_adapter.StreamAdapterWrapper" href="stream_adapter.html#livekit.agents.stt.stream_adapter.StreamAdapterWrapper">StreamAdapterWrapper</a></li>
+<li><a title="livekit.plugins.assemblyai.stt.SpeechStream" href="../../plugins/assemblyai/stt.html#livekit.plugins.assemblyai.stt.SpeechStream">SpeechStream</a></li>
+<li><a title="livekit.plugins.aws.stt.SpeechStream" href="../../plugins/aws/stt.html#livekit.plugins.aws.stt.SpeechStream">SpeechStream</a></li>
+<li>livekit.plugins.azure.stt.SpeechStream</li>
+<li>livekit.plugins.deepgram.stt.SpeechStream</li>
+<li>livekit.plugins.gladia.stt.SpeechStream</li>
+<li>livekit.plugins.google.stt.SpeechStream</li>
+<li>livekit.plugins.openai.stt.SpeechStream</li>
+<li><a title="livekit.plugins.speechmatics.stt.SpeechStream" href="../../plugins/speechmatics/stt.html#livekit.plugins.speechmatics.stt.SpeechStream">SpeechStream</a></li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.stt.RecognizeStream.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    &#34;&#34;&#34;Close ths stream immediately&#34;&#34;&#34;
+    self._input_ch.close()
+    await aio.cancel_and_wait(self._task)
+
+    if self._metrics_task is not None:
+        await self._metrics_task</code></pre>
+</details>
+<div class="desc"><p>Close ths stream immediately</p></div>
+</dd>
+<dt id="livekit.agents.stt.RecognizeStream.end_input"><code class="name flex">
+<span>def <span class="ident">end_input</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def end_input(self) -&gt; None:
+    &#34;&#34;&#34;Mark the end of input, no more audio will be pushed&#34;&#34;&#34;
+    self.flush()
+    self._input_ch.close()</code></pre>
+</details>
+<div class="desc"><p>Mark the end of input, no more audio will be pushed</p></div>
+</dd>
+<dt id="livekit.agents.stt.RecognizeStream.flush"><code class="name flex">
+<span>def <span class="ident">flush</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def flush(self) -&gt; None:
+    &#34;&#34;&#34;Mark the end of the current segment&#34;&#34;&#34;
+    self._check_input_not_ended()
+    self._check_not_closed()
+
+    if self._resampler:
+        for frame in self._resampler.flush():
+            self._input_ch.send_nowait(frame)
+
+    self._input_ch.send_nowait(self._FlushSentinel())</code></pre>
+</details>
+<div class="desc"><p>Mark the end of the current segment</p></div>
+</dd>
+<dt id="livekit.agents.stt.RecognizeStream.push_frame"><code class="name flex">
+<span>def <span class="ident">push_frame</span></span>(<span>self, frame: rtc.AudioFrame) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def push_frame(self, frame: rtc.AudioFrame) -&gt; None:
+    &#34;&#34;&#34;Push audio to be recognized&#34;&#34;&#34;
+    self._check_input_not_ended()
+    self._check_not_closed()
+
+    if self._pushed_sr and self._pushed_sr != frame.sample_rate:
+        raise ValueError(&#34;the sample rate of the input frames must be consistent&#34;)
+
+    self._pushed_sr = frame.sample_rate
+
+    if self._needed_sr and self._needed_sr != frame.sample_rate:
+        if not self._resampler:
+            self._resampler = rtc.AudioResampler(
+                frame.sample_rate,
+                self._needed_sr,
+                quality=rtc.AudioResamplerQuality.HIGH,
+            )
+
+    if self._resampler:
+        frames = self._resampler.push(frame)
+        for frame in frames:
+            self._input_ch.send_nowait(frame)
+    else:
+        self._input_ch.send_nowait(frame)</code></pre>
+</details>
+<div class="desc"><p>Push audio to be recognized</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.STT"><code class="flex name class">
+<span>class <span class="ident">STT</span></span>
+<span>(</span><span>*,<br>capabilities: <a title="livekit.agents.stt.STTCapabilities" href="#livekit.agents.stt.STTCapabilities">STTCapabilities</a>)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class STT(
+    ABC,
+    rtc.EventEmitter[Union[Literal[&#34;metrics_collected&#34;, &#34;error&#34;], TEvent]],
+    Generic[TEvent],
+):
+    def __init__(self, *, capabilities: STTCapabilities) -&gt; None:
+        super().__init__()
+        self._capabilities = capabilities
+        self._label = f&#34;{type(self).__module__}.{type(self).__name__}&#34;
+
+    @property
+    def label(self) -&gt; str:
+        return self._label
+
+    @property
+    def capabilities(self) -&gt; STTCapabilities:
+        return self._capabilities
+
+    @abstractmethod
+    async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ) -&gt; SpeechEvent: ...
+
+    async def recognize(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -&gt; SpeechEvent:
+        for i in range(conn_options.max_retry + 1):
+            try:
+                start_time = time.perf_counter()
+                event = await self._recognize_impl(
+                    buffer, language=language, conn_options=conn_options
+                )
+                duration = time.perf_counter() - start_time
+                stt_metrics = STTMetrics(
+                    request_id=event.request_id,
+                    timestamp=time.time(),
+                    duration=duration,
+                    label=self._label,
+                    audio_duration=calculate_audio_duration(buffer),
+                    streamed=False,
+                )
+                self.emit(&#34;metrics_collected&#34;, stt_metrics)
+                return event
+
+            except APIError as e:
+                retry_interval = conn_options._interval_for_retry(i)
+                if conn_options.max_retry == 0:
+                    raise
+                elif i == conn_options.max_retry:
+                    raise APIConnectionError(
+                        f&#34;failed to recognize speech after {conn_options.max_retry + 1} attempts&#34;,
+                    ) from e
+                else:
+                    logger.warning(
+                        f&#34;failed to recognize speech, retrying in {retry_interval}s&#34;,
+                        exc_info=e,
+                        extra={
+                            &#34;tts&#34;: self._label,
+                            &#34;attempt&#34;: i + 1,
+                            &#34;streamed&#34;: False,
+                        },
+                    )
+
+                await asyncio.sleep(retry_interval)
+
+        raise RuntimeError(&#34;unreachable&#34;)
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -&gt; RecognizeStream:
+        raise NotImplementedError(
+            &#34;streaming is not supported by this STT, please use a different STT or use a StreamAdapter&#34;  # noqa: E501
+        )
+
+    async def aclose(self) -&gt; None:
+        &#34;&#34;&#34;Close the STT, and every stream/requests associated with it&#34;&#34;&#34;
+        ...
+
+    async def __aenter__(self) -&gt; STT:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -&gt; None:
+        await self.aclose()</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.fallback_adapter.FallbackAdapter" href="fallback_adapter.html#livekit.agents.stt.fallback_adapter.FallbackAdapter">FallbackAdapter</a></li>
+<li><a title="livekit.agents.stt.stream_adapter.StreamAdapter" href="stream_adapter.html#livekit.agents.stt.stream_adapter.StreamAdapter">StreamAdapter</a></li>
+<li><a title="livekit.plugins.assemblyai.stt.STT" href="../../plugins/assemblyai/stt.html#livekit.plugins.assemblyai.stt.STT">STT</a></li>
+<li><a title="livekit.plugins.aws.stt.STT" href="../../plugins/aws/stt.html#livekit.plugins.aws.stt.STT">STT</a></li>
+<li>livekit.plugins.azure.stt.STT</li>
+<li>livekit.plugins.clova.stt.STT</li>
+<li>livekit.plugins.deepgram.stt.STT</li>
+<li><a title="livekit.plugins.fal.stt.WizperSTT" href="../../plugins/fal/stt.html#livekit.plugins.fal.stt.WizperSTT">WizperSTT</a></li>
+<li>livekit.plugins.gladia.stt.STT</li>
+<li>livekit.plugins.google.stt.STT</li>
+<li>livekit.plugins.openai.stt.STT</li>
+<li><a title="livekit.plugins.speechmatics.stt.STT" href="../../plugins/speechmatics/stt.html#livekit.plugins.speechmatics.stt.STT">STT</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.stt.STT.capabilities"><code class="name">prop <span class="ident">capabilities</span> : <a title="livekit.agents.stt.STTCapabilities" href="#livekit.agents.stt.STTCapabilities">STTCapabilities</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def capabilities(self) -&gt; STTCapabilities:
+    return self._capabilities</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.stt.STT.label"><code class="name">prop <span class="ident">label</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def label(self) -&gt; str:
+    return self._label</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.stt.STT.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    &#34;&#34;&#34;Close the STT, and every stream/requests associated with it&#34;&#34;&#34;
+    ...</code></pre>
+</details>
+<div class="desc"><p>Close the STT, and every stream/requests associated with it</p></div>
+</dd>
+<dt id="livekit.agents.stt.STT.recognize"><code class="name flex">
+<span>async def <span class="ident">recognize</span></span>(<span>self,<br>buffer: AudioBuffer,<br>*,<br>language: NotGivenOr[str | None] = NOT_GIVEN,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0)) ‑> <a title="livekit.agents.stt.stt.SpeechEvent" href="stt.html#livekit.agents.stt.stt.SpeechEvent">SpeechEvent</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def recognize(
+    self,
+    buffer: AudioBuffer,
+    *,
+    language: NotGivenOr[str | None] = NOT_GIVEN,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+) -&gt; SpeechEvent:
+    for i in range(conn_options.max_retry + 1):
+        try:
+            start_time = time.perf_counter()
+            event = await self._recognize_impl(
+                buffer, language=language, conn_options=conn_options
+            )
+            duration = time.perf_counter() - start_time
+            stt_metrics = STTMetrics(
+                request_id=event.request_id,
+                timestamp=time.time(),
+                duration=duration,
+                label=self._label,
+                audio_duration=calculate_audio_duration(buffer),
+                streamed=False,
+            )
+            self.emit(&#34;metrics_collected&#34;, stt_metrics)
+            return event
+
+        except APIError as e:
+            retry_interval = conn_options._interval_for_retry(i)
+            if conn_options.max_retry == 0:
+                raise
+            elif i == conn_options.max_retry:
+                raise APIConnectionError(
+                    f&#34;failed to recognize speech after {conn_options.max_retry + 1} attempts&#34;,
+                ) from e
+            else:
+                logger.warning(
+                    f&#34;failed to recognize speech, retrying in {retry_interval}s&#34;,
+                    exc_info=e,
+                    extra={
+                        &#34;tts&#34;: self._label,
+                        &#34;attempt&#34;: i + 1,
+                        &#34;streamed&#34;: False,
+                    },
+                )
+
+            await asyncio.sleep(retry_interval)
+
+    raise RuntimeError(&#34;unreachable&#34;)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.stt.STT.stream"><code class="name flex">
+<span>def <span class="ident">stream</span></span>(<span>self,<br>*,<br>language: NotGivenOr[str | None] = NOT_GIVEN,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0)) ‑> <a title="livekit.agents.stt.stt.RecognizeStream" href="stt.html#livekit.agents.stt.stt.RecognizeStream">RecognizeStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def stream(
+    self,
+    *,
+    language: NotGivenOr[str | None] = NOT_GIVEN,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+) -&gt; RecognizeStream:
+    raise NotImplementedError(
+        &#34;streaming is not supported by this STT, please use a different STT or use a StreamAdapter&#34;  # noqa: E501
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.stt.STTCapabilities"><code class="flex name class">
+<span>class <span class="ident">STTCapabilities</span></span>
+<span>(</span><span>streaming: bool, interim_results: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class STTCapabilities:
+    streaming: bool
+    interim_results: bool</code></pre>
+</details>
+<div class="desc"><p>STTCapabilities(streaming: 'bool', interim_results: 'bool')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.stt.STTCapabilities.interim_results"><code class="name">var <span class="ident">interim_results</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.STTCapabilities.streaming"><code class="name">var <span class="ident">streaming</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.STTError"><code class="flex name class">
+<span>class <span class="ident">STTError</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class STTError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal[&#34;stt_error&#34;] = &#34;stt_error&#34;
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.stt.STTError.error"><code class="name">var <span class="ident">error</span> : livekit.agents._exceptions.APIError</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.STTError.label"><code class="name">var <span class="ident">label</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.STTError.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.STTError.recoverable"><code class="name">var <span class="ident">recoverable</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.STTError.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.STTError.type"><code class="name">var <span class="ident">type</span> : Literal['stt_error']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.SpeechData"><code class="flex name class">
+<span>class <span class="ident">SpeechData</span></span>
+<span>(</span><span>language: str,<br>text: str,<br>start_time: float = 0.0,<br>end_time: float = 0.0,<br>confidence: float = 0.0)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class SpeechData:
+    language: str
+    text: str
+    start_time: float = 0.0
+    end_time: float = 0.0
+    confidence: float = 0.0  # [0, 1]</code></pre>
+</details>
+<div class="desc"><p>SpeechData(language: 'str', text: 'str', start_time: 'float' = 0.0, end_time: 'float' = 0.0, confidence: 'float' = 0.0)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.stt.SpeechData.confidence"><code class="name">var <span class="ident">confidence</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechData.end_time"><code class="name">var <span class="ident">end_time</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechData.language"><code class="name">var <span class="ident">language</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechData.start_time"><code class="name">var <span class="ident">start_time</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechData.text"><code class="name">var <span class="ident">text</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.SpeechEvent"><code class="flex name class">
+<span>class <span class="ident">SpeechEvent</span></span>
+<span>(</span><span>type: <a title="livekit.agents.stt.SpeechEventType" href="#livekit.agents.stt.SpeechEventType">SpeechEventType</a>,<br>request_id: str = '',<br>alternatives: list[<a title="livekit.agents.stt.SpeechData" href="#livekit.agents.stt.SpeechData">SpeechData</a>] = &lt;factory&gt;,<br>recognition_usage: <a title="livekit.agents.stt.RecognitionUsage" href="#livekit.agents.stt.RecognitionUsage">RecognitionUsage</a> | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class SpeechEvent:
+    type: SpeechEventType
+    request_id: str = &#34;&#34;
+    alternatives: list[SpeechData] = field(default_factory=list)
+    recognition_usage: RecognitionUsage | None = None</code></pre>
+</details>
+<div class="desc"><p>SpeechEvent(type: 'SpeechEventType', request_id: 'str' = '', alternatives: 'list[SpeechData]' = <factory>, recognition_usage: 'RecognitionUsage | None' = None)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.stt.SpeechEvent.alternatives"><code class="name">var <span class="ident">alternatives</span> : list[<a title="livekit.agents.stt.stt.SpeechData" href="stt.html#livekit.agents.stt.stt.SpeechData">SpeechData</a>]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechEvent.recognition_usage"><code class="name">var <span class="ident">recognition_usage</span> : <a title="livekit.agents.stt.stt.RecognitionUsage" href="stt.html#livekit.agents.stt.stt.RecognitionUsage">RecognitionUsage</a> | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechEvent.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechEvent.type"><code class="name">var <span class="ident">type</span> : <a title="livekit.agents.stt.stt.SpeechEventType" href="stt.html#livekit.agents.stt.stt.SpeechEventType">SpeechEventType</a></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.SpeechEventType"><code class="flex name class">
+<span>class <span class="ident">SpeechEventType</span></span>
+<span>(</span><span>*args, **kwds)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@unique
+class SpeechEventType(str, Enum):
+    START_OF_SPEECH = &#34;start_of_speech&#34;
+    &#34;&#34;&#34;indicate the start of speech
+    if the STT doesn&#39;t support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT&#34;&#34;&#34;  # noqa: E501
+    INTERIM_TRANSCRIPT = &#34;interim_transcript&#34;
+    &#34;&#34;&#34;interim transcript, useful for real-time transcription&#34;&#34;&#34;
+    FINAL_TRANSCRIPT = &#34;final_transcript&#34;
+    &#34;&#34;&#34;final transcript, emitted when the STT is confident enough that a certain
+    portion of speech will not change&#34;&#34;&#34;
+    RECOGNITION_USAGE = &#34;recognition_usage&#34;
+    &#34;&#34;&#34;usage event, emitted periodically to indicate usage metrics&#34;&#34;&#34;
+    END_OF_SPEECH = &#34;end_of_speech&#34;
+    &#34;&#34;&#34;indicate the end of speech, emitted when the user stops speaking&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>str(object='') -&gt; str
+str(bytes_or_buffer[, encoding[, errors]]) -&gt; str</p>
+<p>Create a new string object from the given object. If encoding or
+errors is specified, then the object must expose a data buffer
+that will be decoded using the given encoding and error handler.
+Otherwise, returns the result of object.<strong>str</strong>() (if defined)
+or repr(object).
+encoding defaults to 'utf-8'.
+errors defaults to 'strict'.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.str</li>
+<li>enum.Enum</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.stt.SpeechEventType.END_OF_SPEECH"><code class="name">var <span class="ident">END_OF_SPEECH</span></code></dt>
+<dd>
+<div class="desc"><p>indicate the end of speech, emitted when the user stops speaking</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechEventType.FINAL_TRANSCRIPT"><code class="name">var <span class="ident">FINAL_TRANSCRIPT</span></code></dt>
+<dd>
+<div class="desc"><p>final transcript, emitted when the STT is confident enough that a certain
+portion of speech will not change</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechEventType.INTERIM_TRANSCRIPT"><code class="name">var <span class="ident">INTERIM_TRANSCRIPT</span></code></dt>
+<dd>
+<div class="desc"><p>interim transcript, useful for real-time transcription</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechEventType.RECOGNITION_USAGE"><code class="name">var <span class="ident">RECOGNITION_USAGE</span></code></dt>
+<dd>
+<div class="desc"><p>usage event, emitted periodically to indicate usage metrics</p></div>
+</dd>
+<dt id="livekit.agents.stt.SpeechEventType.START_OF_SPEECH"><code class="name">var <span class="ident">START_OF_SPEECH</span></code></dt>
+<dd>
+<div class="desc"><p>indicate the start of speech
+if the STT doesn't support this event, this will be emitted as the same time as the first INTERIM_TRANSCRIPT</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.stt.StreamAdapter"><code class="flex name class">
+<span>class <span class="ident">StreamAdapter</span></span>
+<span>(</span><span>*,<br>stt: <a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a>,<br>vad: VAD)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class StreamAdapter(STT):
+    def __init__(self, *, stt: STT, vad: VAD) -&gt; None:
+        super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=False))
+        self._vad = vad
+        self._stt = stt
+
+        @self._stt.on(&#34;metrics_collected&#34;)
+        def _forward_metrics(*args, **kwargs):
+            self.emit(&#34;metrics_collected&#34;, *args, **kwargs)
+
+    @property
+    def wrapped_stt(self) -&gt; STT:
+        return self._stt
+
+    async def _recognize_impl(
+        self,
+        buffer: utils.AudioBuffer,
+        *,
+        language: NotGivenOr[str],
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ):
+        return await self._stt.recognize(
+            buffer=buffer, language=language, conn_options=conn_options
+        )
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS,
+    ) -&gt; RecognizeStream:
+        return StreamAdapterWrapper(
+            self,
+            vad=self._vad,
+            wrapped_stt=self._stt,
+            language=language,
+            conn_options=conn_options,
+        )</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.stt.STT" href="stt.html#livekit.agents.stt.stt.STT">STT</a></li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.stt.StreamAdapter.wrapped_stt"><code class="name">prop <span class="ident">wrapped_stt</span> : <a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def wrapped_stt(self) -&gt; STT:
+    return self._stt</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.stt.StreamAdapter.stream"><code class="name flex">
+<span>def <span class="ident">stream</span></span>(<span>self,<br>*,<br>language: NotGivenOr[str | None] = NOT_GIVEN,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=0, retry_interval=2.0, timeout=10.0)) ‑> <a title="livekit.agents.stt.stt.RecognizeStream" href="stt.html#livekit.agents.stt.stt.RecognizeStream">RecognizeStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def stream(
+    self,
+    *,
+    language: NotGivenOr[str | None] = NOT_GIVEN,
+    conn_options: APIConnectOptions = DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS,
+) -&gt; RecognizeStream:
+    return StreamAdapterWrapper(
+        self,
+        vad=self._vad,
+        wrapped_stt=self._stt,
+        language=language,
+        conn_options=conn_options,
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.stt.stt.STT" href="stt.html#livekit.agents.stt.stt.STT">STT</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.stt.stt.STT.aclose" href="stt.html#livekit.agents.stt.stt.STT.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.stt.StreamAdapterWrapper"><code class="flex name class">
+<span>class <span class="ident">StreamAdapterWrapper</span></span>
+<span>(</span><span>stt: <a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a>,<br>*,<br>vad: VAD,<br>wrapped_stt: <a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a>,<br>language: NotGivenOr[str | None],<br>conn_options: APIConnectOptions)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class StreamAdapterWrapper(RecognizeStream):
+    def __init__(
+        self,
+        stt: STT,
+        *,
+        vad: VAD,
+        wrapped_stt: STT,
+        language: NotGivenOr[str | None],
+        conn_options: APIConnectOptions,
+    ) -&gt; None:
+        super().__init__(stt=stt, conn_options=conn_options)
+        self._vad = vad
+        self._wrapped_stt = wrapped_stt
+        self._vad_stream = self._vad.stream()
+        self._language = language
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -&gt; None:
+        pass  # do nothing
+
+    async def _run(self) -&gt; None:
+        async def _forward_input():
+            &#34;&#34;&#34;forward input to vad&#34;&#34;&#34;
+            async for input in self._input_ch:
+                if isinstance(input, self._FlushSentinel):
+                    self._vad_stream.flush()
+                    continue
+                self._vad_stream.push_frame(input)
+
+            self._vad_stream.end_input()
+
+        async def _recognize():
+            &#34;&#34;&#34;recognize speech from vad&#34;&#34;&#34;
+            async for event in self._vad_stream:
+                if event.type == VADEventType.START_OF_SPEECH:
+                    self._event_ch.send_nowait(SpeechEvent(SpeechEventType.START_OF_SPEECH))
+                elif event.type == VADEventType.END_OF_SPEECH:
+                    self._event_ch.send_nowait(
+                        SpeechEvent(
+                            type=SpeechEventType.END_OF_SPEECH,
+                        )
+                    )
+
+                    merged_frames = utils.merge_frames(event.frames)
+                    t_event = await self._wrapped_stt.recognize(
+                        buffer=merged_frames,
+                        language=self._language,
+                        conn_options=self._conn_options,
+                    )
+
+                    if len(t_event.alternatives) == 0:
+                        continue
+                    elif not t_event.alternatives[0].text:
+                        continue
+
+                    self._event_ch.send_nowait(
+                        SpeechEvent(
+                            type=SpeechEventType.FINAL_TRANSCRIPT,
+                            alternatives=[t_event.alternatives[0]],
+                        )
+                    )
+
+        tasks = [
+            asyncio.create_task(_forward_input(), name=&#34;forward_input&#34;),
+            asyncio.create_task(_recognize(), name=&#34;recognize&#34;),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Args:
+sample_rate : int or None, optional
+The desired sample rate for the audio input.
+If specified, the audio input will be automatically resampled to match
+the given sample rate before being processed for Speech-to-Text.
+If not provided (None), the input will retain its original sample rate.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.stt.RecognizeStream" href="stt.html#livekit.agents.stt.stt.RecognizeStream">RecognizeStream</a></li>
+<li>abc.ABC</li>
+</ul>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.stt.stt.RecognizeStream" href="stt.html#livekit.agents.stt.stt.RecognizeStream">RecognizeStream</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.stt.stt.RecognizeStream.aclose" href="stt.html#livekit.agents.stt.stt.RecognizeStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.RecognizeStream.end_input" href="stt.html#livekit.agents.stt.stt.RecognizeStream.end_input">end_input</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.RecognizeStream.flush" href="stt.html#livekit.agents.stt.stt.RecognizeStream.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.RecognizeStream.push_frame" href="stt.html#livekit.agents.stt.stt.RecognizeStream.push_frame">push_frame</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents" href="../index.html">livekit.agents</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-submodules">Sub-modules</a></h3>
+<ul>
+<li><code><a title="livekit.agents.stt.fallback_adapter" href="fallback_adapter.html">livekit.agents.stt.fallback_adapter</a></code></li>
+<li><code><a title="livekit.agents.stt.stream_adapter" href="stream_adapter.html">livekit.agents.stt.stream_adapter</a></code></li>
+<li><code><a title="livekit.agents.stt.stt" href="stt.html">livekit.agents.stt.stt</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.stt.AvailabilityChangedEvent" href="#livekit.agents.stt.AvailabilityChangedEvent">AvailabilityChangedEvent</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.AvailabilityChangedEvent.available" href="#livekit.agents.stt.AvailabilityChangedEvent.available">available</a></code></li>
+<li><code><a title="livekit.agents.stt.AvailabilityChangedEvent.stt" href="#livekit.agents.stt.AvailabilityChangedEvent.stt">stt</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.FallbackAdapter" href="#livekit.agents.stt.FallbackAdapter">FallbackAdapter</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.FallbackAdapter.recognize" href="#livekit.agents.stt.FallbackAdapter.recognize">recognize</a></code></li>
+<li><code><a title="livekit.agents.stt.FallbackAdapter.stream" href="#livekit.agents.stt.FallbackAdapter.stream">stream</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.RecognitionUsage" href="#livekit.agents.stt.RecognitionUsage">RecognitionUsage</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.RecognitionUsage.audio_duration" href="#livekit.agents.stt.RecognitionUsage.audio_duration">audio_duration</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.RecognizeStream" href="#livekit.agents.stt.RecognizeStream">RecognizeStream</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.RecognizeStream.aclose" href="#livekit.agents.stt.RecognizeStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.RecognizeStream.end_input" href="#livekit.agents.stt.RecognizeStream.end_input">end_input</a></code></li>
+<li><code><a title="livekit.agents.stt.RecognizeStream.flush" href="#livekit.agents.stt.RecognizeStream.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.stt.RecognizeStream.push_frame" href="#livekit.agents.stt.RecognizeStream.push_frame">push_frame</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.RecognizeStream" href="#livekit.agents.stt.RecognizeStream">RecognizeStream</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.RecognizeStream.aclose" href="#livekit.agents.stt.RecognizeStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.RecognizeStream.end_input" href="#livekit.agents.stt.RecognizeStream.end_input">end_input</a></code></li>
+<li><code><a title="livekit.agents.stt.RecognizeStream.flush" href="#livekit.agents.stt.RecognizeStream.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.stt.RecognizeStream.push_frame" href="#livekit.agents.stt.RecognizeStream.push_frame">push_frame</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.STT" href="#livekit.agents.stt.STT">STT</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.STT.aclose" href="#livekit.agents.stt.STT.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.STT.capabilities" href="#livekit.agents.stt.STT.capabilities">capabilities</a></code></li>
+<li><code><a title="livekit.agents.stt.STT.label" href="#livekit.agents.stt.STT.label">label</a></code></li>
+<li><code><a title="livekit.agents.stt.STT.recognize" href="#livekit.agents.stt.STT.recognize">recognize</a></code></li>
+<li><code><a title="livekit.agents.stt.STT.stream" href="#livekit.agents.stt.STT.stream">stream</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.STTCapabilities" href="#livekit.agents.stt.STTCapabilities">STTCapabilities</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.STTCapabilities.interim_results" href="#livekit.agents.stt.STTCapabilities.interim_results">interim_results</a></code></li>
+<li><code><a title="livekit.agents.stt.STTCapabilities.streaming" href="#livekit.agents.stt.STTCapabilities.streaming">streaming</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.STTError" href="#livekit.agents.stt.STTError">STTError</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.stt.STTError.error" href="#livekit.agents.stt.STTError.error">error</a></code></li>
+<li><code><a title="livekit.agents.stt.STTError.label" href="#livekit.agents.stt.STTError.label">label</a></code></li>
+<li><code><a title="livekit.agents.stt.STTError.model_config" href="#livekit.agents.stt.STTError.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.stt.STTError.recoverable" href="#livekit.agents.stt.STTError.recoverable">recoverable</a></code></li>
+<li><code><a title="livekit.agents.stt.STTError.timestamp" href="#livekit.agents.stt.STTError.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.stt.STTError.type" href="#livekit.agents.stt.STTError.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.SpeechData" href="#livekit.agents.stt.SpeechData">SpeechData</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.SpeechData.confidence" href="#livekit.agents.stt.SpeechData.confidence">confidence</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechData.end_time" href="#livekit.agents.stt.SpeechData.end_time">end_time</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechData.language" href="#livekit.agents.stt.SpeechData.language">language</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechData.start_time" href="#livekit.agents.stt.SpeechData.start_time">start_time</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechData.text" href="#livekit.agents.stt.SpeechData.text">text</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.SpeechEvent" href="#livekit.agents.stt.SpeechEvent">SpeechEvent</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.SpeechEvent.alternatives" href="#livekit.agents.stt.SpeechEvent.alternatives">alternatives</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechEvent.recognition_usage" href="#livekit.agents.stt.SpeechEvent.recognition_usage">recognition_usage</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechEvent.request_id" href="#livekit.agents.stt.SpeechEvent.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechEvent.type" href="#livekit.agents.stt.SpeechEvent.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.SpeechEventType" href="#livekit.agents.stt.SpeechEventType">SpeechEventType</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.SpeechEventType.END_OF_SPEECH" href="#livekit.agents.stt.SpeechEventType.END_OF_SPEECH">END_OF_SPEECH</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechEventType.FINAL_TRANSCRIPT" href="#livekit.agents.stt.SpeechEventType.FINAL_TRANSCRIPT">FINAL_TRANSCRIPT</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechEventType.INTERIM_TRANSCRIPT" href="#livekit.agents.stt.SpeechEventType.INTERIM_TRANSCRIPT">INTERIM_TRANSCRIPT</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechEventType.RECOGNITION_USAGE" href="#livekit.agents.stt.SpeechEventType.RECOGNITION_USAGE">RECOGNITION_USAGE</a></code></li>
+<li><code><a title="livekit.agents.stt.SpeechEventType.START_OF_SPEECH" href="#livekit.agents.stt.SpeechEventType.START_OF_SPEECH">START_OF_SPEECH</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.StreamAdapter" href="#livekit.agents.stt.StreamAdapter">StreamAdapter</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.stt.StreamAdapter.stream" href="#livekit.agents.stt.StreamAdapter.stream">stream</a></code></li>
+<li><code><a title="livekit.agents.stt.StreamAdapter.wrapped_stt" href="#livekit.agents.stt.StreamAdapter.wrapped_stt">wrapped_stt</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.stt.StreamAdapterWrapper" href="#livekit.agents.stt.StreamAdapterWrapper">StreamAdapterWrapper</a></code></h4>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

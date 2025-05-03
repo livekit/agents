@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.utils.audio API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.utils.audio</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-functions">Functions</h2>
+<dl>
+<dt id="livekit.agents.utils.audio.audio_frames_from_file"><code class="name flex">
+<span>async def <span class="ident">audio_frames_from_file</span></span>(<span>file_path: str, sample_rate: int = 48000, num_channels: int = 1) ‑> AsyncGenerator[<a title="livekit.rtc.audio_frame.AudioFrame" href="../../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a>, None]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def audio_frames_from_file(
+    file_path: str, sample_rate: int = 48000, num_channels: int = 1
+) -&gt; AsyncGenerator[rtc.AudioFrame, None]:
+    &#34;&#34;&#34;
+    Decode the audio file into rtc.AudioFrame instances and yield them as an async iterable.
+    Args:
+        file_path (str): The path to the audio file.
+        sample_rate (int, optional): Desired sample rate. Defaults to 48000.
+        num_channels (int, optional): Number of channels (1 for mono, 2 for stereo). Defaults to 1.
+    Returns:
+        AsyncIterable[rtc.AudioFrame]: An async iterable that yields decoded AudioFrame
+    &#34;&#34;&#34;
+    from .codecs import AudioStreamDecoder
+
+    decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
+
+    async def file_reader():
+        async with aiofiles.open(file_path, mode=&#34;rb&#34;) as f:
+            while True:
+                chunk = await f.read(4096)
+                if not chunk:
+                    break
+
+                decoder.push(chunk)
+
+        decoder.end_input()
+
+    reader_task = asyncio.create_task(file_reader())
+
+    try:
+        async for frame in decoder:
+            yield frame
+
+    finally:
+        await cancel_and_wait(reader_task)</code></pre>
+</details>
+<div class="desc"><p>Decode the audio file into rtc.AudioFrame instances and yield them as an async iterable.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>file_path</code></strong> :&ensp;<code>str</code></dt>
+<dd>The path to the audio file.</dd>
+<dt><strong><code>sample_rate</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Desired sample rate. Defaults to 48000.</dd>
+<dt><strong><code>num_channels</code></strong> :&ensp;<code>int</code>, optional</dt>
+<dd>Number of channels (1 for mono, 2 for stereo). Defaults to 1.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>AsyncIterable[rtc.AudioFrame]</code></dt>
+<dd>An async iterable that yields decoded AudioFrame</dd>
+</dl></div>
+</dd>
+<dt id="livekit.agents.utils.audio.calculate_audio_duration"><code class="name flex">
+<span>def <span class="ident">calculate_audio_duration</span></span>(<span>frames: AudioBuffer) ‑> float</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def calculate_audio_duration(frames: AudioBuffer) -&gt; float:
+    &#34;&#34;&#34;
+    Calculate the total duration of audio frames.
+
+    This function computes the total duration of audio frames in seconds.
+    It accepts either a list of `rtc.AudioFrame` objects or a single `rtc.AudioFrame` object.
+
+    Parameters:
+    - frames (AudioBuffer): A list of `rtc.AudioFrame` instances or a single `rtc.AudioFrame` instance.
+
+    Returns:
+    - float: The total duration in seconds of all frames provided.
+    &#34;&#34;&#34;  # noqa: E501
+    if isinstance(frames, list):
+        return sum(frame.duration for frame in frames)
+    else:
+        return frames.duration</code></pre>
+</details>
+<div class="desc"><p>Calculate the total duration of audio frames.</p>
+<p>This function computes the total duration of audio frames in seconds.
+It accepts either a list of <code>rtc.AudioFrame</code> objects or a single <code>rtc.AudioFrame</code> object.</p>
+<p>Parameters:
+- frames (AudioBuffer): A list of <code>rtc.AudioFrame</code> instances or a single <code>rtc.AudioFrame</code> instance.</p>
+<p>Returns:
+- float: The total duration in seconds of all frames provided.</p></div>
+</dd>
+</dl>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.utils.audio.AudioByteStream"><code class="flex name class">
+<span>class <span class="ident">AudioByteStream</span></span>
+<span>(</span><span>sample_rate: int, num_channels: int, samples_per_channel: int | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class AudioByteStream:
+    &#34;&#34;&#34;
+    Buffer and chunk audio byte data into fixed-size frames.
+
+    This class is designed to handle incoming audio data in bytes,
+    buffering it and producing audio frames of a consistent size.
+    It is mainly used to easily chunk big or too small audio frames
+    into a fixed size, helping to avoid processing very small frames
+    (which can be inefficient) and very large frames (which can cause
+    latency or processing delays). By normalizing frame sizes, it
+    facilitates consistent and efficient audio data processing.
+    &#34;&#34;&#34;
+
+    def __init__(
+        self,
+        sample_rate: int,
+        num_channels: int,
+        samples_per_channel: int | None = None,
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Initialize an AudioByteStream instance.
+
+        Parameters:
+            sample_rate (int): The audio sample rate in Hz.
+            num_channels (int): The number of audio channels.
+            samples_per_channel (int, optional): The number of samples per channel in each frame.
+                If None, defaults to `sample_rate // 10` (i.e., 100ms of audio data).
+
+        The constructor sets up the internal buffer and calculates the size of each frame in bytes.
+        The frame size is determined by the number of channels, samples per channel, and the size
+        of each sample (assumed to be 16 bits or 2 bytes).
+        &#34;&#34;&#34;
+        self._sample_rate = sample_rate
+        self._num_channels = num_channels
+
+        if samples_per_channel is None:
+            samples_per_channel = sample_rate // 10  # 100ms by default
+
+        self._bytes_per_frame = num_channels * samples_per_channel * ctypes.sizeof(ctypes.c_int16)
+        self._buf = bytearray()
+
+    def push(self, data: bytes) -&gt; list[rtc.AudioFrame]:
+        &#34;&#34;&#34;
+        Add audio data to the buffer and retrieve fixed-size frames.
+
+        Parameters:
+            data (bytes): The incoming audio data to buffer.
+
+        Returns:
+            list[rtc.AudioFrame]: A list of `AudioFrame` objects of fixed size.
+
+        The method appends the incoming data to the internal buffer.
+        While the buffer contains enough data to form complete frames,
+        it extracts the data for each frame, creates an `AudioFrame` object,
+        and appends it to the list of frames to return.
+
+        This allows you to feed in variable-sized chunks of audio data
+        (e.g., from a stream or file) and receive back a list of
+        fixed-size audio frames ready for processing or transmission.
+        &#34;&#34;&#34;
+        self._buf.extend(data)
+
+        frames = []
+        while len(self._buf) &gt;= self._bytes_per_frame:
+            frame_data = self._buf[: self._bytes_per_frame]
+            self._buf = self._buf[self._bytes_per_frame :]
+
+            frames.append(
+                rtc.AudioFrame(
+                    data=frame_data,
+                    sample_rate=self._sample_rate,
+                    num_channels=self._num_channels,
+                    samples_per_channel=len(frame_data) // 2,
+                )
+            )
+
+        return frames
+
+    write = push  # Alias for the push method.
+
+    def flush(self) -&gt; list[rtc.AudioFrame]:
+        &#34;&#34;&#34;
+        Flush the buffer and retrieve any remaining audio data as a frame.
+
+        Returns:
+            list[rtc.AudioFrame]: A list containing any remaining `AudioFrame` objects.
+
+        This method processes any remaining data in the buffer that does not
+        fill a complete frame. If the remaining data forms a partial frame
+        (i.e., its size is not a multiple of the expected sample size), a warning is
+        logged and an empty list is returned. Otherwise, it returns the final
+        `AudioFrame` containing the remaining data.
+
+        Use this method when you have no more data to push and want to ensure
+        that all buffered audio data has been processed.
+        &#34;&#34;&#34;
+        if len(self._buf) == 0:
+            return []
+
+        if len(self._buf) % (2 * self._num_channels) != 0:
+            logger.warning(&#34;AudioByteStream: incomplete frame during flush, dropping&#34;)
+            return []
+
+        return [
+            rtc.AudioFrame(
+                data=self._buf,
+                sample_rate=self._sample_rate,
+                num_channels=self._num_channels,
+                samples_per_channel=len(self._buf) // 2,
+            )
+        ]</code></pre>
+</details>
+<div class="desc"><p>Buffer and chunk audio byte data into fixed-size frames.</p>
+<p>This class is designed to handle incoming audio data in bytes,
+buffering it and producing audio frames of a consistent size.
+It is mainly used to easily chunk big or too small audio frames
+into a fixed size, helping to avoid processing very small frames
+(which can be inefficient) and very large frames (which can cause
+latency or processing delays). By normalizing frame sizes, it
+facilitates consistent and efficient audio data processing.</p>
+<p>Initialize an AudioByteStream instance.</p>
+<h2 id="parameters">Parameters</h2>
+<p>sample_rate (int): The audio sample rate in Hz.
+num_channels (int): The number of audio channels.
+samples_per_channel (int, optional): The number of samples per channel in each frame.
+If None, defaults to <code>sample_rate // 10</code> (i.e., 100ms of audio data).</p>
+<p>The constructor sets up the internal buffer and calculates the size of each frame in bytes.
+The frame size is determined by the number of channels, samples per channel, and the size
+of each sample (assumed to be 16 bits or 2 bytes).</p></div>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.utils.audio.AudioByteStream.flush"><code class="name flex">
+<span>def <span class="ident">flush</span></span>(<span>self) ‑> list[<a title="livekit.rtc.audio_frame.AudioFrame" href="../../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a>]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def flush(self) -&gt; list[rtc.AudioFrame]:
+    &#34;&#34;&#34;
+    Flush the buffer and retrieve any remaining audio data as a frame.
+
+    Returns:
+        list[rtc.AudioFrame]: A list containing any remaining `AudioFrame` objects.
+
+    This method processes any remaining data in the buffer that does not
+    fill a complete frame. If the remaining data forms a partial frame
+    (i.e., its size is not a multiple of the expected sample size), a warning is
+    logged and an empty list is returned. Otherwise, it returns the final
+    `AudioFrame` containing the remaining data.
+
+    Use this method when you have no more data to push and want to ensure
+    that all buffered audio data has been processed.
+    &#34;&#34;&#34;
+    if len(self._buf) == 0:
+        return []
+
+    if len(self._buf) % (2 * self._num_channels) != 0:
+        logger.warning(&#34;AudioByteStream: incomplete frame during flush, dropping&#34;)
+        return []
+
+    return [
+        rtc.AudioFrame(
+            data=self._buf,
+            sample_rate=self._sample_rate,
+            num_channels=self._num_channels,
+            samples_per_channel=len(self._buf) // 2,
+        )
+    ]</code></pre>
+</details>
+<div class="desc"><p>Flush the buffer and retrieve any remaining audio data as a frame.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[rtc.AudioFrame]</code></dt>
+<dd>A list containing any remaining <code>AudioFrame</code> objects.</dd>
+</dl>
+<p>This method processes any remaining data in the buffer that does not
+fill a complete frame. If the remaining data forms a partial frame
+(i.e., its size is not a multiple of the expected sample size), a warning is
+logged and an empty list is returned. Otherwise, it returns the final
+<code>AudioFrame</code> containing the remaining data.</p>
+<p>Use this method when you have no more data to push and want to ensure
+that all buffered audio data has been processed.</p></div>
+</dd>
+<dt id="livekit.agents.utils.audio.AudioByteStream.push"><code class="name flex">
+<span>def <span class="ident">push</span></span>(<span>self, data: bytes) ‑> list[<a title="livekit.rtc.audio_frame.AudioFrame" href="../../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a>]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def push(self, data: bytes) -&gt; list[rtc.AudioFrame]:
+    &#34;&#34;&#34;
+    Add audio data to the buffer and retrieve fixed-size frames.
+
+    Parameters:
+        data (bytes): The incoming audio data to buffer.
+
+    Returns:
+        list[rtc.AudioFrame]: A list of `AudioFrame` objects of fixed size.
+
+    The method appends the incoming data to the internal buffer.
+    While the buffer contains enough data to form complete frames,
+    it extracts the data for each frame, creates an `AudioFrame` object,
+    and appends it to the list of frames to return.
+
+    This allows you to feed in variable-sized chunks of audio data
+    (e.g., from a stream or file) and receive back a list of
+    fixed-size audio frames ready for processing or transmission.
+    &#34;&#34;&#34;
+    self._buf.extend(data)
+
+    frames = []
+    while len(self._buf) &gt;= self._bytes_per_frame:
+        frame_data = self._buf[: self._bytes_per_frame]
+        self._buf = self._buf[self._bytes_per_frame :]
+
+        frames.append(
+            rtc.AudioFrame(
+                data=frame_data,
+                sample_rate=self._sample_rate,
+                num_channels=self._num_channels,
+                samples_per_channel=len(frame_data) // 2,
+            )
+        )
+
+    return frames</code></pre>
+</details>
+<div class="desc"><p>Add audio data to the buffer and retrieve fixed-size frames.</p>
+<h2 id="parameters">Parameters</h2>
+<p>data (bytes): The incoming audio data to buffer.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[rtc.AudioFrame]</code></dt>
+<dd>A list of <code>AudioFrame</code> objects of fixed size.</dd>
+</dl>
+<p>The method appends the incoming data to the internal buffer.
+While the buffer contains enough data to form complete frames,
+it extracts the data for each frame, creates an <code>AudioFrame</code> object,
+and appends it to the list of frames to return.</p>
+<p>This allows you to feed in variable-sized chunks of audio data
+(e.g., from a stream or file) and receive back a list of
+fixed-size audio frames ready for processing or transmission.</p></div>
+</dd>
+<dt id="livekit.agents.utils.audio.AudioByteStream.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, data: bytes) ‑> list[<a title="livekit.rtc.audio_frame.AudioFrame" href="../../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a>]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def push(self, data: bytes) -&gt; list[rtc.AudioFrame]:
+    &#34;&#34;&#34;
+    Add audio data to the buffer and retrieve fixed-size frames.
+
+    Parameters:
+        data (bytes): The incoming audio data to buffer.
+
+    Returns:
+        list[rtc.AudioFrame]: A list of `AudioFrame` objects of fixed size.
+
+    The method appends the incoming data to the internal buffer.
+    While the buffer contains enough data to form complete frames,
+    it extracts the data for each frame, creates an `AudioFrame` object,
+    and appends it to the list of frames to return.
+
+    This allows you to feed in variable-sized chunks of audio data
+    (e.g., from a stream or file) and receive back a list of
+    fixed-size audio frames ready for processing or transmission.
+    &#34;&#34;&#34;
+    self._buf.extend(data)
+
+    frames = []
+    while len(self._buf) &gt;= self._bytes_per_frame:
+        frame_data = self._buf[: self._bytes_per_frame]
+        self._buf = self._buf[self._bytes_per_frame :]
+
+        frames.append(
+            rtc.AudioFrame(
+                data=frame_data,
+                sample_rate=self._sample_rate,
+                num_channels=self._num_channels,
+                samples_per_channel=len(frame_data) // 2,
+            )
+        )
+
+    return frames</code></pre>
+</details>
+<div class="desc"><p>Add audio data to the buffer and retrieve fixed-size frames.</p>
+<h2 id="parameters">Parameters</h2>
+<p>data (bytes): The incoming audio data to buffer.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[rtc.AudioFrame]</code></dt>
+<dd>A list of <code>AudioFrame</code> objects of fixed size.</dd>
+</dl>
+<p>The method appends the incoming data to the internal buffer.
+While the buffer contains enough data to form complete frames,
+it extracts the data for each frame, creates an <code>AudioFrame</code> object,
+and appends it to the list of frames to return.</p>
+<p>This allows you to feed in variable-sized chunks of audio data
+(e.g., from a stream or file) and receive back a list of
+fixed-size audio frames ready for processing or transmission.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.utils" href="index.html">livekit.agents.utils</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-functions">Functions</a></h3>
+<ul class="">
+<li><code><a title="livekit.agents.utils.audio.audio_frames_from_file" href="#livekit.agents.utils.audio.audio_frames_from_file">audio_frames_from_file</a></code></li>
+<li><code><a title="livekit.agents.utils.audio.calculate_audio_duration" href="#livekit.agents.utils.audio.calculate_audio_duration">calculate_audio_duration</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.utils.audio.AudioByteStream" href="#livekit.agents.utils.audio.AudioByteStream">AudioByteStream</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.utils.audio.AudioByteStream.flush" href="#livekit.agents.utils.audio.AudioByteStream.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.utils.audio.AudioByteStream.push" href="#livekit.agents.utils.audio.AudioByteStream.push">push</a></code></li>
+<li><code><a title="livekit.agents.utils.audio.AudioByteStream.write" href="#livekit.agents.utils.audio.AudioByteStream.write">write</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

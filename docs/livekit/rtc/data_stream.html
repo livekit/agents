@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.rtc.data_stream API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.rtc.data_stream</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.rtc.data_stream.BaseStreamInfo"><code class="flex name class">
+<span>class <span class="ident">BaseStreamInfo</span></span>
+<span>(</span><span>stream_id: str,<br>mime_type: str,<br>topic: str,<br>timestamp: int,<br>size: Optional[int],<br>attributes: Optional[Dict[str, str]])</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class BaseStreamInfo:
+    stream_id: str
+    mime_type: str
+    topic: str
+    timestamp: int
+    size: Optional[int]
+    attributes: Optional[Dict[str, str]]  # Optional for the attributes dictionary</code></pre>
+</details>
+<div class="desc"><p>BaseStreamInfo(stream_id: 'str', mime_type: 'str', topic: 'str', timestamp: 'int', size: 'Optional[int]', attributes: 'Optional[Dict[str, str]]')</p></div>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.data_stream.ByteStreamInfo" href="#livekit.rtc.data_stream.ByteStreamInfo">ByteStreamInfo</a></li>
+<li><a title="livekit.rtc.data_stream.TextStreamInfo" href="#livekit.rtc.data_stream.TextStreamInfo">TextStreamInfo</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.BaseStreamInfo.attributes"><code class="name">var <span class="ident">attributes</span> : Dict[str, str] | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.BaseStreamInfo.mime_type"><code class="name">var <span class="ident">mime_type</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.BaseStreamInfo.size"><code class="name">var <span class="ident">size</span> : int | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.BaseStreamInfo.stream_id"><code class="name">var <span class="ident">stream_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.BaseStreamInfo.timestamp"><code class="name">var <span class="ident">timestamp</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.BaseStreamInfo.topic"><code class="name">var <span class="ident">topic</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.data_stream.BaseStreamWriter"><code class="flex name class">
+<span>class <span class="ident">BaseStreamWriter</span></span>
+<span>(</span><span>local_participant: LocalParticipant,<br>topic: str = '',<br>attributes: Optional[Dict[str, str]] = {},<br>stream_id: str | None = None,<br>total_size: int | None = None,<br>mime_type: str = '',<br>destination_identities: Optional[List[str]] = None,<br>sender_identity: str | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class BaseStreamWriter:
+    def __init__(
+        self,
+        local_participant: LocalParticipant,
+        topic: str = &#34;&#34;,
+        attributes: Optional[Dict[str, str]] = {},
+        stream_id: str | None = None,
+        total_size: int | None = None,
+        mime_type: str = &#34;&#34;,
+        destination_identities: Optional[List[str]] = None,
+        sender_identity: str | None = None,
+    ):
+        self._local_participant = local_participant
+        if stream_id is None:
+            stream_id = str(uuid.uuid4())
+        timestamp = int(datetime.datetime.now().timestamp() * 1000)
+        self._header = proto_DataStream.Header(
+            stream_id=stream_id,
+            timestamp=timestamp,
+            mime_type=mime_type,
+            topic=topic,
+            attributes=attributes,
+            total_length=total_size,
+        )
+        self._next_chunk_index: int = 0
+        self._destination_identities = destination_identities
+        self._sender_identity = sender_identity or self._local_participant.identity
+        self._closed = False
+
+    async def _send_header(self):
+        req = proto_ffi.FfiRequest(
+            send_stream_header=proto_room.SendStreamHeaderRequest(
+                header=self._header,
+                local_participant_handle=self._local_participant._ffi_handle.handle,
+                destination_identities=self._destination_identities,
+                sender_identity=self._sender_identity,
+            )
+        )
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb: proto_ffi.FfiEvent = await queue.wait_for(
+                lambda e: e.send_stream_header.async_id == resp.send_stream_header.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+        if cb.send_stream_header.error:
+            raise ConnectionError(cb.send_stream_header.error)
+
+    async def _send_chunk(self, chunk: proto_DataStream.Chunk):
+        if self._closed:
+            raise RuntimeError(f&#34;Cannot send chunk after stream is closed: {chunk}&#34;)
+        req = proto_ffi.FfiRequest(
+            send_stream_chunk=proto_room.SendStreamChunkRequest(
+                chunk=chunk,
+                local_participant_handle=self._local_participant._ffi_handle.handle,
+                sender_identity=self._local_participant.identity,
+                destination_identities=self._destination_identities,
+            )
+        )
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb: proto_ffi.FfiEvent = await queue.wait_for(
+                lambda e: e.send_stream_chunk.async_id == resp.send_stream_chunk.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+        if cb.send_stream_chunk.error:
+            raise ConnectionError(cb.send_stream_chunk.error)
+
+    async def _send_trailer(self, trailer: proto_DataStream.Trailer):
+        req = proto_ffi.FfiRequest(
+            send_stream_trailer=proto_room.SendStreamTrailerRequest(
+                trailer=trailer,
+                local_participant_handle=self._local_participant._ffi_handle.handle,
+                sender_identity=self._local_participant.identity,
+            )
+        )
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb: proto_ffi.FfiEvent = await queue.wait_for(
+                lambda e: e.send_stream_trailer.async_id == resp.send_stream_trailer.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+        if cb.send_stream_chunk.error:
+            raise ConnectionError(cb.send_stream_trailer.error)
+
+    async def aclose(self, *, reason: str = &#34;&#34;, attributes: Optional[Dict[str, str]] = None):
+        if self._closed:
+            raise RuntimeError(&#34;Stream already closed&#34;)
+        self._closed = True
+        await self._send_trailer(
+            trailer=proto_DataStream.Trailer(
+                stream_id=self._header.stream_id, reason=reason, attributes=attributes
+            )
+        )</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.data_stream.ByteStreamWriter" href="#livekit.rtc.data_stream.ByteStreamWriter">ByteStreamWriter</a></li>
+<li><a title="livekit.rtc.data_stream.TextStreamWriter" href="#livekit.rtc.data_stream.TextStreamWriter">TextStreamWriter</a></li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.BaseStreamWriter.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self, *, reason: str = '', attributes: Optional[Dict[str, str]] = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self, *, reason: str = &#34;&#34;, attributes: Optional[Dict[str, str]] = None):
+    if self._closed:
+        raise RuntimeError(&#34;Stream already closed&#34;)
+    self._closed = True
+    await self._send_trailer(
+        trailer=proto_DataStream.Trailer(
+            stream_id=self._header.stream_id, reason=reason, attributes=attributes
+        )
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.data_stream.ByteStreamInfo"><code class="flex name class">
+<span>class <span class="ident">ByteStreamInfo</span></span>
+<span>(</span><span>stream_id: str,<br>mime_type: str,<br>topic: str,<br>timestamp: int,<br>size: Optional[int],<br>attributes: Optional[Dict[str, str]],<br>name: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class ByteStreamInfo(BaseStreamInfo):
+    name: str</code></pre>
+</details>
+<div class="desc"><p>ByteStreamInfo(stream_id: 'str', mime_type: 'str', topic: 'str', timestamp: 'int', size: 'Optional[int]', attributes: 'Optional[Dict[str, str]]', name: 'str')</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.data_stream.BaseStreamInfo" href="#livekit.rtc.data_stream.BaseStreamInfo">BaseStreamInfo</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.ByteStreamInfo.name"><code class="name">var <span class="ident">name</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.data_stream.BaseStreamInfo" href="#livekit.rtc.data_stream.BaseStreamInfo">BaseStreamInfo</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.attributes" href="#livekit.rtc.data_stream.BaseStreamInfo.attributes">attributes</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.mime_type" href="#livekit.rtc.data_stream.BaseStreamInfo.mime_type">mime_type</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.size" href="#livekit.rtc.data_stream.BaseStreamInfo.size">size</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.stream_id" href="#livekit.rtc.data_stream.BaseStreamInfo.stream_id">stream_id</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.timestamp" href="#livekit.rtc.data_stream.BaseStreamInfo.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.topic" href="#livekit.rtc.data_stream.BaseStreamInfo.topic">topic</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.rtc.data_stream.ByteStreamReader"><code class="flex name class">
+<span>class <span class="ident">ByteStreamReader</span></span>
+<span>(</span><span>header: proto_DataStream.Header, capacity: int = 0)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ByteStreamReader:
+    def __init__(self, header: proto_DataStream.Header, capacity: int = 0) -&gt; None:
+        self._header = header
+        self._info = ByteStreamInfo(
+            stream_id=header.stream_id,
+            mime_type=header.mime_type,
+            topic=header.topic,
+            timestamp=header.timestamp,
+            size=header.total_length,
+            attributes=dict(header.attributes),
+            name=header.byte_header.name,
+        )
+        self._queue: asyncio.Queue[proto_DataStream.Chunk | None] = asyncio.Queue(capacity)
+
+    async def _on_chunk_update(self, chunk: proto_DataStream.Chunk):
+        await self._queue.put(chunk)
+
+    async def _on_stream_close(self, trailer: proto_DataStream.Trailer):
+        self.info.attributes = self.info.attributes or {}
+        self.info.attributes.update(trailer.attributes)
+        await self._queue.put(None)
+
+    def __aiter__(self) -&gt; AsyncIterator[bytes]:
+        return self
+
+    async def __anext__(self) -&gt; bytes:
+        item = await self._queue.get()
+        if item is None:
+            raise StopAsyncIteration
+
+        return item.content
+
+    @property
+    def info(self) -&gt; ByteStreamInfo:
+        return self._info</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.ByteStreamReader.info"><code class="name">prop <span class="ident">info</span> : <a title="livekit.rtc.data_stream.ByteStreamInfo" href="#livekit.rtc.data_stream.ByteStreamInfo">ByteStreamInfo</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def info(self) -&gt; ByteStreamInfo:
+    return self._info</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.data_stream.ByteStreamWriter"><code class="flex name class">
+<span>class <span class="ident">ByteStreamWriter</span></span>
+<span>(</span><span>local_participant: LocalParticipant,<br>*,<br>name: str,<br>topic: str = '',<br>attributes: Optional[Dict[str, str]] = None,<br>stream_id: str | None = None,<br>total_size: int | None = None,<br>mime_type: str = 'application/octet-stream',<br>destination_identities: Optional[List[str]] = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ByteStreamWriter(BaseStreamWriter):
+    def __init__(
+        self,
+        local_participant: LocalParticipant,
+        *,
+        name: str,
+        topic: str = &#34;&#34;,
+        attributes: Optional[Dict[str, str]] = None,
+        stream_id: str | None = None,
+        total_size: int | None = None,
+        mime_type: str = &#34;application/octet-stream&#34;,
+        destination_identities: Optional[List[str]] = None,
+    ) -&gt; None:
+        super().__init__(
+            local_participant,
+            topic,
+            attributes,
+            stream_id,
+            total_size,
+            mime_type=mime_type,
+            destination_identities=destination_identities,
+        )
+        self._header.byte_header.name = name
+        self._info = ByteStreamInfo(
+            stream_id=self._header.stream_id,
+            mime_type=self._header.mime_type,
+            topic=self._header.topic,
+            timestamp=self._header.timestamp,
+            size=self._header.total_length,
+            attributes=dict(self._header.attributes),
+            name=self._header.byte_header.name,
+        )
+        self._write_lock = asyncio.Lock()
+
+    async def write(self, data: bytes):
+        async with self._write_lock:
+            chunked_data = [
+                data[i : i + STREAM_CHUNK_SIZE] for i in range(0, len(data), STREAM_CHUNK_SIZE)
+            ]
+
+            for chunk in chunked_data:
+                self._next_chunk_index += 1
+                chunk_msg = proto_DataStream.Chunk(
+                    stream_id=self._header.stream_id,
+                    chunk_index=self._next_chunk_index,
+                    content=chunk,
+                )
+                await self._send_chunk(chunk_msg)
+
+    @property
+    def info(self) -&gt; ByteStreamInfo:
+        return self._info</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.data_stream.BaseStreamWriter" href="#livekit.rtc.data_stream.BaseStreamWriter">BaseStreamWriter</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.ByteStreamWriter.info"><code class="name">prop <span class="ident">info</span> : <a title="livekit.rtc.data_stream.ByteStreamInfo" href="#livekit.rtc.data_stream.ByteStreamInfo">ByteStreamInfo</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def info(self) -&gt; ByteStreamInfo:
+    return self._info</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.ByteStreamWriter.write"><code class="name flex">
+<span>async def <span class="ident">write</span></span>(<span>self, data: bytes)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def write(self, data: bytes):
+    async with self._write_lock:
+        chunked_data = [
+            data[i : i + STREAM_CHUNK_SIZE] for i in range(0, len(data), STREAM_CHUNK_SIZE)
+        ]
+
+        for chunk in chunked_data:
+            self._next_chunk_index += 1
+            chunk_msg = proto_DataStream.Chunk(
+                stream_id=self._header.stream_id,
+                chunk_index=self._next_chunk_index,
+                content=chunk,
+            )
+            await self._send_chunk(chunk_msg)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.data_stream.DataStream"><code class="flex name class">
+<span>class <span class="ident">proto_DataStream</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>google._upb._message.Message</li>
+<li>google.protobuf.message.Message</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.DataStream.ByteHeader"><code class="name">var <span class="ident">ByteHeader</span></code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.DataStream.Chunk"><code class="name">var <span class="ident">Chunk</span></code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.DataStream.DESCRIPTOR"><code class="name">var <span class="ident">DESCRIPTOR</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.DataStream.Header"><code class="name">var <span class="ident">Header</span></code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.DataStream.TextHeader"><code class="name">var <span class="ident">TextHeader</span></code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+</dd>
+<dt id="livekit.rtc.data_stream.DataStream.Trailer"><code class="name">var <span class="ident">Trailer</span></code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.data_stream.TextStreamInfo"><code class="flex name class">
+<span>class <span class="ident">TextStreamInfo</span></span>
+<span>(</span><span>stream_id: str,<br>mime_type: str,<br>topic: str,<br>timestamp: int,<br>size: Optional[int],<br>attributes: Optional[Dict[str, str]],<br>attachments: List[str])</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class TextStreamInfo(BaseStreamInfo):
+    attachments: List[str]</code></pre>
+</details>
+<div class="desc"><p>TextStreamInfo(stream_id: 'str', mime_type: 'str', topic: 'str', timestamp: 'int', size: 'Optional[int]', attributes: 'Optional[Dict[str, str]]', attachments: 'List[str]')</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.data_stream.BaseStreamInfo" href="#livekit.rtc.data_stream.BaseStreamInfo">BaseStreamInfo</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.TextStreamInfo.attachments"><code class="name">var <span class="ident">attachments</span> : List[str]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.data_stream.BaseStreamInfo" href="#livekit.rtc.data_stream.BaseStreamInfo">BaseStreamInfo</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.attributes" href="#livekit.rtc.data_stream.BaseStreamInfo.attributes">attributes</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.mime_type" href="#livekit.rtc.data_stream.BaseStreamInfo.mime_type">mime_type</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.size" href="#livekit.rtc.data_stream.BaseStreamInfo.size">size</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.stream_id" href="#livekit.rtc.data_stream.BaseStreamInfo.stream_id">stream_id</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.timestamp" href="#livekit.rtc.data_stream.BaseStreamInfo.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.topic" href="#livekit.rtc.data_stream.BaseStreamInfo.topic">topic</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.rtc.data_stream.TextStreamReader"><code class="flex name class">
+<span>class <span class="ident">TextStreamReader</span></span>
+<span>(</span><span>header: proto_DataStream.Header)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TextStreamReader:
+    def __init__(
+        self,
+        header: proto_DataStream.Header,
+    ) -&gt; None:
+        self._header = header
+        self._info = TextStreamInfo(
+            stream_id=header.stream_id,
+            mime_type=header.mime_type,
+            topic=header.topic,
+            timestamp=header.timestamp,
+            size=header.total_length,
+            attributes=dict(header.attributes),
+            attachments=list(header.text_header.attached_stream_ids),
+        )
+        self._queue: asyncio.Queue[proto_DataStream.Chunk | None] = asyncio.Queue()
+
+    async def _on_chunk_update(self, chunk: proto_DataStream.Chunk):
+        await self._queue.put(chunk)
+
+    async def _on_stream_close(self, trailer: proto_DataStream.Trailer):
+        self.info.attributes = self.info.attributes or {}
+        self.info.attributes.update(trailer.attributes)
+        await self._queue.put(None)
+
+    def __aiter__(self) -&gt; AsyncIterator[str]:
+        return self
+
+    async def __anext__(self) -&gt; str:
+        item = await self._queue.get()
+        if item is None:
+            raise StopAsyncIteration
+        decodedStr = item.content.decode()
+        return decodedStr
+
+    @property
+    def info(self) -&gt; TextStreamInfo:
+        return self._info
+
+    async def read_all(self) -&gt; str:
+        final_string = &#34;&#34;
+        async for chunk in self:
+            final_string += chunk
+        return final_string</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.TextStreamReader.info"><code class="name">prop <span class="ident">info</span> : <a title="livekit.rtc.data_stream.TextStreamInfo" href="#livekit.rtc.data_stream.TextStreamInfo">TextStreamInfo</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def info(self) -&gt; TextStreamInfo:
+    return self._info</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.TextStreamReader.read_all"><code class="name flex">
+<span>async def <span class="ident">read_all</span></span>(<span>self) ‑> str</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def read_all(self) -&gt; str:
+    final_string = &#34;&#34;
+    async for chunk in self:
+        final_string += chunk
+    return final_string</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.data_stream.TextStreamWriter"><code class="flex name class">
+<span>class <span class="ident">TextStreamWriter</span></span>
+<span>(</span><span>local_participant: LocalParticipant,<br>*,<br>topic: str = '',<br>attributes: Optional[Dict[str, str]] = {},<br>stream_id: str | None = None,<br>total_size: int | None = None,<br>reply_to_id: str | None = None,<br>destination_identities: Optional[List[str]] = None,<br>sender_identity: str | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TextStreamWriter(BaseStreamWriter):
+    def __init__(
+        self,
+        local_participant: LocalParticipant,
+        *,
+        topic: str = &#34;&#34;,
+        attributes: Optional[Dict[str, str]] = {},
+        stream_id: str | None = None,
+        total_size: int | None = None,
+        reply_to_id: str | None = None,
+        destination_identities: Optional[List[str]] = None,
+        sender_identity: str | None = None,
+    ) -&gt; None:
+        super().__init__(
+            local_participant,
+            topic,
+            attributes,
+            stream_id,
+            total_size,
+            mime_type=&#34;text/plain&#34;,
+            destination_identities=destination_identities,
+            sender_identity=sender_identity,
+        )
+        self._header.text_header.operation_type = proto_DataStream.OperationType.CREATE
+        if reply_to_id:
+            self._header.text_header.reply_to_stream_id = reply_to_id
+        self._info = TextStreamInfo(
+            stream_id=self._header.stream_id,
+            mime_type=self._header.mime_type,
+            topic=self._header.topic,
+            timestamp=self._header.timestamp,
+            size=self._header.total_length,
+            attributes=dict(self._header.attributes),
+            attachments=list(self._header.text_header.attached_stream_ids),
+        )
+        self._write_lock = asyncio.Lock()
+
+    async def write(self, text: str):
+        async with self._write_lock:
+            for chunk in split_utf8(text, STREAM_CHUNK_SIZE):
+                content = chunk
+                chunk_index = self._next_chunk_index
+                self._next_chunk_index += 1
+                chunk_msg = proto_DataStream.Chunk(
+                    stream_id=self._header.stream_id,
+                    chunk_index=chunk_index,
+                    content=content,
+                )
+                await self._send_chunk(chunk_msg)
+
+    @property
+    def info(self) -&gt; TextStreamInfo:
+        return self._info</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.data_stream.BaseStreamWriter" href="#livekit.rtc.data_stream.BaseStreamWriter">BaseStreamWriter</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.TextStreamWriter.info"><code class="name">prop <span class="ident">info</span> : <a title="livekit.rtc.data_stream.TextStreamInfo" href="#livekit.rtc.data_stream.TextStreamInfo">TextStreamInfo</a></code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def info(self) -&gt; TextStreamInfo:
+    return self._info</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.data_stream.TextStreamWriter.write"><code class="name flex">
+<span>async def <span class="ident">write</span></span>(<span>self, text: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def write(self, text: str):
+    async with self._write_lock:
+        for chunk in split_utf8(text, STREAM_CHUNK_SIZE):
+            content = chunk
+            chunk_index = self._next_chunk_index
+            self._next_chunk_index += 1
+            chunk_msg = proto_DataStream.Chunk(
+                stream_id=self._header.stream_id,
+                chunk_index=chunk_index,
+                content=content,
+            )
+            await self._send_chunk(chunk_msg)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.rtc" href="index.html">livekit.rtc</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.BaseStreamInfo" href="#livekit.rtc.data_stream.BaseStreamInfo">BaseStreamInfo</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.attributes" href="#livekit.rtc.data_stream.BaseStreamInfo.attributes">attributes</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.mime_type" href="#livekit.rtc.data_stream.BaseStreamInfo.mime_type">mime_type</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.size" href="#livekit.rtc.data_stream.BaseStreamInfo.size">size</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.stream_id" href="#livekit.rtc.data_stream.BaseStreamInfo.stream_id">stream_id</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.timestamp" href="#livekit.rtc.data_stream.BaseStreamInfo.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.BaseStreamInfo.topic" href="#livekit.rtc.data_stream.BaseStreamInfo.topic">topic</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.BaseStreamWriter" href="#livekit.rtc.data_stream.BaseStreamWriter">BaseStreamWriter</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.data_stream.BaseStreamWriter.aclose" href="#livekit.rtc.data_stream.BaseStreamWriter.aclose">aclose</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.ByteStreamInfo" href="#livekit.rtc.data_stream.ByteStreamInfo">ByteStreamInfo</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.data_stream.ByteStreamInfo.name" href="#livekit.rtc.data_stream.ByteStreamInfo.name">name</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.ByteStreamReader" href="#livekit.rtc.data_stream.ByteStreamReader">ByteStreamReader</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.data_stream.ByteStreamReader.info" href="#livekit.rtc.data_stream.ByteStreamReader.info">info</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.ByteStreamWriter" href="#livekit.rtc.data_stream.ByteStreamWriter">ByteStreamWriter</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.data_stream.ByteStreamWriter.info" href="#livekit.rtc.data_stream.ByteStreamWriter.info">info</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.ByteStreamWriter.write" href="#livekit.rtc.data_stream.ByteStreamWriter.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.DataStream" href="#livekit.rtc.data_stream.DataStream">DataStream</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.rtc.data_stream.DataStream.ByteHeader" href="#livekit.rtc.data_stream.DataStream.ByteHeader">ByteHeader</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.DataStream.Chunk" href="#livekit.rtc.data_stream.DataStream.Chunk">Chunk</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.DataStream.DESCRIPTOR" href="#livekit.rtc.data_stream.DataStream.DESCRIPTOR">DESCRIPTOR</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.DataStream.Header" href="#livekit.rtc.data_stream.DataStream.Header">Header</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.DataStream.TextHeader" href="#livekit.rtc.data_stream.DataStream.TextHeader">TextHeader</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.DataStream.Trailer" href="#livekit.rtc.data_stream.DataStream.Trailer">Trailer</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.TextStreamInfo" href="#livekit.rtc.data_stream.TextStreamInfo">TextStreamInfo</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.data_stream.TextStreamInfo.attachments" href="#livekit.rtc.data_stream.TextStreamInfo.attachments">attachments</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.TextStreamReader" href="#livekit.rtc.data_stream.TextStreamReader">TextStreamReader</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.data_stream.TextStreamReader.info" href="#livekit.rtc.data_stream.TextStreamReader.info">info</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.TextStreamReader.read_all" href="#livekit.rtc.data_stream.TextStreamReader.read_all">read_all</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.data_stream.TextStreamWriter" href="#livekit.rtc.data_stream.TextStreamWriter">TextStreamWriter</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.data_stream.TextStreamWriter.info" href="#livekit.rtc.data_stream.TextStreamWriter.info">info</a></code></li>
+<li><code><a title="livekit.rtc.data_stream.TextStreamWriter.write" href="#livekit.rtc.data_stream.TextStreamWriter.write">write</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

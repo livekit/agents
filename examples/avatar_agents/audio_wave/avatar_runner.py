@@ -8,7 +8,7 @@ from typing import Optional, Union
 import numpy as np
 
 from livekit import rtc
-from livekit.agents.voice.avatar import (
+from livekit.agents.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
     AvatarRunner,

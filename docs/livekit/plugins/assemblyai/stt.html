@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.plugins.assemblyai.stt API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.plugins.assemblyai.stt</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-functions">Functions</h2>
+<dl>
+<dt id="livekit.plugins.assemblyai.stt.live_transcription_to_speech_data"><code class="name flex">
+<span>def <span class="ident">live_transcription_to_speech_data</span></span>(<span>language: str, data: dict) ‑> list[<a title="livekit.agents.stt.stt.SpeechData" href="../../agents/stt/stt.html#livekit.agents.stt.stt.SpeechData">SpeechData</a>]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def live_transcription_to_speech_data(
+    language: str,
+    data: dict,
+) -&gt; list[stt.SpeechData]:
+    return [
+        stt.SpeechData(
+            language=language,
+            start_time=data[&#34;words&#34;][0][&#34;start&#34;] / 1000 if data[&#34;words&#34;] else 0,
+            end_time=data[&#34;words&#34;][-1][&#34;end&#34;] / 1000 if data[&#34;words&#34;] else 0,
+            confidence=data[&#34;confidence&#34;],
+            text=data[&#34;text&#34;],
+        ),
+    ]</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.plugins.assemblyai.stt.STT"><code class="flex name class">
+<span>class <span class="ident">STT</span></span>
+<span>(</span><span>*,<br>api_key: NotGivenOr[str] = NOT_GIVEN,<br>sample_rate: int = 16000,<br>word_boost: NotGivenOr[list[str]] = NOT_GIVEN,<br>encoding: "NotGivenOr[Literal['pcm_s16le', 'pcm_mulaw']]" = NOT_GIVEN,<br>disable_partial_transcripts: bool = False,<br>enable_extra_session_information: bool = False,<br>end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,<br>http_session: aiohttp.ClientSession | None = None,<br>buffer_size_seconds: float = 0.05)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class STT(stt.STT):
+    def __init__(
+        self,
+        *,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        sample_rate: int = 16000,
+        word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
+        encoding: NotGivenOr[Literal[&#34;pcm_s16le&#34;, &#34;pcm_mulaw&#34;]] = NOT_GIVEN,
+        disable_partial_transcripts: bool = False,
+        enable_extra_session_information: bool = False,
+        end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        buffer_size_seconds: float = 0.05,
+    ):
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+            ),
+        )
+        self._api_key = api_key if is_given(api_key) else os.environ.get(&#34;ASSEMBLYAI_API_KEY&#34;)
+        if not self._api_key:
+            raise ValueError(
+                &#34;AssemblyAI API key is required. &#34;
+                &#34;Pass one in via the `api_key` parameter, &#34;
+                &#34;or set it as the `ASSEMBLYAI_API_KEY` environment variable&#34;
+            )
+
+        self._opts = STTOptions(
+            sample_rate=sample_rate,
+            word_boost=word_boost,
+            encoding=encoding,
+            disable_partial_transcripts=disable_partial_transcripts,
+            enable_extra_session_information=enable_extra_session_information,
+            buffer_size_seconds=buffer_size_seconds,
+            end_utterance_silence_threshold=end_utterance_silence_threshold,
+        )
+        self._session = http_session
+        self._streams = weakref.WeakSet[SpeechStream]()
+
+    @property
+    def session(self) -&gt; aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+        return self._session
+
+    async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ) -&gt; stt.SpeechEvent:
+        raise NotImplementedError(&#34;Not implemented&#34;)
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -&gt; SpeechStream:
+        config = dataclasses.replace(self._opts)
+        stream = SpeechStream(
+            stt=self,
+            conn_options=conn_options,
+            opts=config,
+            api_key=self._api_key,
+            http_session=self.session,
+        )
+        self._streams.add(stream)
+        return stream
+
+    def update_options(
+        self,
+        *,
+        disable_partial_transcripts: NotGivenOr[bool] = NOT_GIVEN,
+        word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
+        end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
+        enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,
+        buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
+    ):
+        if is_given(disable_partial_transcripts):
+            self._opts.disable_partial_transcripts = disable_partial_transcripts
+        if is_given(word_boost):
+            self._opts.word_boost = word_boost
+        if is_given(end_utterance_silence_threshold):
+            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+        if is_given(enable_extra_session_information):
+            self._opts.enable_extra_session_information = enable_extra_session_information
+        if is_given(buffer_size_seconds):
+            self._opts.buffer_size_seconds = buffer_size_seconds
+
+        for stream in self._streams:
+            stream.update_options(
+                disable_partial_transcripts=disable_partial_transcripts,
+                word_boost=word_boost,
+                end_utterance_silence_threshold=end_utterance_silence_threshold,
+                enable_extra_session_information=enable_extra_session_information,
+                buffer_size_seconds=buffer_size_seconds,
+            )</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.stt.STT" href="../../agents/stt/stt.html#livekit.agents.stt.stt.STT">STT</a></li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.plugins.assemblyai.stt.STT.session"><code class="name">prop <span class="ident">session</span> : aiohttp.ClientSession</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def session(self) -&gt; aiohttp.ClientSession:
+    if not self._session:
+        self._session = utils.http_context.http_session()
+    return self._session</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.plugins.assemblyai.stt.STT.stream"><code class="name flex">
+<span>def <span class="ident">stream</span></span>(<span>self,<br>*,<br>language: NotGivenOr[str] = NOT_GIVEN,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0)) ‑> <a title="livekit.plugins.assemblyai.stt.SpeechStream" href="#livekit.plugins.assemblyai.stt.SpeechStream">SpeechStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def stream(
+    self,
+    *,
+    language: NotGivenOr[str] = NOT_GIVEN,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+) -&gt; SpeechStream:
+    config = dataclasses.replace(self._opts)
+    stream = SpeechStream(
+        stt=self,
+        conn_options=conn_options,
+        opts=config,
+        api_key=self._api_key,
+        http_session=self.session,
+    )
+    self._streams.add(stream)
+    return stream</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.STT.update_options"><code class="name flex">
+<span>def <span class="ident">update_options</span></span>(<span>self,<br>*,<br>disable_partial_transcripts: NotGivenOr[bool] = NOT_GIVEN,<br>word_boost: NotGivenOr[list[str]] = NOT_GIVEN,<br>end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,<br>enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,<br>buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def update_options(
+    self,
+    *,
+    disable_partial_transcripts: NotGivenOr[bool] = NOT_GIVEN,
+    word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
+    end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
+    enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,
+    buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
+):
+    if is_given(disable_partial_transcripts):
+        self._opts.disable_partial_transcripts = disable_partial_transcripts
+    if is_given(word_boost):
+        self._opts.word_boost = word_boost
+    if is_given(end_utterance_silence_threshold):
+        self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+    if is_given(enable_extra_session_information):
+        self._opts.enable_extra_session_information = enable_extra_session_information
+    if is_given(buffer_size_seconds):
+        self._opts.buffer_size_seconds = buffer_size_seconds
+
+    for stream in self._streams:
+        stream.update_options(
+            disable_partial_transcripts=disable_partial_transcripts,
+            word_boost=word_boost,
+            end_utterance_silence_threshold=end_utterance_silence_threshold,
+            enable_extra_session_information=enable_extra_session_information,
+            buffer_size_seconds=buffer_size_seconds,
+        )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.stt.stt.STT" href="../../agents/stt/stt.html#livekit.agents.stt.stt.STT">STT</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.stt.stt.STT.aclose" href="../../agents/stt/stt.html#livekit.agents.stt.stt.STT.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.STT.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.STTOptions"><code class="flex name class">
+<span>class <span class="ident">STTOptions</span></span>
+<span>(</span><span>sample_rate: int,<br>buffer_size_seconds: float,<br>word_boost: NotGivenOr[list[str]] = NOT_GIVEN,<br>encoding: "NotGivenOr[Literal['pcm_s16le', 'pcm_mulaw']]" = NOT_GIVEN,<br>disable_partial_transcripts: bool = False,<br>enable_extra_session_information: bool = False,<br>end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class STTOptions:
+    sample_rate: int
+    buffer_size_seconds: float
+    word_boost: NotGivenOr[list[str]] = NOT_GIVEN
+    encoding: NotGivenOr[Literal[&#34;pcm_s16le&#34;, &#34;pcm_mulaw&#34;]] = NOT_GIVEN
+    disable_partial_transcripts: bool = False
+    enable_extra_session_information: bool = False
+    end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN
+    # Buffer to collect frames to send to AssemblyAI
+
+    def __post_init__(self):
+        if self.encoding not in (NOT_GIVEN, &#34;pcm_s16le&#34;, &#34;pcm_mulaw&#34;):
+            raise ValueError(f&#34;Invalid encoding: {self.encoding}&#34;)</code></pre>
+</details>
+<div class="desc"><p>STTOptions(sample_rate: 'int', buffer_size_seconds: 'float', word_boost: 'NotGivenOr[list[str]]' = NOT_GIVEN, encoding: "NotGivenOr[Literal['pcm_s16le', 'pcm_mulaw']]" = NOT_GIVEN, disable_partial_transcripts: 'bool' = False, enable_extra_session_information: 'bool' = False, end_utterance_silence_threshold: 'NotGivenOr[int]' = NOT_GIVEN)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.plugins.assemblyai.stt.STTOptions.buffer_size_seconds"><code class="name">var <span class="ident">buffer_size_seconds</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.STTOptions.disable_partial_transcripts"><code class="name">var <span class="ident">disable_partial_transcripts</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.STTOptions.enable_extra_session_information"><code class="name">var <span class="ident">enable_extra_session_information</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.STTOptions.encoding"><code class="name">var <span class="ident">encoding</span> : Literal['pcm_s16le', 'pcm_mulaw'] | <a title="livekit.agents.types.NotGiven" href="../../agents/types.html#livekit.agents.types.NotGiven">NotGiven</a></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.STTOptions.end_utterance_silence_threshold"><code class="name">var <span class="ident">end_utterance_silence_threshold</span> : int | <a title="livekit.agents.types.NotGiven" href="../../agents/types.html#livekit.agents.types.NotGiven">NotGiven</a></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.STTOptions.sample_rate"><code class="name">var <span class="ident">sample_rate</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.STTOptions.word_boost"><code class="name">var <span class="ident">word_boost</span> : list[str] | <a title="livekit.agents.types.NotGiven" href="../../agents/types.html#livekit.agents.types.NotGiven">NotGiven</a></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.plugins.assemblyai.stt.SpeechStream"><code class="flex name class">
+<span>class <span class="ident">SpeechStream</span></span>
+<span>(</span><span>*,<br>stt: <a title="livekit.plugins.assemblyai.stt.STT" href="#livekit.plugins.assemblyai.stt.STT">STT</a>,<br>opts: <a title="livekit.plugins.assemblyai.stt.STTOptions" href="#livekit.plugins.assemblyai.stt.STTOptions">STTOptions</a>,<br>conn_options: APIConnectOptions,<br>api_key: str,<br>http_session: aiohttp.ClientSession)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class SpeechStream(stt.SpeechStream):
+    # Used to close websocket
+    _CLOSE_MSG: str = json.dumps({&#34;terminate_session&#34;: True})
+
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        opts: STTOptions,
+        conn_options: APIConnectOptions,
+        api_key: str,
+        http_session: aiohttp.ClientSession,
+    ) -&gt; None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+
+        self._opts = opts
+        self._api_key = api_key
+        self._session = http_session
+        self._speech_duration: float = 0
+
+        # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
+        self._final_events: list[SpeechEvent] = []
+        self._reconnect_event = asyncio.Event()
+
+    def update_options(
+        self,
+        *,
+        disable_partial_transcripts: NotGivenOr[bool] = NOT_GIVEN,
+        word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
+        end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
+        enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,
+        buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
+    ):
+        if is_given(disable_partial_transcripts):
+            self._opts.disable_partial_transcripts = disable_partial_transcripts
+        if is_given(word_boost):
+            self._opts.word_boost = word_boost
+        if is_given(end_utterance_silence_threshold):
+            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+        if is_given(enable_extra_session_information):
+            self._opts.enable_extra_session_information = enable_extra_session_information
+        if is_given(buffer_size_seconds):
+            self._opts.buffer_size_seconds = buffer_size_seconds
+
+        self._reconnect_event.set()
+
+    async def _run(self) -&gt; None:
+        &#34;&#34;&#34;
+        Run a single websocket connection to AssemblyAI and make sure to reconnect
+        when something went wrong.
+        &#34;&#34;&#34;
+
+        closing_ws = False
+
+        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal closing_ws
+
+            if is_given(self._opts.end_utterance_silence_threshold):
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            &#34;end_utterance_silence_threshold&#34;: self._opts.end_utterance_silence_threshold  # noqa: E501
+                        }
+                    )
+                )
+
+            samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._opts.sample_rate,
+                num_channels=1,
+                samples_per_channel=samples_per_buffer,
+            )
+
+            # forward inputs to AssemblyAI
+            # if we receive a close message, signal it to AssemblyAI and break.
+            # the recv task will then make sure to process the remaining audio and stop
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    frames = audio_bstream.flush()
+                else:
+                    frames = audio_bstream.write(data.data.tobytes())
+
+                for frame in frames:
+                    self._speech_duration += frame.duration
+                    await ws.send_bytes(frame.data.tobytes())
+
+            closing_ws = True
+            await ws.send_str(SpeechStream._CLOSE_MSG)
+
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal closing_ws
+            while True:
+                try:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                except asyncio.TimeoutError:
+                    if closing_ws:
+                        break
+                    continue
+
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if closing_ws:  # close is expected, see SpeechStream.aclose
+                        return
+
+                    raise APIStatusError(
+                        &#34;AssemblyAI connection closed unexpectedly&#34;,
+                    )  # this will trigger a reconnection, see the _run loop
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.error(&#34;unexpected AssemblyAI message type %s&#34;, msg.type)
+                    continue
+
+                try:
+                    # received a message from AssemblyAI
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data, closing_ws)
+                except Exception:
+                    logger.exception(&#34;failed to process AssemblyAI message&#34;)
+
+        ws: aiohttp.ClientWebSocketResponse | None = None
+
+        while True:
+            try:
+                ws = await self._connect_ws()
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                ]
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                try:
+                    done, _ = await asyncio.wait(
+                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )  # type: ignore
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
+
+                    if wait_reconnect_task not in done:
+                        break
+
+                    self._reconnect_event.clear()
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+            finally:
+                if ws is not None:
+                    await ws.close()
+
+    async def _connect_ws(self) -&gt; aiohttp.ClientWebSocketResponse:
+        live_config = {
+            &#34;sample_rate&#34;: self._opts.sample_rate,
+            &#34;word_boost&#34;: json.dumps(self._opts.word_boost)
+            if is_given(self._opts.word_boost)
+            else None,
+            &#34;encoding&#34;: self._opts.encoding if is_given(self._opts.encoding) else DEFAULT_ENCODING,
+            &#34;disable_partial_transcripts&#34;: self._opts.disable_partial_transcripts,
+            &#34;enable_extra_session_information&#34;: self._opts.enable_extra_session_information,
+        }
+
+        headers = {
+            &#34;Authorization&#34;: self._api_key,
+            &#34;Content-Type&#34;: &#34;application/json&#34;,
+        }
+
+        ws_url = &#34;wss://api.assemblyai.com/v2/realtime/ws&#34;
+        filtered_config = {k: v for k, v in live_config.items() if v is not None}
+        url = f&#34;{ws_url}?{urlencode(filtered_config).lower()}&#34;
+        ws = await self._session.ws_connect(url, headers=headers)
+        return ws
+
+    def _process_stream_event(self, data: dict, closing_ws: bool) -&gt; None:
+        # see this page:
+        # https://www.assemblyai.com/docs/api-reference/streaming/realtime
+        # for more information about the different types of events
+        if &#34;error&#34; in data:
+            logger.error(&#34;Received error from AssemblyAI: %s&#34;, data[&#34;error&#34;])
+            return
+
+        message_type = data.get(&#34;message_type&#34;)
+
+        if message_type == &#34;SessionBegins&#34;:
+            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+            self._event_ch.send_nowait(start_event)
+
+        elif message_type == &#34;PartialTranscript&#34;:
+            alts = live_transcription_to_speech_data(ENGLISH, data)
+            if len(alts) &gt; 0 and alts[0].text:
+                interim_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    alternatives=alts,
+                )
+                self._event_ch.send_nowait(interim_event)
+
+        elif message_type == &#34;FinalTranscript&#34;:
+            alts = live_transcription_to_speech_data(ENGLISH, data)
+            if len(alts) &gt; 0 and alts[0].text:
+                final_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=alts,
+                )
+                self._final_events.append(final_event)
+                self._event_ch.send_nowait(final_event)
+
+            # log metrics
+            if self._speech_duration &gt; 0:
+                usage_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    alternatives=[],
+                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
+                )
+                self._event_ch.send_nowait(usage_event)
+                self._speech_duration = 0
+
+        elif message_type == &#34;SessionTerminated&#34;:
+            if closing_ws:
+                pass
+            else:
+                raise Exception(&#34;AssemblyAI connection closed unexpectedly&#34;)
+
+        elif message_type == &#34;SessionInformation&#34;:
+            logger.debug(&#34;AssemblyAI Session Information: %s&#34;, str(data))
+
+        else:
+            logger.warning(
+                &#34;Received unexpected message type from AssemblyAI: %s&#34;,
+                message_type or &#34;No message_type field&#34;,
+            )</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Args:
+sample_rate : int or None, optional
+The desired sample rate for the audio input.
+If specified, the audio input will be automatically resampled to match
+the given sample rate before being processed for Speech-to-Text.
+If not provided (None), the input will retain its original sample rate.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.stt.stt.RecognizeStream" href="../../agents/stt/stt.html#livekit.agents.stt.stt.RecognizeStream">RecognizeStream</a></li>
+<li>abc.ABC</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.plugins.assemblyai.stt.SpeechStream.update_options"><code class="name flex">
+<span>def <span class="ident">update_options</span></span>(<span>self,<br>*,<br>disable_partial_transcripts: NotGivenOr[bool] = NOT_GIVEN,<br>word_boost: NotGivenOr[list[str]] = NOT_GIVEN,<br>end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,<br>enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,<br>buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def update_options(
+    self,
+    *,
+    disable_partial_transcripts: NotGivenOr[bool] = NOT_GIVEN,
+    word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
+    end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
+    enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,
+    buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
+):
+    if is_given(disable_partial_transcripts):
+        self._opts.disable_partial_transcripts = disable_partial_transcripts
+    if is_given(word_boost):
+        self._opts.word_boost = word_boost
+    if is_given(end_utterance_silence_threshold):
+        self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
+    if is_given(enable_extra_session_information):
+        self._opts.enable_extra_session_information = enable_extra_session_information
+    if is_given(buffer_size_seconds):
+        self._opts.buffer_size_seconds = buffer_size_seconds
+
+    self._reconnect_event.set()</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.stt.stt.RecognizeStream" href="../../agents/stt/stt.html#livekit.agents.stt.stt.RecognizeStream">RecognizeStream</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.stt.stt.RecognizeStream.aclose" href="../../agents/stt/stt.html#livekit.agents.stt.stt.RecognizeStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.RecognizeStream.end_input" href="../../agents/stt/stt.html#livekit.agents.stt.stt.RecognizeStream.end_input">end_input</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.RecognizeStream.flush" href="../../agents/stt/stt.html#livekit.agents.stt.stt.RecognizeStream.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.stt.stt.RecognizeStream.push_frame" href="../../agents/stt/stt.html#livekit.agents.stt.stt.RecognizeStream.push_frame">push_frame</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.plugins.assemblyai" href="index.html">livekit.plugins.assemblyai</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-functions">Functions</a></h3>
+<ul class="">
+<li><code><a title="livekit.plugins.assemblyai.stt.live_transcription_to_speech_data" href="#livekit.plugins.assemblyai.stt.live_transcription_to_speech_data">live_transcription_to_speech_data</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.plugins.assemblyai.stt.STT" href="#livekit.plugins.assemblyai.stt.STT">STT</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.plugins.assemblyai.stt.STT.session" href="#livekit.plugins.assemblyai.stt.STT.session">session</a></code></li>
+<li><code><a title="livekit.plugins.assemblyai.stt.STT.stream" href="#livekit.plugins.assemblyai.stt.STT.stream">stream</a></code></li>
+<li><code><a title="livekit.plugins.assemblyai.stt.STT.update_options" href="#livekit.plugins.assemblyai.stt.STT.update_options">update_options</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.plugins.assemblyai.stt.STTOptions" href="#livekit.plugins.assemblyai.stt.STTOptions">STTOptions</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.plugins.assemblyai.stt.STTOptions.buffer_size_seconds" href="#livekit.plugins.assemblyai.stt.STTOptions.buffer_size_seconds">buffer_size_seconds</a></code></li>
+<li><code><a title="livekit.plugins.assemblyai.stt.STTOptions.disable_partial_transcripts" href="#livekit.plugins.assemblyai.stt.STTOptions.disable_partial_transcripts">disable_partial_transcripts</a></code></li>
+<li><code><a title="livekit.plugins.assemblyai.stt.STTOptions.enable_extra_session_information" href="#livekit.plugins.assemblyai.stt.STTOptions.enable_extra_session_information">enable_extra_session_information</a></code></li>
+<li><code><a title="livekit.plugins.assemblyai.stt.STTOptions.encoding" href="#livekit.plugins.assemblyai.stt.STTOptions.encoding">encoding</a></code></li>
+<li><code><a title="livekit.plugins.assemblyai.stt.STTOptions.end_utterance_silence_threshold" href="#livekit.plugins.assemblyai.stt.STTOptions.end_utterance_silence_threshold">end_utterance_silence_threshold</a></code></li>
+<li><code><a title="livekit.plugins.assemblyai.stt.STTOptions.sample_rate" href="#livekit.plugins.assemblyai.stt.STTOptions.sample_rate">sample_rate</a></code></li>
+<li><code><a title="livekit.plugins.assemblyai.stt.STTOptions.word_boost" href="#livekit.plugins.assemblyai.stt.STTOptions.word_boost">word_boost</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.plugins.assemblyai.stt.SpeechStream" href="#livekit.plugins.assemblyai.stt.SpeechStream">SpeechStream</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.plugins.assemblyai.stt.SpeechStream.update_options" href="#livekit.plugins.assemblyai.stt.SpeechStream.update_options">update_options</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

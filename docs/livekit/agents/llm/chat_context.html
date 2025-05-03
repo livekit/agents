@@ -1,0 +1,1238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.llm.chat_context API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.llm.chat_context</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.llm.chat_context.AudioContent"><code class="flex name class">
+<span>class <span class="ident">AudioContent</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class AudioContent(BaseModel):
+    type: Literal[&#34;audio_content&#34;] = Field(default=&#34;audio_content&#34;)
+    frame: list[rtc.AudioFrame]
+    transcript: str | None = None</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.AudioContent.frame"><code class="name">var <span class="ident">frame</span> : list[<a title="livekit.rtc.audio_frame.AudioFrame" href="../../rtc/audio_frame.html#livekit.rtc.audio_frame.AudioFrame">AudioFrame</a>]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.AudioContent.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.AudioContent.transcript"><code class="name">var <span class="ident">transcript</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.AudioContent.type"><code class="name">var <span class="ident">type</span> : Literal['audio_content']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext"><code class="flex name class">
+<span>class <span class="ident">ChatContext</span></span>
+<span>(</span><span>items: NotGivenOr[list[ChatItem]] = NOT_GIVEN)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ChatContext:
+    def __init__(self, items: NotGivenOr[list[ChatItem]] = NOT_GIVEN):
+        self._items: list[ChatItem] = items if is_given(items) else []
+
+    @classmethod
+    def empty(cls) -&gt; ChatContext:
+        return cls([])
+
+    @property
+    def items(self) -&gt; list[ChatItem]:
+        return self._items
+
+    @items.setter
+    def items(self, items: list[ChatItem]):
+        self._items = items
+
+    def add_message(
+        self,
+        *,
+        role: ChatRole,
+        content: list[ChatContent] | str,
+        id: NotGivenOr[str] = NOT_GIVEN,
+        interrupted: NotGivenOr[bool] = NOT_GIVEN,
+        created_at: NotGivenOr[float] = NOT_GIVEN,
+    ) -&gt; ChatMessage:
+        kwargs = {}
+        if is_given(id):
+            kwargs[&#34;id&#34;] = id
+        if is_given(interrupted):
+            kwargs[&#34;interrupted&#34;] = interrupted
+        if is_given(created_at):
+            kwargs[&#34;created_at&#34;] = created_at
+
+        if isinstance(content, str):
+            message = ChatMessage(role=role, content=[content], **kwargs)
+        else:
+            message = ChatMessage(role=role, content=content, **kwargs)
+
+        self._items.append(message)
+        return message
+
+    def get_by_id(self, item_id: str) -&gt; ChatItem | None:
+        return next((item for item in self.items if item.id == item_id), None)
+
+    def index_by_id(self, item_id: str) -&gt; int | None:
+        return next((i for i, item in enumerate(self.items) if item.id == item_id), None)
+
+    def copy(
+        self,
+        *,
+        exclude_function_call: bool = False,
+        exclude_instructions: bool = False,
+        tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+    ) -&gt; ChatContext:
+        items = []
+
+        from .tool_context import (
+            get_function_info,
+            get_raw_function_info,
+            is_function_tool,
+            is_raw_function_tool,
+        )
+
+        valid_tools = set()
+        if is_given(tools):
+            for tool in tools:
+                if isinstance(tool, str):
+                    valid_tools.add(tool)
+                elif is_function_tool(tool):
+                    valid_tools.add(get_function_info(tool).name)
+                elif is_raw_function_tool(tool):
+                    valid_tools.add(get_raw_function_info(tool).name)
+                # TODO(theomonnom): other tools
+
+        for item in self.items:
+            if exclude_function_call and item.type in [
+                &#34;function_call&#34;,
+                &#34;function_call_output&#34;,
+            ]:
+                continue
+
+            if (
+                exclude_instructions
+                and item.type == &#34;message&#34;
+                and item.role in [&#34;system&#34;, &#34;developer&#34;]
+            ):
+                continue
+
+            if (
+                is_given(tools)
+                and item.type in [&#34;function_call&#34;, &#34;function_call_output&#34;]
+                and item.name not in valid_tools
+            ):
+                continue
+
+            items.append(item)
+
+        return ChatContext(items)
+
+    def truncate(self, *, max_items: int) -&gt; ChatContext:
+        &#34;&#34;&#34;Truncate the chat context to the last N items in place.
+
+        Removes leading function calls to avoid partial function outputs.
+        Preserves the first system message by adding it back to the beginning.
+        &#34;&#34;&#34;
+        instructions = next(
+            (item for item in self._items if item.type == &#34;message&#34; and item.role == &#34;system&#34;),
+            None,
+        )
+
+        new_items = self._items[-max_items:]
+        # chat ctx shouldn&#39;t start with function_call or function_call_output
+        while new_items and new_items[0].type in [
+            &#34;function_call&#34;,
+            &#34;function_call_output&#34;,
+        ]:
+            new_items.pop(0)
+
+        if instructions:
+            new_items.insert(0, instructions)
+
+        self._items[:] = new_items
+        return self
+
+    def to_dict(
+        self,
+        *,
+        exclude_image: bool = True,
+        exclude_audio: bool = True,
+        exclude_timestamp: bool = True,
+        exclude_function_call: bool = False,
+    ) -&gt; dict:
+        items = []
+        for item in self.items:
+            if exclude_function_call and item.type in [
+                &#34;function_call&#34;,
+                &#34;function_call_output&#34;,
+            ]:
+                continue
+
+            if item.type == &#34;message&#34;:
+                item = item.model_copy()
+                if exclude_image:
+                    item.content = [c for c in item.content if not isinstance(c, ImageContent)]
+                if exclude_audio:
+                    item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+
+            items.append(item)
+
+        exclude_fields = set()
+        if exclude_timestamp:
+            exclude_fields.add(&#34;created_at&#34;)
+
+        return {
+            &#34;items&#34;: [
+                item.model_dump(
+                    mode=&#34;json&#34;,
+                    exclude_none=True,
+                    exclude_defaults=False,
+                    exclude=exclude_fields,
+                )
+                for item in items
+            ],
+        }
+
+    def find_insertion_index(self, *, created_at: float) -&gt; int:
+        &#34;&#34;&#34;
+        Returns the index to insert an item by creation time.
+
+        Iterates in reverse, assuming items are sorted by `created_at`.
+        Finds the position after the last item with `created_at &lt;=` the given timestamp.
+        &#34;&#34;&#34;
+        for i in reversed(range(len(self._items))):
+            item = self._items[i]
+            if item.type == &#34;message&#34; and item.created_at &lt;= created_at:
+                return i + 1
+
+        return 0
+
+    @classmethod
+    def from_dict(cls, data: dict) -&gt; ChatContext:
+        item_adapter = TypeAdapter(list[ChatItem])
+        items = item_adapter.validate_python(data[&#34;items&#34;])
+        return cls(items)
+
+    @property
+    def readonly(self) -&gt; bool:
+        return False</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li>livekit.agents.llm.chat_context._ReadOnlyChatContext</li>
+</ul>
+<h3>Static methods</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.ChatContext.empty"><code class="name flex">
+<span>def <span class="ident">empty</span></span>(<span>) ‑> <a title="livekit.agents.llm.chat_context.ChatContext" href="#livekit.agents.llm.chat_context.ChatContext">ChatContext</a></span>
+</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext.from_dict"><code class="name flex">
+<span>def <span class="ident">from_dict</span></span>(<span>data: dict) ‑> <a title="livekit.agents.llm.chat_context.ChatContext" href="#livekit.agents.llm.chat_context.ChatContext">ChatContext</a></span>
+</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.ChatContext.items"><code class="name">prop <span class="ident">items</span> : list[ChatItem]</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def items(self) -&gt; list[ChatItem]:
+    return self._items</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext.readonly"><code class="name">prop <span class="ident">readonly</span> : bool</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def readonly(self) -&gt; bool:
+    return False</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.ChatContext.add_message"><code class="name flex">
+<span>def <span class="ident">add_message</span></span>(<span>self,<br>*,<br>role: ChatRole,<br>content: list[ChatContent] | str,<br>id: NotGivenOr[str] = NOT_GIVEN,<br>interrupted: NotGivenOr[bool] = NOT_GIVEN,<br>created_at: NotGivenOr[float] = NOT_GIVEN) ‑> <a title="livekit.agents.llm.chat_context.ChatMessage" href="#livekit.agents.llm.chat_context.ChatMessage">ChatMessage</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def add_message(
+    self,
+    *,
+    role: ChatRole,
+    content: list[ChatContent] | str,
+    id: NotGivenOr[str] = NOT_GIVEN,
+    interrupted: NotGivenOr[bool] = NOT_GIVEN,
+    created_at: NotGivenOr[float] = NOT_GIVEN,
+) -&gt; ChatMessage:
+    kwargs = {}
+    if is_given(id):
+        kwargs[&#34;id&#34;] = id
+    if is_given(interrupted):
+        kwargs[&#34;interrupted&#34;] = interrupted
+    if is_given(created_at):
+        kwargs[&#34;created_at&#34;] = created_at
+
+    if isinstance(content, str):
+        message = ChatMessage(role=role, content=[content], **kwargs)
+    else:
+        message = ChatMessage(role=role, content=content, **kwargs)
+
+    self._items.append(message)
+    return message</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext.copy"><code class="name flex">
+<span>def <span class="ident">copy</span></span>(<span>self,<br>*,<br>exclude_function_call: bool = False,<br>exclude_instructions: bool = False,<br>tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN) ‑> <a title="livekit.agents.llm.chat_context.ChatContext" href="#livekit.agents.llm.chat_context.ChatContext">ChatContext</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def copy(
+    self,
+    *,
+    exclude_function_call: bool = False,
+    exclude_instructions: bool = False,
+    tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+) -&gt; ChatContext:
+    items = []
+
+    from .tool_context import (
+        get_function_info,
+        get_raw_function_info,
+        is_function_tool,
+        is_raw_function_tool,
+    )
+
+    valid_tools = set()
+    if is_given(tools):
+        for tool in tools:
+            if isinstance(tool, str):
+                valid_tools.add(tool)
+            elif is_function_tool(tool):
+                valid_tools.add(get_function_info(tool).name)
+            elif is_raw_function_tool(tool):
+                valid_tools.add(get_raw_function_info(tool).name)
+            # TODO(theomonnom): other tools
+
+    for item in self.items:
+        if exclude_function_call and item.type in [
+            &#34;function_call&#34;,
+            &#34;function_call_output&#34;,
+        ]:
+            continue
+
+        if (
+            exclude_instructions
+            and item.type == &#34;message&#34;
+            and item.role in [&#34;system&#34;, &#34;developer&#34;]
+        ):
+            continue
+
+        if (
+            is_given(tools)
+            and item.type in [&#34;function_call&#34;, &#34;function_call_output&#34;]
+            and item.name not in valid_tools
+        ):
+            continue
+
+        items.append(item)
+
+    return ChatContext(items)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext.find_insertion_index"><code class="name flex">
+<span>def <span class="ident">find_insertion_index</span></span>(<span>self, *, created_at: float) ‑> int</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def find_insertion_index(self, *, created_at: float) -&gt; int:
+    &#34;&#34;&#34;
+    Returns the index to insert an item by creation time.
+
+    Iterates in reverse, assuming items are sorted by `created_at`.
+    Finds the position after the last item with `created_at &lt;=` the given timestamp.
+    &#34;&#34;&#34;
+    for i in reversed(range(len(self._items))):
+        item = self._items[i]
+        if item.type == &#34;message&#34; and item.created_at &lt;= created_at:
+            return i + 1
+
+    return 0</code></pre>
+</details>
+<div class="desc"><p>Returns the index to insert an item by creation time.</p>
+<p>Iterates in reverse, assuming items are sorted by <code>created_at</code>.
+Finds the position after the last item with <code>created_at &lt;=</code> the given timestamp.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext.get_by_id"><code class="name flex">
+<span>def <span class="ident">get_by_id</span></span>(<span>self, item_id: str) ‑> <a title="livekit.agents.llm.chat_context.ChatMessage" href="#livekit.agents.llm.chat_context.ChatMessage">ChatMessage</a> | <a title="livekit.agents.llm.chat_context.FunctionCall" href="#livekit.agents.llm.chat_context.FunctionCall">FunctionCall</a> | <a title="livekit.agents.llm.chat_context.FunctionCallOutput" href="#livekit.agents.llm.chat_context.FunctionCallOutput">FunctionCallOutput</a> | None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def get_by_id(self, item_id: str) -&gt; ChatItem | None:
+    return next((item for item in self.items if item.id == item_id), None)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext.index_by_id"><code class="name flex">
+<span>def <span class="ident">index_by_id</span></span>(<span>self, item_id: str) ‑> int | None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def index_by_id(self, item_id: str) -&gt; int | None:
+    return next((i for i, item in enumerate(self.items) if item.id == item_id), None)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext.to_dict"><code class="name flex">
+<span>def <span class="ident">to_dict</span></span>(<span>self,<br>*,<br>exclude_image: bool = True,<br>exclude_audio: bool = True,<br>exclude_timestamp: bool = True,<br>exclude_function_call: bool = False) ‑> dict</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def to_dict(
+    self,
+    *,
+    exclude_image: bool = True,
+    exclude_audio: bool = True,
+    exclude_timestamp: bool = True,
+    exclude_function_call: bool = False,
+) -&gt; dict:
+    items = []
+    for item in self.items:
+        if exclude_function_call and item.type in [
+            &#34;function_call&#34;,
+            &#34;function_call_output&#34;,
+        ]:
+            continue
+
+        if item.type == &#34;message&#34;:
+            item = item.model_copy()
+            if exclude_image:
+                item.content = [c for c in item.content if not isinstance(c, ImageContent)]
+            if exclude_audio:
+                item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+
+        items.append(item)
+
+    exclude_fields = set()
+    if exclude_timestamp:
+        exclude_fields.add(&#34;created_at&#34;)
+
+    return {
+        &#34;items&#34;: [
+            item.model_dump(
+                mode=&#34;json&#34;,
+                exclude_none=True,
+                exclude_defaults=False,
+                exclude=exclude_fields,
+            )
+            for item in items
+        ],
+    }</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatContext.truncate"><code class="name flex">
+<span>def <span class="ident">truncate</span></span>(<span>self, *, max_items: int) ‑> <a title="livekit.agents.llm.chat_context.ChatContext" href="#livekit.agents.llm.chat_context.ChatContext">ChatContext</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def truncate(self, *, max_items: int) -&gt; ChatContext:
+    &#34;&#34;&#34;Truncate the chat context to the last N items in place.
+
+    Removes leading function calls to avoid partial function outputs.
+    Preserves the first system message by adding it back to the beginning.
+    &#34;&#34;&#34;
+    instructions = next(
+        (item for item in self._items if item.type == &#34;message&#34; and item.role == &#34;system&#34;),
+        None,
+    )
+
+    new_items = self._items[-max_items:]
+    # chat ctx shouldn&#39;t start with function_call or function_call_output
+    while new_items and new_items[0].type in [
+        &#34;function_call&#34;,
+        &#34;function_call_output&#34;,
+    ]:
+        new_items.pop(0)
+
+    if instructions:
+        new_items.insert(0, instructions)
+
+    self._items[:] = new_items
+    return self</code></pre>
+</details>
+<div class="desc"><p>Truncate the chat context to the last N items in place.</p>
+<p>Removes leading function calls to avoid partial function outputs.
+Preserves the first system message by adding it back to the beginning.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatMessage"><code class="flex name class">
+<span>class <span class="ident">ChatMessage</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ChatMessage(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid(&#34;item_&#34;))
+    type: Literal[&#34;message&#34;] = &#34;message&#34;
+    role: ChatRole
+    content: list[ChatContent]
+    interrupted: bool = False
+    hash: bytes | None = None
+    created_at: float = Field(default_factory=time.time)
+
+    @property
+    def text_content(self) -&gt; str | None:
+        &#34;&#34;&#34;
+        Returns a string of all text content in the message.
+
+        Multiple text content items will be joined by a newline.
+        &#34;&#34;&#34;
+        text_parts = [c for c in self.content if isinstance(c, str)]
+        if not text_parts:
+            return None
+        return &#34;\n&#34;.join(text_parts)</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.content"><code class="name">var <span class="ident">content</span> : list[<a title="livekit.agents.llm.chat_context.ImageContent" href="#livekit.agents.llm.chat_context.ImageContent">ImageContent</a> | <a title="livekit.agents.llm.chat_context.AudioContent" href="#livekit.agents.llm.chat_context.AudioContent">AudioContent</a> | str]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.created_at"><code class="name">var <span class="ident">created_at</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.hash"><code class="name">var <span class="ident">hash</span> : bytes | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.id"><code class="name">var <span class="ident">id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.interrupted"><code class="name">var <span class="ident">interrupted</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.role"><code class="name">var <span class="ident">role</span> : Literal['developer', 'system', 'user', 'assistant']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.type"><code class="name">var <span class="ident">type</span> : Literal['message']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.ChatMessage.text_content"><code class="name">prop <span class="ident">text_content</span> : str | None</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def text_content(self) -&gt; str | None:
+    &#34;&#34;&#34;
+    Returns a string of all text content in the message.
+
+    Multiple text content items will be joined by a newline.
+    &#34;&#34;&#34;
+    text_parts = [c for c in self.content if isinstance(c, str)]
+    if not text_parts:
+        return None
+    return &#34;\n&#34;.join(text_parts)</code></pre>
+</details>
+<div class="desc"><p>Returns a string of all text content in the message.</p>
+<p>Multiple text content items will be joined by a newline.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCall"><code class="flex name class">
+<span>class <span class="ident">FunctionCall</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class FunctionCall(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid(&#34;item_&#34;))
+    type: Literal[&#34;function_call&#34;] = &#34;function_call&#34;
+    call_id: str
+    arguments: str
+    name: str</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.FunctionCall.arguments"><code class="name">var <span class="ident">arguments</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCall.call_id"><code class="name">var <span class="ident">call_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCall.id"><code class="name">var <span class="ident">id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCall.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCall.name"><code class="name">var <span class="ident">name</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCall.type"><code class="name">var <span class="ident">type</span> : Literal['function_call']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCallOutput"><code class="flex name class">
+<span>class <span class="ident">FunctionCallOutput</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class FunctionCallOutput(BaseModel):
+    id: str = Field(default_factory=lambda: utils.shortuuid(&#34;item_&#34;))
+    name: str = Field(default=&#34;&#34;)
+    type: Literal[&#34;function_call_output&#34;] = Field(default=&#34;function_call_output&#34;)
+    call_id: str
+    output: str
+    is_error: bool</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.FunctionCallOutput.call_id"><code class="name">var <span class="ident">call_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCallOutput.id"><code class="name">var <span class="ident">id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCallOutput.is_error"><code class="name">var <span class="ident">is_error</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCallOutput.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCallOutput.name"><code class="name">var <span class="ident">name</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCallOutput.output"><code class="name">var <span class="ident">output</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.FunctionCallOutput.type"><code class="name">var <span class="ident">type</span> : Literal['function_call_output']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ImageContent"><code class="flex name class">
+<span>class <span class="ident">ImageContent</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ImageContent(BaseModel):
+    &#34;&#34;&#34;
+    ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.
+
+    You may need to consult your LLM provider&#39;s documentation on supported URL types.
+
+    ```python
+    # Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally
+    async for event in rtc.VideoStream(video_track):
+        chat_image = ImageContent(image=event.frame)
+        # this instance is now available for your ChatContext
+
+    # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
+    from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
+
+    image_bytes = encode(
+        event.frame,
+        EncodeOptions(
+            format=&#34;PNG&#34;,
+            resize_options=ResizeOptions(width=512, height=512, strategy=&#34;scale_aspect_fit&#34;),
+        ),
+    )
+    chat_image = ImageContent(
+        image=f&#34;data:image/png;base64,{base64.b64encode(image_bytes).decode(&#39;utf-8&#39;)}&#34;
+    )
+
+    # With an external URL
+    chat_image = ImageContent(image=&#34;https://example.com/image.jpg&#34;)
+    ```
+    &#34;&#34;&#34;  # noqa: E501
+
+    id: str = Field(default_factory=lambda: utils.shortuuid(&#34;img_&#34;))
+    &#34;&#34;&#34;
+    Unique identifier for the image
+    &#34;&#34;&#34;
+
+    type: Literal[&#34;image_content&#34;] = Field(default=&#34;image_content&#34;)
+
+    image: str | rtc.VideoFrame
+    &#34;&#34;&#34;
+    Either a string URL or a VideoFrame object
+    &#34;&#34;&#34;
+    inference_width: int | None = None
+    &#34;&#34;&#34;
+    Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
+    &#34;&#34;&#34;
+    inference_height: int | None = None
+    &#34;&#34;&#34;
+    Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)
+    &#34;&#34;&#34;
+    inference_detail: Literal[&#34;auto&#34;, &#34;high&#34;, &#34;low&#34;] = &#34;auto&#34;
+    &#34;&#34;&#34;
+    Detail parameter for LLM provider, if supported.
+
+    Currently only supported by OpenAI (see https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding)
+    &#34;&#34;&#34;
+    mime_type: str | None = None
+    &#34;&#34;&#34;
+    MIME type of the image
+    &#34;&#34;&#34;
+    _cache: dict[int, Any] = PrivateAttr(default_factory=dict)</code></pre>
+</details>
+<div class="desc"><p>ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.</p>
+<p>You may need to consult your LLM provider's documentation on supported URL types.</p>
+<pre><code class="language-python"># Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally
+async for event in rtc.VideoStream(video_track):
+    chat_image = ImageContent(image=event.frame)
+    # this instance is now available for your ChatContext
+
+# Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
+from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
+
+image_bytes = encode(
+    event.frame,
+    EncodeOptions(
+        format=&quot;PNG&quot;,
+        resize_options=ResizeOptions(width=512, height=512, strategy=&quot;scale_aspect_fit&quot;),
+    ),
+)
+chat_image = ImageContent(
+    image=f&quot;data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}&quot;
+)
+
+# With an external URL
+chat_image = ImageContent(image=&quot;https://example.com/image.jpg&quot;)
+</code></pre>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.ImageContent.id"><code class="name">var <span class="ident">id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>Unique identifier for the image</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ImageContent.image"><code class="name">var <span class="ident">image</span> : str | <a title="livekit.rtc.video_frame.VideoFrame" href="../../rtc/video_frame.html#livekit.rtc.video_frame.VideoFrame">VideoFrame</a></code></dt>
+<dd>
+<div class="desc"><p>Either a string URL or a VideoFrame object</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ImageContent.inference_detail"><code class="name">var <span class="ident">inference_detail</span> : Literal['auto', 'high', 'low']</code></dt>
+<dd>
+<div class="desc"><p>Detail parameter for LLM provider, if supported.</p>
+<p>Currently only supported by OpenAI (see <a href="https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding">https://platform.openai.com/docs/guides/vision?lang=node#low-or-high-fidelity-image-understanding</a>)</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ImageContent.inference_height"><code class="name">var <span class="ident">inference_height</span> : int | None</code></dt>
+<dd>
+<div class="desc"><p>Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ImageContent.inference_width"><code class="name">var <span class="ident">inference_width</span> : int | None</code></dt>
+<dd>
+<div class="desc"><p>Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ImageContent.mime_type"><code class="name">var <span class="ident">mime_type</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>MIME type of the image</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ImageContent.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.chat_context.ImageContent.type"><code class="name">var <span class="ident">type</span> : Literal['image_content']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.llm.chat_context.ImageContent.model_post_init"><code class="name flex">
+<span>def <span class="ident">model_post_init</span></span>(<span>self: BaseModel, context: Any, /) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def init_private_attributes(self: BaseModel, context: Any, /) -&gt; None:
+    &#34;&#34;&#34;This function is meant to behave like a BaseModel method to initialise private attributes.
+
+    It takes context as an argument since that&#39;s what pydantic-core passes when calling it.
+
+    Args:
+        self: The BaseModel instance.
+        context: The context.
+    &#34;&#34;&#34;
+    if getattr(self, &#39;__pydantic_private__&#39;, None) is None:
+        pydantic_private = {}
+        for name, private_attr in self.__private_attributes__.items():
+            default = private_attr.get_default()
+            if default is not PydanticUndefined:
+                pydantic_private[name] = default
+        object_setattr(self, &#39;__pydantic_private__&#39;, pydantic_private)</code></pre>
+</details>
+<div class="desc"><p>This function is meant to behave like a BaseModel method to initialise private attributes.</p>
+<p>It takes context as an argument since that's what pydantic-core passes when calling it.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>self</code></strong></dt>
+<dd>The BaseModel instance.</dd>
+<dt><strong><code>context</code></strong></dt>
+<dd>The context.</dd>
+</dl></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.llm" href="index.html">livekit.agents.llm</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.llm.chat_context.AudioContent" href="#livekit.agents.llm.chat_context.AudioContent">AudioContent</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.chat_context.AudioContent.frame" href="#livekit.agents.llm.chat_context.AudioContent.frame">frame</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.AudioContent.model_config" href="#livekit.agents.llm.chat_context.AudioContent.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.AudioContent.transcript" href="#livekit.agents.llm.chat_context.AudioContent.transcript">transcript</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.AudioContent.type" href="#livekit.agents.llm.chat_context.AudioContent.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.chat_context.ChatContext" href="#livekit.agents.llm.chat_context.ChatContext">ChatContext</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.add_message" href="#livekit.agents.llm.chat_context.ChatContext.add_message">add_message</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.copy" href="#livekit.agents.llm.chat_context.ChatContext.copy">copy</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.empty" href="#livekit.agents.llm.chat_context.ChatContext.empty">empty</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.find_insertion_index" href="#livekit.agents.llm.chat_context.ChatContext.find_insertion_index">find_insertion_index</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.from_dict" href="#livekit.agents.llm.chat_context.ChatContext.from_dict">from_dict</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.get_by_id" href="#livekit.agents.llm.chat_context.ChatContext.get_by_id">get_by_id</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.index_by_id" href="#livekit.agents.llm.chat_context.ChatContext.index_by_id">index_by_id</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.items" href="#livekit.agents.llm.chat_context.ChatContext.items">items</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.readonly" href="#livekit.agents.llm.chat_context.ChatContext.readonly">readonly</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.to_dict" href="#livekit.agents.llm.chat_context.ChatContext.to_dict">to_dict</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatContext.truncate" href="#livekit.agents.llm.chat_context.ChatContext.truncate">truncate</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.chat_context.ChatMessage" href="#livekit.agents.llm.chat_context.ChatMessage">ChatMessage</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.content" href="#livekit.agents.llm.chat_context.ChatMessage.content">content</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.created_at" href="#livekit.agents.llm.chat_context.ChatMessage.created_at">created_at</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.hash" href="#livekit.agents.llm.chat_context.ChatMessage.hash">hash</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.id" href="#livekit.agents.llm.chat_context.ChatMessage.id">id</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.interrupted" href="#livekit.agents.llm.chat_context.ChatMessage.interrupted">interrupted</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.model_config" href="#livekit.agents.llm.chat_context.ChatMessage.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.role" href="#livekit.agents.llm.chat_context.ChatMessage.role">role</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.text_content" href="#livekit.agents.llm.chat_context.ChatMessage.text_content">text_content</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ChatMessage.type" href="#livekit.agents.llm.chat_context.ChatMessage.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.chat_context.FunctionCall" href="#livekit.agents.llm.chat_context.FunctionCall">FunctionCall</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCall.arguments" href="#livekit.agents.llm.chat_context.FunctionCall.arguments">arguments</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCall.call_id" href="#livekit.agents.llm.chat_context.FunctionCall.call_id">call_id</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCall.id" href="#livekit.agents.llm.chat_context.FunctionCall.id">id</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCall.model_config" href="#livekit.agents.llm.chat_context.FunctionCall.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCall.name" href="#livekit.agents.llm.chat_context.FunctionCall.name">name</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCall.type" href="#livekit.agents.llm.chat_context.FunctionCall.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.chat_context.FunctionCallOutput" href="#livekit.agents.llm.chat_context.FunctionCallOutput">FunctionCallOutput</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCallOutput.call_id" href="#livekit.agents.llm.chat_context.FunctionCallOutput.call_id">call_id</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCallOutput.id" href="#livekit.agents.llm.chat_context.FunctionCallOutput.id">id</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCallOutput.is_error" href="#livekit.agents.llm.chat_context.FunctionCallOutput.is_error">is_error</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCallOutput.model_config" href="#livekit.agents.llm.chat_context.FunctionCallOutput.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCallOutput.name" href="#livekit.agents.llm.chat_context.FunctionCallOutput.name">name</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCallOutput.output" href="#livekit.agents.llm.chat_context.FunctionCallOutput.output">output</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.FunctionCallOutput.type" href="#livekit.agents.llm.chat_context.FunctionCallOutput.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.chat_context.ImageContent" href="#livekit.agents.llm.chat_context.ImageContent">ImageContent</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.id" href="#livekit.agents.llm.chat_context.ImageContent.id">id</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.image" href="#livekit.agents.llm.chat_context.ImageContent.image">image</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.inference_detail" href="#livekit.agents.llm.chat_context.ImageContent.inference_detail">inference_detail</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.inference_height" href="#livekit.agents.llm.chat_context.ImageContent.inference_height">inference_height</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.inference_width" href="#livekit.agents.llm.chat_context.ImageContent.inference_width">inference_width</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.mime_type" href="#livekit.agents.llm.chat_context.ImageContent.mime_type">mime_type</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.model_config" href="#livekit.agents.llm.chat_context.ImageContent.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.model_post_init" href="#livekit.agents.llm.chat_context.ImageContent.model_post_init">model_post_init</a></code></li>
+<li><code><a title="livekit.agents.llm.chat_context.ImageContent.type" href="#livekit.agents.llm.chat_context.ImageContent.type">type</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

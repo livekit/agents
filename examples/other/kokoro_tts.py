@@ -2,8 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, metrics
-from livekit.agents.voice import MetricsCollectedEvent
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, metrics, MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
 
 logger = logging.getLogger("kokoro-tts-agent")

@@ -1,0 +1,2024 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.rtc.participant API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.rtc.participant</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.rtc.participant.LocalParticipant"><code class="flex name class">
+<span>class <span class="ident">LocalParticipant</span></span>
+<span>(</span><span>room_queue: BroadcastQueue[proto_ffi.FfiEvent],<br>owned_info: proto_participant.OwnedParticipant)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LocalParticipant(Participant):
+    &#34;&#34;&#34;Represents the local participant in a room.&#34;&#34;&#34;
+
+    def __init__(
+        self,
+        room_queue: BroadcastQueue[proto_ffi.FfiEvent],
+        owned_info: proto_participant.OwnedParticipant,
+    ) -&gt; None:
+        super().__init__(owned_info)
+        self._room_queue = room_queue
+        self._track_publications: dict[str, LocalTrackPublication] = {}  # type: ignore
+        self._rpc_handlers: Dict[str, RpcHandler] = {}
+
+    @property
+    def track_publications(self) -&gt; Mapping[str, LocalTrackPublication]:
+        &#34;&#34;&#34;
+        A dictionary of track publications associated with the participant.
+        &#34;&#34;&#34;
+        return self._track_publications
+
+    async def publish_data(
+        self,
+        payload: Union[bytes, str],
+        *,
+        reliable: bool = True,
+        destination_identities: List[str] = [],
+        topic: str = &#34;&#34;,
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Publish arbitrary data to the room.
+
+        Args:
+            payload (Union[bytes, str]): The data to publish.
+            reliable (bool, optional): Whether to send reliably or not. Defaults to True.
+            destination_identities (List[str], optional): List of participant identities to send to. Defaults to [].
+            topic (str, optional): The topic under which to publish the data. Defaults to &#34;&#34;.
+
+        Raises:
+            PublishDataError: If there is an error in publishing data.
+        &#34;&#34;&#34;
+        if isinstance(payload, str):
+            payload = payload.encode(&#34;utf-8&#34;)
+
+        data_len = len(payload)
+        cdata = (ctypes.c_byte * data_len)(*payload)
+
+        req = proto_ffi.FfiRequest()
+        req.publish_data.local_participant_handle = self._ffi_handle.handle
+        req.publish_data.data_ptr = ctypes.addressof(cdata)
+        req.publish_data.data_len = data_len
+        req.publish_data.reliable = reliable
+        req.publish_data.topic = topic
+        req.publish_data.destination_identities.extend(destination_identities)
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb: proto_ffi.FfiEvent = await queue.wait_for(
+                lambda e: e.publish_data.async_id == resp.publish_data.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+        if cb.publish_data.error:
+            raise PublishDataError(cb.publish_data.error)
+
+    async def publish_dtmf(self, *, code: int, digit: str) -&gt; None:
+        &#34;&#34;&#34;
+        Publish SIP DTMF message.
+
+        Args:
+            code (int): DTMF code.
+            digit (str): DTMF digit.
+
+        Raises:
+            PublishDTMFError: If there is an error in publishing SIP DTMF message.
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.publish_sip_dtmf.local_participant_handle = self._ffi_handle.handle
+        req.publish_sip_dtmf.code = code
+        req.publish_sip_dtmf.digit = digit
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb: proto_ffi.FfiEvent = await queue.wait_for(
+                lambda e: e.publish_sip_dtmf.async_id == resp.publish_sip_dtmf.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+        if cb.publish_sip_dtmf.error:
+            raise PublishDTMFError(cb.publish_sip_dtmf.error)
+
+    async def publish_transcription(self, transcription: Transcription) -&gt; None:
+        &#34;&#34;&#34;
+        Publish transcription data to the room.
+
+        Args:
+            transcription (Transcription): The transcription data to publish.
+
+        Raises:
+            PublishTranscriptionError: If there is an error in publishing transcription.
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        proto_segments = [
+            ProtoTranscriptionSegment(
+                id=s.id,
+                text=s.text,
+                start_time=s.start_time,
+                end_time=s.end_time,
+                final=s.final,
+                language=s.language,
+            )
+            for s in transcription.segments
+        ]
+        # fmt: off
+        req.publish_transcription.local_participant_handle = self._ffi_handle.handle
+        req.publish_transcription.participant_identity = transcription.participant_identity
+        req.publish_transcription.segments.extend(proto_segments)
+        req.publish_transcription.track_id = transcription.track_sid
+        # fmt: on
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb: proto_ffi.FfiEvent = await queue.wait_for(
+                lambda e: e.publish_transcription.async_id == resp.publish_transcription.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+        if cb.publish_transcription.error:
+            raise PublishTranscriptionError(cb.publish_transcription.error)
+
+    async def perform_rpc(
+        self,
+        *,
+        destination_identity: str,
+        method: str,
+        payload: str,
+        response_timeout: Optional[float] = None,
+    ) -&gt; str:
+        &#34;&#34;&#34;
+        Initiate an RPC call to a remote participant.
+
+        Args:
+            destination_identity (str): The `identity` of the destination participant
+            method (str): The method name to call
+            payload (str): The method payload
+            response_timeout (Optional[float]): Timeout for receiving a response after initial connection
+
+        Returns:
+            str: The response payload
+
+        Raises:
+            RpcError: On failure. Details in `message`.
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.perform_rpc.local_participant_handle = self._ffi_handle.handle
+        req.perform_rpc.destination_identity = destination_identity
+        req.perform_rpc.method = method
+        req.perform_rpc.payload = payload
+        if response_timeout is not None:
+            req.perform_rpc.response_timeout_ms = int(response_timeout * 1000)
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb = await queue.wait_for(
+                lambda e: (e.perform_rpc.async_id == resp.perform_rpc.async_id)
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+        if cb.perform_rpc.HasField(&#34;error&#34;):
+            raise RpcError._from_proto(cb.perform_rpc.error)
+
+        return cb.perform_rpc.payload
+
+    def register_rpc_method(
+        self,
+        method_name: str,
+        handler: Optional[F] = None,
+    ) -&gt; Union[F, Callable[[F], F]]:
+        &#34;&#34;&#34;
+        Establishes the participant as a receiver for calls of the specified RPC method.
+        Can be used either as a decorator or a regular method.
+
+        The handler will receive one argument of type `RpcInvocationData` and should return a string response which will be forwarded back to the caller.
+
+        The handler may be synchronous or asynchronous.
+
+        If unable to respond within `response_timeout`, the caller will hang up and receive an error on their side.
+
+        You may raise errors of type `RpcError` in the handler, and they will be forwarded to the caller.
+
+        Other errors raised in your handler will be caught and forwarded to the caller as &#34;1500 Application Error&#34;.
+
+        Args:
+            method_name (str): The name of the indicated RPC method.
+            handler (Optional[Callable]): Handler to be invoked whenever an RPC request for this method is received.  Omit this argument to use the decorator syntax.
+
+        Returns:
+            None (when used as a decorator it returns the decorator function)
+
+        Example:
+            # As a decorator:
+            @room.local_participant.register_rpc_method(&#34;greet&#34;)
+            async def greet_handler(data: RpcInvocationData) -&gt; str:
+                print(f&#34;Received greeting from {data.caller_identity}: {data.payload}&#34;)
+                return f&#34;Hello, {data.caller_identity}!&#34;
+
+            # As a regular method:
+            async def greet_handler(data: RpcInvocationData) -&gt; str:
+                print(f&#34;Received greeting from {data.caller_identity}: {data.payload}&#34;)
+                return f&#34;Hello, {data.caller_identity}!&#34;
+
+            room.local_participant.register_rpc_method(&#39;greet&#39;, greet_handler)
+        &#34;&#34;&#34;
+
+        def register(handler_func: F) -&gt; F:
+            self._rpc_handlers[method_name] = handler_func
+            req = proto_ffi.FfiRequest()
+            req.register_rpc_method.local_participant_handle = self._ffi_handle.handle
+            req.register_rpc_method.method = method_name
+            FfiClient.instance.request(req)
+            return handler_func
+
+        if handler is not None:
+            return register(handler)
+        else:
+            return register
+
+    def unregister_rpc_method(self, method: str) -&gt; None:
+        &#34;&#34;&#34;
+        Unregisters a previously registered RPC method.
+
+        Args:
+            method (str): The name of the RPC method to unregister
+        &#34;&#34;&#34;
+        self._rpc_handlers.pop(method, None)
+
+        req = proto_ffi.FfiRequest()
+        req.unregister_rpc_method.local_participant_handle = self._ffi_handle.handle
+        req.unregister_rpc_method.method = method
+
+        FfiClient.instance.request(req)
+
+    def set_track_subscription_permissions(
+        self,
+        *,
+        allow_all_participants: bool,
+        participant_permissions: Optional[List[ParticipantTrackPermission]] = None,
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Set the track subscription permissions for the local participant.
+
+        Args:
+            allow_all_participants (bool): Whether to allow all participants to subscribe to this participant&#39;s tracks.
+            participant_permissions (List[ParticipantTrackPermission]): Participant-specific track subscription permissions, ignored if `allow_all_participants` is True.
+        &#34;&#34;&#34;
+        if participant_permissions is None:
+            participant_permissions = []
+
+        req = proto_ffi.FfiRequest()
+        req.set_track_subscription_permissions.local_participant_handle = self._ffi_handle.handle
+        req.set_track_subscription_permissions.all_participants_allowed = allow_all_participants
+        req.set_track_subscription_permissions.permissions.extend(participant_permissions)
+        FfiClient.instance.request(req)
+
+    async def _handle_rpc_method_invocation(
+        self,
+        invocation_id: int,
+        method: str,
+        request_id: str,
+        caller_identity: str,
+        payload: str,
+        response_timeout: float,
+    ) -&gt; None:
+        response_error: Optional[RpcError] = None
+        response_payload: Optional[str] = None
+
+        params = RpcInvocationData(request_id, caller_identity, payload, response_timeout)
+
+        handler = self._rpc_handlers.get(method)
+
+        if not handler:
+            response_error = RpcError._built_in(RpcError.ErrorCode.UNSUPPORTED_METHOD)
+        else:
+            try:
+                if asyncio.iscoroutinefunction(handler):
+                    try:
+                        response_payload = await asyncio.wait_for(
+                            handler(params), timeout=response_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        raise RpcError._built_in(RpcError.ErrorCode.RESPONSE_TIMEOUT)
+                    except asyncio.CancelledError:
+                        raise RpcError._built_in(RpcError.ErrorCode.RECIPIENT_DISCONNECTED)
+                else:
+                    response_payload = cast(Optional[str], handler(params))
+            except RpcError as error:
+                response_error = error
+            except Exception:
+                logger.exception(
+                    f&#34;Uncaught error returned by RPC handler for {method}. &#34;
+                    &#34;Returning APPLICATION_ERROR instead. &#34;
+                )
+                response_error = RpcError._built_in(RpcError.ErrorCode.APPLICATION_ERROR)
+
+        req = proto_ffi.FfiRequest(
+            rpc_method_invocation_response=RpcMethodInvocationResponseRequest(
+                local_participant_handle=self._ffi_handle.handle,
+                invocation_id=invocation_id,
+                error=response_error._to_proto() if response_error else None,
+                payload=response_payload,
+            )
+        )
+
+        res = FfiClient.instance.request(req)
+
+        if res.rpc_method_invocation_response.error:
+            err = res.rpc_method_invocation_response.error
+            logger.error(f&#34;error sending rpc method invocation response: {err}&#34;)
+
+    async def set_metadata(self, metadata: str) -&gt; None:
+        &#34;&#34;&#34;
+        Set the metadata for the local participant.
+
+        Note: this requires `canUpdateOwnMetadata` permission.
+
+        Args:
+            metadata (str): The new metadata.
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.set_local_metadata.local_participant_handle = self._ffi_handle.handle
+        req.set_local_metadata.metadata = metadata
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            await queue.wait_for(
+                lambda e: e.set_local_metadata.async_id == resp.set_local_metadata.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+    async def set_name(self, name: str) -&gt; None:
+        &#34;&#34;&#34;
+        Set the name for the local participant.
+
+        Note: this requires `canUpdateOwnMetadata` permission.
+
+        Args:
+            name (str): The new name.
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.set_local_name.local_participant_handle = self._ffi_handle.handle
+        req.set_local_name.name = name
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            await queue.wait_for(
+                lambda e: e.set_local_name.async_id == resp.set_local_name.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+    async def set_attributes(self, attributes: dict[str, str]) -&gt; None:
+        &#34;&#34;&#34;
+        Set custom attributes for the local participant.
+
+        Note: this requires `canUpdateOwnMetadata` permission.
+
+        Args:
+            attributes (dict[str, str]): A dictionary of attributes to set.
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.set_local_attributes.local_participant_handle = self._ffi_handle.handle
+        existing_attributes = {
+            entry.key: entry.value for entry in req.set_local_attributes.attributes
+        }
+        existing_attributes.update(attributes)
+
+        for key, value in existing_attributes.items():
+            entry = req.set_local_attributes.attributes.add()
+            entry.key = key
+            entry.value = value
+
+        queue = FfiClient.instance.queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            await queue.wait_for(
+                lambda e: e.set_local_attributes.async_id == resp.set_local_attributes.async_id
+            )
+        finally:
+            FfiClient.instance.queue.unsubscribe(queue)
+
+    async def stream_text(
+        self,
+        *,
+        destination_identities: Optional[List[str]] = None,
+        topic: str = &#34;&#34;,
+        attributes: Optional[Dict[str, str]] = None,
+        stream_id: str | None = None,
+        reply_to_id: str | None = None,
+        total_size: int | None = None,
+        sender_identity: str | None = None,
+    ) -&gt; TextStreamWriter:
+        &#34;&#34;&#34;
+        Returns a TextStreamWriter that allows to write individual chunks of text to a text stream.
+        In most cases where you want to simply send a text message use send_text() instead.
+        &#34;&#34;&#34;
+        writer = TextStreamWriter(
+            self,
+            topic=topic,
+            attributes=attributes,
+            reply_to_id=reply_to_id,
+            destination_identities=destination_identities,
+            total_size=total_size,
+            stream_id=stream_id,
+            sender_identity=sender_identity,
+        )
+
+        await writer._send_header()
+
+        return writer
+
+    async def send_text(
+        self,
+        text: str,
+        *,
+        destination_identities: Optional[List[str]] = None,
+        topic: str = &#34;&#34;,
+        attributes: Optional[Dict[str, str]] = None,
+        reply_to_id: str | None = None,
+    ):
+        total_size = len(text.encode())
+        writer = await self.stream_text(
+            destination_identities=destination_identities,
+            topic=topic,
+            attributes=attributes,
+            reply_to_id=reply_to_id,
+            total_size=total_size,
+        )
+
+        await writer.write(text)
+        await writer.aclose()
+
+        return writer.info
+
+    async def stream_bytes(
+        self,
+        name: str,
+        *,
+        total_size: int | None = None,
+        mime_type: str = &#34;application/octet-stream&#34;,
+        attributes: Optional[Dict[str, str]] = None,
+        stream_id: str | None = None,
+        destination_identities: Optional[List[str]] = None,
+        topic: str = &#34;&#34;,
+    ) -&gt; ByteStreamWriter:
+        &#34;&#34;&#34;
+        Returns a ByteStreamWriter that allows to write individual chunks of bytes to a byte stream.
+        In cases where you want to simply send a file from the file system use send_file() instead.
+        &#34;&#34;&#34;
+        writer = ByteStreamWriter(
+            self,
+            name=name,
+            attributes=attributes,
+            total_size=total_size,
+            stream_id=stream_id,
+            mime_type=mime_type,
+            destination_identities=destination_identities,
+            topic=topic,
+        )
+
+        await writer._send_header()
+
+        return writer
+
+    async def send_file(
+        self,
+        file_path: str,
+        *,
+        topic: str = &#34;&#34;,
+        destination_identities: Optional[List[str]] = None,
+        attributes: Optional[Dict[str, str]] = None,
+        stream_id: str | None = None,
+    ) -&gt; ByteStreamInfo:
+        file_size = os.path.getsize(file_path)
+        file_name = os.path.basename(file_path)
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if mime_type is None:
+            mime_type = &#34;application/octet-stream&#34;  # Fallback MIME type for unknown files
+
+        writer: ByteStreamWriter = await self.stream_bytes(
+            name=file_name,
+            total_size=file_size,
+            mime_type=mime_type,
+            attributes=attributes,
+            stream_id=stream_id,
+            destination_identities=destination_identities,
+            topic=topic,
+        )
+
+        async with aiofiles.open(file_path, &#34;rb&#34;) as f:
+            while bytes := await f.read(STREAM_CHUNK_SIZE):
+                await writer.write(bytes)
+        await writer.aclose()
+
+        return writer.info
+
+    async def publish_track(
+        self, track: LocalTrack, options: TrackPublishOptions = TrackPublishOptions()
+    ) -&gt; LocalTrackPublication:
+        &#34;&#34;&#34;
+        Publish a local track to the room.
+
+        Args:
+            track (LocalTrack): The track to publish.
+            options (TrackPublishOptions, optional): Options for publishing the track.
+
+        Returns:
+            LocalTrackPublication: The publication of the published track.
+
+        Raises:
+            PublishTrackError: If there is an error in publishing the track.
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.publish_track.track_handle = track._ffi_handle.handle
+        req.publish_track.local_participant_handle = self._ffi_handle.handle
+        req.publish_track.options.CopyFrom(options)
+
+        queue = self._room_queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb: proto_ffi.FfiEvent = await queue.wait_for(
+                lambda e: e.publish_track.async_id == resp.publish_track.async_id
+            )
+
+            if cb.publish_track.error:
+                raise PublishTrackError(cb.publish_track.error)
+
+            track_publication = LocalTrackPublication(cb.publish_track.publication)
+            track_publication._track = track
+            track._info.sid = track_publication.sid
+            self._track_publications[track_publication.sid] = track_publication
+
+            queue.task_done()
+            return track_publication
+        finally:
+            self._room_queue.unsubscribe(queue)
+
+    async def unpublish_track(self, track_sid: str) -&gt; None:
+        &#34;&#34;&#34;
+        Unpublish a track from the room.
+
+        Args:
+            track_sid (str): The SID of the track to unpublish.
+
+        Raises:
+            UnpublishTrackError: If there is an error in unpublishing the track.
+        &#34;&#34;&#34;
+        req = proto_ffi.FfiRequest()
+        req.unpublish_track.local_participant_handle = self._ffi_handle.handle
+        req.unpublish_track.track_sid = track_sid
+        req.unpublish_track.stop_on_unpublish = True
+
+        queue = self._room_queue.subscribe()
+        try:
+            resp = FfiClient.instance.request(req)
+            cb: proto_ffi.FfiEvent = await queue.wait_for(
+                lambda e: e.unpublish_track.async_id == resp.unpublish_track.async_id
+            )
+
+            if cb.unpublish_track.error:
+                raise UnpublishTrackError(cb.unpublish_track.error)
+
+            publication = self._track_publications.pop(track_sid)
+            publication._track = None
+            queue.task_done()
+        finally:
+            self._room_queue.unsubscribe(queue)
+
+    def __repr__(self) -&gt; str:
+        return f&#34;rtc.LocalParticipant(sid={self.sid}, identity={self.identity}, name={self.name})&#34;</code></pre>
+</details>
+<div class="desc"><p>Represents the local participant in a room.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.participant.Participant" href="#livekit.rtc.participant.Participant">Participant</a></li>
+<li>abc.ABC</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.participant.LocalParticipant.perform_rpc"><code class="name flex">
+<span>async def <span class="ident">perform_rpc</span></span>(<span>self,<br>*,<br>destination_identity: str,<br>method: str,<br>payload: str,<br>response_timeout: Optional[float] = None) ‑> str</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def perform_rpc(
+    self,
+    *,
+    destination_identity: str,
+    method: str,
+    payload: str,
+    response_timeout: Optional[float] = None,
+) -&gt; str:
+    &#34;&#34;&#34;
+    Initiate an RPC call to a remote participant.
+
+    Args:
+        destination_identity (str): The `identity` of the destination participant
+        method (str): The method name to call
+        payload (str): The method payload
+        response_timeout (Optional[float]): Timeout for receiving a response after initial connection
+
+    Returns:
+        str: The response payload
+
+    Raises:
+        RpcError: On failure. Details in `message`.
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.perform_rpc.local_participant_handle = self._ffi_handle.handle
+    req.perform_rpc.destination_identity = destination_identity
+    req.perform_rpc.method = method
+    req.perform_rpc.payload = payload
+    if response_timeout is not None:
+        req.perform_rpc.response_timeout_ms = int(response_timeout * 1000)
+
+    queue = FfiClient.instance.queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        cb = await queue.wait_for(
+            lambda e: (e.perform_rpc.async_id == resp.perform_rpc.async_id)
+        )
+    finally:
+        FfiClient.instance.queue.unsubscribe(queue)
+
+    if cb.perform_rpc.HasField(&#34;error&#34;):
+        raise RpcError._from_proto(cb.perform_rpc.error)
+
+    return cb.perform_rpc.payload</code></pre>
+</details>
+<div class="desc"><p>Initiate an RPC call to a remote participant.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>destination_identity</code></strong> :&ensp;<code>str</code></dt>
+<dd>The <code>identity</code> of the destination participant</dd>
+<dt><strong><code>method</code></strong> :&ensp;<code>str</code></dt>
+<dd>The method name to call</dd>
+<dt><strong><code>payload</code></strong> :&ensp;<code>str</code></dt>
+<dd>The method payload</dd>
+<dt><strong><code>response_timeout</code></strong> :&ensp;<code>Optional[float]</code></dt>
+<dd>Timeout for receiving a response after initial connection</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>str</code></dt>
+<dd>The response payload</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code>RpcError</code></dt>
+<dd>On failure. Details in <code>message</code>.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.publish_data"><code class="name flex">
+<span>async def <span class="ident">publish_data</span></span>(<span>self,<br>payload: Union[bytes, str],<br>*,<br>reliable: bool = True,<br>destination_identities: List[str] = [],<br>topic: str = '') ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def publish_data(
+    self,
+    payload: Union[bytes, str],
+    *,
+    reliable: bool = True,
+    destination_identities: List[str] = [],
+    topic: str = &#34;&#34;,
+) -&gt; None:
+    &#34;&#34;&#34;
+    Publish arbitrary data to the room.
+
+    Args:
+        payload (Union[bytes, str]): The data to publish.
+        reliable (bool, optional): Whether to send reliably or not. Defaults to True.
+        destination_identities (List[str], optional): List of participant identities to send to. Defaults to [].
+        topic (str, optional): The topic under which to publish the data. Defaults to &#34;&#34;.
+
+    Raises:
+        PublishDataError: If there is an error in publishing data.
+    &#34;&#34;&#34;
+    if isinstance(payload, str):
+        payload = payload.encode(&#34;utf-8&#34;)
+
+    data_len = len(payload)
+    cdata = (ctypes.c_byte * data_len)(*payload)
+
+    req = proto_ffi.FfiRequest()
+    req.publish_data.local_participant_handle = self._ffi_handle.handle
+    req.publish_data.data_ptr = ctypes.addressof(cdata)
+    req.publish_data.data_len = data_len
+    req.publish_data.reliable = reliable
+    req.publish_data.topic = topic
+    req.publish_data.destination_identities.extend(destination_identities)
+
+    queue = FfiClient.instance.queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        cb: proto_ffi.FfiEvent = await queue.wait_for(
+            lambda e: e.publish_data.async_id == resp.publish_data.async_id
+        )
+    finally:
+        FfiClient.instance.queue.unsubscribe(queue)
+
+    if cb.publish_data.error:
+        raise PublishDataError(cb.publish_data.error)</code></pre>
+</details>
+<div class="desc"><p>Publish arbitrary data to the room.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>payload</code></strong> :&ensp;<code>Union[bytes, str]</code></dt>
+<dd>The data to publish.</dd>
+<dt><strong><code>reliable</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>Whether to send reliably or not. Defaults to True.</dd>
+<dt><strong><code>destination_identities</code></strong> :&ensp;<code>List[str]</code>, optional</dt>
+<dd>List of participant identities to send to. Defaults to [].</dd>
+<dt><strong><code>topic</code></strong> :&ensp;<code>str</code>, optional</dt>
+<dd>The topic under which to publish the data. Defaults to "".</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code><a title="livekit.rtc.participant.PublishDataError" href="#livekit.rtc.participant.PublishDataError">PublishDataError</a></code></dt>
+<dd>If there is an error in publishing data.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.publish_dtmf"><code class="name flex">
+<span>async def <span class="ident">publish_dtmf</span></span>(<span>self, *, code: int, digit: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def publish_dtmf(self, *, code: int, digit: str) -&gt; None:
+    &#34;&#34;&#34;
+    Publish SIP DTMF message.
+
+    Args:
+        code (int): DTMF code.
+        digit (str): DTMF digit.
+
+    Raises:
+        PublishDTMFError: If there is an error in publishing SIP DTMF message.
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.publish_sip_dtmf.local_participant_handle = self._ffi_handle.handle
+    req.publish_sip_dtmf.code = code
+    req.publish_sip_dtmf.digit = digit
+
+    queue = FfiClient.instance.queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        cb: proto_ffi.FfiEvent = await queue.wait_for(
+            lambda e: e.publish_sip_dtmf.async_id == resp.publish_sip_dtmf.async_id
+        )
+    finally:
+        FfiClient.instance.queue.unsubscribe(queue)
+
+    if cb.publish_sip_dtmf.error:
+        raise PublishDTMFError(cb.publish_sip_dtmf.error)</code></pre>
+</details>
+<div class="desc"><p>Publish SIP DTMF message.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>code</code></strong> :&ensp;<code>int</code></dt>
+<dd>DTMF code.</dd>
+<dt><strong><code>digit</code></strong> :&ensp;<code>str</code></dt>
+<dd>DTMF digit.</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code><a title="livekit.rtc.participant.PublishDTMFError" href="#livekit.rtc.participant.PublishDTMFError">PublishDTMFError</a></code></dt>
+<dd>If there is an error in publishing SIP DTMF message.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.publish_track"><code class="name flex">
+<span>async def <span class="ident">publish_track</span></span>(<span>self,<br>track: LocalTrack,<br>options: <a title="livekit.rtc.participant.TrackPublishOptions" href="#livekit.rtc.participant.TrackPublishOptions">TrackPublishOptions</a> = ) ‑> <a title="livekit.rtc.track_publication.LocalTrackPublication" href="track_publication.html#livekit.rtc.track_publication.LocalTrackPublication">LocalTrackPublication</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def publish_track(
+    self, track: LocalTrack, options: TrackPublishOptions = TrackPublishOptions()
+) -&gt; LocalTrackPublication:
+    &#34;&#34;&#34;
+    Publish a local track to the room.
+
+    Args:
+        track (LocalTrack): The track to publish.
+        options (TrackPublishOptions, optional): Options for publishing the track.
+
+    Returns:
+        LocalTrackPublication: The publication of the published track.
+
+    Raises:
+        PublishTrackError: If there is an error in publishing the track.
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.publish_track.track_handle = track._ffi_handle.handle
+    req.publish_track.local_participant_handle = self._ffi_handle.handle
+    req.publish_track.options.CopyFrom(options)
+
+    queue = self._room_queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        cb: proto_ffi.FfiEvent = await queue.wait_for(
+            lambda e: e.publish_track.async_id == resp.publish_track.async_id
+        )
+
+        if cb.publish_track.error:
+            raise PublishTrackError(cb.publish_track.error)
+
+        track_publication = LocalTrackPublication(cb.publish_track.publication)
+        track_publication._track = track
+        track._info.sid = track_publication.sid
+        self._track_publications[track_publication.sid] = track_publication
+
+        queue.task_done()
+        return track_publication
+    finally:
+        self._room_queue.unsubscribe(queue)</code></pre>
+</details>
+<div class="desc"><p>Publish a local track to the room.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>track</code></strong> :&ensp;<code>LocalTrack</code></dt>
+<dd>The track to publish.</dd>
+<dt><strong><code>options</code></strong> :&ensp;<code><a title="livekit.rtc.participant.TrackPublishOptions" href="#livekit.rtc.participant.TrackPublishOptions">TrackPublishOptions</a></code>, optional</dt>
+<dd>Options for publishing the track.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>LocalTrackPublication</code></dt>
+<dd>The publication of the published track.</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code><a title="livekit.rtc.participant.PublishTrackError" href="#livekit.rtc.participant.PublishTrackError">PublishTrackError</a></code></dt>
+<dd>If there is an error in publishing the track.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.publish_transcription"><code class="name flex">
+<span>async def <span class="ident">publish_transcription</span></span>(<span>self, transcription: Transcription) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def publish_transcription(self, transcription: Transcription) -&gt; None:
+    &#34;&#34;&#34;
+    Publish transcription data to the room.
+
+    Args:
+        transcription (Transcription): The transcription data to publish.
+
+    Raises:
+        PublishTranscriptionError: If there is an error in publishing transcription.
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    proto_segments = [
+        ProtoTranscriptionSegment(
+            id=s.id,
+            text=s.text,
+            start_time=s.start_time,
+            end_time=s.end_time,
+            final=s.final,
+            language=s.language,
+        )
+        for s in transcription.segments
+    ]
+    # fmt: off
+    req.publish_transcription.local_participant_handle = self._ffi_handle.handle
+    req.publish_transcription.participant_identity = transcription.participant_identity
+    req.publish_transcription.segments.extend(proto_segments)
+    req.publish_transcription.track_id = transcription.track_sid
+    # fmt: on
+    queue = FfiClient.instance.queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        cb: proto_ffi.FfiEvent = await queue.wait_for(
+            lambda e: e.publish_transcription.async_id == resp.publish_transcription.async_id
+        )
+    finally:
+        FfiClient.instance.queue.unsubscribe(queue)
+
+    if cb.publish_transcription.error:
+        raise PublishTranscriptionError(cb.publish_transcription.error)</code></pre>
+</details>
+<div class="desc"><p>Publish transcription data to the room.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>transcription</code></strong> :&ensp;<code>Transcription</code></dt>
+<dd>The transcription data to publish.</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code><a title="livekit.rtc.participant.PublishTranscriptionError" href="#livekit.rtc.participant.PublishTranscriptionError">PublishTranscriptionError</a></code></dt>
+<dd>If there is an error in publishing transcription.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.register_rpc_method"><code class="name flex">
+<span>def <span class="ident">register_rpc_method</span></span>(<span>self, method_name: str, handler: Optional[F] = None) ‑> ~F | Callable[[~F], ~F]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def register_rpc_method(
+    self,
+    method_name: str,
+    handler: Optional[F] = None,
+) -&gt; Union[F, Callable[[F], F]]:
+    &#34;&#34;&#34;
+    Establishes the participant as a receiver for calls of the specified RPC method.
+    Can be used either as a decorator or a regular method.
+
+    The handler will receive one argument of type `RpcInvocationData` and should return a string response which will be forwarded back to the caller.
+
+    The handler may be synchronous or asynchronous.
+
+    If unable to respond within `response_timeout`, the caller will hang up and receive an error on their side.
+
+    You may raise errors of type `RpcError` in the handler, and they will be forwarded to the caller.
+
+    Other errors raised in your handler will be caught and forwarded to the caller as &#34;1500 Application Error&#34;.
+
+    Args:
+        method_name (str): The name of the indicated RPC method.
+        handler (Optional[Callable]): Handler to be invoked whenever an RPC request for this method is received.  Omit this argument to use the decorator syntax.
+
+    Returns:
+        None (when used as a decorator it returns the decorator function)
+
+    Example:
+        # As a decorator:
+        @room.local_participant.register_rpc_method(&#34;greet&#34;)
+        async def greet_handler(data: RpcInvocationData) -&gt; str:
+            print(f&#34;Received greeting from {data.caller_identity}: {data.payload}&#34;)
+            return f&#34;Hello, {data.caller_identity}!&#34;
+
+        # As a regular method:
+        async def greet_handler(data: RpcInvocationData) -&gt; str:
+            print(f&#34;Received greeting from {data.caller_identity}: {data.payload}&#34;)
+            return f&#34;Hello, {data.caller_identity}!&#34;
+
+        room.local_participant.register_rpc_method(&#39;greet&#39;, greet_handler)
+    &#34;&#34;&#34;
+
+    def register(handler_func: F) -&gt; F:
+        self._rpc_handlers[method_name] = handler_func
+        req = proto_ffi.FfiRequest()
+        req.register_rpc_method.local_participant_handle = self._ffi_handle.handle
+        req.register_rpc_method.method = method_name
+        FfiClient.instance.request(req)
+        return handler_func
+
+    if handler is not None:
+        return register(handler)
+    else:
+        return register</code></pre>
+</details>
+<div class="desc"><p>Establishes the participant as a receiver for calls of the specified RPC method.
+Can be used either as a decorator or a regular method.</p>
+<p>The handler will receive one argument of type <code>RpcInvocationData</code> and should return a string response which will be forwarded back to the caller.</p>
+<p>The handler may be synchronous or asynchronous.</p>
+<p>If unable to respond within <code>response_timeout</code>, the caller will hang up and receive an error on their side.</p>
+<p>You may raise errors of type <code>RpcError</code> in the handler, and they will be forwarded to the caller.</p>
+<p>Other errors raised in your handler will be caught and forwarded to the caller as "1500 Application Error".</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>method_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the indicated RPC method.</dd>
+<dt><strong><code>handler</code></strong> :&ensp;<code>Optional[Callable]</code></dt>
+<dd>Handler to be invoked whenever an RPC request for this method is received.
+Omit this argument to use the decorator syntax.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<p>None (when used as a decorator it returns the decorator function)</p>
+<h2 id="example">Example</h2>
+<h1 id="as-a-decorator">As a decorator:</h1>
+<p>@room.local_participant.register_rpc_method("greet")
+async def greet_handler(data: RpcInvocationData) -&gt; str:
+print(f"Received greeting from {data.caller_identity}: {data.payload}")
+return f"Hello, {data.caller_identity}!"</p>
+<h1 id="as-a-regular-method">As a regular method:</h1>
+<p>async def greet_handler(data: RpcInvocationData) -&gt; str:
+print(f"Received greeting from {data.caller_identity}: {data.payload}")
+return f"Hello, {data.caller_identity}!"</p>
+<p>room.local_participant.register_rpc_method('greet', greet_handler)</p></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.send_file"><code class="name flex">
+<span>async def <span class="ident">send_file</span></span>(<span>self,<br>file_path: str,<br>*,<br>topic: str = '',<br>destination_identities: Optional[List[str]] = None,<br>attributes: Optional[Dict[str, str]] = None,<br>stream_id: str | None = None) ‑> <a title="livekit.rtc.data_stream.ByteStreamInfo" href="data_stream.html#livekit.rtc.data_stream.ByteStreamInfo">ByteStreamInfo</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def send_file(
+    self,
+    file_path: str,
+    *,
+    topic: str = &#34;&#34;,
+    destination_identities: Optional[List[str]] = None,
+    attributes: Optional[Dict[str, str]] = None,
+    stream_id: str | None = None,
+) -&gt; ByteStreamInfo:
+    file_size = os.path.getsize(file_path)
+    file_name = os.path.basename(file_path)
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if mime_type is None:
+        mime_type = &#34;application/octet-stream&#34;  # Fallback MIME type for unknown files
+
+    writer: ByteStreamWriter = await self.stream_bytes(
+        name=file_name,
+        total_size=file_size,
+        mime_type=mime_type,
+        attributes=attributes,
+        stream_id=stream_id,
+        destination_identities=destination_identities,
+        topic=topic,
+    )
+
+    async with aiofiles.open(file_path, &#34;rb&#34;) as f:
+        while bytes := await f.read(STREAM_CHUNK_SIZE):
+            await writer.write(bytes)
+    await writer.aclose()
+
+    return writer.info</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.send_text"><code class="name flex">
+<span>async def <span class="ident">send_text</span></span>(<span>self,<br>text: str,<br>*,<br>destination_identities: Optional[List[str]] = None,<br>topic: str = '',<br>attributes: Optional[Dict[str, str]] = None,<br>reply_to_id: str | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def send_text(
+    self,
+    text: str,
+    *,
+    destination_identities: Optional[List[str]] = None,
+    topic: str = &#34;&#34;,
+    attributes: Optional[Dict[str, str]] = None,
+    reply_to_id: str | None = None,
+):
+    total_size = len(text.encode())
+    writer = await self.stream_text(
+        destination_identities=destination_identities,
+        topic=topic,
+        attributes=attributes,
+        reply_to_id=reply_to_id,
+        total_size=total_size,
+    )
+
+    await writer.write(text)
+    await writer.aclose()
+
+    return writer.info</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.set_attributes"><code class="name flex">
+<span>async def <span class="ident">set_attributes</span></span>(<span>self, attributes: dict[str, str]) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def set_attributes(self, attributes: dict[str, str]) -&gt; None:
+    &#34;&#34;&#34;
+    Set custom attributes for the local participant.
+
+    Note: this requires `canUpdateOwnMetadata` permission.
+
+    Args:
+        attributes (dict[str, str]): A dictionary of attributes to set.
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.set_local_attributes.local_participant_handle = self._ffi_handle.handle
+    existing_attributes = {
+        entry.key: entry.value for entry in req.set_local_attributes.attributes
+    }
+    existing_attributes.update(attributes)
+
+    for key, value in existing_attributes.items():
+        entry = req.set_local_attributes.attributes.add()
+        entry.key = key
+        entry.value = value
+
+    queue = FfiClient.instance.queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        await queue.wait_for(
+            lambda e: e.set_local_attributes.async_id == resp.set_local_attributes.async_id
+        )
+    finally:
+        FfiClient.instance.queue.unsubscribe(queue)</code></pre>
+</details>
+<div class="desc"><p>Set custom attributes for the local participant.</p>
+<p>Note: this requires <code>canUpdateOwnMetadata</code> permission.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>attributes</code></strong> :&ensp;<code>dict[str, str]</code></dt>
+<dd>A dictionary of attributes to set.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.set_metadata"><code class="name flex">
+<span>async def <span class="ident">set_metadata</span></span>(<span>self, metadata: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def set_metadata(self, metadata: str) -&gt; None:
+    &#34;&#34;&#34;
+    Set the metadata for the local participant.
+
+    Note: this requires `canUpdateOwnMetadata` permission.
+
+    Args:
+        metadata (str): The new metadata.
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.set_local_metadata.local_participant_handle = self._ffi_handle.handle
+    req.set_local_metadata.metadata = metadata
+
+    queue = FfiClient.instance.queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        await queue.wait_for(
+            lambda e: e.set_local_metadata.async_id == resp.set_local_metadata.async_id
+        )
+    finally:
+        FfiClient.instance.queue.unsubscribe(queue)</code></pre>
+</details>
+<div class="desc"><p>Set the metadata for the local participant.</p>
+<p>Note: this requires <code>canUpdateOwnMetadata</code> permission.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>metadata</code></strong> :&ensp;<code>str</code></dt>
+<dd>The new metadata.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.set_name"><code class="name flex">
+<span>async def <span class="ident">set_name</span></span>(<span>self, name: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def set_name(self, name: str) -&gt; None:
+    &#34;&#34;&#34;
+    Set the name for the local participant.
+
+    Note: this requires `canUpdateOwnMetadata` permission.
+
+    Args:
+        name (str): The new name.
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.set_local_name.local_participant_handle = self._ffi_handle.handle
+    req.set_local_name.name = name
+
+    queue = FfiClient.instance.queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        await queue.wait_for(
+            lambda e: e.set_local_name.async_id == resp.set_local_name.async_id
+        )
+    finally:
+        FfiClient.instance.queue.unsubscribe(queue)</code></pre>
+</details>
+<div class="desc"><p>Set the name for the local participant.</p>
+<p>Note: this requires <code>canUpdateOwnMetadata</code> permission.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The new name.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.set_track_subscription_permissions"><code class="name flex">
+<span>def <span class="ident">set_track_subscription_permissions</span></span>(<span>self,<br>*,<br>allow_all_participants: bool,<br>participant_permissions: Optional[List[<a title="livekit.rtc.participant.ParticipantTrackPermission" href="#livekit.rtc.participant.ParticipantTrackPermission">ParticipantTrackPermission</a>]] = None) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_track_subscription_permissions(
+    self,
+    *,
+    allow_all_participants: bool,
+    participant_permissions: Optional[List[ParticipantTrackPermission]] = None,
+) -&gt; None:
+    &#34;&#34;&#34;
+    Set the track subscription permissions for the local participant.
+
+    Args:
+        allow_all_participants (bool): Whether to allow all participants to subscribe to this participant&#39;s tracks.
+        participant_permissions (List[ParticipantTrackPermission]): Participant-specific track subscription permissions, ignored if `allow_all_participants` is True.
+    &#34;&#34;&#34;
+    if participant_permissions is None:
+        participant_permissions = []
+
+    req = proto_ffi.FfiRequest()
+    req.set_track_subscription_permissions.local_participant_handle = self._ffi_handle.handle
+    req.set_track_subscription_permissions.all_participants_allowed = allow_all_participants
+    req.set_track_subscription_permissions.permissions.extend(participant_permissions)
+    FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"><p>Set the track subscription permissions for the local participant.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>allow_all_participants</code></strong> :&ensp;<code>bool</code></dt>
+<dd>Whether to allow all participants to subscribe to this participant's tracks.</dd>
+<dt><strong><code>participant_permissions</code></strong> :&ensp;<code>List[<a title="livekit.rtc.participant.ParticipantTrackPermission" href="#livekit.rtc.participant.ParticipantTrackPermission">ParticipantTrackPermission</a>]</code></dt>
+<dd>Participant-specific track subscription permissions, ignored if <code>allow_all_participants</code> is True.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.stream_bytes"><code class="name flex">
+<span>async def <span class="ident">stream_bytes</span></span>(<span>self,<br>name: str,<br>*,<br>total_size: int | None = None,<br>mime_type: str = 'application/octet-stream',<br>attributes: Optional[Dict[str, str]] = None,<br>stream_id: str | None = None,<br>destination_identities: Optional[List[str]] = None,<br>topic: str = '') ‑> <a title="livekit.rtc.data_stream.ByteStreamWriter" href="data_stream.html#livekit.rtc.data_stream.ByteStreamWriter">ByteStreamWriter</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def stream_bytes(
+    self,
+    name: str,
+    *,
+    total_size: int | None = None,
+    mime_type: str = &#34;application/octet-stream&#34;,
+    attributes: Optional[Dict[str, str]] = None,
+    stream_id: str | None = None,
+    destination_identities: Optional[List[str]] = None,
+    topic: str = &#34;&#34;,
+) -&gt; ByteStreamWriter:
+    &#34;&#34;&#34;
+    Returns a ByteStreamWriter that allows to write individual chunks of bytes to a byte stream.
+    In cases where you want to simply send a file from the file system use send_file() instead.
+    &#34;&#34;&#34;
+    writer = ByteStreamWriter(
+        self,
+        name=name,
+        attributes=attributes,
+        total_size=total_size,
+        stream_id=stream_id,
+        mime_type=mime_type,
+        destination_identities=destination_identities,
+        topic=topic,
+    )
+
+    await writer._send_header()
+
+    return writer</code></pre>
+</details>
+<div class="desc"><p>Returns a ByteStreamWriter that allows to write individual chunks of bytes to a byte stream.
+In cases where you want to simply send a file from the file system use send_file() instead.</p></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.stream_text"><code class="name flex">
+<span>async def <span class="ident">stream_text</span></span>(<span>self,<br>*,<br>destination_identities: Optional[List[str]] = None,<br>topic: str = '',<br>attributes: Optional[Dict[str, str]] = None,<br>stream_id: str | None = None,<br>reply_to_id: str | None = None,<br>total_size: int | None = None,<br>sender_identity: str | None = None) ‑> <a title="livekit.rtc.data_stream.TextStreamWriter" href="data_stream.html#livekit.rtc.data_stream.TextStreamWriter">TextStreamWriter</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def stream_text(
+    self,
+    *,
+    destination_identities: Optional[List[str]] = None,
+    topic: str = &#34;&#34;,
+    attributes: Optional[Dict[str, str]] = None,
+    stream_id: str | None = None,
+    reply_to_id: str | None = None,
+    total_size: int | None = None,
+    sender_identity: str | None = None,
+) -&gt; TextStreamWriter:
+    &#34;&#34;&#34;
+    Returns a TextStreamWriter that allows to write individual chunks of text to a text stream.
+    In most cases where you want to simply send a text message use send_text() instead.
+    &#34;&#34;&#34;
+    writer = TextStreamWriter(
+        self,
+        topic=topic,
+        attributes=attributes,
+        reply_to_id=reply_to_id,
+        destination_identities=destination_identities,
+        total_size=total_size,
+        stream_id=stream_id,
+        sender_identity=sender_identity,
+    )
+
+    await writer._send_header()
+
+    return writer</code></pre>
+</details>
+<div class="desc"><p>Returns a TextStreamWriter that allows to write individual chunks of text to a text stream.
+In most cases where you want to simply send a text message use send_text() instead.</p></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.unpublish_track"><code class="name flex">
+<span>async def <span class="ident">unpublish_track</span></span>(<span>self, track_sid: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def unpublish_track(self, track_sid: str) -&gt; None:
+    &#34;&#34;&#34;
+    Unpublish a track from the room.
+
+    Args:
+        track_sid (str): The SID of the track to unpublish.
+
+    Raises:
+        UnpublishTrackError: If there is an error in unpublishing the track.
+    &#34;&#34;&#34;
+    req = proto_ffi.FfiRequest()
+    req.unpublish_track.local_participant_handle = self._ffi_handle.handle
+    req.unpublish_track.track_sid = track_sid
+    req.unpublish_track.stop_on_unpublish = True
+
+    queue = self._room_queue.subscribe()
+    try:
+        resp = FfiClient.instance.request(req)
+        cb: proto_ffi.FfiEvent = await queue.wait_for(
+            lambda e: e.unpublish_track.async_id == resp.unpublish_track.async_id
+        )
+
+        if cb.unpublish_track.error:
+            raise UnpublishTrackError(cb.unpublish_track.error)
+
+        publication = self._track_publications.pop(track_sid)
+        publication._track = None
+        queue.task_done()
+    finally:
+        self._room_queue.unsubscribe(queue)</code></pre>
+</details>
+<div class="desc"><p>Unpublish a track from the room.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>track_sid</code></strong> :&ensp;<code>str</code></dt>
+<dd>The SID of the track to unpublish.</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code><a title="livekit.rtc.participant.UnpublishTrackError" href="#livekit.rtc.participant.UnpublishTrackError">UnpublishTrackError</a></code></dt>
+<dd>If there is an error in unpublishing the track.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.participant.LocalParticipant.unregister_rpc_method"><code class="name flex">
+<span>def <span class="ident">unregister_rpc_method</span></span>(<span>self, method: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def unregister_rpc_method(self, method: str) -&gt; None:
+    &#34;&#34;&#34;
+    Unregisters a previously registered RPC method.
+
+    Args:
+        method (str): The name of the RPC method to unregister
+    &#34;&#34;&#34;
+    self._rpc_handlers.pop(method, None)
+
+    req = proto_ffi.FfiRequest()
+    req.unregister_rpc_method.local_participant_handle = self._ffi_handle.handle
+    req.unregister_rpc_method.method = method
+
+    FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"><p>Unregisters a previously registered RPC method.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>method</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the RPC method to unregister</dd>
+</dl></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.participant.Participant" href="#livekit.rtc.participant.Participant">Participant</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.participant.Participant.attributes" href="#livekit.rtc.participant.Participant.attributes">attributes</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.disconnect_reason" href="#livekit.rtc.participant.Participant.disconnect_reason">disconnect_reason</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.kind" href="#livekit.rtc.participant.Participant.kind">kind</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.track_publications" href="#livekit.rtc.participant.Participant.track_publications">track_publications</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.rtc.participant.Participant"><code class="flex name class">
+<span>class <span class="ident">Participant</span></span>
+<span>(</span><span>owned_info: proto_participant.OwnedParticipant)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class Participant(ABC):
+    def __init__(self, owned_info: proto_participant.OwnedParticipant) -&gt; None:
+        self._info = owned_info.info
+        self._ffi_handle = FfiHandle(owned_info.handle.id)
+
+    @property
+    @abstractmethod
+    def track_publications(self) -&gt; Mapping[str, TrackPublication]:
+        &#34;&#34;&#34;
+        A dictionary of track publications associated with the participant.
+        &#34;&#34;&#34;
+        ...
+
+    @property
+    def sid(self) -&gt; str:
+        return self._info.sid
+
+    @property
+    def name(self) -&gt; str:
+        return self._info.name
+
+    @property
+    def identity(self) -&gt; str:
+        return self._info.identity
+
+    @property
+    def metadata(self) -&gt; str:
+        return self._info.metadata
+
+    @property
+    def attributes(self) -&gt; dict[str, str]:
+        &#34;&#34;&#34;Custom attributes associated with the participant.&#34;&#34;&#34;
+        return dict(self._info.attributes)
+
+    @property
+    def kind(self) -&gt; proto_participant.ParticipantKind.ValueType:
+        &#34;&#34;&#34;Participant&#39;s kind (e.g., regular participant, ingress, egress, sip, agent).&#34;&#34;&#34;
+        return self._info.kind
+
+    @property
+    def disconnect_reason(
+        self,
+    ) -&gt; Optional[proto_participant.DisconnectReason.ValueType]:
+        &#34;&#34;&#34;Reason for the participant&#39;s disconnection.
+
+        Returns one of DisconnectReasons or None if the participant isn&#39;t disconnected. Common reasons are:
+        - CLIENT_INITIATED - the client initiated the disconnect
+        - DUPLICATE_IDENTITY - another participant with the same identity has joined the room
+        - SERVER_SHUTDOWN - the server instance is shutting down
+        - PARTICIPANT_REMOVED - RoomService.RemoveParticipant was called
+        - ROOM_DELETED - RoomService.DeleteRoom was called
+        - STATE_MISMATCH - the client is attempting to resume a session, but server is not aware of it
+        - JOIN_FAILURE - client was unable to connect fully
+
+        When dialing a participant via SIP, you may see the following reasons:
+        - USER_UNAVAILABLE - SIP callee did not respond in time
+        - USER_REJECTED - SIP callee rejected the call (busy)
+        - SIP_TRUNK_FAILURE - SIP protocol failure or unexpected response
+        &#34;&#34;&#34;
+        if self._info.disconnect_reason == proto_participant.DisconnectReason.UNKNOWN_REASON:
+            return None
+        return self._info.disconnect_reason</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.participant.LocalParticipant" href="#livekit.rtc.participant.LocalParticipant">LocalParticipant</a></li>
+<li><a title="livekit.rtc.participant.RemoteParticipant" href="#livekit.rtc.participant.RemoteParticipant">RemoteParticipant</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.participant.Participant.attributes"><code class="name">prop <span class="ident">attributes</span> : dict[str, str]</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def attributes(self) -&gt; dict[str, str]:
+    &#34;&#34;&#34;Custom attributes associated with the participant.&#34;&#34;&#34;
+    return dict(self._info.attributes)</code></pre>
+</details>
+<div class="desc"><p>Custom attributes associated with the participant.</p></div>
+</dd>
+<dt id="livekit.rtc.participant.Participant.disconnect_reason"><code class="name">prop <span class="ident">disconnect_reason</span> : Optional[proto_participant.DisconnectReason.ValueType]</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def disconnect_reason(
+    self,
+) -&gt; Optional[proto_participant.DisconnectReason.ValueType]:
+    &#34;&#34;&#34;Reason for the participant&#39;s disconnection.
+
+    Returns one of DisconnectReasons or None if the participant isn&#39;t disconnected. Common reasons are:
+    - CLIENT_INITIATED - the client initiated the disconnect
+    - DUPLICATE_IDENTITY - another participant with the same identity has joined the room
+    - SERVER_SHUTDOWN - the server instance is shutting down
+    - PARTICIPANT_REMOVED - RoomService.RemoveParticipant was called
+    - ROOM_DELETED - RoomService.DeleteRoom was called
+    - STATE_MISMATCH - the client is attempting to resume a session, but server is not aware of it
+    - JOIN_FAILURE - client was unable to connect fully
+
+    When dialing a participant via SIP, you may see the following reasons:
+    - USER_UNAVAILABLE - SIP callee did not respond in time
+    - USER_REJECTED - SIP callee rejected the call (busy)
+    - SIP_TRUNK_FAILURE - SIP protocol failure or unexpected response
+    &#34;&#34;&#34;
+    if self._info.disconnect_reason == proto_participant.DisconnectReason.UNKNOWN_REASON:
+        return None
+    return self._info.disconnect_reason</code></pre>
+</details>
+<div class="desc"><p>Reason for the participant's disconnection.</p>
+<p>Returns one of DisconnectReasons or None if the participant isn't disconnected. Common reasons are:
+- CLIENT_INITIATED - the client initiated the disconnect
+- DUPLICATE_IDENTITY - another participant with the same identity has joined the room
+- SERVER_SHUTDOWN - the server instance is shutting down
+- PARTICIPANT_REMOVED - RoomService.RemoveParticipant was called
+- ROOM_DELETED - RoomService.DeleteRoom was called
+- STATE_MISMATCH - the client is attempting to resume a session, but server is not aware of it
+- JOIN_FAILURE - client was unable to connect fully</p>
+<p>When dialing a participant via SIP, you may see the following reasons:
+- USER_UNAVAILABLE - SIP callee did not respond in time
+- USER_REJECTED - SIP callee rejected the call (busy)
+- SIP_TRUNK_FAILURE - SIP protocol failure or unexpected response</p></div>
+</dd>
+<dt id="livekit.rtc.participant.Participant.identity"><code class="name">prop <span class="ident">identity</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def identity(self) -&gt; str:
+    return self._info.identity</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.participant.Participant.kind"><code class="name">prop <span class="ident">kind</span> : proto_participant.ParticipantKind.ValueType</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def kind(self) -&gt; proto_participant.ParticipantKind.ValueType:
+    &#34;&#34;&#34;Participant&#39;s kind (e.g., regular participant, ingress, egress, sip, agent).&#34;&#34;&#34;
+    return self._info.kind</code></pre>
+</details>
+<div class="desc"><p>Participant's kind (e.g., regular participant, ingress, egress, sip, agent).</p></div>
+</dd>
+<dt id="livekit.rtc.participant.Participant.metadata"><code class="name">prop <span class="ident">metadata</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def metadata(self) -&gt; str:
+    return self._info.metadata</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.participant.Participant.name"><code class="name">prop <span class="ident">name</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def name(self) -&gt; str:
+    return self._info.name</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.participant.Participant.sid"><code class="name">prop <span class="ident">sid</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def sid(self) -&gt; str:
+    return self._info.sid</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.participant.Participant.track_publications"><code class="name">prop <span class="ident">track_publications</span> : Mapping[str, TrackPublication]</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+@abstractmethod
+def track_publications(self) -&gt; Mapping[str, TrackPublication]:
+    &#34;&#34;&#34;
+    A dictionary of track publications associated with the participant.
+    &#34;&#34;&#34;
+    ...</code></pre>
+</details>
+<div class="desc"><p>A dictionary of track publications associated with the participant.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.participant.ParticipantTrackPermission"><code class="flex name class">
+<span>class <span class="ident">ParticipantTrackPermission</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>google._upb._message.Message</li>
+<li>google.protobuf.message.Message</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.rtc.participant.ParticipantTrackPermission.DESCRIPTOR"><code class="name">var <span class="ident">DESCRIPTOR</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.participant.PublishDTMFError"><code class="flex name class">
+<span>class <span class="ident">PublishDTMFError</span></span>
+<span>(</span><span>message: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class PublishDTMFError(Exception):
+    def __init__(self, message: str) -&gt; None:
+        self.message = message</code></pre>
+</details>
+<div class="desc"><p>Common base class for all non-exit exceptions.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.Exception</li>
+<li>builtins.BaseException</li>
+</ul>
+</dd>
+<dt id="livekit.rtc.participant.PublishDataError"><code class="flex name class">
+<span>class <span class="ident">PublishDataError</span></span>
+<span>(</span><span>message: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class PublishDataError(Exception):
+    def __init__(self, message: str) -&gt; None:
+        self.message = message</code></pre>
+</details>
+<div class="desc"><p>Common base class for all non-exit exceptions.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.Exception</li>
+<li>builtins.BaseException</li>
+</ul>
+</dd>
+<dt id="livekit.rtc.participant.PublishTrackError"><code class="flex name class">
+<span>class <span class="ident">PublishTrackError</span></span>
+<span>(</span><span>message: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class PublishTrackError(Exception):
+    def __init__(self, message: str) -&gt; None:
+        self.message = message</code></pre>
+</details>
+<div class="desc"><p>Common base class for all non-exit exceptions.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.Exception</li>
+<li>builtins.BaseException</li>
+</ul>
+</dd>
+<dt id="livekit.rtc.participant.PublishTranscriptionError"><code class="flex name class">
+<span>class <span class="ident">PublishTranscriptionError</span></span>
+<span>(</span><span>message: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class PublishTranscriptionError(Exception):
+    def __init__(self, message: str) -&gt; None:
+        self.message = message</code></pre>
+</details>
+<div class="desc"><p>Common base class for all non-exit exceptions.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.Exception</li>
+<li>builtins.BaseException</li>
+</ul>
+</dd>
+<dt id="livekit.rtc.participant.RemoteParticipant"><code class="flex name class">
+<span>class <span class="ident">RemoteParticipant</span></span>
+<span>(</span><span>owned_info: proto_participant.OwnedParticipant)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class RemoteParticipant(Participant):
+    def __init__(self, owned_info: proto_participant.OwnedParticipant) -&gt; None:
+        super().__init__(owned_info)
+        self._track_publications: dict[str, RemoteTrackPublication] = {}  # type: ignore
+
+    @property
+    def track_publications(self) -&gt; Mapping[str, RemoteTrackPublication]:
+        &#34;&#34;&#34;
+        A dictionary of track publications associated with the participant.
+        &#34;&#34;&#34;
+        return self._track_publications
+
+    def __repr__(self) -&gt; str:
+        return f&#34;rtc.RemoteParticipant(sid={self.sid}, identity={self.identity}, name={self.name})&#34;</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.participant.Participant" href="#livekit.rtc.participant.Participant">Participant</a></li>
+<li>abc.ABC</li>
+</ul>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.participant.Participant" href="#livekit.rtc.participant.Participant">Participant</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.participant.Participant.attributes" href="#livekit.rtc.participant.Participant.attributes">attributes</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.disconnect_reason" href="#livekit.rtc.participant.Participant.disconnect_reason">disconnect_reason</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.kind" href="#livekit.rtc.participant.Participant.kind">kind</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.track_publications" href="#livekit.rtc.participant.Participant.track_publications">track_publications</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.rtc.participant.RpcMethodInvocationResponseRequest"><code class="flex name class">
+<span>class <span class="ident">RpcMethodInvocationResponseRequest</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>google._upb._message.Message</li>
+<li>google.protobuf.message.Message</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.rtc.participant.RpcMethodInvocationResponseRequest.DESCRIPTOR"><code class="name">var <span class="ident">DESCRIPTOR</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.participant.TrackPublishOptions"><code class="flex name class">
+<span>class <span class="ident">TrackPublishOptions</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>google._upb._message.Message</li>
+<li>google.protobuf.message.Message</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.rtc.participant.TrackPublishOptions.DESCRIPTOR"><code class="name">var <span class="ident">DESCRIPTOR</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.participant.TranscriptionSegment"><code class="flex name class">
+<span>class <span class="ident">ProtoTranscriptionSegment</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>A ProtocolMessage</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>google._upb._message.Message</li>
+<li>google.protobuf.message.Message</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.rtc.participant.TranscriptionSegment.DESCRIPTOR"><code class="name">var <span class="ident">DESCRIPTOR</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.participant.UnpublishTrackError"><code class="flex name class">
+<span>class <span class="ident">UnpublishTrackError</span></span>
+<span>(</span><span>message: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class UnpublishTrackError(Exception):
+    def __init__(self, message: str) -&gt; None:
+        self.message = message</code></pre>
+</details>
+<div class="desc"><p>Common base class for all non-exit exceptions.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.Exception</li>
+<li>builtins.BaseException</li>
+</ul>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.rtc" href="index.html">livekit.rtc</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.rtc.participant.LocalParticipant" href="#livekit.rtc.participant.LocalParticipant">LocalParticipant</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.participant.LocalParticipant.perform_rpc" href="#livekit.rtc.participant.LocalParticipant.perform_rpc">perform_rpc</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.publish_data" href="#livekit.rtc.participant.LocalParticipant.publish_data">publish_data</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.publish_dtmf" href="#livekit.rtc.participant.LocalParticipant.publish_dtmf">publish_dtmf</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.publish_track" href="#livekit.rtc.participant.LocalParticipant.publish_track">publish_track</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.publish_transcription" href="#livekit.rtc.participant.LocalParticipant.publish_transcription">publish_transcription</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.register_rpc_method" href="#livekit.rtc.participant.LocalParticipant.register_rpc_method">register_rpc_method</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.send_file" href="#livekit.rtc.participant.LocalParticipant.send_file">send_file</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.send_text" href="#livekit.rtc.participant.LocalParticipant.send_text">send_text</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.set_attributes" href="#livekit.rtc.participant.LocalParticipant.set_attributes">set_attributes</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.set_metadata" href="#livekit.rtc.participant.LocalParticipant.set_metadata">set_metadata</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.set_name" href="#livekit.rtc.participant.LocalParticipant.set_name">set_name</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.set_track_subscription_permissions" href="#livekit.rtc.participant.LocalParticipant.set_track_subscription_permissions">set_track_subscription_permissions</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.stream_bytes" href="#livekit.rtc.participant.LocalParticipant.stream_bytes">stream_bytes</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.stream_text" href="#livekit.rtc.participant.LocalParticipant.stream_text">stream_text</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.unpublish_track" href="#livekit.rtc.participant.LocalParticipant.unpublish_track">unpublish_track</a></code></li>
+<li><code><a title="livekit.rtc.participant.LocalParticipant.unregister_rpc_method" href="#livekit.rtc.participant.LocalParticipant.unregister_rpc_method">unregister_rpc_method</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.Participant" href="#livekit.rtc.participant.Participant">Participant</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.rtc.participant.Participant.attributes" href="#livekit.rtc.participant.Participant.attributes">attributes</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.disconnect_reason" href="#livekit.rtc.participant.Participant.disconnect_reason">disconnect_reason</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.identity" href="#livekit.rtc.participant.Participant.identity">identity</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.kind" href="#livekit.rtc.participant.Participant.kind">kind</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.metadata" href="#livekit.rtc.participant.Participant.metadata">metadata</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.name" href="#livekit.rtc.participant.Participant.name">name</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.sid" href="#livekit.rtc.participant.Participant.sid">sid</a></code></li>
+<li><code><a title="livekit.rtc.participant.Participant.track_publications" href="#livekit.rtc.participant.Participant.track_publications">track_publications</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.ParticipantTrackPermission" href="#livekit.rtc.participant.ParticipantTrackPermission">ParticipantTrackPermission</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.participant.ParticipantTrackPermission.DESCRIPTOR" href="#livekit.rtc.participant.ParticipantTrackPermission.DESCRIPTOR">DESCRIPTOR</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.PublishDTMFError" href="#livekit.rtc.participant.PublishDTMFError">PublishDTMFError</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.PublishDataError" href="#livekit.rtc.participant.PublishDataError">PublishDataError</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.PublishTrackError" href="#livekit.rtc.participant.PublishTrackError">PublishTrackError</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.PublishTranscriptionError" href="#livekit.rtc.participant.PublishTranscriptionError">PublishTranscriptionError</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.RemoteParticipant" href="#livekit.rtc.participant.RemoteParticipant">RemoteParticipant</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.RpcMethodInvocationResponseRequest" href="#livekit.rtc.participant.RpcMethodInvocationResponseRequest">RpcMethodInvocationResponseRequest</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.participant.RpcMethodInvocationResponseRequest.DESCRIPTOR" href="#livekit.rtc.participant.RpcMethodInvocationResponseRequest.DESCRIPTOR">DESCRIPTOR</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.TrackPublishOptions" href="#livekit.rtc.participant.TrackPublishOptions">TrackPublishOptions</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.participant.TrackPublishOptions.DESCRIPTOR" href="#livekit.rtc.participant.TrackPublishOptions.DESCRIPTOR">DESCRIPTOR</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.TranscriptionSegment" href="#livekit.rtc.participant.TranscriptionSegment">TranscriptionSegment</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.participant.TranscriptionSegment.DESCRIPTOR" href="#livekit.rtc.participant.TranscriptionSegment.DESCRIPTOR">DESCRIPTOR</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.participant.UnpublishTrackError" href="#livekit.rtc.participant.UnpublishTrackError">UnpublishTrackError</a></code></h4>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

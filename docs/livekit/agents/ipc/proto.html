@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.ipc.proto API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.ipc.proto</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.ipc.proto.Exiting"><code class="flex name class">
+<span>class <span class="ident">Exiting</span></span>
+<span>(</span><span>reason: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class Exiting:
+    &#34;&#34;&#34;sent by the subprocess to the main process to indicate that it is exiting&#34;&#34;&#34;
+
+    MSG_ID: ClassVar[int] = 6
+    reason: str = &#34;&#34;
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_string(b, self.reason)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.reason = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"><p>sent by the subprocess to the main process to indicate that it is exiting</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.Exiting.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.Exiting.reason"><code class="name">var <span class="ident">reason</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.Exiting.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.reason = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.Exiting.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_string(b, self.reason)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceRequest"><code class="flex name class">
+<span>class <span class="ident">InferenceRequest</span></span>
+<span>(</span><span>method: str = '', request_id: str = '', data: bytes = b'')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class InferenceRequest:
+    &#34;&#34;&#34;sent by a subprocess to the main process to request inference&#34;&#34;&#34;
+
+    MSG_ID: ClassVar[int] = 7
+    method: str = &#34;&#34;
+    request_id: str = &#34;&#34;
+    data: bytes = b&#34;&#34;
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_string(b, self.method)
+        channel.write_string(b, self.request_id)
+        channel.write_bytes(b, self.data)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.method = channel.read_string(b)
+        self.request_id = channel.read_string(b)
+        self.data = channel.read_bytes(b)</code></pre>
+</details>
+<div class="desc"><p>sent by a subprocess to the main process to request inference</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.InferenceRequest.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceRequest.data"><code class="name">var <span class="ident">data</span> : bytes</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceRequest.method"><code class="name">var <span class="ident">method</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceRequest.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.InferenceRequest.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.method = channel.read_string(b)
+    self.request_id = channel.read_string(b)
+    self.data = channel.read_bytes(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceRequest.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_string(b, self.method)
+    channel.write_string(b, self.request_id)
+    channel.write_bytes(b, self.data)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceResponse"><code class="flex name class">
+<span>class <span class="ident">InferenceResponse</span></span>
+<span>(</span><span>request_id: str = '', data: bytes | None = None, error: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class InferenceResponse:
+    &#34;&#34;&#34;response to an InferenceRequest&#34;&#34;&#34;
+
+    MSG_ID: ClassVar[int] = 8
+    request_id: str = &#34;&#34;
+    data: bytes | None = None
+    error: str = &#34;&#34;
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_string(b, self.request_id)
+        channel.write_bool(b, self.data is not None)
+        if self.data is not None:
+            channel.write_bytes(b, self.data)
+        channel.write_string(b, self.error)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.request_id = channel.read_string(b)
+        has_data = channel.read_bool(b)
+        if has_data:
+            self.data = channel.read_bytes(b)
+        self.error = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"><p>response to an InferenceRequest</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.InferenceResponse.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceResponse.data"><code class="name">var <span class="ident">data</span> : bytes | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceResponse.error"><code class="name">var <span class="ident">error</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceResponse.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.InferenceResponse.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.request_id = channel.read_string(b)
+    has_data = channel.read_bool(b)
+    if has_data:
+        self.data = channel.read_bytes(b)
+    self.error = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InferenceResponse.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_string(b, self.request_id)
+    channel.write_bool(b, self.data is not None)
+    if self.data is not None:
+        channel.write_bytes(b, self.data)
+    channel.write_string(b, self.error)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeRequest"><code class="flex name class">
+<span>class <span class="ident">InitializeRequest</span></span>
+<span>(</span><span>asyncio_debug: bool = False,<br>ping_interval: float = 0,<br>ping_timeout: float = 0,<br>high_ping_threshold: float = 0,<br>http_proxy: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class InitializeRequest:
+    &#34;&#34;&#34;sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc&#34;&#34;&#34;  # noqa: E501
+
+    MSG_ID: ClassVar[int] = 0
+
+    asyncio_debug: bool = False
+    ping_interval: float = 0
+    ping_timeout: float = 0  # if no response, process is considered dead
+    # if ping is higher than this, process is considered unresponsive
+    high_ping_threshold: float = 0
+    http_proxy: str = &#34;&#34;  # empty = None
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_bool(b, self.asyncio_debug)
+        channel.write_float(b, self.ping_interval)
+        channel.write_float(b, self.ping_timeout)
+        channel.write_float(b, self.high_ping_threshold)
+        channel.write_string(b, self.http_proxy)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.asyncio_debug = channel.read_bool(b)
+        self.ping_interval = channel.read_float(b)
+        self.ping_timeout = channel.read_float(b)
+        self.high_ping_threshold = channel.read_float(b)
+        self.http_proxy = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"><p>sent by the main process to the subprocess to initialize it. this is going to call initialize_process_fnc</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.InitializeRequest.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeRequest.asyncio_debug"><code class="name">var <span class="ident">asyncio_debug</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeRequest.high_ping_threshold"><code class="name">var <span class="ident">high_ping_threshold</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeRequest.http_proxy"><code class="name">var <span class="ident">http_proxy</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeRequest.ping_interval"><code class="name">var <span class="ident">ping_interval</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeRequest.ping_timeout"><code class="name">var <span class="ident">ping_timeout</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.InitializeRequest.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.asyncio_debug = channel.read_bool(b)
+    self.ping_interval = channel.read_float(b)
+    self.ping_timeout = channel.read_float(b)
+    self.high_ping_threshold = channel.read_float(b)
+    self.http_proxy = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeRequest.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_bool(b, self.asyncio_debug)
+    channel.write_float(b, self.ping_interval)
+    channel.write_float(b, self.ping_timeout)
+    channel.write_float(b, self.high_ping_threshold)
+    channel.write_string(b, self.http_proxy)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeResponse"><code class="flex name class">
+<span>class <span class="ident">InitializeResponse</span></span>
+<span>(</span><span>error: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class InitializeResponse:
+    &#34;&#34;&#34;mark the process as initialized&#34;&#34;&#34;
+
+    MSG_ID: ClassVar[int] = 1
+    error: str = &#34;&#34;
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_string(b, self.error)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.error = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"><p>mark the process as initialized</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.InitializeResponse.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeResponse.error"><code class="name">var <span class="ident">error</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.InitializeResponse.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.error = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.InitializeResponse.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_string(b, self.error)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.PingRequest"><code class="flex name class">
+<span>class <span class="ident">PingRequest</span></span>
+<span>(</span><span>timestamp: int = 0)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class PingRequest:
+    &#34;&#34;&#34;sent by the main process to the subprocess to check if it is still alive&#34;&#34;&#34;
+
+    MSG_ID: ClassVar[int] = 2
+    timestamp: int = 0
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_long(b, self.timestamp)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.timestamp = channel.read_long(b)</code></pre>
+</details>
+<div class="desc"><p>sent by the main process to the subprocess to check if it is still alive</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.PingRequest.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.PingRequest.timestamp"><code class="name">var <span class="ident">timestamp</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.PingRequest.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.timestamp = channel.read_long(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.PingRequest.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_long(b, self.timestamp)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.PongResponse"><code class="flex name class">
+<span>class <span class="ident">PongResponse</span></span>
+<span>(</span><span>last_timestamp: int = 0, timestamp: int = 0)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class PongResponse:
+    &#34;&#34;&#34;response to a PingRequest&#34;&#34;&#34;
+
+    MSG_ID: ClassVar[int] = 3
+    last_timestamp: int = 0
+    timestamp: int = 0
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_long(b, self.last_timestamp)
+        channel.write_long(b, self.timestamp)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.last_timestamp = channel.read_long(b)
+        self.timestamp = channel.read_long(b)</code></pre>
+</details>
+<div class="desc"><p>response to a PingRequest</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.PongResponse.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.PongResponse.last_timestamp"><code class="name">var <span class="ident">last_timestamp</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.PongResponse.timestamp"><code class="name">var <span class="ident">timestamp</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.PongResponse.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.last_timestamp = channel.read_long(b)
+    self.timestamp = channel.read_long(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.PongResponse.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_long(b, self.last_timestamp)
+    channel.write_long(b, self.timestamp)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.ShutdownRequest"><code class="flex name class">
+<span>class <span class="ident">ShutdownRequest</span></span>
+<span>(</span><span>reason: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class ShutdownRequest:
+    &#34;&#34;&#34;sent by the main process to the subprocess to indicate that it should shut down
+    gracefully. the subprocess will follow with a ExitInfo message&#34;&#34;&#34;
+
+    MSG_ID: ClassVar[int] = 5
+    reason: str = &#34;&#34;
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_string(b, self.reason)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.reason = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"><p>sent by the main process to the subprocess to indicate that it should shut down
+gracefully. the subprocess will follow with a ExitInfo message</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.ShutdownRequest.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.ShutdownRequest.reason"><code class="name">var <span class="ident">reason</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.ShutdownRequest.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.reason = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.ShutdownRequest.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_string(b, self.reason)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.StartJobRequest"><code class="flex name class">
+<span>class <span class="ident">StartJobRequest</span></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class StartJobRequest:
+    &#34;&#34;&#34;sent by the main process to the subprocess to start a job, the subprocess will only
+    receive this message if the process is fully initialized (after sending a InitializeResponse).&#34;&#34;&#34;  # noqa: E501
+
+    MSG_ID: ClassVar[int] = 4
+    running_job: RunningJobInfo = field(init=False)
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        accept_args = self.running_job.accept_arguments
+        channel.write_bytes(b, self.running_job.job.SerializeToString())
+        channel.write_string(b, accept_args.name)
+        channel.write_string(b, accept_args.identity)
+        channel.write_string(b, accept_args.metadata)
+        channel.write_string(b, self.running_job.url)
+        channel.write_string(b, self.running_job.token)
+        channel.write_string(b, self.running_job.worker_id)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        job = agent.Job()
+        job.ParseFromString(channel.read_bytes(b))
+        self.running_job = RunningJobInfo(
+            accept_arguments=JobAcceptArguments(
+                name=channel.read_string(b),
+                identity=channel.read_string(b),
+                metadata=channel.read_string(b),
+            ),
+            job=job,
+            url=channel.read_string(b),
+            token=channel.read_string(b),
+            worker_id=channel.read_string(b),
+        )</code></pre>
+</details>
+<div class="desc"><p>sent by the main process to the subprocess to start a job, the subprocess will only
+receive this message if the process is fully initialized (after sending a InitializeResponse).</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.StartJobRequest.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.StartJobRequest.running_job"><code class="name">var <span class="ident">running_job</span> : <a title="livekit.agents.job.RunningJobInfo" href="../job.html#livekit.agents.job.RunningJobInfo">RunningJobInfo</a></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.StartJobRequest.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    job = agent.Job()
+    job.ParseFromString(channel.read_bytes(b))
+    self.running_job = RunningJobInfo(
+        accept_arguments=JobAcceptArguments(
+            name=channel.read_string(b),
+            identity=channel.read_string(b),
+            metadata=channel.read_string(b),
+        ),
+        job=job,
+        url=channel.read_string(b),
+        token=channel.read_string(b),
+        worker_id=channel.read_string(b),
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.StartJobRequest.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    accept_args = self.running_job.accept_arguments
+    channel.write_bytes(b, self.running_job.job.SerializeToString())
+    channel.write_string(b, accept_args.name)
+    channel.write_string(b, accept_args.identity)
+    channel.write_string(b, accept_args.metadata)
+    channel.write_string(b, self.running_job.url)
+    channel.write_string(b, self.running_job.token)
+    channel.write_string(b, self.running_job.worker_id)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.TracingRequest"><code class="flex name class">
+<span>class <span class="ident">TracingRequest</span></span>
+<span>(</span><span>request_id: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class TracingRequest:
+    MSG_ID: ClassVar[int] = 9
+    request_id: str = &#34;&#34;
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_string(b, self.request_id)
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.request_id = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"><p>TracingRequest(request_id: 'str' = '')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.TracingRequest.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.TracingRequest.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.TracingRequest.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.request_id = channel.read_string(b)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.TracingRequest.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_string(b, self.request_id)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.ipc.proto.TracingResponse"><code class="flex name class">
+<span>class <span class="ident">TracingResponse</span></span>
+<span>(</span><span>request_id: str = '', info: dict[str, Any] = &lt;factory&gt;)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class TracingResponse:
+    MSG_ID: ClassVar[int] = 10
+    request_id: str = &#34;&#34;
+    info: dict[str, Any] = field(default_factory=dict)
+
+    def write(self, b: io.BytesIO) -&gt; None:
+        channel.write_string(b, self.request_id)
+        channel.write_bytes(b, pickle.dumps(self.info))
+
+    def read(self, b: io.BytesIO) -&gt; None:
+        self.request_id = channel.read_string(b)
+        self.info = pickle.loads(channel.read_bytes(b))</code></pre>
+</details>
+<div class="desc"><p>TracingResponse(request_id: 'str' = '', info: 'dict[str, Any]' = <factory>)</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.TracingResponse.MSG_ID"><code class="name">var <span class="ident">MSG_ID</span> : ClassVar[int]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.TracingResponse.info"><code class="name">var <span class="ident">info</span> : dict[str, typing.Any]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.TracingResponse.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.proto.TracingResponse.read"><code class="name flex">
+<span>def <span class="ident">read</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def read(self, b: io.BytesIO) -&gt; None:
+    self.request_id = channel.read_string(b)
+    self.info = pickle.loads(channel.read_bytes(b))</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.proto.TracingResponse.write"><code class="name flex">
+<span>def <span class="ident">write</span></span>(<span>self, b: io.BytesIO) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def write(self, b: io.BytesIO) -&gt; None:
+    channel.write_string(b, self.request_id)
+    channel.write_bytes(b, pickle.dumps(self.info))</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.ipc" href="index.html">livekit.agents.ipc</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.Exiting" href="#livekit.agents.ipc.proto.Exiting">Exiting</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.ipc.proto.Exiting.MSG_ID" href="#livekit.agents.ipc.proto.Exiting.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.Exiting.read" href="#livekit.agents.ipc.proto.Exiting.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.Exiting.reason" href="#livekit.agents.ipc.proto.Exiting.reason">reason</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.Exiting.write" href="#livekit.agents.ipc.proto.Exiting.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.InferenceRequest" href="#livekit.agents.ipc.proto.InferenceRequest">InferenceRequest</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.ipc.proto.InferenceRequest.MSG_ID" href="#livekit.agents.ipc.proto.InferenceRequest.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceRequest.data" href="#livekit.agents.ipc.proto.InferenceRequest.data">data</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceRequest.method" href="#livekit.agents.ipc.proto.InferenceRequest.method">method</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceRequest.read" href="#livekit.agents.ipc.proto.InferenceRequest.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceRequest.request_id" href="#livekit.agents.ipc.proto.InferenceRequest.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceRequest.write" href="#livekit.agents.ipc.proto.InferenceRequest.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.InferenceResponse" href="#livekit.agents.ipc.proto.InferenceResponse">InferenceResponse</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.ipc.proto.InferenceResponse.MSG_ID" href="#livekit.agents.ipc.proto.InferenceResponse.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceResponse.data" href="#livekit.agents.ipc.proto.InferenceResponse.data">data</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceResponse.error" href="#livekit.agents.ipc.proto.InferenceResponse.error">error</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceResponse.read" href="#livekit.agents.ipc.proto.InferenceResponse.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceResponse.request_id" href="#livekit.agents.ipc.proto.InferenceResponse.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InferenceResponse.write" href="#livekit.agents.ipc.proto.InferenceResponse.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.InitializeRequest" href="#livekit.agents.ipc.proto.InitializeRequest">InitializeRequest</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.ipc.proto.InitializeRequest.MSG_ID" href="#livekit.agents.ipc.proto.InitializeRequest.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeRequest.asyncio_debug" href="#livekit.agents.ipc.proto.InitializeRequest.asyncio_debug">asyncio_debug</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeRequest.high_ping_threshold" href="#livekit.agents.ipc.proto.InitializeRequest.high_ping_threshold">high_ping_threshold</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeRequest.http_proxy" href="#livekit.agents.ipc.proto.InitializeRequest.http_proxy">http_proxy</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeRequest.ping_interval" href="#livekit.agents.ipc.proto.InitializeRequest.ping_interval">ping_interval</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeRequest.ping_timeout" href="#livekit.agents.ipc.proto.InitializeRequest.ping_timeout">ping_timeout</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeRequest.read" href="#livekit.agents.ipc.proto.InitializeRequest.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeRequest.write" href="#livekit.agents.ipc.proto.InitializeRequest.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.InitializeResponse" href="#livekit.agents.ipc.proto.InitializeResponse">InitializeResponse</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.ipc.proto.InitializeResponse.MSG_ID" href="#livekit.agents.ipc.proto.InitializeResponse.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeResponse.error" href="#livekit.agents.ipc.proto.InitializeResponse.error">error</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeResponse.read" href="#livekit.agents.ipc.proto.InitializeResponse.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.InitializeResponse.write" href="#livekit.agents.ipc.proto.InitializeResponse.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.PingRequest" href="#livekit.agents.ipc.proto.PingRequest">PingRequest</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.ipc.proto.PingRequest.MSG_ID" href="#livekit.agents.ipc.proto.PingRequest.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.PingRequest.read" href="#livekit.agents.ipc.proto.PingRequest.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.PingRequest.timestamp" href="#livekit.agents.ipc.proto.PingRequest.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.PingRequest.write" href="#livekit.agents.ipc.proto.PingRequest.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.PongResponse" href="#livekit.agents.ipc.proto.PongResponse">PongResponse</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.ipc.proto.PongResponse.MSG_ID" href="#livekit.agents.ipc.proto.PongResponse.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.PongResponse.last_timestamp" href="#livekit.agents.ipc.proto.PongResponse.last_timestamp">last_timestamp</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.PongResponse.read" href="#livekit.agents.ipc.proto.PongResponse.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.PongResponse.timestamp" href="#livekit.agents.ipc.proto.PongResponse.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.PongResponse.write" href="#livekit.agents.ipc.proto.PongResponse.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.ShutdownRequest" href="#livekit.agents.ipc.proto.ShutdownRequest">ShutdownRequest</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.ipc.proto.ShutdownRequest.MSG_ID" href="#livekit.agents.ipc.proto.ShutdownRequest.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.ShutdownRequest.read" href="#livekit.agents.ipc.proto.ShutdownRequest.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.ShutdownRequest.reason" href="#livekit.agents.ipc.proto.ShutdownRequest.reason">reason</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.ShutdownRequest.write" href="#livekit.agents.ipc.proto.ShutdownRequest.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.StartJobRequest" href="#livekit.agents.ipc.proto.StartJobRequest">StartJobRequest</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.ipc.proto.StartJobRequest.MSG_ID" href="#livekit.agents.ipc.proto.StartJobRequest.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.StartJobRequest.read" href="#livekit.agents.ipc.proto.StartJobRequest.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.StartJobRequest.running_job" href="#livekit.agents.ipc.proto.StartJobRequest.running_job">running_job</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.StartJobRequest.write" href="#livekit.agents.ipc.proto.StartJobRequest.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.TracingRequest" href="#livekit.agents.ipc.proto.TracingRequest">TracingRequest</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.ipc.proto.TracingRequest.MSG_ID" href="#livekit.agents.ipc.proto.TracingRequest.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.TracingRequest.read" href="#livekit.agents.ipc.proto.TracingRequest.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.TracingRequest.request_id" href="#livekit.agents.ipc.proto.TracingRequest.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.TracingRequest.write" href="#livekit.agents.ipc.proto.TracingRequest.write">write</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.ipc.proto.TracingResponse" href="#livekit.agents.ipc.proto.TracingResponse">TracingResponse</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.ipc.proto.TracingResponse.MSG_ID" href="#livekit.agents.ipc.proto.TracingResponse.MSG_ID">MSG_ID</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.TracingResponse.info" href="#livekit.agents.ipc.proto.TracingResponse.info">info</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.TracingResponse.read" href="#livekit.agents.ipc.proto.TracingResponse.read">read</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.TracingResponse.request_id" href="#livekit.agents.ipc.proto.TracingResponse.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.ipc.proto.TracingResponse.write" href="#livekit.agents.ipc.proto.TracingResponse.write">write</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

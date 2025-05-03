@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.rtc.video_frame API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.rtc.video_frame</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.rtc.video_frame.VideoFrame"><code class="flex name class">
+<span>class <span class="ident">VideoFrame</span></span>
+<span>(</span><span>width: int, height: int, type: int, data: bytes | bytearray | memoryview)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class VideoFrame:
+    &#34;&#34;&#34;
+    Represents a video frame with associated metadata and pixel data.
+
+    This class provides methods to access video frame properties such as width, height,
+    and pixel format, as well as methods for manipulating and converting video frames.
+    &#34;&#34;&#34;
+
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        type: proto_video.VideoBufferType.ValueType,
+        data: Union[bytes, bytearray, memoryview],
+    ) -&gt; None:
+        &#34;&#34;&#34;
+        Initializes a new VideoFrame instance.
+
+        Args:
+            width (int): The width of the video frame in pixels.
+            height (int): The height of the video frame in pixels.
+            type (proto_video.VideoBufferType.ValueType): The format type of the video frame data
+                (e.g., RGBA, BGRA, RGB24, etc.).
+            data (Union[bytes, bytearray, memoryview]): The raw pixel data for the video frame.
+        &#34;&#34;&#34;
+        self._width = width
+        self._height = height
+        self._type = type
+        self._data = bytearray(data)
+
+    @property
+    def width(self) -&gt; int:
+        &#34;&#34;&#34;
+        Returns the width of the video frame in pixels.
+
+        Returns:
+            int: The width of the video frame.
+        &#34;&#34;&#34;
+        return self._width
+
+    @property
+    def height(self) -&gt; int:
+        &#34;&#34;&#34;
+        Returns the height of the video frame in pixels.
+
+        Returns:
+            int: The height of the video frame.
+        &#34;&#34;&#34;
+        return self._height
+
+    @property
+    def type(self) -&gt; proto_video.VideoBufferType.ValueType:
+        &#34;&#34;&#34;
+        Returns the height of the video frame in pixels.
+
+        Returns:
+            int: The height of the video frame.
+        &#34;&#34;&#34;
+        return self._type
+
+    @property
+    def data(self) -&gt; memoryview:
+        &#34;&#34;&#34;
+        Returns a memoryview of the raw pixel data for the video frame.
+
+        Returns:
+            memoryview: The raw pixel data of the video frame as a memoryview object.
+        &#34;&#34;&#34;
+        return memoryview(self._data)
+
+    @staticmethod
+    def _from_owned_info(owned_info: proto_video.OwnedVideoBuffer) -&gt; &#34;VideoFrame&#34;:
+        info = owned_info.info
+        data_len = _get_plane_length(info.type, info.width, info.height)
+        cdata = (ctypes.c_uint8 * data_len).from_address(info.data_ptr)
+        data = bytearray(cdata)
+        frame = VideoFrame(
+            width=info.width,
+            height=info.height,
+            type=info.type,
+            data=data,
+        )
+        FfiHandle(owned_info.handle.id)
+        return frame
+
+    def _proto_info(self) -&gt; proto_video.VideoBufferInfo:
+        info = proto_video.VideoBufferInfo()
+        addr = get_address(self.data)
+        info.components.extend(_get_plane_infos(addr, self.type, self.width, self.height))
+        info.width = self.width
+        info.height = self.height
+        info.type = self.type
+        info.data_ptr = addr
+        info.stride = 0
+
+        if self.type in [
+            proto_video.VideoBufferType.ARGB,
+            proto_video.VideoBufferType.ABGR,
+            proto_video.VideoBufferType.RGBA,
+            proto_video.VideoBufferType.BGRA,
+        ]:
+            info.stride = self.width * 4
+        elif self.type == proto_video.VideoBufferType.RGB24:
+            info.stride = self.width * 3
+
+        return info
+
+    def get_plane(self, plane_nth: int) -&gt; Optional[memoryview]:
+        &#34;&#34;&#34;
+        Returns the memoryview of a specific plane in the video frame, based on its index.
+
+        Some video formats (e.g., I420, NV12) contain multiple planes (Y, U, V channels).
+        This method allows access to individual planes by index.
+
+        Args:
+            plane_nth (int): The index of the plane to retrieve (starting from 0).
+
+        Returns:
+            Optional[memoryview]: A memoryview of the specified plane&#39;s data, or None if
+            the index is out of bounds for the format.
+        &#34;&#34;&#34;
+        plane_infos = _get_plane_infos(get_address(self.data), self.type, self.width, self.height)
+        if plane_nth &gt;= len(plane_infos):
+            return None
+
+        plane_info = plane_infos[plane_nth]
+        cdata = (ctypes.c_uint8 * plane_info.size).from_address(plane_info.data_ptr)
+        return memoryview(cdata)
+
+    def convert(
+        self, type: proto_video.VideoBufferType.ValueType, *, flip_y: bool = False
+    ) -&gt; &#34;VideoFrame&#34;:
+        &#34;&#34;&#34;
+        Converts the current video frame to a different format type, optionally flipping
+        the frame vertically.
+
+        Args:
+            type (proto_video.VideoBufferType.ValueType): The target format type to convert to
+                (e.g., RGBA, I420).
+            flip_y (bool, optional): If True, the frame will be flipped vertically. Defaults to False.
+
+        Returns:
+            VideoFrame: A new VideoFrame object in the specified format.
+
+        Raises:
+            Exception: If the conversion isn&#39;t supported.
+
+        Example:
+            Convert a frame from RGBA to I420 format:
+
+            &gt;&gt;&gt; frame = VideoFrame(width=1920, height=1080, type=proto_video.VideoBufferType.RGBA, data=raw_data)
+            &gt;&gt;&gt; converted_frame = frame.convert(proto_video.VideoBufferType.I420)
+            &gt;&gt;&gt; print(converted_frame.type)
+            VideoBufferType.I420
+
+        Example:
+            Convert a frame from BGRA to RGB24 format and flip it vertically:
+
+            &gt;&gt;&gt; frame = VideoFrame(width=1280, height=720, type=proto_video.VideoBufferType.BGRA, data=raw_data)
+            &gt;&gt;&gt; converted_frame = frame.convert(proto_video.VideoBufferType.RGB24, flip_y=True)
+            &gt;&gt;&gt; print(converted_frame.type)
+            VideoBufferType.RGB24
+            &gt;&gt;&gt; print(converted_frame.width, converted_frame.height)
+            1280 720
+        &#34;&#34;&#34;
+        req = proto.FfiRequest()
+        req.video_convert.flip_y = flip_y
+        req.video_convert.dst_type = type
+        req.video_convert.buffer.CopyFrom(self._proto_info())
+        resp = FfiClient.instance.request(req)
+        if resp.video_convert.error:
+            raise Exception(resp.video_convert.error)
+
+        return VideoFrame._from_owned_info(resp.video_convert.buffer)
+
+    def __repr__(self) -&gt; str:
+        return f&#34;rtc.VideoFrame(width={self.width}, height={self.height}, type={proto_video.VideoBufferType.Name(self.type)})&#34;
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, *_: Any):
+        from pydantic_core import core_schema
+        import base64
+
+        def validate_video_frame(value: Any) -&gt; &#34;VideoFrame&#34;:
+            if isinstance(value, VideoFrame):
+                return value
+
+            if isinstance(value, tuple):
+                value = value[0]
+
+            if isinstance(value, dict):
+                return VideoFrame(
+                    width=value[&#34;width&#34;],
+                    height=value[&#34;height&#34;],
+                    type=proto_video.VideoBufferType.Value(value[&#34;type&#34;]),
+                    data=base64.b64decode(value[&#34;data&#34;]),
+                )
+
+            raise TypeError(&#34;Invalid type for VideoFrame&#34;)
+
+        return core_schema.json_or_python_schema(
+            json_schema=core_schema.chain_schema(
+                [
+                    core_schema.model_fields_schema(
+                        {
+                            &#34;width&#34;: core_schema.model_field(core_schema.int_schema()),
+                            &#34;height&#34;: core_schema.model_field(core_schema.int_schema()),
+                            &#34;type&#34;: core_schema.model_field(core_schema.str_schema()),
+                            &#34;data&#34;: core_schema.model_field(core_schema.str_schema()),
+                        },
+                    ),
+                    core_schema.no_info_plain_validator_function(validate_video_frame),
+                ]
+            ),
+            python_schema=core_schema.no_info_plain_validator_function(validate_video_frame),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                lambda instance: {
+                    &#34;width&#34;: instance.width,
+                    &#34;height&#34;: instance.height,
+                    &#34;type&#34;: proto_video.VideoBufferType.Name(instance.type),
+                    &#34;data&#34;: base64.b64encode(instance.data).decode(&#34;utf-8&#34;),
+                }
+            ),
+        )</code></pre>
+</details>
+<div class="desc"><p>Represents a video frame with associated metadata and pixel data.</p>
+<p>This class provides methods to access video frame properties such as width, height,
+and pixel format, as well as methods for manipulating and converting video frames.</p>
+<p>Initializes a new VideoFrame instance.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>width</code></strong> :&ensp;<code>int</code></dt>
+<dd>The width of the video frame in pixels.</dd>
+<dt><strong><code>height</code></strong> :&ensp;<code>int</code></dt>
+<dd>The height of the video frame in pixels.</dd>
+<dt><strong><code>type</code></strong> :&ensp;<code>proto_video.VideoBufferType.ValueType</code></dt>
+<dd>The format type of the video frame data
+(e.g., RGBA, BGRA, RGB24, etc.).</dd>
+<dt><strong><code>data</code></strong> :&ensp;<code>Union[bytes, bytearray, memoryview]</code></dt>
+<dd>The raw pixel data for the video frame.</dd>
+</dl></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.video_frame.VideoFrame.data"><code class="name">prop <span class="ident">data</span> : memoryview</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def data(self) -&gt; memoryview:
+    &#34;&#34;&#34;
+    Returns a memoryview of the raw pixel data for the video frame.
+
+    Returns:
+        memoryview: The raw pixel data of the video frame as a memoryview object.
+    &#34;&#34;&#34;
+    return memoryview(self._data)</code></pre>
+</details>
+<div class="desc"><p>Returns a memoryview of the raw pixel data for the video frame.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>memoryview</code></dt>
+<dd>The raw pixel data of the video frame as a memoryview object.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.video_frame.VideoFrame.height"><code class="name">prop <span class="ident">height</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def height(self) -&gt; int:
+    &#34;&#34;&#34;
+    Returns the height of the video frame in pixels.
+
+    Returns:
+        int: The height of the video frame.
+    &#34;&#34;&#34;
+    return self._height</code></pre>
+</details>
+<div class="desc"><p>Returns the height of the video frame in pixels.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>int</code></dt>
+<dd>The height of the video frame.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.video_frame.VideoFrame.type"><code class="name">prop <span class="ident">type</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def type(self) -&gt; proto_video.VideoBufferType.ValueType:
+    &#34;&#34;&#34;
+    Returns the height of the video frame in pixels.
+
+    Returns:
+        int: The height of the video frame.
+    &#34;&#34;&#34;
+    return self._type</code></pre>
+</details>
+<div class="desc"><p>Returns the height of the video frame in pixels.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>int</code></dt>
+<dd>The height of the video frame.</dd>
+</dl></div>
+</dd>
+<dt id="livekit.rtc.video_frame.VideoFrame.width"><code class="name">prop <span class="ident">width</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def width(self) -&gt; int:
+    &#34;&#34;&#34;
+    Returns the width of the video frame in pixels.
+
+    Returns:
+        int: The width of the video frame.
+    &#34;&#34;&#34;
+    return self._width</code></pre>
+</details>
+<div class="desc"><p>Returns the width of the video frame in pixels.</p>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>int</code></dt>
+<dd>The width of the video frame.</dd>
+</dl></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.video_frame.VideoFrame.convert"><code class="name flex">
+<span>def <span class="ident">convert</span></span>(<span>self, type: int, *, flip_y: bool = False) ‑> <a title="livekit.rtc.video_frame.VideoFrame" href="#livekit.rtc.video_frame.VideoFrame">VideoFrame</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def convert(
+    self, type: proto_video.VideoBufferType.ValueType, *, flip_y: bool = False
+) -&gt; &#34;VideoFrame&#34;:
+    &#34;&#34;&#34;
+    Converts the current video frame to a different format type, optionally flipping
+    the frame vertically.
+
+    Args:
+        type (proto_video.VideoBufferType.ValueType): The target format type to convert to
+            (e.g., RGBA, I420).
+        flip_y (bool, optional): If True, the frame will be flipped vertically. Defaults to False.
+
+    Returns:
+        VideoFrame: A new VideoFrame object in the specified format.
+
+    Raises:
+        Exception: If the conversion isn&#39;t supported.
+
+    Example:
+        Convert a frame from RGBA to I420 format:
+
+        &gt;&gt;&gt; frame = VideoFrame(width=1920, height=1080, type=proto_video.VideoBufferType.RGBA, data=raw_data)
+        &gt;&gt;&gt; converted_frame = frame.convert(proto_video.VideoBufferType.I420)
+        &gt;&gt;&gt; print(converted_frame.type)
+        VideoBufferType.I420
+
+    Example:
+        Convert a frame from BGRA to RGB24 format and flip it vertically:
+
+        &gt;&gt;&gt; frame = VideoFrame(width=1280, height=720, type=proto_video.VideoBufferType.BGRA, data=raw_data)
+        &gt;&gt;&gt; converted_frame = frame.convert(proto_video.VideoBufferType.RGB24, flip_y=True)
+        &gt;&gt;&gt; print(converted_frame.type)
+        VideoBufferType.RGB24
+        &gt;&gt;&gt; print(converted_frame.width, converted_frame.height)
+        1280 720
+    &#34;&#34;&#34;
+    req = proto.FfiRequest()
+    req.video_convert.flip_y = flip_y
+    req.video_convert.dst_type = type
+    req.video_convert.buffer.CopyFrom(self._proto_info())
+    resp = FfiClient.instance.request(req)
+    if resp.video_convert.error:
+        raise Exception(resp.video_convert.error)
+
+    return VideoFrame._from_owned_info(resp.video_convert.buffer)</code></pre>
+</details>
+<div class="desc"><p>Converts the current video frame to a different format type, optionally flipping
+the frame vertically.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>type</code></strong> :&ensp;<code>proto_video.VideoBufferType.ValueType</code></dt>
+<dd>The target format type to convert to
+(e.g., RGBA, I420).</dd>
+<dt><strong><code>flip_y</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>If True, the frame will be flipped vertically. Defaults to False.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code><a title="livekit.rtc.video_frame.VideoFrame" href="#livekit.rtc.video_frame.VideoFrame">VideoFrame</a></code></dt>
+<dd>A new VideoFrame object in the specified format.</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code>Exception</code></dt>
+<dd>If the conversion isn't supported.</dd>
+</dl>
+<h2 id="example">Example</h2>
+<p>Convert a frame from RGBA to I420 format:</p>
+<pre><code class="language-python-repl">&gt;&gt;&gt; frame = VideoFrame(width=1920, height=1080, type=proto_video.VideoBufferType.RGBA, data=raw_data)
+&gt;&gt;&gt; converted_frame = frame.convert(proto_video.VideoBufferType.I420)
+&gt;&gt;&gt; print(converted_frame.type)
+VideoBufferType.I420
+</code></pre>
+<h2 id="example_1">Example</h2>
+<p>Convert a frame from BGRA to RGB24 format and flip it vertically:</p>
+<pre><code class="language-python-repl">&gt;&gt;&gt; frame = VideoFrame(width=1280, height=720, type=proto_video.VideoBufferType.BGRA, data=raw_data)
+&gt;&gt;&gt; converted_frame = frame.convert(proto_video.VideoBufferType.RGB24, flip_y=True)
+&gt;&gt;&gt; print(converted_frame.type)
+VideoBufferType.RGB24
+&gt;&gt;&gt; print(converted_frame.width, converted_frame.height)
+1280 720
+</code></pre></div>
+</dd>
+<dt id="livekit.rtc.video_frame.VideoFrame.get_plane"><code class="name flex">
+<span>def <span class="ident">get_plane</span></span>(<span>self, plane_nth: int) ‑> memoryview | None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def get_plane(self, plane_nth: int) -&gt; Optional[memoryview]:
+    &#34;&#34;&#34;
+    Returns the memoryview of a specific plane in the video frame, based on its index.
+
+    Some video formats (e.g., I420, NV12) contain multiple planes (Y, U, V channels).
+    This method allows access to individual planes by index.
+
+    Args:
+        plane_nth (int): The index of the plane to retrieve (starting from 0).
+
+    Returns:
+        Optional[memoryview]: A memoryview of the specified plane&#39;s data, or None if
+        the index is out of bounds for the format.
+    &#34;&#34;&#34;
+    plane_infos = _get_plane_infos(get_address(self.data), self.type, self.width, self.height)
+    if plane_nth &gt;= len(plane_infos):
+        return None
+
+    plane_info = plane_infos[plane_nth]
+    cdata = (ctypes.c_uint8 * plane_info.size).from_address(plane_info.data_ptr)
+    return memoryview(cdata)</code></pre>
+</details>
+<div class="desc"><p>Returns the memoryview of a specific plane in the video frame, based on its index.</p>
+<p>Some video formats (e.g., I420, NV12) contain multiple planes (Y, U, V channels).
+This method allows access to individual planes by index.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>plane_nth</code></strong> :&ensp;<code>int</code></dt>
+<dd>The index of the plane to retrieve (starting from 0).</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>Optional[memoryview]</code></dt>
+<dd>A memoryview of the specified plane's data, or None if</dd>
+</dl>
+<p>the index is out of bounds for the format.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.rtc" href="index.html">livekit.rtc</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.rtc.video_frame.VideoFrame" href="#livekit.rtc.video_frame.VideoFrame">VideoFrame</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.rtc.video_frame.VideoFrame.convert" href="#livekit.rtc.video_frame.VideoFrame.convert">convert</a></code></li>
+<li><code><a title="livekit.rtc.video_frame.VideoFrame.data" href="#livekit.rtc.video_frame.VideoFrame.data">data</a></code></li>
+<li><code><a title="livekit.rtc.video_frame.VideoFrame.get_plane" href="#livekit.rtc.video_frame.VideoFrame.get_plane">get_plane</a></code></li>
+<li><code><a title="livekit.rtc.video_frame.VideoFrame.height" href="#livekit.rtc.video_frame.VideoFrame.height">height</a></code></li>
+<li><code><a title="livekit.rtc.video_frame.VideoFrame.type" href="#livekit.rtc.video_frame.VideoFrame.type">type</a></code></li>
+<li><code><a title="livekit.rtc.video_frame.VideoFrame.width" href="#livekit.rtc.video_frame.VideoFrame.width">width</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

@@ -17,10 +17,10 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     metrics,
+    function_tool,
+    MetricsCollectedEvent,
+    get_job_context
 )
-from livekit.agents.job import get_job_context
-from livekit.agents.llm import function_tool
-from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
 
 # uncomment to enable Krisp BVC noise cancellation, currently supported on Linux and MacOS

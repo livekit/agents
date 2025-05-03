@@ -17,8 +17,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     llm,
+    ModelSettings
 )
-from livekit.agents.voice.agent import ModelSettings
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()

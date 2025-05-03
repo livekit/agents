@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.ipc.job_proc_executor API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.ipc.job_proc_executor</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.ipc.job_proc_executor.ProcJobExecutor"><code class="flex name class">
+<span>class <span class="ident">ProcJobExecutor</span></span>
+<span>(</span><span>*,<br>initialize_process_fnc: Callable[[JobProcess], Any],<br>job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],<br>inference_executor: InferenceExecutor | None,<br>initialize_timeout: float,<br>close_timeout: float,<br>memory_warn_mb: float,<br>memory_limit_mb: float,<br>ping_interval: float,<br>ping_timeout: float,<br>high_ping_threshold: float,<br>http_proxy: str | None,<br>mp_ctx: BaseContext,<br>loop: asyncio.AbstractEventLoop)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ProcJobExecutor(SupervisedProc):
+    def __init__(
+        self,
+        *,
+        initialize_process_fnc: Callable[[JobProcess], Any],
+        job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
+        inference_executor: InferenceExecutor | None,
+        initialize_timeout: float,
+        close_timeout: float,
+        memory_warn_mb: float,
+        memory_limit_mb: float,
+        ping_interval: float,
+        ping_timeout: float,
+        high_ping_threshold: float,
+        http_proxy: str | None,
+        mp_ctx: BaseContext,
+        loop: asyncio.AbstractEventLoop,
+    ) -&gt; None:
+        super().__init__(
+            initialize_timeout=initialize_timeout,
+            close_timeout=close_timeout,
+            memory_warn_mb=memory_warn_mb,
+            memory_limit_mb=memory_limit_mb,
+            ping_interval=ping_interval,
+            ping_timeout=ping_timeout,
+            high_ping_threshold=high_ping_threshold,
+            mp_ctx=mp_ctx,
+            loop=loop,
+            http_proxy=http_proxy,
+        )
+
+        self._user_args: Any | None = None
+        self._job_status: JobStatus | None = None
+        self._running_job: RunningJobInfo | None = None
+        self._initialize_process_fnc = initialize_process_fnc
+        self._job_entrypoint_fnc = job_entrypoint_fnc
+        self._inference_executor = inference_executor
+        self._inference_tasks: list[asyncio.Task[None]] = []
+        self._id = shortuuid(&#34;PCEXEC_&#34;)
+        self._tracing_requests = dict[str, asyncio.Future[proto.TracingResponse]]()
+
+    @property
+    def id(self) -&gt; str:
+        return self._id
+
+    async def tracing_info(self) -&gt; dict[str, Any]:
+        if not self.started:
+            raise RuntimeError(&#34;process not started&#34;)
+
+        tracing_req = proto.TracingRequest()
+        tracing_req.request_id = shortuuid(&#34;trace_req_&#34;)
+        fut = asyncio.Future[proto.TracingResponse]()
+        self._tracing_requests[tracing_req.request_id] = fut
+        await channel.asend_message(self._pch, tracing_req)
+        resp = await fut
+        return resp.info
+
+    @property
+    def status(self) -&gt; JobStatus:
+        if self._job_status is None:
+            raise RuntimeError(&#34;job status not available&#34;)
+
+        return self._job_status
+
+    @property
+    def user_arguments(self) -&gt; Any | None:
+        return self._user_args
+
+    @user_arguments.setter
+    def user_arguments(self, value: Any | None) -&gt; None:
+        self._user_args = value
+
+    @property
+    def running_job(self) -&gt; RunningJobInfo | None:
+        return self._running_job
+
+    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -&gt; mp.Process:
+        proc_args = ProcStartArgs(
+            initialize_process_fnc=self._initialize_process_fnc,
+            job_entrypoint_fnc=self._job_entrypoint_fnc,
+            log_cch=log_cch,
+            mp_cch=cch,
+            user_arguments=self._user_args,
+        )
+
+        return self._mp_ctx.Process(  # type: ignore
+            target=proc_main,
+            args=(proc_args,),
+            name=&#34;job_proc&#34;,
+        )
+
+    @log_exceptions(logger=logger)
+    async def _main_task(self, ipc_ch: aio.ChanReceiver[channel.Message]) -&gt; None:
+        try:
+            async for msg in ipc_ch:
+                if isinstance(msg, proto.InferenceRequest):
+                    self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+                elif isinstance(msg, proto.TracingResponse):
+                    fut = self._tracing_requests.pop(msg.request_id)
+                    with contextlib.suppress(asyncio.InvalidStateError):
+                        fut.set_result(msg)
+        finally:
+            await aio.cancel_and_wait(*self._inference_tasks)
+
+    @log_exceptions(logger=logger)
+    async def _supervise_task(self) -&gt; None:
+        try:
+            await super()._supervise_task()
+        finally:
+            self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
+
+    async def _do_inference_task(self, inf_req: proto.InferenceRequest) -&gt; None:
+        if self._inference_executor is None:
+            logger.warning(&#34;inference request received but no inference executor&#34;)
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceResponse(
+                    request_id=inf_req.request_id, error=&#34;no inference executor&#34;
+                ),
+            )
+            return
+
+        try:
+            inf_res = await self._inference_executor.do_inference(inf_req.method, inf_req.data)
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),
+            )
+        except Exception as e:
+            await channel.asend_message(
+                self._pch,
+                proto.InferenceResponse(request_id=inf_req.request_id, error=str(e)),
+            )
+
+    async def launch_job(self, info: RunningJobInfo) -&gt; None:
+        &#34;&#34;&#34;start/assign a job to the process&#34;&#34;&#34;
+        if self._running_job is not None:
+            raise RuntimeError(&#34;process already has a running job&#34;)
+
+        if not self._initialize_fut.done():
+            raise RuntimeError(&#34;process not initialized&#34;)
+
+        self._job_status = JobStatus.RUNNING
+        self._running_job = info
+
+        start_req = proto.StartJobRequest()
+        start_req.running_job = info
+        await channel.asend_message(self._pch, start_req)
+
+    def logging_extra(self):
+        extra = super().logging_extra()
+
+        if self._running_job:
+            extra[&#34;job_id&#34;] = self._running_job.job.id
+
+        return extra</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.ipc.supervised_proc.SupervisedProc" href="supervised_proc.html#livekit.agents.ipc.supervised_proc.SupervisedProc">SupervisedProc</a></li>
+<li>abc.ABC</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.id"><code class="name">prop <span class="ident">id</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def id(self) -&gt; str:
+    return self._id</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.running_job"><code class="name">prop <span class="ident">running_job</span> : RunningJobInfo | None</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def running_job(self) -&gt; RunningJobInfo | None:
+    return self._running_job</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.status"><code class="name">prop <span class="ident">status</span> : JobStatus</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def status(self) -&gt; JobStatus:
+    if self._job_status is None:
+        raise RuntimeError(&#34;job status not available&#34;)
+
+    return self._job_status</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.user_arguments"><code class="name">prop <span class="ident">user_arguments</span> : Any | None</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def user_arguments(self) -&gt; Any | None:
+    return self._user_args</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.launch_job"><code class="name flex">
+<span>async def <span class="ident">launch_job</span></span>(<span>self, info: RunningJobInfo) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def launch_job(self, info: RunningJobInfo) -&gt; None:
+    &#34;&#34;&#34;start/assign a job to the process&#34;&#34;&#34;
+    if self._running_job is not None:
+        raise RuntimeError(&#34;process already has a running job&#34;)
+
+    if not self._initialize_fut.done():
+        raise RuntimeError(&#34;process not initialized&#34;)
+
+    self._job_status = JobStatus.RUNNING
+    self._running_job = info
+
+    start_req = proto.StartJobRequest()
+    start_req.running_job = info
+    await channel.asend_message(self._pch, start_req)</code></pre>
+</details>
+<div class="desc"><p>start/assign a job to the process</p></div>
+</dd>
+<dt id="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.logging_extra"><code class="name flex">
+<span>def <span class="ident">logging_extra</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def logging_extra(self):
+    extra = super().logging_extra()
+
+    if self._running_job:
+        extra[&#34;job_id&#34;] = self._running_job.job.id
+
+    return extra</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.tracing_info"><code class="name flex">
+<span>async def <span class="ident">tracing_info</span></span>(<span>self) ‑> dict[str, typing.Any]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def tracing_info(self) -&gt; dict[str, Any]:
+    if not self.started:
+        raise RuntimeError(&#34;process not started&#34;)
+
+    tracing_req = proto.TracingRequest()
+    tracing_req.request_id = shortuuid(&#34;trace_req_&#34;)
+    fut = asyncio.Future[proto.TracingResponse]()
+    self._tracing_requests[tracing_req.request_id] = fut
+    await channel.asend_message(self._pch, tracing_req)
+    resp = await fut
+    return resp.info</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.agents.ipc.supervised_proc.SupervisedProc" href="supervised_proc.html#livekit.agents.ipc.supervised_proc.SupervisedProc">SupervisedProc</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.agents.ipc.supervised_proc.SupervisedProc.aclose" href="supervised_proc.html#livekit.agents.ipc.supervised_proc.SupervisedProc.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.ipc.supervised_proc.SupervisedProc.initialize" href="supervised_proc.html#livekit.agents.ipc.supervised_proc.SupervisedProc.initialize">initialize</a></code></li>
+<li><code><a title="livekit.agents.ipc.supervised_proc.SupervisedProc.join" href="supervised_proc.html#livekit.agents.ipc.supervised_proc.SupervisedProc.join">join</a></code></li>
+<li><code><a title="livekit.agents.ipc.supervised_proc.SupervisedProc.kill" href="supervised_proc.html#livekit.agents.ipc.supervised_proc.SupervisedProc.kill">kill</a></code></li>
+<li><code><a title="livekit.agents.ipc.supervised_proc.SupervisedProc.start" href="supervised_proc.html#livekit.agents.ipc.supervised_proc.SupervisedProc.start">start</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.ipc" href="index.html">livekit.agents.ipc</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.ipc.job_proc_executor.ProcJobExecutor" href="#livekit.agents.ipc.job_proc_executor.ProcJobExecutor">ProcJobExecutor</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.id" href="#livekit.agents.ipc.job_proc_executor.ProcJobExecutor.id">id</a></code></li>
+<li><code><a title="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.launch_job" href="#livekit.agents.ipc.job_proc_executor.ProcJobExecutor.launch_job">launch_job</a></code></li>
+<li><code><a title="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.logging_extra" href="#livekit.agents.ipc.job_proc_executor.ProcJobExecutor.logging_extra">logging_extra</a></code></li>
+<li><code><a title="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.running_job" href="#livekit.agents.ipc.job_proc_executor.ProcJobExecutor.running_job">running_job</a></code></li>
+<li><code><a title="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.status" href="#livekit.agents.ipc.job_proc_executor.ProcJobExecutor.status">status</a></code></li>
+<li><code><a title="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.tracing_info" href="#livekit.agents.ipc.job_proc_executor.ProcJobExecutor.tracing_info">tracing_info</a></code></li>
+<li><code><a title="livekit.agents.ipc.job_proc_executor.ProcJobExecutor.user_arguments" href="#livekit.agents.ipc.job_proc_executor.ProcJobExecutor.user_arguments">user_arguments</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

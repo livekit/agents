@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.metrics.base API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.metrics.base</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.metrics.base.EOUMetrics"><code class="flex name class">
+<span>class <span class="ident">EOUMetrics</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class EOUMetrics(BaseModel):
+    type: Literal[&#34;eou_metrics&#34;] = &#34;eou_metrics&#34;
+    timestamp: float
+    end_of_utterance_delay: float
+    &#34;&#34;&#34;Amount of time between the end of speech from VAD and the decision to end the user&#39;s turn.&#34;&#34;&#34;
+
+    transcription_delay: float
+    &#34;&#34;&#34;Time taken to obtain the transcript after the end of the user&#39;s speech.&#34;&#34;&#34;
+
+    on_user_turn_completed_delay: float
+    &#34;&#34;&#34;Time taken to invoke the user&#39;s `Agent.on_user_turn_completed` callback.&#34;&#34;&#34;
+
+    speech_id: str | None = None</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.metrics.base.EOUMetrics.end_of_utterance_delay"><code class="name">var <span class="ident">end_of_utterance_delay</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Amount of time between the end of speech from VAD and the decision to end the user's turn.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.EOUMetrics.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.EOUMetrics.on_user_turn_completed_delay"><code class="name">var <span class="ident">on_user_turn_completed_delay</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Time taken to invoke the user's <code>Agent.on_user_turn_completed</code> callback.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.EOUMetrics.speech_id"><code class="name">var <span class="ident">speech_id</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.EOUMetrics.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.EOUMetrics.transcription_delay"><code class="name">var <span class="ident">transcription_delay</span> : float</code></dt>
+<dd>
+<div class="desc"><p>Time taken to obtain the transcript after the end of the user's speech.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.EOUMetrics.type"><code class="name">var <span class="ident">type</span> : Literal['eou_metrics']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics"><code class="flex name class">
+<span>class <span class="ident">LLMMetrics</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LLMMetrics(BaseModel):
+    type: Literal[&#34;llm_metrics&#34;] = &#34;llm_metrics&#34;
+    label: str
+    request_id: str
+    timestamp: float
+    duration: float
+    ttft: float
+    cancelled: bool
+    completion_tokens: int
+    prompt_tokens: int
+    prompt_cached_tokens: int
+    total_tokens: int
+    tokens_per_second: float
+    speech_id: str | None = None</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.metrics.base.LLMMetrics.cancelled"><code class="name">var <span class="ident">cancelled</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.completion_tokens"><code class="name">var <span class="ident">completion_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.duration"><code class="name">var <span class="ident">duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.label"><code class="name">var <span class="ident">label</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.prompt_cached_tokens"><code class="name">var <span class="ident">prompt_cached_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.prompt_tokens"><code class="name">var <span class="ident">prompt_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.speech_id"><code class="name">var <span class="ident">speech_id</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.tokens_per_second"><code class="name">var <span class="ident">tokens_per_second</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.total_tokens"><code class="name">var <span class="ident">total_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.ttft"><code class="name">var <span class="ident">ttft</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.LLMMetrics.type"><code class="name">var <span class="ident">type</span> : Literal['llm_metrics']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.metrics.base.STTMetrics"><code class="flex name class">
+<span>class <span class="ident">STTMetrics</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class STTMetrics(BaseModel):
+    type: Literal[&#34;stt_metrics&#34;] = &#34;stt_metrics&#34;
+    label: str
+    request_id: str
+    timestamp: float
+    duration: float
+    &#34;&#34;&#34;The request duration in seconds, 0.0 if the STT is streaming.&#34;&#34;&#34;
+    audio_duration: float
+    &#34;&#34;&#34;The duration of the pushed audio in seconds.&#34;&#34;&#34;
+    streamed: bool
+    &#34;&#34;&#34;Whether the STT is streaming (e.g using websocket).&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.metrics.base.STTMetrics.audio_duration"><code class="name">var <span class="ident">audio_duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The duration of the pushed audio in seconds.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.STTMetrics.duration"><code class="name">var <span class="ident">duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The request duration in seconds, 0.0 if the STT is streaming.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.STTMetrics.label"><code class="name">var <span class="ident">label</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.STTMetrics.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.STTMetrics.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.STTMetrics.streamed"><code class="name">var <span class="ident">streamed</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether the STT is streaming (e.g using websocket).</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.STTMetrics.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.STTMetrics.type"><code class="name">var <span class="ident">type</span> : Literal['stt_metrics']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics"><code class="flex name class">
+<span>class <span class="ident">TTSMetrics</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TTSMetrics(BaseModel):
+    type: Literal[&#34;tts_metrics&#34;] = &#34;tts_metrics&#34;
+    label: str
+    request_id: str
+    timestamp: float
+    ttfb: float
+    duration: float
+    audio_duration: float
+    cancelled: bool
+    characters_count: int
+    streamed: bool
+    speech_id: str | None = None</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.metrics.base.TTSMetrics.audio_duration"><code class="name">var <span class="ident">audio_duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.cancelled"><code class="name">var <span class="ident">cancelled</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.characters_count"><code class="name">var <span class="ident">characters_count</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.duration"><code class="name">var <span class="ident">duration</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.label"><code class="name">var <span class="ident">label</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.request_id"><code class="name">var <span class="ident">request_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.speech_id"><code class="name">var <span class="ident">speech_id</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.streamed"><code class="name">var <span class="ident">streamed</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.ttfb"><code class="name">var <span class="ident">ttfb</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.TTSMetrics.type"><code class="name">var <span class="ident">type</span> : Literal['tts_metrics']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.metrics.base.VADMetrics"><code class="flex name class">
+<span>class <span class="ident">VADMetrics</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class VADMetrics(BaseModel):
+    type: Literal[&#34;vad_metrics&#34;] = &#34;vad_metrics&#34;
+    label: str
+    timestamp: float
+    idle_time: float
+    inference_duration_total: float
+    inference_count: int</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.metrics.base.VADMetrics.idle_time"><code class="name">var <span class="ident">idle_time</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.VADMetrics.inference_count"><code class="name">var <span class="ident">inference_count</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.VADMetrics.inference_duration_total"><code class="name">var <span class="ident">inference_duration_total</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.VADMetrics.label"><code class="name">var <span class="ident">label</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.VADMetrics.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.VADMetrics.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.metrics.base.VADMetrics.type"><code class="name">var <span class="ident">type</span> : Literal['vad_metrics']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.metrics" href="index.html">livekit.agents.metrics</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.metrics.base.EOUMetrics" href="#livekit.agents.metrics.base.EOUMetrics">EOUMetrics</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.metrics.base.EOUMetrics.end_of_utterance_delay" href="#livekit.agents.metrics.base.EOUMetrics.end_of_utterance_delay">end_of_utterance_delay</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.EOUMetrics.model_config" href="#livekit.agents.metrics.base.EOUMetrics.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.EOUMetrics.on_user_turn_completed_delay" href="#livekit.agents.metrics.base.EOUMetrics.on_user_turn_completed_delay">on_user_turn_completed_delay</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.EOUMetrics.speech_id" href="#livekit.agents.metrics.base.EOUMetrics.speech_id">speech_id</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.EOUMetrics.timestamp" href="#livekit.agents.metrics.base.EOUMetrics.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.EOUMetrics.transcription_delay" href="#livekit.agents.metrics.base.EOUMetrics.transcription_delay">transcription_delay</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.EOUMetrics.type" href="#livekit.agents.metrics.base.EOUMetrics.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.metrics.base.LLMMetrics" href="#livekit.agents.metrics.base.LLMMetrics">LLMMetrics</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.cancelled" href="#livekit.agents.metrics.base.LLMMetrics.cancelled">cancelled</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.completion_tokens" href="#livekit.agents.metrics.base.LLMMetrics.completion_tokens">completion_tokens</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.duration" href="#livekit.agents.metrics.base.LLMMetrics.duration">duration</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.label" href="#livekit.agents.metrics.base.LLMMetrics.label">label</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.model_config" href="#livekit.agents.metrics.base.LLMMetrics.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.prompt_cached_tokens" href="#livekit.agents.metrics.base.LLMMetrics.prompt_cached_tokens">prompt_cached_tokens</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.prompt_tokens" href="#livekit.agents.metrics.base.LLMMetrics.prompt_tokens">prompt_tokens</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.request_id" href="#livekit.agents.metrics.base.LLMMetrics.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.speech_id" href="#livekit.agents.metrics.base.LLMMetrics.speech_id">speech_id</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.timestamp" href="#livekit.agents.metrics.base.LLMMetrics.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.tokens_per_second" href="#livekit.agents.metrics.base.LLMMetrics.tokens_per_second">tokens_per_second</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.total_tokens" href="#livekit.agents.metrics.base.LLMMetrics.total_tokens">total_tokens</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.ttft" href="#livekit.agents.metrics.base.LLMMetrics.ttft">ttft</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.LLMMetrics.type" href="#livekit.agents.metrics.base.LLMMetrics.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.metrics.base.STTMetrics" href="#livekit.agents.metrics.base.STTMetrics">STTMetrics</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.metrics.base.STTMetrics.audio_duration" href="#livekit.agents.metrics.base.STTMetrics.audio_duration">audio_duration</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.STTMetrics.duration" href="#livekit.agents.metrics.base.STTMetrics.duration">duration</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.STTMetrics.label" href="#livekit.agents.metrics.base.STTMetrics.label">label</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.STTMetrics.model_config" href="#livekit.agents.metrics.base.STTMetrics.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.STTMetrics.request_id" href="#livekit.agents.metrics.base.STTMetrics.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.STTMetrics.streamed" href="#livekit.agents.metrics.base.STTMetrics.streamed">streamed</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.STTMetrics.timestamp" href="#livekit.agents.metrics.base.STTMetrics.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.STTMetrics.type" href="#livekit.agents.metrics.base.STTMetrics.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.metrics.base.TTSMetrics" href="#livekit.agents.metrics.base.TTSMetrics">TTSMetrics</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.audio_duration" href="#livekit.agents.metrics.base.TTSMetrics.audio_duration">audio_duration</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.cancelled" href="#livekit.agents.metrics.base.TTSMetrics.cancelled">cancelled</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.characters_count" href="#livekit.agents.metrics.base.TTSMetrics.characters_count">characters_count</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.duration" href="#livekit.agents.metrics.base.TTSMetrics.duration">duration</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.label" href="#livekit.agents.metrics.base.TTSMetrics.label">label</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.model_config" href="#livekit.agents.metrics.base.TTSMetrics.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.request_id" href="#livekit.agents.metrics.base.TTSMetrics.request_id">request_id</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.speech_id" href="#livekit.agents.metrics.base.TTSMetrics.speech_id">speech_id</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.streamed" href="#livekit.agents.metrics.base.TTSMetrics.streamed">streamed</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.timestamp" href="#livekit.agents.metrics.base.TTSMetrics.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.ttfb" href="#livekit.agents.metrics.base.TTSMetrics.ttfb">ttfb</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.TTSMetrics.type" href="#livekit.agents.metrics.base.TTSMetrics.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.metrics.base.VADMetrics" href="#livekit.agents.metrics.base.VADMetrics">VADMetrics</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.metrics.base.VADMetrics.idle_time" href="#livekit.agents.metrics.base.VADMetrics.idle_time">idle_time</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.VADMetrics.inference_count" href="#livekit.agents.metrics.base.VADMetrics.inference_count">inference_count</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.VADMetrics.inference_duration_total" href="#livekit.agents.metrics.base.VADMetrics.inference_duration_total">inference_duration_total</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.VADMetrics.label" href="#livekit.agents.metrics.base.VADMetrics.label">label</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.VADMetrics.model_config" href="#livekit.agents.metrics.base.VADMetrics.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.VADMetrics.timestamp" href="#livekit.agents.metrics.base.VADMetrics.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.metrics.base.VADMetrics.type" href="#livekit.agents.metrics.base.VADMetrics.type">type</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

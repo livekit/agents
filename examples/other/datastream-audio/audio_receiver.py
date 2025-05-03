@@ -5,7 +5,7 @@ import sys
 from dotenv import load_dotenv
 
 from livekit import api, rtc
-from livekit.agents.voice.avatar import AudioSegmentEnd, DataStreamAudioReceiver
+from livekit.agents.avatar import AudioSegmentEnd, DataStreamAudioReceiver
 
 load_dotenv()
 

@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.llm.llm API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.llm.llm</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.llm.llm.ChatChunk"><code class="flex name class">
+<span>class <span class="ident">ChatChunk</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ChatChunk(BaseModel):
+    id: str
+    delta: ChoiceDelta | None = None
+    usage: CompletionUsage | None = None</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.ChatChunk.delta"><code class="name">var <span class="ident">delta</span> : <a title="livekit.agents.llm.llm.ChoiceDelta" href="#livekit.agents.llm.llm.ChoiceDelta">ChoiceDelta</a> | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.ChatChunk.id"><code class="name">var <span class="ident">id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.ChatChunk.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.ChatChunk.usage"><code class="name">var <span class="ident">usage</span> : <a title="livekit.agents.llm.llm.CompletionUsage" href="#livekit.agents.llm.llm.CompletionUsage">CompletionUsage</a> | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.llm.ChoiceDelta"><code class="flex name class">
+<span>class <span class="ident">ChoiceDelta</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ChoiceDelta(BaseModel):
+    role: ChatRole | None = None
+    content: str | None = None
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.ChoiceDelta.content"><code class="name">var <span class="ident">content</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.ChoiceDelta.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.ChoiceDelta.role"><code class="name">var <span class="ident">role</span> : Literal['developer', 'system', 'user', 'assistant'] | None</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.ChoiceDelta.tool_calls"><code class="name">var <span class="ident">tool_calls</span> : list[<a title="livekit.agents.llm.llm.FunctionToolCall" href="#livekit.agents.llm.llm.FunctionToolCall">FunctionToolCall</a>]</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.llm.CompletionUsage"><code class="flex name class">
+<span>class <span class="ident">CompletionUsage</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class CompletionUsage(BaseModel):
+    completion_tokens: int
+    prompt_tokens: int
+    prompt_cached_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    total_tokens: int</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.CompletionUsage.cache_creation_tokens"><code class="name">var <span class="ident">cache_creation_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.CompletionUsage.cache_read_tokens"><code class="name">var <span class="ident">cache_read_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.CompletionUsage.completion_tokens"><code class="name">var <span class="ident">completion_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.CompletionUsage.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.CompletionUsage.prompt_cached_tokens"><code class="name">var <span class="ident">prompt_cached_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.CompletionUsage.prompt_tokens"><code class="name">var <span class="ident">prompt_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.CompletionUsage.total_tokens"><code class="name">var <span class="ident">total_tokens</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.llm.FunctionToolCall"><code class="flex name class">
+<span>class <span class="ident">FunctionToolCall</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class FunctionToolCall(BaseModel):
+    type: Literal[&#34;function&#34;] = &#34;function&#34;
+    name: str
+    arguments: str
+    call_id: str</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.FunctionToolCall.arguments"><code class="name">var <span class="ident">arguments</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.FunctionToolCall.call_id"><code class="name">var <span class="ident">call_id</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.FunctionToolCall.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.FunctionToolCall.name"><code class="name">var <span class="ident">name</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.FunctionToolCall.type"><code class="name">var <span class="ident">type</span> : Literal['function']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.llm.LLM"><code class="flex name class">
+<span>class <span class="ident">LLM</span></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LLM(
+    ABC,
+    rtc.EventEmitter[Union[Literal[&#34;metrics_collected&#34;, &#34;error&#34;], TEvent]],
+    Generic[TEvent],
+):
+    def __init__(self) -&gt; None:
+        super().__init__()
+        self._label = f&#34;{type(self).__module__}.{type(self).__name__}&#34;
+
+    @property
+    def label(self) -&gt; str:
+        return self._label
+
+    @abstractmethod
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[FunctionTool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -&gt; LLMStream: ...
+
+    async def aclose(self) -&gt; None: ...
+
+    async def __aenter__(self) -&gt; LLM:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -&gt; None:
+        await self.aclose()</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.llm.fallback_adapter.FallbackAdapter" href="fallback_adapter.html#livekit.agents.llm.fallback_adapter.FallbackAdapter">FallbackAdapter</a></li>
+<li>livekit.plugins.anthropic.llm.LLM</li>
+<li><a title="livekit.plugins.aws.llm.LLM" href="../../plugins/aws/llm.html#livekit.plugins.aws.llm.LLM">LLM</a></li>
+<li>livekit.plugins.google.llm.LLM</li>
+<li>livekit.plugins.openai.llm.LLM</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.LLM.label"><code class="name">prop <span class="ident">label</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def label(self) -&gt; str:
+    return self._label</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.LLM.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.llm.LLM.chat"><code class="name flex">
+<span>def <span class="ident">chat</span></span>(<span>self,<br>*,<br>chat_ctx: ChatContext,<br>tools: list[FunctionTool] | None = None,<br>conn_options: APIConnectOptions = APIConnectOptions(max_retry=3, retry_interval=2.0, timeout=10.0),<br>parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,<br>tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,<br>extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN) ‑> <a title="livekit.agents.llm.llm.LLMStream" href="#livekit.agents.llm.llm.LLMStream">LLMStream</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def chat(
+    self,
+    *,
+    chat_ctx: ChatContext,
+    tools: list[FunctionTool] | None = None,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+    tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+    extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+) -&gt; LLMStream: ...</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMError"><code class="flex name class">
+<span>class <span class="ident">LLMError</span></span>
+<span>(</span><span>**data: Any)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LLMError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal[&#34;llm_error&#34;] = &#34;llm_error&#34;
+    timestamp: float
+    label: str
+    error: APIError = Field(..., exclude=True)
+    recoverable: bool</code></pre>
+</details>
+<div class="desc"><p>Usage docs: <a href="https://docs.pydantic.dev/2.10/concepts/models/">https://docs.pydantic.dev/2.10/concepts/models/</a></p>
+<p>A base class for creating Pydantic models.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>__class_vars__</code></strong></dt>
+<dd>The names of the class variables defined on the model.</dd>
+<dt><strong><code>__private_attributes__</code></strong></dt>
+<dd>Metadata about the private attributes of the model.</dd>
+<dt><strong><code>__signature__</code></strong></dt>
+<dd>The synthesized <code>__init__</code> [<code>Signature</code>][inspect.Signature] of the model.</dd>
+<dt><strong><code>__pydantic_complete__</code></strong></dt>
+<dd>Whether model building is completed, or if there are still undefined fields.</dd>
+<dt><strong><code>__pydantic_core_schema__</code></strong></dt>
+<dd>The core schema of the model.</dd>
+<dt><strong><code>__pydantic_custom_init__</code></strong></dt>
+<dd>Whether the model has a custom <code>__init__</code> function.</dd>
+<dt><strong><code>__pydantic_decorators__</code></strong></dt>
+<dd>Metadata containing the decorators defined on the model.
+This replaces <code>Model.__validators__</code> and <code>Model.__root_validators__</code> from Pydantic V1.</dd>
+<dt><strong><code>__pydantic_generic_metadata__</code></strong></dt>
+<dd>Metadata for generic models; contains data used for a similar purpose to
+<strong>args</strong>, <strong>origin</strong>, <strong>parameters</strong> in typing-module generics. May eventually be replaced by these.</dd>
+<dt><strong><code>__pydantic_parent_namespace__</code></strong></dt>
+<dd>Parent namespace of the model, used for automatic rebuilding of models.</dd>
+<dt><strong><code>__pydantic_post_init__</code></strong></dt>
+<dd>The name of the post-init method for the model, if defined.</dd>
+<dt><strong><code>__pydantic_root_model__</code></strong></dt>
+<dd>Whether the model is a [<code>RootModel</code>][pydantic.root_model.RootModel].</dd>
+<dt><strong><code>__pydantic_serializer__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaSerializer</code> used to dump instances of the model.</dd>
+<dt><strong><code>__pydantic_validator__</code></strong></dt>
+<dd>The <code>pydantic-core</code> <code>SchemaValidator</code> used to validate instances of the model.</dd>
+<dt><strong><code>__pydantic_fields__</code></strong></dt>
+<dd>A dictionary of field names and their corresponding [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_computed_fields__</code></strong></dt>
+<dd>A dictionary of computed field names and their corresponding [<code>ComputedFieldInfo</code>][pydantic.fields.ComputedFieldInfo] objects.</dd>
+<dt><strong><code>__pydantic_extra__</code></strong></dt>
+<dd>A dictionary containing extra values, if [<code>extra</code>][pydantic.config.ConfigDict.extra]
+is set to <code>'allow'</code>.</dd>
+<dt><strong><code>__pydantic_fields_set__</code></strong></dt>
+<dd>The names of fields explicitly set during instantiation.</dd>
+<dt><strong><code>__pydantic_private__</code></strong></dt>
+<dd>Values of private attributes set on the model instance.</dd>
+</dl>
+<p>Create a new model by parsing and validating input data from keyword arguments.</p>
+<p>Raises [<code>ValidationError</code>][pydantic_core.ValidationError] if the input data cannot be
+validated to form a valid model.</p>
+<p><code>self</code> is explicitly positional-only to allow <code>self</code> as a field name.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>pydantic.main.BaseModel</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.LLMError.error"><code class="name">var <span class="ident">error</span> : livekit.agents._exceptions.APIError</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMError.label"><code class="name">var <span class="ident">label</span> : str</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMError.model_config"><code class="name">var <span class="ident">model_config</span></code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMError.recoverable"><code class="name">var <span class="ident">recoverable</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMError.timestamp"><code class="name">var <span class="ident">timestamp</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMError.type"><code class="name">var <span class="ident">type</span> : Literal['llm_error']</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMStream"><code class="flex name class">
+<span>class <span class="ident">LLMStream</span></span>
+<span>(</span><span>llm: <a title="livekit.agents.llm.llm.LLM" href="#livekit.agents.llm.llm.LLM">LLM</a>,<br>*,<br>chat_ctx: ChatContext,<br>tools: list[FunctionTool],<br>conn_options: APIConnectOptions)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LLMStream(ABC):
+    def __init__(
+        self,
+        llm: LLM,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[FunctionTool],
+        conn_options: APIConnectOptions,
+    ) -&gt; None:
+        self._llm = llm
+        self._chat_ctx = chat_ctx
+        self._tools = tools
+        self._conn_options = conn_options
+
+        self._event_ch = aio.Chan[ChatChunk]()
+        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._current_attempt_has_error = False
+        self._metrics_task = asyncio.create_task(
+            self._metrics_monitor_task(monitor_aiter), name=&#34;LLM._metrics_task&#34;
+        )
+
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    @abstractmethod
+    async def _run(self) -&gt; None: ...
+
+    async def _main_task(self) -&gt; None:
+        for i in range(self._conn_options.max_retry + 1):
+            try:
+                return await self._run()
+            except APIError as e:
+                if self._conn_options.max_retry == 0 or not e.retryable:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif i == self._conn_options.max_retry:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f&#34;failed to generate LLM completion after {self._conn_options.max_retry + 1} attempts&#34;,  # noqa: E501
+                    ) from e
+
+                else:
+                    self._emit_error(e, recoverable=True)
+                    logger.warning(
+                        f&#34;failed to generate LLM completion, retrying in {self._conn_options.retry_interval}s&#34;,  # noqa: E501
+                        exc_info=e,
+                        extra={
+                            &#34;llm&#34;: self._llm._label,
+                            &#34;attempt&#34;: i + 1,
+                        },
+                    )
+
+                await asyncio.sleep(self._conn_options.retry_interval)
+                # Reset the flag when retrying
+                self._current_attempt_has_error = False
+
+    def _emit_error(self, api_error: APIError, recoverable: bool):
+        self._current_attempt_has_error = True
+        self._llm.emit(
+            &#34;error&#34;,
+            LLMError(
+                timestamp=time.time(),
+                label=self._llm._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
+    @utils.log_exceptions(logger=logger)
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -&gt; None:
+        start_time = time.perf_counter()
+        ttft = -1.0
+        request_id = &#34;&#34;
+        usage: CompletionUsage | None = None
+
+        async for ev in event_aiter:
+            request_id = ev.id
+            if ttft == -1.0:
+                ttft = time.perf_counter() - start_time
+
+            if ev.usage is not None:
+                usage = ev.usage
+
+        duration = time.perf_counter() - start_time
+
+        if self._current_attempt_has_error:
+            return
+
+        metrics = LLMMetrics(
+            timestamp=time.time(),
+            request_id=request_id,
+            ttft=ttft,
+            duration=duration,
+            cancelled=self._task.cancelled(),
+            label=self._llm._label,
+            completion_tokens=usage.completion_tokens if usage else 0,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
+            total_tokens=usage.total_tokens if usage else 0,
+            tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
+        )
+        self._llm.emit(&#34;metrics_collected&#34;, metrics)
+
+    @property
+    def chat_ctx(self) -&gt; ChatContext:
+        return self._chat_ctx
+
+    @property
+    def tools(self) -&gt; list[FunctionTool]:
+        return self._tools
+
+    async def aclose(self) -&gt; None:
+        await aio.cancel_and_wait(self._task)
+        await self._metrics_task
+
+    async def __anext__(self) -&gt; ChatChunk:
+        try:
+            val = await self._event_aiter.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+
+            raise StopAsyncIteration from None
+
+        return val
+
+    def __aiter__(self) -&gt; AsyncIterator[ChatChunk]:
+        return self
+
+    async def __aenter__(self) -&gt; LLMStream:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -&gt; None:
+        await self.aclose()
+
+    def to_str_iterable(self) -&gt; AsyncIterable[str]:
+        &#34;&#34;&#34;
+        Convert the LLMStream to an async iterable of strings.
+        This assumes the stream will not call any tools.
+        &#34;&#34;&#34;
+
+        async def _iterable():
+            async with self:
+                async for chunk in self:
+                    if chunk.delta and chunk.delta.content:
+                        yield chunk.delta.content
+
+        return _iterable()</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.agents.llm.fallback_adapter.FallbackLLMStream" href="fallback_adapter.html#livekit.agents.llm.fallback_adapter.FallbackLLMStream">FallbackLLMStream</a></li>
+<li>livekit.plugins.anthropic.llm.LLMStream</li>
+<li><a title="livekit.plugins.aws.llm.LLMStream" href="../../plugins/aws/llm.html#livekit.plugins.aws.llm.LLMStream">LLMStream</a></li>
+<li>livekit.plugins.google.llm.LLMStream</li>
+<li>livekit.plugins.openai.llm.LLMStream</li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.LLMStream.chat_ctx"><code class="name">prop <span class="ident">chat_ctx</span> : ChatContext</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def chat_ctx(self) -&gt; ChatContext:
+    return self._chat_ctx</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMStream.tools"><code class="name">prop <span class="ident">tools</span> : list[FunctionTool]</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def tools(self) -&gt; list[FunctionTool]:
+    return self._tools</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.llm.llm.LLMStream.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    await aio.cancel_and_wait(self._task)
+    await self._metrics_task</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.llm.llm.LLMStream.to_str_iterable"><code class="name flex">
+<span>def <span class="ident">to_str_iterable</span></span>(<span>self) ‑> AsyncIterable[str]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def to_str_iterable(self) -&gt; AsyncIterable[str]:
+    &#34;&#34;&#34;
+    Convert the LLMStream to an async iterable of strings.
+    This assumes the stream will not call any tools.
+    &#34;&#34;&#34;
+
+    async def _iterable():
+        async with self:
+            async for chunk in self:
+                if chunk.delta and chunk.delta.content:
+                    yield chunk.delta.content
+
+    return _iterable()</code></pre>
+</details>
+<div class="desc"><p>Convert the LLMStream to an async iterable of strings.
+This assumes the stream will not call any tools.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.llm" href="index.html">livekit.agents.llm</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.llm.llm.ChatChunk" href="#livekit.agents.llm.llm.ChatChunk">ChatChunk</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.llm.ChatChunk.delta" href="#livekit.agents.llm.llm.ChatChunk.delta">delta</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.ChatChunk.id" href="#livekit.agents.llm.llm.ChatChunk.id">id</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.ChatChunk.model_config" href="#livekit.agents.llm.llm.ChatChunk.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.ChatChunk.usage" href="#livekit.agents.llm.llm.ChatChunk.usage">usage</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.llm.ChoiceDelta" href="#livekit.agents.llm.llm.ChoiceDelta">ChoiceDelta</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.llm.ChoiceDelta.content" href="#livekit.agents.llm.llm.ChoiceDelta.content">content</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.ChoiceDelta.model_config" href="#livekit.agents.llm.llm.ChoiceDelta.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.ChoiceDelta.role" href="#livekit.agents.llm.llm.ChoiceDelta.role">role</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.ChoiceDelta.tool_calls" href="#livekit.agents.llm.llm.ChoiceDelta.tool_calls">tool_calls</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.llm.CompletionUsage" href="#livekit.agents.llm.llm.CompletionUsage">CompletionUsage</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.llm.CompletionUsage.cache_creation_tokens" href="#livekit.agents.llm.llm.CompletionUsage.cache_creation_tokens">cache_creation_tokens</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.CompletionUsage.cache_read_tokens" href="#livekit.agents.llm.llm.CompletionUsage.cache_read_tokens">cache_read_tokens</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.CompletionUsage.completion_tokens" href="#livekit.agents.llm.llm.CompletionUsage.completion_tokens">completion_tokens</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.CompletionUsage.model_config" href="#livekit.agents.llm.llm.CompletionUsage.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.CompletionUsage.prompt_cached_tokens" href="#livekit.agents.llm.llm.CompletionUsage.prompt_cached_tokens">prompt_cached_tokens</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.CompletionUsage.prompt_tokens" href="#livekit.agents.llm.llm.CompletionUsage.prompt_tokens">prompt_tokens</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.CompletionUsage.total_tokens" href="#livekit.agents.llm.llm.CompletionUsage.total_tokens">total_tokens</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.llm.FunctionToolCall" href="#livekit.agents.llm.llm.FunctionToolCall">FunctionToolCall</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.llm.FunctionToolCall.arguments" href="#livekit.agents.llm.llm.FunctionToolCall.arguments">arguments</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.FunctionToolCall.call_id" href="#livekit.agents.llm.llm.FunctionToolCall.call_id">call_id</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.FunctionToolCall.model_config" href="#livekit.agents.llm.llm.FunctionToolCall.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.FunctionToolCall.name" href="#livekit.agents.llm.llm.FunctionToolCall.name">name</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.FunctionToolCall.type" href="#livekit.agents.llm.llm.FunctionToolCall.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.llm.LLM" href="#livekit.agents.llm.llm.LLM">LLM</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.llm.LLM.aclose" href="#livekit.agents.llm.llm.LLM.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLM.chat" href="#livekit.agents.llm.llm.LLM.chat">chat</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLM.label" href="#livekit.agents.llm.llm.LLM.label">label</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.llm.LLMError" href="#livekit.agents.llm.llm.LLMError">LLMError</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.agents.llm.llm.LLMError.error" href="#livekit.agents.llm.llm.LLMError.error">error</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLMError.label" href="#livekit.agents.llm.llm.LLMError.label">label</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLMError.model_config" href="#livekit.agents.llm.llm.LLMError.model_config">model_config</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLMError.recoverable" href="#livekit.agents.llm.llm.LLMError.recoverable">recoverable</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLMError.timestamp" href="#livekit.agents.llm.llm.LLMError.timestamp">timestamp</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLMError.type" href="#livekit.agents.llm.llm.LLMError.type">type</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.llm.llm.LLMStream" href="#livekit.agents.llm.llm.LLMStream">LLMStream</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.llm.llm.LLMStream.aclose" href="#livekit.agents.llm.llm.LLMStream.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLMStream.chat_ctx" href="#livekit.agents.llm.llm.LLMStream.chat_ctx">chat_ctx</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLMStream.to_str_iterable" href="#livekit.agents.llm.llm.LLMStream.to_str_iterable">to_str_iterable</a></code></li>
+<li><code><a title="livekit.agents.llm.llm.LLMStream.tools" href="#livekit.agents.llm.llm.LLMStream.tools">tools</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

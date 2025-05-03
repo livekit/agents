@@ -1,0 +1,1132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.agents.voice.avatar API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.agents.voice.avatar</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.agents.voice.avatar.AudioReceiver"><code class="flex name class">
+<span>class <span class="ident">AudioReceiver</span></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class AudioReceiver(ABC, rtc.EventEmitter[Literal[&#34;clear_buffer&#34;]]):
+    async def start(self) -&gt; None:
+        pass
+
+    @abstractmethod
+    def notify_playback_finished(
+        self, playback_position: float, interrupted: bool
+    ) -&gt; None | Coroutine[None, None, None]:
+        &#34;&#34;&#34;Notify the sender that playback has finished&#34;&#34;&#34;
+
+    @abstractmethod
+    def __aiter__(self) -&gt; AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
+        &#34;&#34;&#34;Continuously stream out audio frames or AudioSegmentEnd when the stream ends&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p>
+<p>Initialize a new instance of EventEmitter.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li>livekit.agents.voice.avatar._datastream_io.DataStreamAudioReceiver</li>
+<li>livekit.agents.voice.avatar._queue_io.QueueAudioOutput</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.voice.avatar.AudioReceiver.notify_playback_finished"><code class="name flex">
+<span>def <span class="ident">notify_playback_finished</span></span>(<span>self, playback_position: float, interrupted: bool) ‑> None | collections.abc.Coroutine[None, None, None]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def notify_playback_finished(
+    self, playback_position: float, interrupted: bool
+) -&gt; None | Coroutine[None, None, None]:
+    &#34;&#34;&#34;Notify the sender that playback has finished&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>Notify the sender that playback has finished</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.AudioReceiver.start"><code class="name flex">
+<span>async def <span class="ident">start</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def start(self) -&gt; None:
+    pass</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.voice.avatar.AudioSegmentEnd"><code class="flex name class">
+<span>class <span class="ident">AudioSegmentEnd</span></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class AudioSegmentEnd:
+    pass</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.AvatarOptions"><code class="flex name class">
+<span>class <span class="ident">AvatarOptions</span></span>
+<span>(</span><span>video_width: int,<br>video_height: int,<br>video_fps: float,<br>audio_sample_rate: int,<br>audio_channels: int)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class AvatarOptions:
+    video_width: int
+    video_height: int
+    video_fps: float
+    audio_sample_rate: int
+    audio_channels: int</code></pre>
+</details>
+<div class="desc"><p>AvatarOptions(video_width: 'int', video_height: 'int', video_fps: 'float', audio_sample_rate: 'int', audio_channels: 'int')</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.voice.avatar.AvatarOptions.audio_channels"><code class="name">var <span class="ident">audio_channels</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.AvatarOptions.audio_sample_rate"><code class="name">var <span class="ident">audio_sample_rate</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.AvatarOptions.video_fps"><code class="name">var <span class="ident">video_fps</span> : float</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.AvatarOptions.video_height"><code class="name">var <span class="ident">video_height</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.AvatarOptions.video_width"><code class="name">var <span class="ident">video_width</span> : int</code></dt>
+<dd>
+<div class="desc"><p>The type of the None singleton.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.voice.avatar.AvatarRunner"><code class="flex name class">
+<span>class <span class="ident">AvatarRunner</span></span>
+<span>(</span><span>room: rtc.Room,<br>*,<br>audio_recv: <a title="livekit.agents.voice.avatar.AudioReceiver" href="#livekit.agents.voice.avatar.AudioReceiver">AudioReceiver</a>,<br>video_gen: <a title="livekit.agents.voice.avatar.VideoGenerator" href="#livekit.agents.voice.avatar.VideoGenerator">VideoGenerator</a>,<br>options: <a title="livekit.agents.voice.avatar.AvatarOptions" href="#livekit.agents.voice.avatar.AvatarOptions">AvatarOptions</a>)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class AvatarRunner:
+    &#34;&#34;&#34;Worker that generates synchronized avatar video based on received audio&#34;&#34;&#34;
+
+    def __init__(
+        self,
+        room: rtc.Room,
+        *,
+        audio_recv: AudioReceiver,
+        video_gen: VideoGenerator,
+        options: AvatarOptions,
+        _queue_size_ms: int = 100,
+    ) -&gt; None:
+        self._room = room
+        self._video_gen = video_gen
+        self._options = options
+        self._queue_size_ms = _queue_size_ms
+
+        self._audio_recv = audio_recv
+        self._playback_position = 0.0
+        self._audio_playing = False
+        self._tasks: set[asyncio.Task] = set()
+
+        # Audio/video sources
+        self._audio_source = rtc.AudioSource(
+            sample_rate=options.audio_sample_rate,
+            num_channels=options.audio_channels,
+            queue_size_ms=self._queue_size_ms,
+        )
+        self._video_source = rtc.VideoSource(width=options.video_width, height=options.video_height)
+        # AV synchronizer
+        self._av_sync = rtc.AVSynchronizer(
+            audio_source=self._audio_source,
+            video_source=self._video_source,
+            video_fps=options.video_fps,
+            video_queue_size_ms=self._queue_size_ms,
+        )
+        self._publish_video_atask: asyncio.Task[None] | None = None
+
+    @property
+    def av_sync(self) -&gt; rtc.AVSynchronizer:
+        return self._av_sync
+
+    async def start(self) -&gt; None:
+        &#34;&#34;&#34;Start the worker&#34;&#34;&#34;
+
+        # Start audio receiver
+        await self._audio_recv.start()
+
+        def _on_clear_buffer():
+            task = asyncio.create_task(self._handle_clear_buffer())
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+        self._audio_recv.on(&#34;clear_buffer&#34;, _on_clear_buffer)
+
+        # Publish tracks
+        audio_track = rtc.LocalAudioTrack.create_audio_track(&#34;avatar_audio&#34;, self._audio_source)
+        video_track = rtc.LocalVideoTrack.create_video_track(&#34;avatar_video&#34;, self._video_source)
+        audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+        self._avatar_audio_publication = await self._room.local_participant.publish_track(
+            audio_track, audio_options
+        )
+        self._avatar_video_publication = await self._room.local_participant.publish_track(
+            video_track, video_options
+        )
+
+        # Start processing
+        self._read_audio_atask = asyncio.create_task(self._read_audio())
+        self._publish_video_atask = asyncio.create_task(self._publish_video())
+
+    async def wait_for_subscription(self) -&gt; None:
+        await asyncio.gather(
+            self._avatar_audio_publication.wait_for_subscription(),
+            self._avatar_video_publication.wait_for_subscription(),
+        )
+
+    async def _read_audio(self) -&gt; None:
+        async for frame in self._audio_recv:
+            if not self._audio_playing and isinstance(frame, rtc.AudioFrame):
+                self._audio_playing = True
+            await self._video_gen.push_audio(frame)
+
+    @utils.log_exceptions(logger=logger)
+    async def _publish_video(self) -&gt; None:
+        &#34;&#34;&#34;Process audio frames and generate synchronized video&#34;&#34;&#34;
+
+        async for frame in self._video_gen:
+            if isinstance(frame, AudioSegmentEnd):
+                # notify the agent that the audio has finished playing
+                if self._audio_playing:
+                    notify_task = self._audio_recv.notify_playback_finished(
+                        playback_position=self._playback_position,
+                        interrupted=False,
+                    )
+                    if asyncio.iscoroutine(notify_task):
+                        await notify_task
+                    self._playback_position = 0.0
+                self._audio_playing = False
+                continue
+
+            await self._av_sync.push(frame)
+            if isinstance(frame, rtc.AudioFrame):
+                self._playback_position += frame.duration
+
+    async def _handle_clear_buffer(self) -&gt; None:
+        &#34;&#34;&#34;Handle clearing the buffer and notify about interrupted playback&#34;&#34;&#34;
+        tasks = []
+        clear_result = self._video_gen.clear_buffer()
+        if asyncio.iscoroutine(clear_result):
+            tasks.append(clear_result)
+
+        if self._audio_playing:
+            notify_task = self._audio_recv.notify_playback_finished(
+                playback_position=self._playback_position,
+                interrupted=True,
+            )
+            if asyncio.iscoroutine(notify_task):
+                tasks.append(notify_task)
+            self._playback_position = 0.0
+            self._audio_playing = False
+
+        await asyncio.gather(*tasks)
+
+    async def aclose(self) -&gt; None:
+        if self._publish_video_atask:
+            await utils.aio.cancel_and_wait(self._publish_video_atask)
+        if self._read_audio_atask:
+            await utils.aio.cancel_and_wait(self._read_audio_atask)
+        await utils.aio.cancel_and_wait(*self._tasks)
+
+        await self._av_sync.aclose()
+        await self._audio_source.aclose()
+        await self._video_source.aclose()</code></pre>
+</details>
+<div class="desc"><p>Worker that generates synchronized avatar video based on received audio</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.agents.voice.avatar.AvatarRunner.av_sync"><code class="name">prop <span class="ident">av_sync</span> : rtc.AVSynchronizer</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def av_sync(self) -&gt; rtc.AVSynchronizer:
+    return self._av_sync</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.voice.avatar.AvatarRunner.aclose"><code class="name flex">
+<span>async def <span class="ident">aclose</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def aclose(self) -&gt; None:
+    if self._publish_video_atask:
+        await utils.aio.cancel_and_wait(self._publish_video_atask)
+    if self._read_audio_atask:
+        await utils.aio.cancel_and_wait(self._read_audio_atask)
+    await utils.aio.cancel_and_wait(*self._tasks)
+
+    await self._av_sync.aclose()
+    await self._audio_source.aclose()
+    await self._video_source.aclose()</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.AvatarRunner.start"><code class="name flex">
+<span>async def <span class="ident">start</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def start(self) -&gt; None:
+    &#34;&#34;&#34;Start the worker&#34;&#34;&#34;
+
+    # Start audio receiver
+    await self._audio_recv.start()
+
+    def _on_clear_buffer():
+        task = asyncio.create_task(self._handle_clear_buffer())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    self._audio_recv.on(&#34;clear_buffer&#34;, _on_clear_buffer)
+
+    # Publish tracks
+    audio_track = rtc.LocalAudioTrack.create_audio_track(&#34;avatar_audio&#34;, self._audio_source)
+    video_track = rtc.LocalVideoTrack.create_video_track(&#34;avatar_video&#34;, self._video_source)
+    audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+    video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+    self._avatar_audio_publication = await self._room.local_participant.publish_track(
+        audio_track, audio_options
+    )
+    self._avatar_video_publication = await self._room.local_participant.publish_track(
+        video_track, video_options
+    )
+
+    # Start processing
+    self._read_audio_atask = asyncio.create_task(self._read_audio())
+    self._publish_video_atask = asyncio.create_task(self._publish_video())</code></pre>
+</details>
+<div class="desc"><p>Start the worker</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.AvatarRunner.wait_for_subscription"><code class="name flex">
+<span>async def <span class="ident">wait_for_subscription</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def wait_for_subscription(self) -&gt; None:
+    await asyncio.gather(
+        self._avatar_audio_publication.wait_for_subscription(),
+        self._avatar_video_publication.wait_for_subscription(),
+    )</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.agents.voice.avatar.DataStreamAudioOutput"><code class="flex name class">
+<span>class <span class="ident">DataStreamAudioOutput</span></span>
+<span>(</span><span>room: rtc.Room, *, destination_identity: str, sample_rate: int | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class DataStreamAudioOutput(AudioOutput):
+    &#34;&#34;&#34;
+    AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.
+    &#34;&#34;&#34;  # noqa: E501
+
+    def __init__(
+        self, room: rtc.Room, *, destination_identity: str, sample_rate: int | None = None
+    ):
+        super().__init__(next_in_chain=None, sample_rate=sample_rate)
+        self._room = room
+        self._destination_identity = destination_identity
+        self._stream_writer: rtc.ByteStreamWriter | None = None
+        self._pushed_duration: float = 0.0
+        self._tasks: set[asyncio.Task] = set()
+
+        # playback finished handler
+        def _handle_playback_finished(data: rtc.RpcInvocationData) -&gt; str:
+            if data.caller_identity != self._destination_identity:
+                logger.warning(
+                    &#34;playback finished event received from unexpected participant&#34;,
+                    extra={
+                        &#34;caller_identity&#34;: data.caller_identity,
+                        &#34;expected_identity&#34;: self._destination_identity,
+                    },
+                )
+                return &#34;reject&#34;
+
+            event = PlaybackFinishedEvent(**json.loads(data.payload))
+            self.on_playback_finished(
+                playback_position=event.playback_position,
+                interrupted=event.interrupted,
+            )
+            return &#34;ok&#34;
+
+        self._room.local_participant.register_rpc_method(
+            RPC_PLAYBACK_FINISHED, _handle_playback_finished
+        )
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -&gt; None:
+        &#34;&#34;&#34;Capture and stream audio frame to remote worker&#34;&#34;&#34;
+        await super().capture_frame(frame)
+
+        if not self._stream_writer:
+            self._stream_writer = await self._room.local_participant.stream_bytes(
+                name=utils.shortuuid(&#34;AUDIO_&#34;),
+                topic=AUDIO_STREAM_TOPIC,
+                destination_identities=[self._destination_identity],
+                attributes={
+                    &#34;sample_rate&#34;: str(frame.sample_rate),
+                    &#34;num_channels&#34;: str(frame.num_channels),
+                },
+            )
+            self._pushed_duration = 0.0
+        await self._stream_writer.write(bytes(frame.data))
+        self._pushed_duration += frame.duration
+
+    def flush(self) -&gt; None:
+        &#34;&#34;&#34;Mark end of current audio segment&#34;&#34;&#34;
+        super().flush()
+        if self._stream_writer is None:
+            return
+
+        # close the stream marking the end of the segment
+        task = asyncio.create_task(self._stream_writer.aclose())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+        self._stream_writer = None
+
+    def clear_buffer(self) -&gt; None:
+        task = asyncio.create_task(
+            self._room.local_participant.perform_rpc(
+                destination_identity=self._destination_identity,
+                method=RPC_CLEAR_BUFFER,
+                payload=&#34;&#34;,
+            )
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)</code></pre>
+</details>
+<div class="desc"><p>AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>sample_rate</code></strong></dt>
+<dd>The sample rate required by the audio sink, if None, any sample rate is accepted</dd>
+</dl></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>livekit.agents.voice.io.AudioOutput</li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.voice.avatar.DataStreamAudioOutput.capture_frame"><code class="name flex">
+<span>async def <span class="ident">capture_frame</span></span>(<span>self, frame: rtc.AudioFrame) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def capture_frame(self, frame: rtc.AudioFrame) -&gt; None:
+    &#34;&#34;&#34;Capture and stream audio frame to remote worker&#34;&#34;&#34;
+    await super().capture_frame(frame)
+
+    if not self._stream_writer:
+        self._stream_writer = await self._room.local_participant.stream_bytes(
+            name=utils.shortuuid(&#34;AUDIO_&#34;),
+            topic=AUDIO_STREAM_TOPIC,
+            destination_identities=[self._destination_identity],
+            attributes={
+                &#34;sample_rate&#34;: str(frame.sample_rate),
+                &#34;num_channels&#34;: str(frame.num_channels),
+            },
+        )
+        self._pushed_duration = 0.0
+    await self._stream_writer.write(bytes(frame.data))
+    self._pushed_duration += frame.duration</code></pre>
+</details>
+<div class="desc"><p>Capture and stream audio frame to remote worker</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.DataStreamAudioOutput.clear_buffer"><code class="name flex">
+<span>def <span class="ident">clear_buffer</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def clear_buffer(self) -&gt; None:
+    task = asyncio.create_task(
+        self._room.local_participant.perform_rpc(
+            destination_identity=self._destination_identity,
+            method=RPC_CLEAR_BUFFER,
+            payload=&#34;&#34;,
+        )
+    )
+    self._tasks.add(task)
+    task.add_done_callback(self._tasks.discard)</code></pre>
+</details>
+<div class="desc"><p>Clear the buffer, stopping playback immediately</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.DataStreamAudioOutput.flush"><code class="name flex">
+<span>def <span class="ident">flush</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def flush(self) -&gt; None:
+    &#34;&#34;&#34;Mark end of current audio segment&#34;&#34;&#34;
+    super().flush()
+    if self._stream_writer is None:
+        return
+
+    # close the stream marking the end of the segment
+    task = asyncio.create_task(self._stream_writer.aclose())
+    self._tasks.add(task)
+    task.add_done_callback(self._tasks.discard)
+
+    self._stream_writer = None</code></pre>
+</details>
+<div class="desc"><p>Mark end of current audio segment</p></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.voice.avatar.DataStreamAudioReceiver"><code class="flex name class">
+<span>class <span class="ident">DataStreamAudioReceiver</span></span>
+<span>(</span><span>room: rtc.Room, *, sender_identity: str | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class DataStreamAudioReceiver(AudioReceiver):
+    &#34;&#34;&#34;
+    Audio receiver that receives streamed audio from a sender participant using LiveKit DataStream.
+    If the sender_identity is provided, subscribe to the specified participant. If not provided,
+    subscribe to the first agent participant in the room.
+    &#34;&#34;&#34;
+
+    def __init__(self, room: rtc.Room, *, sender_identity: str | None = None):
+        super().__init__()
+        self._room = room
+        self._sender_identity = sender_identity
+        self._remote_participant: rtc.RemoteParticipant | None = None
+
+        self._stream_readers: list[rtc.ByteStreamReader] = []
+        self._stream_reader_changed: asyncio.Event = asyncio.Event()
+
+        self._current_reader: rtc.ByteStreamReader | None = None
+        self._current_reader_cleared: bool = False
+
+    async def start(self) -&gt; None:
+        # wait for the target participant or first agent participant to join
+        self._remote_participant = await utils.wait_for_participant(
+            room=self._room,
+            identity=self._sender_identity,
+            kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT if not self._sender_identity else None,
+        )
+
+        def _handle_clear_buffer(data: rtc.RpcInvocationData) -&gt; str:
+            assert self._remote_participant is not None
+            if data.caller_identity != self._remote_participant.identity:
+                logger.warning(
+                    &#34;clear buffer event received from unexpected participant&#34;,
+                    extra={
+                        &#34;caller_identity&#34;: data.caller_identity,
+                        &#34;expected_identity&#34;: self._remote_participant.identity,
+                    },
+                )
+                return &#34;reject&#34;
+
+            if self._current_reader:
+                self._current_reader_cleared = True
+            self.emit(&#34;clear_buffer&#34;)
+            return &#34;ok&#34;
+
+        self._room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handle_clear_buffer)
+
+        def _handle_stream_received(
+            reader: rtc.ByteStreamReader, remote_participant_id: str
+        ) -&gt; None:
+            if remote_participant_id != self._remote_participant.identity:
+                return
+
+            self._stream_readers.append(reader)
+            self._stream_reader_changed.set()
+
+        self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
+
+    async def notify_playback_finished(self, playback_position: int, interrupted: bool) -&gt; None:
+        &#34;&#34;&#34;Notify the sender that playback has finished&#34;&#34;&#34;
+        assert self._remote_participant is not None
+        event = PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
+        try:
+            logger.debug(
+                f&#34;notifying playback finished: {event.playback_position:.3f}s, &#34;
+                f&#34;interrupted: {event.interrupted}&#34;
+            )
+            await self._room.local_participant.perform_rpc(
+                destination_identity=self._remote_participant.identity,
+                method=RPC_PLAYBACK_FINISHED,
+                payload=json.dumps(asdict(event)),
+            )
+        except Exception as e:
+            logger.exception(f&#34;error notifying playback finished: {e}&#34;)
+
+    def __aiter__(self) -&gt; AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
+        return self._stream_impl()
+
+    @utils.log_exceptions(logger=logger)
+    async def _stream_impl(
+        self,
+    ) -&gt; AsyncGenerator[rtc.AudioFrame | AudioSegmentEnd, None]:
+        while True:
+            await self._stream_reader_changed.wait()
+
+            while self._stream_readers:
+                self._current_reader = self._stream_readers.pop(0)
+                sample_rate = int(self._current_reader.info.attributes[&#34;sample_rate&#34;])
+                num_channels = int(self._current_reader.info.attributes[&#34;num_channels&#34;])
+                async for data in self._current_reader:
+                    if self._current_reader_cleared:
+                        # ignore the rest data of the current reader if clear_buffer was called
+                        continue
+
+                    samples_per_channel = len(data) // num_channels // ctypes.sizeof(ctypes.c_int16)
+                    frame = rtc.AudioFrame(
+                        data=data,
+                        sample_rate=sample_rate,
+                        num_channels=num_channels,
+                        samples_per_channel=samples_per_channel,
+                    )
+                    yield frame
+                self._current_reader = None
+                self._current_reader_cleared = False
+                yield AudioSegmentEnd()
+
+            self._stream_reader_changed.clear()</code></pre>
+</details>
+<div class="desc"><p>Audio receiver that receives streamed audio from a sender participant using LiveKit DataStream.
+If the sender_identity is provided, subscribe to the specified participant. If not provided,
+subscribe to the first agent participant in the room.</p>
+<p>Initialize a new instance of EventEmitter.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>livekit.agents.voice.avatar._types.AudioReceiver</li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.voice.avatar.DataStreamAudioReceiver.notify_playback_finished"><code class="name flex">
+<span>async def <span class="ident">notify_playback_finished</span></span>(<span>self, playback_position: int, interrupted: bool) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def notify_playback_finished(self, playback_position: int, interrupted: bool) -&gt; None:
+    &#34;&#34;&#34;Notify the sender that playback has finished&#34;&#34;&#34;
+    assert self._remote_participant is not None
+    event = PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
+    try:
+        logger.debug(
+            f&#34;notifying playback finished: {event.playback_position:.3f}s, &#34;
+            f&#34;interrupted: {event.interrupted}&#34;
+        )
+        await self._room.local_participant.perform_rpc(
+            destination_identity=self._remote_participant.identity,
+            method=RPC_PLAYBACK_FINISHED,
+            payload=json.dumps(asdict(event)),
+        )
+    except Exception as e:
+        logger.exception(f&#34;error notifying playback finished: {e}&#34;)</code></pre>
+</details>
+<div class="desc"><p>Notify the sender that playback has finished</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.DataStreamAudioReceiver.start"><code class="name flex">
+<span>async def <span class="ident">start</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def start(self) -&gt; None:
+    # wait for the target participant or first agent participant to join
+    self._remote_participant = await utils.wait_for_participant(
+        room=self._room,
+        identity=self._sender_identity,
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_AGENT if not self._sender_identity else None,
+    )
+
+    def _handle_clear_buffer(data: rtc.RpcInvocationData) -&gt; str:
+        assert self._remote_participant is not None
+        if data.caller_identity != self._remote_participant.identity:
+            logger.warning(
+                &#34;clear buffer event received from unexpected participant&#34;,
+                extra={
+                    &#34;caller_identity&#34;: data.caller_identity,
+                    &#34;expected_identity&#34;: self._remote_participant.identity,
+                },
+            )
+            return &#34;reject&#34;
+
+        if self._current_reader:
+            self._current_reader_cleared = True
+        self.emit(&#34;clear_buffer&#34;)
+        return &#34;ok&#34;
+
+    self._room.local_participant.register_rpc_method(RPC_CLEAR_BUFFER, _handle_clear_buffer)
+
+    def _handle_stream_received(
+        reader: rtc.ByteStreamReader, remote_participant_id: str
+    ) -&gt; None:
+        if remote_participant_id != self._remote_participant.identity:
+            return
+
+        self._stream_readers.append(reader)
+        self._stream_reader_changed.set()
+
+    self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.voice.avatar.QueueAudioOutput"><code class="flex name class">
+<span>class <span class="ident">QueueAudioOutput</span></span>
+<span>(</span><span>*, sample_rate: int | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class QueueAudioOutput(
+    AudioOutput,
+    AudioReceiver,
+    rtc.EventEmitter[Literal[&#34;playback_finished&#34;, &#34;clear_buffer&#34;]],
+):
+    &#34;&#34;&#34;
+    AudioOutput implementation that sends audio frames through a queue.
+    &#34;&#34;&#34;
+
+    def __init__(self, *, sample_rate: int | None = None):
+        super().__init__(next_in_chain=None, sample_rate=sample_rate)
+        self._data_ch = utils.aio.Chan[Union[rtc.AudioFrame, AudioSegmentEnd]]()
+        self._capturing = False
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -&gt; None:
+        &#34;&#34;&#34;Capture and queue audio frame&#34;&#34;&#34;
+        await super().capture_frame(frame)
+        if not self._capturing:
+            self._capturing = True
+
+        await self._data_ch.send(frame)
+
+    def flush(self) -&gt; None:
+        &#34;&#34;&#34;Mark end of current audio segment&#34;&#34;&#34;
+        super().flush()
+        if not self._capturing:
+            return
+        self._capturing = False
+        self._data_ch.send_nowait(AudioSegmentEnd())
+
+    # as AudioReceiver for AvatarRunner
+
+    def clear_buffer(self) -&gt; None:
+        &#34;&#34;&#34;Clear the audio buffer&#34;&#34;&#34;
+        while True:
+            try:
+                self._data_ch.recv_nowait()
+            except utils.aio.channel.ChanEmpty:
+                break
+        self.emit(&#34;clear_buffer&#34;)
+
+    def notify_playback_finished(self, playback_position: float, interrupted: bool) -&gt; None:
+        self.on_playback_finished(playback_position=playback_position, interrupted=interrupted)
+
+    def __aiter__(self) -&gt; AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
+        return self._data_ch</code></pre>
+</details>
+<div class="desc"><p>AudioOutput implementation that sends audio frames through a queue.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>sample_rate</code></strong></dt>
+<dd>The sample rate required by the audio sink, if None, any sample rate is accepted</dd>
+</dl></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>livekit.agents.voice.io.AudioOutput</li>
+<li>livekit.agents.voice.avatar._types.AudioReceiver</li>
+<li>abc.ABC</li>
+<li><a title="livekit.rtc.event_emitter.EventEmitter" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></li>
+<li>typing.Generic</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.voice.avatar.QueueAudioOutput.capture_frame"><code class="name flex">
+<span>async def <span class="ident">capture_frame</span></span>(<span>self, frame: rtc.AudioFrame) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def capture_frame(self, frame: rtc.AudioFrame) -&gt; None:
+    &#34;&#34;&#34;Capture and queue audio frame&#34;&#34;&#34;
+    await super().capture_frame(frame)
+    if not self._capturing:
+        self._capturing = True
+
+    await self._data_ch.send(frame)</code></pre>
+</details>
+<div class="desc"><p>Capture and queue audio frame</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.QueueAudioOutput.clear_buffer"><code class="name flex">
+<span>def <span class="ident">clear_buffer</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def clear_buffer(self) -&gt; None:
+    &#34;&#34;&#34;Clear the audio buffer&#34;&#34;&#34;
+    while True:
+        try:
+            self._data_ch.recv_nowait()
+        except utils.aio.channel.ChanEmpty:
+            break
+    self.emit(&#34;clear_buffer&#34;)</code></pre>
+</details>
+<div class="desc"><p>Clear the audio buffer</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.QueueAudioOutput.flush"><code class="name flex">
+<span>def <span class="ident">flush</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def flush(self) -&gt; None:
+    &#34;&#34;&#34;Mark end of current audio segment&#34;&#34;&#34;
+    super().flush()
+    if not self._capturing:
+        return
+    self._capturing = False
+    self._data_ch.send_nowait(AudioSegmentEnd())</code></pre>
+</details>
+<div class="desc"><p>Mark end of current audio segment</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.QueueAudioOutput.notify_playback_finished"><code class="name flex">
+<span>def <span class="ident">notify_playback_finished</span></span>(<span>self, playback_position: float, interrupted: bool) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def notify_playback_finished(self, playback_position: float, interrupted: bool) -&gt; None:
+    self.on_playback_finished(playback_position=playback_position, interrupted=interrupted)</code></pre>
+</details>
+<div class="desc"><p>Notify the sender that playback has finished</p></div>
+</dd>
+</dl>
+<h3>Inherited members</h3>
+<ul class="hlist">
+<li><code><b><a title="livekit.rtc.event_emitter.EventEmitter" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter">EventEmitter</a></b></code>:
+<ul class="hlist">
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.emit" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.emit">emit</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.off" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.off">off</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.on" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.on">on</a></code></li>
+<li><code><a title="livekit.rtc.event_emitter.EventEmitter.once" href="../../../rtc/event_emitter.html#livekit.rtc.event_emitter.EventEmitter.once">once</a></code></li>
+</ul>
+</li>
+</ul>
+</dd>
+<dt id="livekit.agents.voice.avatar.VideoGenerator"><code class="flex name class">
+<span>class <span class="ident">VideoGenerator</span></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class VideoGenerator(ABC):
+    @abstractmethod
+    async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -&gt; None:
+        &#34;&#34;&#34;Push an audio frame to the video generator&#34;&#34;&#34;
+
+    @abstractmethod
+    def clear_buffer(self) -&gt; None | Coroutine[None, None, None]:
+        &#34;&#34;&#34;Clear the audio buffer, stopping audio playback immediately&#34;&#34;&#34;
+
+    @abstractmethod
+    def __aiter__(
+        self,
+    ) -&gt; AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
+        &#34;&#34;&#34;Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends&#34;&#34;&#34;  # noqa: E501</code></pre>
+</details>
+<div class="desc"><p>Helper class that provides a standard way to create an ABC using
+inheritance.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>abc.ABC</li>
+</ul>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.plugins.bithuman.avatar.BithumanGenerator" href="../../../plugins/bithuman/avatar.html#livekit.plugins.bithuman.avatar.BithumanGenerator">BithumanGenerator</a></li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.agents.voice.avatar.VideoGenerator.clear_buffer"><code class="name flex">
+<span>def <span class="ident">clear_buffer</span></span>(<span>self) ‑> None | collections.abc.Coroutine[None, None, None]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+def clear_buffer(self) -&gt; None | Coroutine[None, None, None]:
+    &#34;&#34;&#34;Clear the audio buffer, stopping audio playback immediately&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>Clear the audio buffer, stopping audio playback immediately</p></div>
+</dd>
+<dt id="livekit.agents.voice.avatar.VideoGenerator.push_audio"><code class="name flex">
+<span>async def <span class="ident">push_audio</span></span>(<span>self,<br>frame: rtc.AudioFrame | <a title="livekit.agents.voice.avatar.AudioSegmentEnd" href="#livekit.agents.voice.avatar.AudioSegmentEnd">AudioSegmentEnd</a>) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@abstractmethod
+async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -&gt; None:
+    &#34;&#34;&#34;Push an audio frame to the video generator&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>Push an audio frame to the video generator</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.agents.voice" href="../index.html">livekit.agents.voice</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.agents.voice.avatar.AudioReceiver" href="#livekit.agents.voice.avatar.AudioReceiver">AudioReceiver</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.voice.avatar.AudioReceiver.notify_playback_finished" href="#livekit.agents.voice.avatar.AudioReceiver.notify_playback_finished">notify_playback_finished</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.AudioReceiver.start" href="#livekit.agents.voice.avatar.AudioReceiver.start">start</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.voice.avatar.AudioSegmentEnd" href="#livekit.agents.voice.avatar.AudioSegmentEnd">AudioSegmentEnd</a></code></h4>
+</li>
+<li>
+<h4><code><a title="livekit.agents.voice.avatar.AvatarOptions" href="#livekit.agents.voice.avatar.AvatarOptions">AvatarOptions</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.voice.avatar.AvatarOptions.audio_channels" href="#livekit.agents.voice.avatar.AvatarOptions.audio_channels">audio_channels</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.AvatarOptions.audio_sample_rate" href="#livekit.agents.voice.avatar.AvatarOptions.audio_sample_rate">audio_sample_rate</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.AvatarOptions.video_fps" href="#livekit.agents.voice.avatar.AvatarOptions.video_fps">video_fps</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.AvatarOptions.video_height" href="#livekit.agents.voice.avatar.AvatarOptions.video_height">video_height</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.AvatarOptions.video_width" href="#livekit.agents.voice.avatar.AvatarOptions.video_width">video_width</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.voice.avatar.AvatarRunner" href="#livekit.agents.voice.avatar.AvatarRunner">AvatarRunner</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.voice.avatar.AvatarRunner.aclose" href="#livekit.agents.voice.avatar.AvatarRunner.aclose">aclose</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.AvatarRunner.av_sync" href="#livekit.agents.voice.avatar.AvatarRunner.av_sync">av_sync</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.AvatarRunner.start" href="#livekit.agents.voice.avatar.AvatarRunner.start">start</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.AvatarRunner.wait_for_subscription" href="#livekit.agents.voice.avatar.AvatarRunner.wait_for_subscription">wait_for_subscription</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.voice.avatar.DataStreamAudioOutput" href="#livekit.agents.voice.avatar.DataStreamAudioOutput">DataStreamAudioOutput</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.voice.avatar.DataStreamAudioOutput.capture_frame" href="#livekit.agents.voice.avatar.DataStreamAudioOutput.capture_frame">capture_frame</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.DataStreamAudioOutput.clear_buffer" href="#livekit.agents.voice.avatar.DataStreamAudioOutput.clear_buffer">clear_buffer</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.DataStreamAudioOutput.flush" href="#livekit.agents.voice.avatar.DataStreamAudioOutput.flush">flush</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.voice.avatar.DataStreamAudioReceiver" href="#livekit.agents.voice.avatar.DataStreamAudioReceiver">DataStreamAudioReceiver</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.voice.avatar.DataStreamAudioReceiver.notify_playback_finished" href="#livekit.agents.voice.avatar.DataStreamAudioReceiver.notify_playback_finished">notify_playback_finished</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.DataStreamAudioReceiver.start" href="#livekit.agents.voice.avatar.DataStreamAudioReceiver.start">start</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.voice.avatar.QueueAudioOutput" href="#livekit.agents.voice.avatar.QueueAudioOutput">QueueAudioOutput</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.voice.avatar.QueueAudioOutput.capture_frame" href="#livekit.agents.voice.avatar.QueueAudioOutput.capture_frame">capture_frame</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.QueueAudioOutput.clear_buffer" href="#livekit.agents.voice.avatar.QueueAudioOutput.clear_buffer">clear_buffer</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.QueueAudioOutput.flush" href="#livekit.agents.voice.avatar.QueueAudioOutput.flush">flush</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.QueueAudioOutput.notify_playback_finished" href="#livekit.agents.voice.avatar.QueueAudioOutput.notify_playback_finished">notify_playback_finished</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.agents.voice.avatar.VideoGenerator" href="#livekit.agents.voice.avatar.VideoGenerator">VideoGenerator</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.agents.voice.avatar.VideoGenerator.clear_buffer" href="#livekit.agents.voice.avatar.VideoGenerator.clear_buffer">clear_buffer</a></code></li>
+<li><code><a title="livekit.agents.voice.avatar.VideoGenerator.push_audio" href="#livekit.agents.voice.avatar.VideoGenerator.push_audio">push_audio</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

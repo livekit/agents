@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>livekit.rtc.track_publication API documentation</title>
+<meta name="description" content="">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>livekit.rtc.track_publication</code></h1>
+</header>
+<section id="section-intro">
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="livekit.rtc.track_publication.LocalTrackPublication"><code class="flex name class">
+<span>class <span class="ident">LocalTrackPublication</span></span>
+<span>(</span><span>owned_info: track_pb2.OwnedTrackPublication)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class LocalTrackPublication(TrackPublication):
+    def __init__(self, owned_info: proto_track.OwnedTrackPublication):
+        super().__init__(owned_info)
+        self._first_subscription: asyncio.Future[None] = asyncio.Future()
+
+    @property
+    def track(self) -&gt; Optional[LocalTrack]:
+        return cast(Optional[LocalTrack], self._track)
+
+    async def wait_for_subscription(self) -&gt; None:
+        await asyncio.shield(self._first_subscription)
+
+    def __repr__(self) -&gt; str:
+        return f&#34;rtc.LocalTrackPublication(sid={self.sid}, name={self.name}, kind={self.kind}, source={self.source})&#34;</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.track_publication.TrackPublication" href="#livekit.rtc.track_publication.TrackPublication">TrackPublication</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.track_publication.LocalTrackPublication.track"><code class="name">prop <span class="ident">track</span> : <a title="livekit.rtc.track.LocalVideoTrack" href="track.html#livekit.rtc.track.LocalVideoTrack">LocalVideoTrack</a> | <a title="livekit.rtc.track.LocalAudioTrack" href="track.html#livekit.rtc.track.LocalAudioTrack">LocalAudioTrack</a> | None</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def track(self) -&gt; Optional[LocalTrack]:
+    return cast(Optional[LocalTrack], self._track)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.track_publication.LocalTrackPublication.wait_for_subscription"><code class="name flex">
+<span>async def <span class="ident">wait_for_subscription</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def wait_for_subscription(self) -&gt; None:
+    await asyncio.shield(self._first_subscription)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.track_publication.RemoteTrackPublication"><code class="flex name class">
+<span>class <span class="ident">RemoteTrackPublication</span></span>
+<span>(</span><span>owned_info: track_pb2.OwnedTrackPublication)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class RemoteTrackPublication(TrackPublication):
+    def __init__(self, owned_info: proto_track.OwnedTrackPublication):
+        super().__init__(owned_info)
+        self._subscribed = False
+
+    @property
+    def track(self) -&gt; Optional[RemoteTrack]:
+        return cast(Optional[RemoteTrack], self._track)
+
+    @property
+    def subscribed(self) -&gt; bool:
+        return self._subscribed
+
+    def set_subscribed(self, subscribed: bool):
+        req = proto_ffi.FfiRequest()
+        req.set_subscribed.subscribe = subscribed
+        req.set_subscribed.publication_handle = self._ffi_handle.handle
+        FfiClient.instance.request(req)
+
+    def __repr__(self) -&gt; str:
+        return f&#34;rtc.RemoteTrackPublication(sid={self.sid}, name={self.name}, kind={self.kind}, source={self.source})&#34;</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.track_publication.TrackPublication" href="#livekit.rtc.track_publication.TrackPublication">TrackPublication</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.track_publication.RemoteTrackPublication.subscribed"><code class="name">prop <span class="ident">subscribed</span> : bool</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def subscribed(self) -&gt; bool:
+    return self._subscribed</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.RemoteTrackPublication.track"><code class="name">prop <span class="ident">track</span> : <a title="livekit.rtc.track.RemoteVideoTrack" href="track.html#livekit.rtc.track.RemoteVideoTrack">RemoteVideoTrack</a> | <a title="livekit.rtc.track.RemoteAudioTrack" href="track.html#livekit.rtc.track.RemoteAudioTrack">RemoteAudioTrack</a> | None</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def track(self) -&gt; Optional[RemoteTrack]:
+    return cast(Optional[RemoteTrack], self._track)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="livekit.rtc.track_publication.RemoteTrackPublication.set_subscribed"><code class="name flex">
+<span>def <span class="ident">set_subscribed</span></span>(<span>self, subscribed: bool)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_subscribed(self, subscribed: bool):
+    req = proto_ffi.FfiRequest()
+    req.set_subscribed.subscribe = subscribed
+    req.set_subscribed.publication_handle = self._ffi_handle.handle
+    FfiClient.instance.request(req)</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication"><code class="flex name class">
+<span>class <span class="ident">TrackPublication</span></span>
+<span>(</span><span>owned_info: track_pb2.OwnedTrackPublication)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class TrackPublication:
+    def __init__(self, owned_info: proto_track.OwnedTrackPublication):
+        self._info = owned_info.info
+        self._track: Optional[Track] = None
+        self._ffi_handle = FfiHandle(owned_info.handle.id)
+
+    @property
+    def track(self) -&gt; Optional[Track]:
+        return self._track
+
+    @property
+    def sid(self) -&gt; str:
+        return self._info.sid
+
+    @property
+    def name(self) -&gt; str:
+        return self._info.name
+
+    @property
+    def kind(self) -&gt; proto_track.TrackKind.ValueType:
+        return self._info.kind
+
+    @property
+    def source(self) -&gt; proto_track.TrackSource.ValueType:
+        return self._info.source
+
+    @property
+    def simulcasted(self) -&gt; bool:
+        return self._info.simulcasted
+
+    @property
+    def width(self) -&gt; int:
+        return self._info.width
+
+    @property
+    def height(self) -&gt; int:
+        return self._info.height
+
+    @property
+    def mime_type(self) -&gt; str:
+        return self._info.mime_type
+
+    @property
+    def muted(self) -&gt; bool:
+        return self._info.muted
+
+    @property
+    def encryption_type(self) -&gt; proto_e2ee.EncryptionType.ValueType:
+        return self._info.encryption_type</code></pre>
+</details>
+<div class="desc"></div>
+<h3>Subclasses</h3>
+<ul class="hlist">
+<li><a title="livekit.rtc.track_publication.LocalTrackPublication" href="#livekit.rtc.track_publication.LocalTrackPublication">LocalTrackPublication</a></li>
+<li><a title="livekit.rtc.track_publication.RemoteTrackPublication" href="#livekit.rtc.track_publication.RemoteTrackPublication">RemoteTrackPublication</a></li>
+</ul>
+<h3>Instance variables</h3>
+<dl>
+<dt id="livekit.rtc.track_publication.TrackPublication.encryption_type"><code class="name">prop <span class="ident">encryption_type</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def encryption_type(self) -&gt; proto_e2ee.EncryptionType.ValueType:
+    return self._info.encryption_type</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.height"><code class="name">prop <span class="ident">height</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def height(self) -&gt; int:
+    return self._info.height</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.kind"><code class="name">prop <span class="ident">kind</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def kind(self) -&gt; proto_track.TrackKind.ValueType:
+    return self._info.kind</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.mime_type"><code class="name">prop <span class="ident">mime_type</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def mime_type(self) -&gt; str:
+    return self._info.mime_type</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.muted"><code class="name">prop <span class="ident">muted</span> : bool</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def muted(self) -&gt; bool:
+    return self._info.muted</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.name"><code class="name">prop <span class="ident">name</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def name(self) -&gt; str:
+    return self._info.name</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.sid"><code class="name">prop <span class="ident">sid</span> : str</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def sid(self) -&gt; str:
+    return self._info.sid</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.simulcasted"><code class="name">prop <span class="ident">simulcasted</span> : bool</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def simulcasted(self) -&gt; bool:
+    return self._info.simulcasted</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.source"><code class="name">prop <span class="ident">source</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def source(self) -&gt; proto_track.TrackSource.ValueType:
+    return self._info.source</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.track"><code class="name">prop <span class="ident">track</span> : <a title="livekit.rtc.track.Track" href="track.html#livekit.rtc.track.Track">Track</a> | None</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def track(self) -&gt; Optional[Track]:
+    return self._track</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+<dt id="livekit.rtc.track_publication.TrackPublication.width"><code class="name">prop <span class="ident">width</span> : int</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@property
+def width(self) -&gt; int:
+    return self._info.width</code></pre>
+</details>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="livekit.rtc" href="index.html">livekit.rtc</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="livekit.rtc.track_publication.LocalTrackPublication" href="#livekit.rtc.track_publication.LocalTrackPublication">LocalTrackPublication</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.track_publication.LocalTrackPublication.track" href="#livekit.rtc.track_publication.LocalTrackPublication.track">track</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.LocalTrackPublication.wait_for_subscription" href="#livekit.rtc.track_publication.LocalTrackPublication.wait_for_subscription">wait_for_subscription</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.track_publication.RemoteTrackPublication" href="#livekit.rtc.track_publication.RemoteTrackPublication">RemoteTrackPublication</a></code></h4>
+<ul class="">
+<li><code><a title="livekit.rtc.track_publication.RemoteTrackPublication.set_subscribed" href="#livekit.rtc.track_publication.RemoteTrackPublication.set_subscribed">set_subscribed</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.RemoteTrackPublication.subscribed" href="#livekit.rtc.track_publication.RemoteTrackPublication.subscribed">subscribed</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.RemoteTrackPublication.track" href="#livekit.rtc.track_publication.RemoteTrackPublication.track">track</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="livekit.rtc.track_publication.TrackPublication" href="#livekit.rtc.track_publication.TrackPublication">TrackPublication</a></code></h4>
+<ul class="two-column">
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.encryption_type" href="#livekit.rtc.track_publication.TrackPublication.encryption_type">encryption_type</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.height" href="#livekit.rtc.track_publication.TrackPublication.height">height</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.kind" href="#livekit.rtc.track_publication.TrackPublication.kind">kind</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.mime_type" href="#livekit.rtc.track_publication.TrackPublication.mime_type">mime_type</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.muted" href="#livekit.rtc.track_publication.TrackPublication.muted">muted</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.name" href="#livekit.rtc.track_publication.TrackPublication.name">name</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.sid" href="#livekit.rtc.track_publication.TrackPublication.sid">sid</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.simulcasted" href="#livekit.rtc.track_publication.TrackPublication.simulcasted">simulcasted</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.source" href="#livekit.rtc.track_publication.TrackPublication.source">source</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.track" href="#livekit.rtc.track_publication.TrackPublication.track">track</a></code></li>
+<li><code><a title="livekit.rtc.track_publication.TrackPublication.width" href="#livekit.rtc.track_publication.TrackPublication.width">width</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>
