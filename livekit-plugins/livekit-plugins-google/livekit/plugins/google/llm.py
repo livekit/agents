@@ -270,7 +270,7 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm))
+            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm), generate=True)
             function_declarations = to_fnc_ctx(self._tools)
             if function_declarations:
                 self._extra_kwargs["tools"] = [
