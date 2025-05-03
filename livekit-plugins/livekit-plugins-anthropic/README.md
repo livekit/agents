@@ -2,6 +2,8 @@
 
 Agent Framework plugin for services from Anthropic.
 
+See [https://docs.livekit.io/integrations/llm/anthropic/](https://docs.livekit.io/integrations/llm/anthropic/) for more information.
+
 ## Installation
 
 ```bash
