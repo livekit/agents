@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Groq plugin for LiveKit Agents
+
+Support for STT, TTS, and LLM with Groq fast inference.
+
+See https://docs.livekit.io/agents/integrations/groq/ for more information.
+"""
+
 from livekit.agents import Plugin
 
 from .log import logger

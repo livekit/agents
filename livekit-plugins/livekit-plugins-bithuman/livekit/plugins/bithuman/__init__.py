@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""BitHuman plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/avatar/bithuman/ for more information.
+"""
 
 from .avatar import AvatarSession, BitHumanException
 from .version import __version__

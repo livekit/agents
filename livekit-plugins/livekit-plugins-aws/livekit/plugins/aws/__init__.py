@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""AWS plugin for LiveKit Agents
+
+Support for AWS AI including Bedrock, Polly, and Transcribe.
+
+See https://docs.livekit.io/agents/integrations/aws/ for more information.
+"""
+
 from .llm import LLM
 from .stt import STT, SpeechStream
 from .tts import TTS, ChunkedStream

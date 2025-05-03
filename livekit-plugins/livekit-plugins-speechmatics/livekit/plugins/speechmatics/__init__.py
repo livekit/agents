@@ -10,6 +10,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Speechmatics STT plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more information.
+"""
+
 from .log import logger
 from .stt import STT, SpeechStream
 from .version import __version__

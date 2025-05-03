@@ -1,10 +1,8 @@
-# LiveKit Plugins AWS
+# AWS plugin for LiveKit Agents
 
-Agent Framework plugin for services from AWS.
+Support for AWS AI including Bedrock, Polly, and Transcribe.
 
-- aws polly for tts
-- aws transcribe for stt
-- aws bedrock for llm
+See [https://docs.livekit.io/agents/integrations/aws/](https://docs.livekit.io/agents/integrations/aws/) for more information.
 
 ## Installation
 

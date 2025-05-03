@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Minimal example plugin for LiveKit Agents
+
+This is a minimal example of a LiveKit plugin for Agents.
+"""
+
 from livekit.agents import Plugin
 
 from .log import logger

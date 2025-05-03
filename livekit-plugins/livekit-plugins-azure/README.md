@@ -1,6 +1,8 @@
-# LiveKit Plugins Azure
+# Azure plugin for LiveKit Agents
 
-Agent Framework plugin for services from Azure Cognitive Services. Currently supports STT and TTS.
+Support for Azure AI including Azure Speech. For Azure OpenAI, see the [OpenAI plugin](https://github.com/livekit/agents/livekit-plugins/livekit-plugins-openai).
+
+See [https://docs.livekit.io/agents/integrations/azure/](https://docs.livekit.io/agents/integrations/azure/) for more information.
 
 ## Installation
 

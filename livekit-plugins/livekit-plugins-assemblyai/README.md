@@ -1,6 +1,8 @@
-# LiveKit Plugins AssemblyAI
+# AssemblyAI plugin for LiveKit Agents
 
-Agent Framework plugin for AssemblyAI. Currently supports Streaming Speech-to-Text.
+Support for Streaming Speech-to-Text from AssemblyAI.
+
+See [https://docs.livekit.io/agents/integrations/stt/assemblyai/](https://docs.livekit.io/agents/integrations/stt/assemblyai/) for more information.
 
 ## Installation
 

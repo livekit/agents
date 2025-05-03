@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LiveKit Agents Anthropic plugin
+"""Anthropic plugin for LiveKit Agents
 
-See https://docs.livekit.io/integrations/llm/anthropic/ for more information.
+See https://docs.livekit.io/agents/integrations/llm/anthropic/ for more information.
 """
 
 from .llm import LLM, LLMStream

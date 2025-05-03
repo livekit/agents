@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Contextually-aware turn detection for LiveKit Agents
+
+See https://docs.livekit.io/agents/build/turns/turn-detector/ for more information.
+"""
+
 from livekit.agents import Plugin
 
 from .log import logger

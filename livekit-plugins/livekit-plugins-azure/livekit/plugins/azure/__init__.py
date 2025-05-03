@@ -10,6 +10,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Azure plugin for LiveKit Agents
+
+Support for Azure AI including Azure Speech. For Azure OpenAI, see the [OpenAI plugin](https://github.com/livekit/agents/livekit-plugins/livekit-plugins-openai).
+
+See https://docs.livekit.io/agents/integrations/azure/ for more information.
+"""
+
 from .stt import STT, SpeechStream
 from .tts import TTS
 from .version import __version__
