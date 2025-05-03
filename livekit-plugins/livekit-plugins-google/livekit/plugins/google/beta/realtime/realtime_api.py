@@ -18,6 +18,7 @@ from google.genai.types import (
     GenerationConfig,
     LiveClientContent,
     LiveClientRealtimeInput,
+    LiveClientToolResponse,
     LiveConnectConfig,
     LiveServerContent,
     LiveServerGoAway,
@@ -481,11 +482,18 @@ class RealtimeSession(llm.RealtimeSession):
                         not self._active_session or self._active_session != session
                     ):
                         break
-
                 if isinstance(msg, LiveClientContent):
-                    await session.send(input=msg)
+                    await session.send_client_content(
+                        turns=msg.turns, turn_complete=msg.turn_complete
+                    )
+                elif isinstance(msg, LiveClientToolResponse):
+                    await session.send_tool_response(function_responses=msg.function_responses)
+                elif isinstance(msg, LiveClientRealtimeInput):
+                    for media_chunk in msg.media_chunks:
+                        await session.send_realtime_input(media=media_chunk)
                 else:
-                    await session.send(input=msg)
+                    logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
+
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in send task: {e}", exc_info=e)
