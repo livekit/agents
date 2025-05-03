@@ -1,6 +1,6 @@
 # Azure plugin for LiveKit Agents
 
-Support for Azure AI including Azure Speech. For Azure OpenAI, see the [OpenAI plugin](https://github.com/livekit/agents/livekit-plugins/livekit-plugins-openai).
+Support for Azure AI including Azure Speech. For Azure OpenAI, see the [OpenAI plugin](https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-openai).
 
 See [https://docs.livekit.io/agents/integrations/azure/](https://docs.livekit.io/agents/integrations/azure/) for more information.
 
