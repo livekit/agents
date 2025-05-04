@@ -2,4 +2,4 @@
 "livekit-plugins-google": patch
 ---
 
-[draft] streaming for google tts (#2143)
+streaming for google tts (#2143)
