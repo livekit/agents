@@ -515,7 +515,9 @@ class SpeechStream(stt.SpeechStream):
                     logger.debug("stream timeout")
                     pass
                 else:
-                    raise APIStatusError(e.message, status_code=e.code or -1) from None
+                    raise APIStatusError(
+                        f"{e.message} {e.details}", status_code=e.code or -1
+                    ) from e
             except Exception as e:
                 raise APIConnectionError() from e
 
