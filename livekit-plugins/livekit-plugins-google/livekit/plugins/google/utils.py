@@ -175,9 +175,15 @@ class _GeminiJsonSchema:
         schema.pop("title", None)
         schema.pop("default", None)
         schema.pop("additionalProperties", None)
-        # Convert 'const' to 'enum' for Literal single-value compatibility
-        if "const" in schema:
-            schema["enum"] = [schema.pop("const")]
+        schema.pop("$schema", None)
+
+        if (const := schema.pop("const", None)) is not None:
+            # Gemini doesn't support const, but it does support enum with a single value
+            schema["enum"] = [const]
+
+        schema.pop("discriminator", None)
+        schema.pop("examples", None)
+
         if ref := schema.pop("$ref", None):
             key = re.sub(r"^#/\$defs/", "", ref)
             if key in refs_stack:
