@@ -300,7 +300,6 @@ class Checkout(BaseAgent):
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
-
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
     userdata = UserData()
     userdata.agents.update(
