@@ -175,6 +175,9 @@ class _GeminiJsonSchema:
         schema.pop("title", None)
         schema.pop("default", None)
         schema.pop("additionalProperties", None)
+        # Convert 'const' to 'enum' for Literal single-value compatibility
+        if "const" in schema:
+            schema["enum"] = [schema.pop("const")]
         if ref := schema.pop("$ref", None):
             key = re.sub(r"^#/\$defs/", "", ref)
             if key in refs_stack:
