@@ -44,17 +44,16 @@ async def entrypoint(ctx: JobContext):
         turn_detection=MultilingualModel(),
     )
 
-    # create room_io with pre-connect audio enabled to register the byte stream handler
+    # create and start room_io with pre-connect audio enabled to register the byte stream handler
     room_io = RoomIO(
         agent_session=session,
         room=ctx.room,
         input_options=RoomInputOptions(pre_connect_audio=True, pre_connect_audio_timeout=5.0),
     )
-
-    # connect to room first to notify the client to send pre-connect audio buffer,
-    # then start room_io to collect ongoing audio and combine with the buffer
-    await ctx.connect()
     await room_io.start()
+
+    # connect to room to notify the client to send pre-connect audio buffer,
+    await ctx.connect()
 
     # put the time consuming model/knowledge loading here
     # user audio buffering starts after the room_io is started

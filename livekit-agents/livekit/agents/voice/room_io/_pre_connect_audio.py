@@ -1,9 +1,7 @@
 import asyncio
 import contextlib
 import time
-from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Callable
 
 from livekit import rtc
 
@@ -17,9 +15,6 @@ PRE_CONNECT_AUDIO_ATTRIBUTE = "lk.agent.pre-connect-audio"
 class _PreConnectAudioBuffer:
     timestamp: float
     frames: list[rtc.AudioFrame] = field(default_factory=list)
-
-
-_WaitPreConnectAudio = Callable[[rtc.RemoteParticipant], Coroutine[Any, Any, list[rtc.AudioFrame]]]
 
 
 class PreConnectAudioHandler:
@@ -36,6 +31,17 @@ class PreConnectAudioHandler:
             task = asyncio.create_task(self._read_audio_task(reader, participant_id))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
+
+            def _on_timeout():
+                logger.warning(
+                    "pre-connect audio received but not completed in time",
+                    extra={"participant": participant_id},
+                )
+                if not task.done():
+                    task.cancel()
+
+            timeout_handle = asyncio.get_event_loop().call_later(self._timeout, _on_timeout)
+            task.add_done_callback(lambda _: timeout_handle.cancel())
 
         self._room.register_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM, _handler)
 
@@ -80,15 +86,6 @@ class PreConnectAudioHandler:
             sample_rate = int(reader.info.attributes["sampleRate"])
             num_channels = int(reader.info.attributes["channels"])
 
-            def _on_timeout():
-                logger.warning(
-                    "pre-connect audio received but not completed in time",
-                    extra={"participant": participant_id},
-                )
-                raise asyncio.TimeoutError()
-
-            timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-
             duration = 0
             audio_stream = utils.audio.AudioByteStream(sample_rate, num_channels)
             async for chunk in reader:
@@ -110,5 +107,3 @@ class PreConnectAudioHandler:
         except Exception as e:
             with contextlib.suppress(asyncio.InvalidStateError):
                 fut.set_exception(e)
-        finally:
-            timeout_handle.cancel()
