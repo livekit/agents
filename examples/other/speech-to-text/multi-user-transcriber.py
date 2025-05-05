@@ -100,6 +100,9 @@ class MultiUserTranscriber:
             room=self.ctx.room,
             participant=participant,
             input_options=RoomInputOptions(
+                # text input is not supported for multiple room participants
+                # if needed, register the text stream handler by yourself
+                # and route the text to different sessions based on the participant identity
                 text_enabled=False,
             ),
             output_options=RoomOutputOptions(
