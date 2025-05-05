@@ -30,9 +30,15 @@ class MCPServer(ABC):
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._read_timeout = client_session_timeout_seconds
 
+        self._cache_dirty = True
+        self._lk_tools: list[MCPTool] | None = None
+
     @property
     def initialized(self) -> bool:
         return self._client is not None
+
+    def invalidate_cache(self) -> None:
+        self._cache_dirty = True
 
     async def initialize(self) -> None:
         try:
@@ -58,53 +64,58 @@ class MCPServer(ABC):
         if self._client is None:
             raise RuntimeError("MCPServer isn't initialized")
 
+        if not self._cache_dirty and self._lk_tools is not None:
+            return self._lk_tools
+
         tools = await self._client.list_tools()
-
-        def make_function_tool(name: str):
-            async def _tool_called(raw_arguments: dict) -> Any:
-                # In case (somehow), the tool is called after the MCPServer aclose.
-                if self._client is None:
-                    raise ToolError(
-                        "Tool invocation failed: internal service is unavailable. "
-                        "Please check that the MCPServer is still running."
-                    )
-
-                tool_result = await self._client.call_tool(name, raw_arguments)
-
-                if tool_result.isError:
-                    error_str = "\n".join(str(part) for part in tool_result.content)
-                    raise ToolError(error_str)
-
-                # TODO(theomonnom): handle images & binary messages
-                if len(tool_result.content) == 1:
-                    return tool_result.content[0].model_dump_json()
-                elif len(tool_result.content) > 1:
-                    return json.dumps([item.model_dump() for item in tool_result.content])
-
-                raise ToolError(
-                    f"Tool '{name}' completed without producing a result. "
-                    "This might indicate an issue with internal processing."
-                )
-
-            return _tool_called
-
-        return [
-            function_tool(
-                make_function_tool(tool.name),
-                raw_schema={
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.inputSchema,
-                },
-            )
+        lk_tools = [
+            self._make_function_tool(tool.name, tool.description, tool.inputSchema)
             for tool in tools.tools
         ]
+
+        self._lk_tools = lk_tools
+        self._cache_dirty = False
+        return lk_tools
+
+    def _make_function_tool(
+        self, name: str, description: str | None, input_schema: dict
+    ) -> MCPTool:
+        async def _tool_called(raw_arguments: dict) -> Any:
+            # In case (somehow), the tool is called after the MCPServer aclose.
+            if self._client is None:
+                raise ToolError(
+                    "Tool invocation failed: internal service is unavailable. "
+                    "Please check that the MCPServer is still running."
+                )
+
+            tool_result = await self._client.call_tool(name, raw_arguments)
+
+            if tool_result.isError:
+                error_str = "\n".join(str(part) for part in tool_result.content)
+                raise ToolError(error_str)
+
+            # TODO(theomonnom): handle images & binary messages
+            if len(tool_result.content) == 1:
+                return tool_result.content[0].model_dump_json()
+            elif len(tool_result.content) > 1:
+                return json.dumps([item.model_dump() for item in tool_result.content])
+
+            raise ToolError(
+                f"Tool '{name}' completed without producing a result. "
+                "This might indicate an issue with internal processing."
+            )
+
+        return function_tool(
+            _tool_called,
+            raw_schema={"name": name, "description": description, "parameters": input_schema},
+        )
 
     async def aclose(self) -> None:
         try:
             await self._exit_stack.aclose()
         finally:
             self._client = None
+            self._lk_tools = None
 
     @abstractmethod
     def client_streams(
