@@ -168,7 +168,11 @@ class RealtimeModel(llm.RealtimeModel):
 
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
-        gcp_location = location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+        gcp_location = (
+            location
+            if is_given(location)
+            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+        )
 
         if vertexai:
             if not gcp_project or not gcp_location:
@@ -317,7 +321,9 @@ class RealtimeSession(llm.RealtimeSession):
         async with self._update_lock:
             self._chat_ctx = chat_ctx.copy()
             turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
-            tool_results = get_tool_results_for_realtime(self._chat_ctx, vertexai=self._opts.vertexai)
+            tool_results = get_tool_results_for_realtime(
+                self._chat_ctx, vertexai=self._opts.vertexai
+            )
             # TODO(dz): need to compute delta and then either append or recreate session
             if turns:
                 self._send_client_event(LiveClientContent(turns=turns, turn_complete=False))
