@@ -107,7 +107,7 @@ def _ensure_strict_json_schema(
             ]
 
     # strict mode doesn't support default
-    if json_schema.get("default") is not None:
+    if "default" in json_schema:
         json_schema.pop("default", None)
 
         # Treat any parameter with a default value as optional. If the parameter’s type doesn't

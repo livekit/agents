@@ -20,17 +20,21 @@ def to_fnc_ctx(fncs: list[FunctionTool]) -> list[types.FunctionDeclaration]:
     return [_build_gemini_fnc(fnc) for fnc in fncs]
 
 
-def get_tool_results_for_realtime(chat_ctx: llm.ChatContext) -> types.LiveClientToolResponse | None:
+def get_tool_results_for_realtime(
+    chat_ctx: llm.ChatContext, *, vertexai: bool = False
+) -> types.LiveClientToolResponse | None:
     function_responses: list[types.FunctionResponse] = []
     for msg in chat_ctx.items:
         if msg.type == "function_call_output":
-            function_responses.append(
-                types.FunctionResponse(
-                    id=msg.call_id,
-                    name=msg.name,
-                    response={"output": msg.output},
-                )
+            res = types.FunctionResponse(
+                name=msg.name,
+                response={"output": msg.output},
             )
+            if not vertexai:
+                # vertexai does not support id in FunctionResponse
+                # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
+                res.id = msg.call_id
+            function_responses.append(res)
     return (
         types.LiveClientToolResponse(function_responses=function_responses)
         if function_responses
@@ -39,7 +43,10 @@ def get_tool_results_for_realtime(chat_ctx: llm.ChatContext) -> types.LiveClient
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, cache_key: Any, ignore_functions: bool = False
+    chat_ctx: llm.ChatContext,
+    cache_key: Any,
+    ignore_functions: bool = False,
+    generate: bool = False,
 ) -> tuple[list[types.Content], types.Content | None]:
     turns: list[types.Content] = []
     system_instruction: types.Content | None = None
@@ -99,10 +106,9 @@ def to_chat_ctx(
     if current_role is not None and parts:
         turns.append(types.Content(role=current_role, parts=parts))
 
-    # # Gemini requires the last message to end with user's turn before they can generate
-    # # currently not used because to_chat_ctx should not be used to force a new generation
-    # if current_role != "user":
-    #     turns.append(types.Content(role="user", parts=[types.Part(text=".")]))
+    # Gemini requires the last message to end with user's turn before they can generate
+    if generate and current_role != "user":
+        turns.append(types.Content(role="user", parts=[types.Part(text=".")]))
 
     return turns, system_instruction
 
@@ -173,6 +179,15 @@ class _GeminiJsonSchema:
         schema.pop("title", None)
         schema.pop("default", None)
         schema.pop("additionalProperties", None)
+        schema.pop("$schema", None)
+
+        if (const := schema.pop("const", None)) is not None:
+            # Gemini doesn't support const, but it does support enum with a single value
+            schema["enum"] = [const]
+
+        schema.pop("discriminator", None)
+        schema.pop("examples", None)
+
         if ref := schema.pop("$ref", None):
             key = re.sub(r"^#/\$defs/", "", ref)
             if key in refs_stack:

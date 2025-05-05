@@ -18,6 +18,7 @@ from google.genai.types import (
     GenerationConfig,
     LiveClientContent,
     LiveClientRealtimeInput,
+    LiveClientToolResponse,
     LiveConnectConfig,
     LiveServerContent,
     LiveServerGoAway,
@@ -101,7 +102,7 @@ class RealtimeModel(llm.RealtimeModel):
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
-        model: LiveAPIModels | str = "gemini-2.0-flash-live-001",
+        model: NotGivenOr[LiveAPIModels | str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: Voice | str = "Puck",
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -133,7 +134,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str, optional): The name of the model to use. Defaults to "gemini-2.0-flash-live-001".
+            model (str, optional): The name of the model to use. Defaults to "gemini-2.0-flash-live-001" or "gemini-2.0-flash-exp" (vertexai).
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             language (str, optional): The language(BCP-47 Code) to use for the API. supported languages - https://ai.google.dev/gemini-api/docs/live#supported-languages
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
@@ -159,14 +160,24 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
 
+        if not is_given(model):
+            if vertexai:
+                model = "gemini-2.0-flash-exp"
+            else:
+                model = "gemini-2.0-flash-live-001"
+
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
-        gcp_location = location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION")
+        gcp_location = (
+            location
+            if is_given(location)
+            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+        )
 
         if vertexai:
             if not gcp_project or not gcp_location:
                 raise ValueError(
-                    "Project and location are required for VertexAI either via project and location or GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION environment variables"  # noqa: E501
+                    "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
                 )
             gemini_api_key = None  # VertexAI does not require an API key
         else:
@@ -310,7 +321,9 @@ class RealtimeSession(llm.RealtimeSession):
         async with self._update_lock:
             self._chat_ctx = chat_ctx.copy()
             turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
-            tool_results = get_tool_results_for_realtime(self._chat_ctx)
+            tool_results = get_tool_results_for_realtime(
+                self._chat_ctx, vertexai=self._opts.vertexai
+            )
             # TODO(dz): need to compute delta and then either append or recreate session
             if turns:
                 self._send_client_event(LiveClientContent(turns=turns, turn_complete=False))
@@ -481,11 +494,18 @@ class RealtimeSession(llm.RealtimeSession):
                         not self._active_session or self._active_session != session
                     ):
                         break
-
                 if isinstance(msg, LiveClientContent):
-                    await session.send(input=msg)
+                    await session.send_client_content(
+                        turns=msg.turns, turn_complete=msg.turn_complete
+                    )
+                elif isinstance(msg, LiveClientToolResponse):
+                    await session.send_tool_response(function_responses=msg.function_responses)
+                elif isinstance(msg, LiveClientRealtimeInput):
+                    for media_chunk in msg.media_chunks:
+                        await session.send_realtime_input(media=media_chunk)
                 else:
-                    await session.send(input=msg)
+                    logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
+
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in send task: {e}", exc_info=e)
