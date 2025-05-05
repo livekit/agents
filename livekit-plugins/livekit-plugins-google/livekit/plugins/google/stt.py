@@ -472,6 +472,7 @@ class SpeechStream(stt.SpeechStream):
                             features=cloud_speech.RecognitionFeatures(
                                 enable_automatic_punctuation=self._config.punctuate,
                                 enable_word_time_offsets=True,
+                                enable_spoken_punctuation=self._config.spoken_punctuation,
                             ),
                         ),
                         streaming_features=cloud_speech.StreamingRecognitionFeatures(
