@@ -17,7 +17,7 @@
 See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quickstarts, documentation, and examples.
 """
 
-from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, vision  # noqa: F401
+from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice  # noqa: F401
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -139,7 +139,7 @@ __all__ = [
     "tts",
     "utils",
     "vad",
-    "vision",
+    "voice",
 ]
 
 # Cleanup docs of unexported modules
