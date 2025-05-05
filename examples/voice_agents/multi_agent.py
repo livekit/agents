@@ -11,15 +11,15 @@ from livekit.agents import (
     ChatContext,
     JobContext,
     JobProcess,
+    MetricsCollectedEvent,
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
     WorkerOptions,
     cli,
-    metrics,
     function_tool,
-    MetricsCollectedEvent,
-    get_job_context
+    get_job_context,
+    metrics,
 )
 from livekit.plugins import deepgram, openai, silero
 

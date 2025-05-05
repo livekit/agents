@@ -7,14 +7,14 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
+    MetricsCollectedEvent,
     RoomInputOptions,
     RoomOutputOptions,
     RunContext,
     WorkerOptions,
     cli,
+    function_tool,
     metrics,
-    function_tool, 
-    MetricsCollectedEvent
 )
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel

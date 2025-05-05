@@ -14,10 +14,10 @@ from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     JobContext,
+    ModelSettings,
     WorkerOptions,
     cli,
     llm,
-    ModelSettings
 )
 from livekit.plugins import deepgram, openai, silero
 

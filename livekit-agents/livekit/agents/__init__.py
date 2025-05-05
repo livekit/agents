@@ -17,7 +17,7 @@
 See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quickstarts, documentation, and examples.
 """
 
-from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad  # noqa: F401
+from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, vision  # noqa: F401
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -66,8 +66,8 @@ from .voice import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    avatar,
     io,
-    avatar
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomInputOptions, RoomIO, RoomOutputOptions
@@ -139,6 +139,7 @@ __all__ = [
     "tts",
     "utils",
     "vad",
+    "vision",
 ]
 
 # Cleanup docs of unexported modules
