@@ -127,7 +127,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self,
         old_task: asyncio.Task | None,
         stream: rtc.VideoStream | rtc.AudioStream,
-        track_source: rtc.TrackSource.ValueType,
+        publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
         if old_task:
@@ -135,7 +135,7 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         extra = {
             "participant": participant.identity,
-            "source": rtc.TrackSource.Name(track_source),
+            "source": rtc.TrackSource.Name(publication.source),
         }
         logger.debug("start reading stream", extra=extra)
         async for event in stream:
@@ -174,7 +174,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = self._create_stream(track)
         self._publication = publication
         self._forward_atask = asyncio.create_task(
-            self._forward_task(self._forward_atask, self._stream, publication.source, participant)
+            self._forward_task(self._forward_atask, self._stream, publication, participant)
         )
         return True
 
@@ -228,10 +228,11 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self,
         old_task: asyncio.Task | None,
         stream: rtc.AudioStream,
-        track_source: rtc.TrackSource.ValueType,
+        publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        if self._pre_connect_audio_handler:
+        if self._pre_connect_audio_handler and publication.track:
+            # TODO(long): read the flag from track features
             try:
                 duration = 0
                 frames = await self._pre_connect_audio_handler.wait_for_data(participant)
@@ -257,7 +258,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     extra={"error": e, "participant": participant.identity},
                 )
 
-        await super()._forward_task(old_task, stream, track_source, participant)
+        await super()._forward_task(old_task, stream, publication, participant)
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None

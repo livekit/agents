@@ -50,6 +50,7 @@ class PreConnectAudioHandler:
         await utils.aio.cancel_and_wait(*self._tasks)
 
     async def wait_for_data(self, participant: rtc.RemoteParticipant) -> list[rtc.AudioFrame]:
+        # TODO(long): index the buffer by track
         if not participant.attributes.get(PRE_CONNECT_AUDIO_ATTRIBUTE) == "true":
             return []
 
