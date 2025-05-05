@@ -456,7 +456,12 @@ class AgentActivity(RecognitionHooks):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
-        if not is_given(audio) and not self.tts:
+        if (
+            not is_given(audio)
+            and not self.tts
+            and self._session.output.audio
+            and self._session.output.audio_enabled
+        ):
             raise RuntimeError("trying to generate speech from text without a TTS model")
 
         if (
@@ -526,7 +531,7 @@ class AgentActivity(RecognitionHooks):
         if not is_given(tool_choice) and task is not None:
             if task_info := _get_inline_task_info(task):
                 if task_info.function_call is not None:
-                    # when generete_reply is called inside a function_tool, set tool_choice to None by default  # noqa: E501
+                    # when generate_reply is called inside a function_tool, set tool_choice to None by default  # noqa: E501
                     tool_choice = "none"
 
         handle = SpeechHandle.create(
