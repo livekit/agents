@@ -3,6 +3,4 @@
 See https://docs.livekit.io/agents/integrations/ for a complete list and documentation.
 """
 
-__pdoc__ = {
-    'minimal': False
-}
+__pdoc__ = {"minimal": False}
