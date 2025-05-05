@@ -48,12 +48,18 @@ async def entrypoint(ctx: JobContext):
     def on_close(_: CloseEvent):
         logger.info("Session is closing")
 
-        # Assume there is only one caller in the room
-        participant = [
+        sip_participants = [
             p
             for p in ctx.room.remote_participants.values()
             if p.kind == ParticipantKind.PARTICIPANT_KIND_SIP
-        ][0]
+        ]
+
+        if len(sip_participants) == 0:
+            logger.info("No remote SIP participants found")
+            return
+
+        # Assume there is only one caller in the room
+        participant = sip_participants[0]
 
         def on_sip_transfer_done(f: asyncio.Future):
             if f.exception():

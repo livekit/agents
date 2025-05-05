@@ -25,6 +25,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
+import aiohttp.client_exceptions
 import numpy as np
 
 from livekit import rtc
@@ -618,13 +619,19 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
-        ws = await asyncio.wait_for(
-            self._session.ws_connect(
-                _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
-                headers={"Authorization": f"Token {self._api_key}"},
-            ),
-            self._conn_options.timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
+                    headers={"Authorization": f"Token {self._api_key}"},
+                ),
+                self._conn_options.timeout,
+            )
+        except aiohttp.client_exceptions.WSServerHandshakeError as e:
+            raise APIConnectionError(
+                f"failed to connect to deepgram: {e.code} {e.message} {e.headers}",
+                retryable=False,
+            ) from e
         return ws
 
     def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:

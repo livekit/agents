@@ -202,7 +202,7 @@ class RoomIO:
         self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session._room_io = self
 
-    async def aclose(self) -> None:
+    async def aclose(self, disconnect_room: bool) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
 
@@ -220,6 +220,9 @@ class RoomIO:
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
+
+        if disconnect_room:
+            await self._room.disconnect()
 
     @property
     def audio_output(self) -> AudioOutput | None:

@@ -419,7 +419,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
             if self._room_io:
-                await self._room_io.aclose()
+                await self._room_io.aclose(disconnect_room=error is not None)
 
     async def aclose(self) -> None:
         await self._aclose_impl()
