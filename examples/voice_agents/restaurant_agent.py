@@ -6,16 +6,10 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import Field
 
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    JobContext,
-    RoomInputOptions,
-    RunContext,
-    WorkerOptions,
-    cli,
-    function_tool,
-)
+from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, AgentSession, RunContext
+from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import cartesia, deepgram, openai, silero
 
 # from livekit.plugins import noise_cancellation

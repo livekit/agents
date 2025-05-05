@@ -5,16 +5,10 @@ import pathlib
 
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    CloseEvent,
-    ErrorEvent,
-    JobContext,
-    WorkerOptions,
-    cli,
-)
+from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.utils.audio import audio_frames_from_file
+from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.events import CloseEvent, ErrorEvent
 from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.rtc import ParticipantKind
 

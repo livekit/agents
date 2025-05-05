@@ -3,16 +3,10 @@ import logging
 import aiohttp
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    JobContext,
-    RoomInputOptions,
-    RoomOutputOptions,
-    WorkerOptions,
-    cli,
-    function_tool,
-)
+from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents.llm import function_tool
+from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
 from livekit.plugins import openai
 
 logger = logging.getLogger("weather-example")

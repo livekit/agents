@@ -8,18 +8,11 @@ import httpx
 from dotenv import load_dotenv
 
 from livekit import api, rtc
-from livekit.agents import (
-    ATTRIBUTE_PUBLISH_ON_BEHALF,
-    Agent,
-    AgentSession,
-    JobContext,
-    RoomOutputOptions,
-    WorkerOptions,
-    WorkerType,
-    cli,
-)
-from livekit.agents.avatar import DataStreamAudioOutput
-from livekit.agents.io import PlaybackFinishedEvent
+from livekit.agents import JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomOutputOptions
 from livekit.plugins import openai
 
 logger = logging.getLogger("avatar-example")

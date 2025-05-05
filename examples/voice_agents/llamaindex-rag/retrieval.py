@@ -14,11 +14,11 @@ from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     JobContext,
-    ModelSettings,
     WorkerOptions,
     cli,
     llm,
 )
+from livekit.agents.voice.agent import ModelSettings
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
