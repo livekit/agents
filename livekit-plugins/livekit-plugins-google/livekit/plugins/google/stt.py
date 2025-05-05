@@ -506,7 +506,7 @@ class SpeechStream(stt.SpeechStream):
                 raise APITimeoutError() from None
             except GoogleAPICallError as e:
                 if e.code == 409:
-                    logger.debug("stream timeout")
+                    logger.debug("stream timed out, restarting")
                     pass
                 else:
                     raise APIStatusError(e.message, status_code=e.code or -1) from None
