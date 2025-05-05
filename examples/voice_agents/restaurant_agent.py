@@ -16,6 +16,11 @@ from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("restaurant-example")
 logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    logger.addHandler(_h)
 
 load_dotenv()
 
@@ -79,6 +84,7 @@ async def update_name(
 ) -> str:
     """Called when the user provides their name.
     Confirm the spelling with the user before calling the function."""
+    logger.info("update_name called ‑ new name=%s", name)
     userdata = context.userdata
     userdata.customer_name = name
     return f"The name is updated to {name}"
@@ -91,6 +97,7 @@ async def update_phone(
 ) -> str:
     """Called when the user provides their phone number.
     Confirm the spelling with the user before calling the function."""
+    logger.info("update_phone called ‑ new phone=%s", phone)
     userdata = context.userdata
     userdata.customer_phone = phone
     return f"The phone number is updated to {phone}"
@@ -100,6 +107,7 @@ async def update_phone(
 async def to_greeter(context: RunContext_T) -> Agent:
     """Called when user asks any unrelated questions or requests
     any other services not in your job description."""
+    logger.info("to_greeter called")
     curr_agent: BaseAgent = context.session.current_agent
     return await curr_agent._transfer_to_agent("greeter", context)
 
@@ -126,12 +134,14 @@ class BaseAgent(Agent):
             role="system",  # role=system works for OpenAI's LLM and Realtime API
             content=f"You are {agent_name} agent. Current user data is {userdata.summarize()}",
         )
+        logger.debug("Updating chat context for %s", agent_name)
         await self.update_chat_ctx(chat_ctx)
         self.session.generate_reply(tool_choice="none")
 
     async def _transfer_to_agent(self, name: str, context: RunContext_T) -> tuple[Agent, str]:
         userdata = context.userdata
         current_agent = context.session.current_agent
+        logger.info("Transferring from %s to %s", current_agent.__class__.__name__, name)
         next_agent = userdata.agents[name]
         userdata.prev_agent = current_agent
 
@@ -157,6 +167,7 @@ class Greeter(BaseAgent):
         This function handles transitioning to the reservation agent
         who will collect the necessary details like reservation time,
         customer name and phone number."""
+        logger.info("Greeter transferring to %s", "reservation")
         return await self._transfer_to_agent("reservation", context)
 
     @function_tool()
@@ -164,6 +175,7 @@ class Greeter(BaseAgent):
         """Called when the user wants to place a takeaway order.
         This includes handling orders for pickup, delivery, or when the user wants to
         proceed to checkout with their existing order."""
+        logger.info("Greeter transferring to %s", "takeaway")
         return await self._transfer_to_agent("takeaway", context)
 
 
@@ -185,6 +197,7 @@ class Reservation(BaseAgent):
     ) -> str:
         """Called when the user provides their reservation time.
         Confirm the time with the user before calling the function."""
+        logger.info("update_reservation_time called ‑ time=%s", time)
         userdata = context.userdata
         userdata.reservation_time = time
         return f"The reservation time is updated to {time}"
@@ -192,6 +205,7 @@ class Reservation(BaseAgent):
     @function_tool()
     async def confirm_reservation(self, context: RunContext_T) -> str | tuple[Agent, str]:
         """Called when the user confirms the reservation."""
+        logger.info("confirm_reservation called")
         userdata = context.userdata
         if not userdata.customer_name or not userdata.customer_phone:
             return "Please provide your name and phone number first."
@@ -221,6 +235,7 @@ class Takeaway(BaseAgent):
         context: RunContext_T,
     ) -> str:
         """Called when the user create or update their order."""
+        logger.info("update_order called ‑ items=%s", items)
         userdata = context.userdata
         userdata.order = items
         return f"The order is updated to {items}"
@@ -228,6 +243,7 @@ class Takeaway(BaseAgent):
     @function_tool()
     async def to_checkout(self, context: RunContext_T) -> str | tuple[Agent, str]:
         """Called when the user confirms the order."""
+        logger.info("to_checkout called")
         userdata = context.userdata
         if not userdata.order:
             return "No takeaway order found. Please make an order first."
@@ -255,6 +271,7 @@ class Checkout(BaseAgent):
         context: RunContext_T,
     ) -> str:
         """Called when the user confirms the expense."""
+        logger.info("confirm_expense called ‑ expense=%s", expense)
         userdata = context.userdata
         userdata.expense = expense
         return f"The expense is confirmed to be {expense}"
@@ -269,6 +286,7 @@ class Checkout(BaseAgent):
     ) -> str:
         """Called when the user provides their credit card number, expiry date, and CVV.
         Confirm the spelling with the user before calling the function."""
+        logger.info("update_credit_card called ‑ ****%s", number[-4:])
         userdata = context.userdata
         userdata.customer_credit_card = number
         userdata.customer_credit_card_expiry = expiry
@@ -278,6 +296,7 @@ class Checkout(BaseAgent):
     @function_tool()
     async def confirm_checkout(self, context: RunContext_T) -> str | tuple[Agent, str]:
         """Called when the user confirms the checkout."""
+        logger.info("confirm_checkout called")
         userdata = context.userdata
         if not userdata.expense:
             return "Please confirm the expense first."
@@ -295,11 +314,14 @@ class Checkout(BaseAgent):
     @function_tool()
     async def to_takeaway(self, context: RunContext_T) -> tuple[Agent, str]:
         """Called when the user wants to update their order."""
+        logger.info("Checkout transferring back to takeaway")
         return await self._transfer_to_agent("takeaway", context)
 
 
 async def entrypoint(ctx: JobContext):
+    logger.info("Connecting to LiveKit…")
     await ctx.connect()
+    logger.info("Connected.")
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
     userdata = UserData()
     userdata.agents.update(
@@ -321,6 +343,7 @@ async def entrypoint(ctx: JobContext):
         # llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
 
+    logger.info("Starting AgentSession with Greeter")
     await session.start(
         agent=userdata.agents["greeter"],
         room=ctx.room,
@@ -328,6 +351,7 @@ async def entrypoint(ctx: JobContext):
             # noise_cancellation=noise_cancellation.BVC(),
         ),
     )
+    logger.info("AgentSession finished")
 
     # await agent.say("Welcome to our restaurant! How may I assist you today?")
 
