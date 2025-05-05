@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 
 import aiohttp
+from PIL.Image import Image
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -21,7 +23,6 @@ from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .log import logger
 
-DEFAULT_AVATAR_ID = "default-avatar-id"
 DEFAULT_API_URL = "https://api.hedra.com"
 _AVATAR_AGENT_IDENTITY = "hedra-avatar-agent"
 _AVATAR_AGENT_NAME = "hedra-avatar-agent"
@@ -38,13 +39,18 @@ class AvatarSession:
         self,
         *,
         avatar_id: NotGivenOr[str | None] = NOT_GIVEN,
+        avatar_image: NotGivenOr[Image] = NOT_GIVEN,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        self._avatar_id = avatar_id or DEFAULT_AVATAR_ID
+        self._avatar_id = avatar_id
+        self._avatar_image = avatar_image
+        if not self._avatar_id and not self._avatar_image:
+            raise HedraException("avatar_id or avatar_image must be provided")
+
         self._api_url = api_url or os.getenv("HEDRA_API_URL", DEFAULT_API_URL)
         self._api_key = api_key or os.getenv("HEDRA_API_KEY")
         if self._api_key is None:
@@ -107,6 +113,19 @@ class AvatarSession:
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
 
+        data = aiohttp.FormData({"livekit_url": livekit_url, "livekit_token": livekit_token})
+
+        if self._avatar_id:
+            data.add_field("avatar_id", self._avatar_id)
+
+        if self._avatar_image:
+            img_byte_arr = io.BytesIO()
+            self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
+            img_byte_arr.seek(0)
+            data.add_field(
+                "avatar_image", img_byte_arr, filename="avatar.jpg", content_type="image/jpeg"
+            )
+
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._ensure_http_session().post(
@@ -114,11 +133,7 @@ class AvatarSession:
                     headers={
                         "x-api-key": self._api_key,
                     },
-                    json={
-                        "avatar_id": self._avatar_id,
-                        "livekit_url": livekit_url,
-                        "livekit_token": livekit_token,
-                    },
+                    data=data,
                     timeout=self._conn_options.timeout,
                 ) as response:
                     if not response.ok:
