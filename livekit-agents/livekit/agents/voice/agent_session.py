@@ -321,24 +321,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await chat_cli.start()
 
             elif is_given(room) and not self._room_io:
-                room_input_options = copy.deepcopy(room_input_options)
-                room_output_options = copy.deepcopy(room_output_options)
+                room_input_options = copy.copy(
+                    room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
+                )
+                room_output_options = copy.copy(
+                    room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
+                )
 
-                if (
-                    self.input.audio is not None
-                    and is_given(room_input_options)
-                    and room_input_options.audio_enabled
-                ):
+                if self.input.audio is not None and room_input_options.audio_enabled:
                     logger.warning(
                         "RoomIO audio input is enabled but input.audio is already set, ignoring.."
                     )
                     room_input_options.audio_enabled = False
 
-                if (
-                    self.output.audio is not None
-                    and is_given(room_output_options)
-                    and room_output_options.audio_enabled
-                ):
+                if self.output.audio is not None and room_output_options.audio_enabled:
                     logger.warning(
                         "RoomIO audio output is enabled but output.audio is already set, ignoring.."
                     )
@@ -346,7 +342,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if (
                     self.output.transcription is not None
-                    and is_given(room_output_options)
                     and room_output_options.transcription_enabled
                 ):
                     logger.warning(
@@ -357,8 +352,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(
                     room=room,
                     agent_session=self,
-                    input_options=(room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS),
-                    output_options=(room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS),
+                    input_options=room_input_options,
+                    output_options=room_output_options,
                 )
                 await self._room_io.start()
 

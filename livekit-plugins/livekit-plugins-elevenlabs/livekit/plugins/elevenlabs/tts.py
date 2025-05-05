@@ -418,20 +418,25 @@ class SynthesizeStream(tts.SynthesizeStream):
             xml_content = []
             async for data in word_stream:
                 text = data.token
-                # send the xml phoneme in one go
+                # send xml tags fully formed
+                xml_start_tokens = ["<phoneme", "<break"]
+                xml_end_tokens = ["</phoneme>", "/>"]
+
                 if (
                     self._opts.enable_ssml_parsing
-                    and data.token.startswith("<phoneme")
+                    and any(data.token.startswith(start) for start in xml_start_tokens)
                     or xml_content
                 ):
                     xml_content.append(text)
-                    if data.token.find("</phoneme>") > -1:
+
+                    if any(data.token.find(end) > -1 for end in xml_end_tokens):
                         text = self._opts.word_tokenizer.format_words(xml_content)
                         xml_content = []
                     else:
                         continue
 
                 data_pkt = {"text": f"{text} "}  # must always end with a space
+
                 self._mark_started()
                 await ws_conn.send_str(json.dumps(data_pkt))
             if xml_content:

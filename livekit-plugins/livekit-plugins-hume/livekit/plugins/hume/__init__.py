@@ -20,9 +20,7 @@ __version__ = "1.0.0"
 from hume.tts import (
     Format,
     PostedContext,
-    PostedUtterance,
-    PostedUtteranceVoiceWithId,
-    PostedUtteranceVoiceWithName,
+    PostedUtteranceVoice,
 )
 from livekit.agents import Plugin
 
@@ -32,10 +30,8 @@ from .tts import TTS
 __all__ = [
     "TTS",
     "Format",
-    "PostedUtterance",
     "PostedContext",
-    "PostedUtteranceVoiceWithName",
-    "PostedUtteranceVoiceWithId",
+    "PostedUtteranceVoice",
 ]
 
 
