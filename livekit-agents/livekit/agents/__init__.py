@@ -70,7 +70,7 @@ from .voice import (
     io,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
-from .voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF, RoomInputOptions, RoomIO, RoomOutputOptions
+from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .worker import SimulateJobInfo, Worker, WorkerOptions, WorkerPermissions, WorkerType
 
 __all__ = [
@@ -92,7 +92,6 @@ __all__ = [
     "RoomIO",
     "RoomInputOptions",
     "RoomOutputOptions",
-    "ATTRIBUTE_PUBLISH_ON_BEHALF",
     "ChatMessage",
     "ChatRole",
     "ChatContent",
