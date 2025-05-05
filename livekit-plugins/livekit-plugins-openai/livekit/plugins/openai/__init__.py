@@ -16,9 +16,11 @@
 
 Support for OpenAI Realtime API, LLM, TTS, and STT APIs.
 
-Also includes support for a large number of OpenAI-compatible APIs including Azure OpenAI, Cerebras, Fireworks, Perplexity, Telnyx, xAI, Ollama, and DeepSeek.
+Also includes support for a large number of OpenAI-compatible APIs including Azure OpenAI, Cerebras,
+Fireworks, Perplexity, Telnyx, xAI, Ollama, and DeepSeek.
 
-See https://docs.livekit.io/agents/integrations/openai/ and https://docs.livekit.io/agents/integrations/llm/ for more information.
+See https://docs.livekit.io/agents/integrations/openai/ and
+https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
 from . import realtime
@@ -35,7 +37,6 @@ __all__ = [
     "LLM",
     "LLMStream",
     "STTModels",
-    # "beta",
     "TTSModels",
     "TTSVoices",
     "create_embeddings",

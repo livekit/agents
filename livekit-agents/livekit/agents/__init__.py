@@ -14,7 +14,8 @@
 
 """LiveKit Agents for Python
 
-See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quickstarts, documentation, and examples.
+See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quickstarts,
+documentation, and examples.
 """
 
 from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice  # noqa: F401
