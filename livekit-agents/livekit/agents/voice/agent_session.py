@@ -5,7 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
+from typing import Generic, Literal, Protocol, TypeVar, Union, runtime_checkable, TYPE_CHECKING
 
 from livekit import rtc
 
@@ -31,6 +31,9 @@ from .events import (
     UserStateChangedEvent,
 )
 from .speech_handle import SpeechHandle
+
+if TYPE_CHECKING:
+    from ..llm import mcp
 
 
 @dataclass
@@ -102,6 +105,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
         discard_audio_if_uninterruptible: bool = True,
@@ -140,6 +144,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             vad (vad.VAD, optional): Voice-activity detector
             llm (llm.LLM | llm.RealtimeModel, optional): LLM or RealtimeModel
             tts (tts.TTS, optional): Text-to-speech engine.
+            mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
+                providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             allow_interruptions (bool): Whether the user can interrupt the
                 agent mid-utterance. Default ``True``.
@@ -187,6 +193,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+        self._mcp_servers = mcp_servers or None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -243,6 +250,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def vad(self) -> vad.VAD | None:
         return self._vad
+
+    @property
+    def mcp_servers(self) -> list[mcp.MCPServer] | None:
+        return self._mcp_servers
 
     @property
     def input(self) -> io.AgentInput:

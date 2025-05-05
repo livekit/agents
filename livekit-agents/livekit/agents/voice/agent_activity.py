@@ -53,6 +53,7 @@ def log_event(event: str, **kwargs) -> None:
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession, TurnDetectionMode
+    from ..llm import mcp
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -162,6 +163,8 @@ class AgentActivity(RecognitionHooks):
                 "for more responsive interruption handling."
             )
 
+        self._mcp_tools: list[mcp.MCPTool] = []
+
     @property
     def draining(self) -> bool:
         return self._draining
@@ -171,28 +174,40 @@ class AgentActivity(RecognitionHooks):
         return self._session
 
     @property
-    def turn_detection(self) -> TurnDetectionMode | None:
-        return self._agent._turn_detection or self._session._turn_detection
-
-    @property
     def agent(self) -> Agent:
         return self._agent
 
     @property
+    def turn_detection(self) -> TurnDetectionMode | None:
+        return (
+            self._agent.turn_detection
+            if is_given(self._agent.turn_detection)
+            else self._session.turn_detection
+        )
+
+    @property
     def stt(self) -> stt.STT | None:
-        return self._agent.stt or self._session.stt
+        return self._agent.stt if is_given(self._agent.stt) else self._session.stt
 
     @property
     def llm(self) -> llm.LLM | llm.RealtimeModel | None:
-        return self._agent.llm or self._session.llm
+        return self._agent.llm if is_given(self._agent.llm) else self._session.llm
 
     @property
     def tts(self) -> tts.TTS | None:
-        return self._agent.tts or self._session.tts
+        return self._agent.tts if is_given(self._agent.tts) else self._session.tts
 
     @property
     def vad(self) -> vad.VAD | None:
-        return self._agent.vad or self._session.vad
+        return self._agent.vad if is_given(self._agent.vad) else self._session.vad
+
+    @property
+    def mcp_servers(self) -> list[mcp.MCPServer] | None:
+        return (
+            self._agent.mcp_servers
+            if is_given(self._agent.mcp_servers)
+            else self._session.mcp_servers
+        )
 
     @property
     def allow_interruptions(self) -> bool:
@@ -209,6 +224,10 @@ class AgentActivity(RecognitionHooks):
     @property
     def current_speech(self) -> SpeechHandle | None:
         return self._current_speech
+
+    @property
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
+        return self._agent.tools + self._mcp_tools
 
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
@@ -232,7 +251,7 @@ class AgentActivity(RecognitionHooks):
             await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        chat_ctx = chat_ctx.copy(tools=self._agent.tools)
+        chat_ctx = chat_ctx.copy(tools=self.tools)
 
         self._agent._chat_ctx = chat_ctx
 
@@ -294,6 +313,29 @@ class AgentActivity(RecognitionHooks):
         async with self._lock:
             self._agent._activity = self
 
+            if self.mcp_servers:
+
+                @utils.log_exceptions(logger=logger)
+                async def _list_mcp_tools_task(mcp_server: mcp.MCPServer) -> list[mcp.MCPTool]:
+                    if not mcp_server.initialized:
+                        await mcp_server.initialize()
+
+                    return await mcp_server.list_tools()
+
+                gathered = await asyncio.gather(
+                    *(_list_mcp_tools_task(s) for s in self.mcp_servers), return_exceptions=True
+                )
+                tools: list[mcp.MCPTool] = []
+                for mcp_server, res in zip(self.mcp_servers, gathered):
+                    if isinstance(res, BaseException):
+                        logger.error(
+                            f"Failed to list tools from MCP server {mcp_server}", exc_info=res
+                        )
+                    else:
+                        tools.extend(res)
+
+                self._mcp_tools = tools
+
             if isinstance(self.llm, llm.RealtimeModel):
                 self._rt_session = self.llm.session()
                 self._rt_session.on("generation_created", self._on_generation_created)
@@ -318,7 +360,7 @@ class AgentActivity(RecognitionHooks):
                     logger.exception("failed to update the chat_ctx")
 
                 try:
-                    await self._rt_session.update_tools(self._agent.tools)
+                    await self._rt_session.update_tools(self.tools)
                 except llm.RealtimeError:
                     logger.exception("failed to update the tools")
 
@@ -568,7 +610,7 @@ class AgentActivity(RecognitionHooks):
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
-                    tools=self._agent.tools,
+                    tools=self.tools,
                     new_message=user_message.model_copy() if user_message else None,
                     instructions=instructions or None,
                     model_settings=ModelSettings(
@@ -1035,7 +1077,7 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         chat_ctx: llm.ChatContext,
-        tools: list[llm.FunctionTool],
+        tools: list[llm.FunctionTool | llm.RawFunctionTool],
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
@@ -1359,7 +1401,7 @@ class AgentActivity(RecognitionHooks):
             if self._session.output.transcription_enabled
             else None
         )
-        tool_ctx = llm.ToolContext(self._agent.tools)
+        tool_ctx = llm.ToolContext(self.tools)
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]

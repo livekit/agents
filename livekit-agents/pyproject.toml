@@ -45,6 +45,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = ["mcp>=1.6.0, <2; python_version >= '3.10'"]
 codecs = ["av>=12.0.0", "numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
 aws = ["livekit-plugins-aws>=1.0.19"]

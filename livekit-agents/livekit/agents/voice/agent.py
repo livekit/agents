@@ -16,6 +16,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, TurnDetectionMode
+    from ..llm import mcp
 
 
 @dataclass
@@ -36,6 +37,7 @@ class Agent:
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
@@ -48,6 +50,11 @@ class Agent:
         self._tts = tts
         self._vad = vad
         self._allow_interruptions = allow_interruptions
+
+        if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
+            mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
+
+        self._mcp_servers = mcp_servers
         self._activity: AgentActivity | None = None
 
     @property
@@ -191,6 +198,19 @@ class Agent:
             NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
         """  # noqa: E501
         return self._tts
+
+    @property
+    def mcp_servers(self) -> NotGivenOr[list[mcp.MCPServer] | None]:
+        """
+        Retrieves the list of Model Context Protocol (MCP) servers providing external tools.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides MCP servers,
+        the session's MCP servers will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[list[mcp.MCPServer]]: An optional list of MCP servers.
+        """
+        return self._mcp_servers
 
     @property
     def vad(self) -> NotGivenOr[vad.VAD | None]:

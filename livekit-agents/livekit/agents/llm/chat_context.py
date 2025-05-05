@@ -21,11 +21,11 @@ from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
 
 from livekit import rtc
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.misc import is_given
 
 from .. import utils
 from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils.misc import is_given
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool, RawFunctionTool
