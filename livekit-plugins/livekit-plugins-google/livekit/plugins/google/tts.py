@@ -266,8 +266,8 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
             raise APIStatusError(
-                e.message, status_code=e.code or -1, request_id=None, body=None
-            ) from None
+                f"{e.message} {e.details}", status_code=e.code or -1, request_id=None, body=None
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -355,12 +355,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             for frame in audio_bstream.flush():
                 emitter.push(frame)
             emitter.flush()
-        except DeadlineExceeded:
-            raise APITimeoutError() from None
+        except DeadlineExceeded as e:
+            logger.debug(f"google tts deadline exceeded: {e}")
+            pass
         except GoogleAPICallError as e:
             raise APIStatusError(
-                e.message, status_code=e.code or -1, request_id=request_id, body=None
-            ) from None
+                f"{e.message} {e.details}",
+                status_code=e.code or -1,
+                request_id=request_id,
+                body=None,
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e
 
