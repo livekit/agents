@@ -52,8 +52,8 @@ def log_event(event: str, **kwargs) -> None:
 
 
 if TYPE_CHECKING:
-    from .agent_session import AgentSession, TurnDetectionMode
     from ..llm import mcp
+    from .agent_session import AgentSession, TurnDetectionMode
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")

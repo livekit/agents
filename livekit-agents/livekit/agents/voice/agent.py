@@ -14,9 +14,9 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 
 if TYPE_CHECKING:
+    from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, TurnDetectionMode
-    from ..llm import mcp
 
 
 @dataclass
@@ -209,7 +209,7 @@ class Agent:
 
         Returns:
             NotGivenOr[list[mcp.MCPServer]]: An optional list of MCP servers.
-        """
+        """  # noqa: E501
         return self._mcp_servers
 
     @property

@@ -15,8 +15,8 @@ class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You can retrieve data via the MCP server. "
-                "The interface is voice-based: accept spoken user queries and respond with synthesized speech."
+                "You can retrieve data via the MCP server. The interface is voice-based: "
+                "accept spoken user queries and respond with synthesized speech."
             ),
         )
 

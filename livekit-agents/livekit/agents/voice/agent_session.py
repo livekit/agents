@@ -5,7 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, Protocol, TypeVar, Union, runtime_checkable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
 
 from livekit import rtc
 
