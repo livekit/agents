@@ -46,91 +46,114 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    if args.console:
-        print(_esc(34) + "=" * 50 + _esc(0))
-        print(_esc(34) + "     Livekit Agents - Console" + _esc(0))
-        print(_esc(34) + "=" * 50 + _esc(0))
-        print("Press [Ctrl+B] to toggle between Text/Audio mode, [Q] to quit.\n")
-
-    worker = Worker(args.opts, devmode=args.devmode, register=args.register, loop=loop)
-
-    loop.set_debug(args.asyncio_debug)
-    loop.slow_callback_duration = 0.1  # 100ms
-    utils.aio.debug.hook_slow_callbacks(2)
-
-    @worker.once("worker_started")
-    def _worker_started():
-        if args.simulate_job and args.reload_count == 0:
-            loop.create_task(worker.simulate_job(args.simulate_job))
-
-        if args.devmode:
-            logger.info(
-                f"{_esc(1)}see tracing information at http://localhost:{worker.worker_info.http_port}/debug{_esc(0)}"
-            )
-        else:
-            logger.info(
-                f"see tracing information at http://localhost:{worker.worker_info.http_port}/debug"
-            )
-
-    try:
-
-        def _signal_handler():
-            raise KeyboardInterrupt
-
-        if threading.current_thread() is threading.main_thread():
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, _signal_handler)
-
-    except NotImplementedError:
-        # TODO(theomonnom): add_signal_handler is not implemented on win
-        pass
-
-    async def _worker_run(worker: Worker) -> None:
+    # Save original terminal settings if on non-Windows platform and in console mode
+    original_terminal_settings = None
+    if args.console and sys.platform != "win32":
+        import termios
+        fd = sys.stdin.fileno()
         try:
-            await worker.run()
+            original_terminal_settings = termios.tcgetattr(fd)
         except Exception:
-            logger.exception("worker failed")
-
-    watch_client = None
-    if args.watch:
-        from .watcher import WatchClient
-
-        watch_client = WatchClient(worker, args, loop=loop)
-        watch_client.start()
+            logger.warning("Failed to save original terminal settings")
 
     try:
-        main_task = loop.create_task(_worker_run(worker), name="agent_runner")
+        if args.console:
+            print(_esc(34) + "=" * 50 + _esc(0))
+            print(_esc(34) + "     Livekit Agents - Console" + _esc(0))
+            print(_esc(34) + "=" * 50 + _esc(0))
+            print("Press [Ctrl+B] to toggle between Text/Audio mode, [Q] to quit.\n")
+
+        worker = Worker(args.opts, devmode=args.devmode, register=args.register, loop=loop)
+
+        loop.set_debug(args.asyncio_debug)
+        loop.slow_callback_duration = 0.1  # 100ms
+        utils.aio.debug.hook_slow_callbacks(2)
+
+        @worker.once("worker_started")
+        def _worker_started():
+            if args.simulate_job and args.reload_count == 0:
+                loop.create_task(worker.simulate_job(args.simulate_job))
+
+            if args.devmode:
+                logger.info(
+                    f"{_esc(1)}see tracing information at http://localhost:{worker.worker_info.http_port}/debug{_esc(0)}"
+                )
+            else:
+                logger.info(
+                    f"see tracing information at http://localhost:{worker.worker_info.http_port}/debug"
+                )
+
         try:
-            loop.run_until_complete(main_task)
-        except KeyboardInterrupt:
+
+            def _signal_handler():
+                raise KeyboardInterrupt
+
+            if threading.current_thread() is threading.main_thread():
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, _signal_handler)
+
+        except NotImplementedError:
+            # TODO(theomonnom): add_signal_handler is not implemented on win
             pass
 
-        try:
-            if not args.devmode:
-                loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+        async def _worker_run(worker: Worker) -> None:
+            try:
+                await worker.run()
+            except Exception:
+                logger.exception("worker failed")
 
-            loop.run_until_complete(worker.aclose())
+        watch_client = None
+        if args.watch:
+            from .watcher import WatchClient
 
-            if watch_client:
-                loop.run_until_complete(watch_client.aclose())
-        except KeyboardInterrupt:
-            if not jupyter:
-                logger.warning("exiting forcefully")
-                import os
-
-                os._exit(1)  # TODO(theomonnom): add aclose(force=True) in worker
-    finally:
-        if jupyter:
-            loop.close()  # close can only be called from the main thread
-            return  # noqa: B012
+            watch_client = WatchClient(worker, args, loop=loop)
+            watch_client.start()
 
         try:
-            tasks = asyncio.all_tasks(loop)
-            for task in tasks:
-                task.cancel()
+            main_task = loop.create_task(_worker_run(worker), name="agent_runner")
+            try:
+                loop.run_until_complete(main_task)
+            except KeyboardInterrupt:
+                pass
 
-            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.run_until_complete(loop.shutdown_default_executor())
+            try:
+                if not args.devmode:
+                    loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+
+                loop.run_until_complete(worker.aclose())
+
+                if watch_client:
+                    loop.run_until_complete(watch_client.aclose())
+            except KeyboardInterrupt:
+                if not jupyter:
+                    logger.warning("exiting forcefully")
+                    import os
+
+                    os._exit(1)  # TODO(theomonnom): add aclose(force=True) in worker
         finally:
-            loop.close()
+            if jupyter:
+                loop.close()  # close can only be called from the main thread
+                return  # noqa: B012
+
+            try:
+                tasks = asyncio.all_tasks(loop)
+                for task in tasks:
+                    task.cancel()
+
+                loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
+            finally:
+                loop.close()
+    finally:
+        # Restore terminal settings if needed
+        if original_terminal_settings is not None:
+            try:
+                import termios
+                fd = sys.stdin.fileno()
+                termios.tcsetattr(fd, termios.TCSADRAIN, original_terminal_settings)
+                logger.debug("Terminal settings restored")
+            except Exception:
+                logger.warning("Failed to restore terminal settings")
+                # If we can't restore settings, print a message for the user
+                print("\nIf your terminal is showing strange behavior, run the 'reset' command.")
