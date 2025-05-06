@@ -417,6 +417,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self.emit("close", CloseEvent(error=error))
 
+            if error is not None:
+                logger.error(f"AgentSession is closing due to unrecoverable error {error}")
+
             if self._activity is not None:
                 await self._activity.aclose()
 
