@@ -107,7 +107,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
 
         try:
             if not args.devmode:
-                loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+                loop.run_until_complete(worker.drain(timeout=args.opts.drain_timeout))
 
             loop.run_until_complete(worker.aclose())
 
