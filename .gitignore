@@ -167,3 +167,4 @@ node_modules
 credentials.json
 pyrightconfig.json
 docs/
+.aider*

@@ -398,12 +398,29 @@ class Agent:
             assert activity.stt is not None, "stt_node called but no STT node is available"
 
             wrapped_stt = activity.stt
+            
+            # Add debug logging
+            logger.debug(
+                "STT capabilities check",
+                extra={
+                    "stt_type": type(activity.stt).__name__,
+                    "stt_dir": dir(activity.stt),
+                    "has_capabilities": hasattr(activity.stt, "capabilities"),
+                    "capabilities_dir": dir(activity.stt.capabilities) if hasattr(activity.stt, "capabilities") else None,
+                }
+            )
 
-            if not activity.stt.capabilities.streaming:
+            # Check if STT has capabilities attribute and if streaming is supported
+            if not hasattr(activity.stt, "capabilities") or not activity.stt.capabilities.streaming:
                 if not activity.vad:
+                    # Get the label safely
+                    stt_label = getattr(activity.stt, "label", type(activity.stt).__name__)
+                    
                     raise RuntimeError(
-                        f"The STT ({activity.stt.label}) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming"  # noqa: E501
-                        "Or manually wrap your STT in a stt.StreamAdapter"
+                        f"The STT ({stt_label}) does not support streaming or has missing capabilities attribute. "
+                        f"Add a VAD to the AgentTask/VoiceAgent to enable streaming, "
+                        f"or manually wrap your STT in a stt.StreamAdapter, "
+                        f"or ensure your STT implementation properly initializes the capabilities attribute."
                     )
 
                 wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)

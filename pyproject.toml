@@ -15,6 +15,8 @@ livekit-plugins-fal = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
+livekit-plugins-whisper = { workspace = true }
+livekit-plugins-edge-tts = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
@@ -42,6 +44,8 @@ dev = [
     "ruff",
     "pytest-asyncio>=0.25.3",
     "jiwer>=3.1.0",
+    "pyaudio>=0.2.14",
+    "torch>=2.7.0",
 ]
 
 [tool.ruff]
