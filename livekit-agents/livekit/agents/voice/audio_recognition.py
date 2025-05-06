@@ -189,6 +189,15 @@ class AudioRecognition:
 
         self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
 
+    @property
+    def current_transcript(self) -> str:
+        """
+        Transcript for this turn, including interim transcript if available.
+        """
+        if self._audio_interim_transcript:
+            return self._audio_transcript + " " + self._audio_interim_transcript
+        return self._audio_transcript
+
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         if (
             self._manual_turn_detection
