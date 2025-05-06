@@ -217,6 +217,9 @@ class RoomIO:
         if self._tr_synchronizer:
             await self._tr_synchronizer.aclose()
 
+        if self._audio_output:
+            await self._audio_output.aclose()
+
         # cancel and wait for all pending tasks
         await utils.aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
