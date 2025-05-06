@@ -29,6 +29,10 @@ class StreamAdapter(TTS):
         def _forward_metrics(*args, **kwargs):
             self.emit("metrics_collected", *args, **kwargs)
 
+        @self.on("error")
+        def _forward_error(*args, **kwargs):
+            self._tts.emit("error", *args, **kwargs)
+
     def synthesize(
         self,
         text: str,
