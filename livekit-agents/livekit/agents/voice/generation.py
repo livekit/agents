@@ -112,6 +112,8 @@ def perform_llm_inference(
                         logger.warning(
                             f"LLM node returned an unexpected type: {type(chunk)}",
                         )
+            except StopResponse:
+                return  # ignore this turn
             finally:
                 if isinstance(llm_node, _ACloseable):
                     await llm_node.aclose()
