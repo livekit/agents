@@ -24,6 +24,10 @@ class StreamAdapter(STT):
         def _forward_metrics(*args, **kwargs):
             self.emit("metrics_collected", *args, **kwargs)
 
+        @self.on("error")
+        def _forward_error(*args, **kwargs):
+            self._stt.emit("error", *args, **kwargs)
+
     @property
     def wrapped_stt(self) -> STT:
         return self._stt
