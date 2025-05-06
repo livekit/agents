@@ -1,6 +1,5 @@
 from __future__ import annotations  # noqa: I001
 
-
 import click
 
 from .. import utils
@@ -48,15 +47,17 @@ def run_app(
     @click.option(
         "--drain-timeout",
         type=int,
-        default=0,
+        default=None,
         help="Time in seconds to wait for jobs to finish before shutting down",
     )
-    def start(log_level: str, url: str, api_key: str, api_secret: str, drain_timeout: int) -> None:
+    def start(
+        log_level: str, url: str, api_key: str, api_secret: str, drain_timeout: int | None = None
+    ) -> None:
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
         # backwards compatibility
-        if drain_timeout > 0:
+        if drain_timeout is not None:
             opts.drain_timeout = drain_timeout
         args = proto.CliArgs(
             opts=opts,
