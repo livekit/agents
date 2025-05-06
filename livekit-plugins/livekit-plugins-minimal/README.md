@@ -1,4 +1,4 @@
-# LiveKit Plugins Minimal
+# Minimal example plugin for LiveKit Agents
 
 This is a minimal example of a LiveKit plugin for Agents.
 
