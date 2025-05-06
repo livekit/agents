@@ -13,6 +13,7 @@ from .. import debug, llm, stt, tts, utils, vad
 from ..llm.tool_context import StopResponse
 from ..log import logger
 from ..metrics import EOUMetrics, LLMMetrics, STTMetrics, TTSMetrics, VADMetrics
+from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
@@ -774,20 +775,33 @@ class AgentActivity(RecognitionHooks):
             # ignore if turn_detection is enabled on the realtime model
             return
 
-        if ev.speech_duration > self._session.options.min_interruption_duration:
-            if (
-                self._current_speech is not None
-                and not self._current_speech.interrupted
-                and self._current_speech.allow_interruptions
-            ):
-                log_event(
-                    "speech interrupted by vad",
-                    speech_id=self._current_speech.id,
-                )
-                if self._rt_session is not None:
-                    self._rt_session.interrupt()
+        if ev.speech_duration < self._session.options.min_interruption_duration:
+            return
 
-                self._current_speech.interrupt()
+        if (
+            self.stt is not None
+            and self._session.options.min_interruption_words > 0
+            and self._audio_recognition is not None
+        ):
+            text = self._audio_recognition.current_transcript
+
+            # TODO(long): better word splitting for multi-language
+            if len(split_words(text)) < self._session.options.min_interruption_words:
+                return
+
+        if (
+            self._current_speech is not None
+            and not self._current_speech.interrupted
+            and self._current_speech.allow_interruptions
+        ):
+            log_event(
+                "speech interrupted by vad",
+                speech_id=self._current_speech.id,
+            )
+            if self._rt_session is not None:
+                self._rt_session.interrupt()
+
+            self._current_speech.interrupt()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -809,7 +823,7 @@ class AgentActivity(RecognitionHooks):
             UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
         )
 
-    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> None:
+    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method can be cancelled by the AudioRecognition
         # We explicitly create a new task to avoid cancelling user code.
 
@@ -822,18 +836,27 @@ class AgentActivity(RecognitionHooks):
                 "skipping user input, task is draining",
                 user_input=info.new_transcript,
             )
-            return
-
-        if self.draining:
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
-            logger.warning("ignoring new user turn, the agent is draining")
-            return
+            return True
+
+        if (
+            self.stt is not None
+            and self._turn_detection_mode != "manual"
+            and self._current_speech is not None
+            and self._current_speech.allow_interruptions
+            and not self._current_speech.interrupted
+            and self._session.options.min_interruption_words > 0
+            and len(split_words(info.new_transcript)) < self._session.options.min_interruption_words
+        ):
+            # avoid interruption if the new_transcript is too short
+            return False
 
         old_task = self._user_turn_completed_atask
         self._user_turn_completed_atask = self._create_speech_task(
             self._user_turn_completed_task(old_task, info),
             name="AgentActivity._user_turn_completed_task",
         )
+        return True
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
