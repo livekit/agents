@@ -37,7 +37,7 @@ class RecognitionHooks(Protocol):
     def on_end_of_speech(self, ev: vad.VADEvent) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
-    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> None: ...
+    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -303,7 +303,7 @@ class AudioRecognition:
             await asyncio.sleep(max(extra_sleep, 0))
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
-            await self._hooks.on_end_of_turn(
+            committed = await self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     new_transcript=self._audio_transcript,
                     transcription_delay=max(
@@ -312,7 +312,9 @@ class AudioRecognition:
                     end_of_utterance_delay=time.time() - last_speaking_time,
                 )
             )
-            self._audio_transcript = ""
+            if committed:
+                # clear the transcript if the user turn was committed
+                self._audio_transcript = ""
 
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
