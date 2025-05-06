@@ -209,11 +209,11 @@ class ChunkedStream(tts.ChunkedStream):
                         body=json.dumps(response_json),
                     )
 
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    format="audio/pcm",
+                    mime_type="audio/pcm",
                 )
 
                 audio_b64 = response_json["audio_content"]

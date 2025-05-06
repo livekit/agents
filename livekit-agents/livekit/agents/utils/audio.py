@@ -79,7 +79,7 @@ class AudioByteStream:
         self._bytes_per_frame = num_channels * samples_per_channel * ctypes.sizeof(ctypes.c_int16)
         self._buf = bytearray()
 
-    def push(self, data: bytes) -> list[rtc.AudioFrame]:
+    def push(self, data: bytes | memoryview) -> list[rtc.AudioFrame]:
         """
         Add audio data to the buffer and retrieve fixed-size frames.
 

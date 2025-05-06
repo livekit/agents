@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal, Union
 
+import asyncio
 import httpx
 
 import openai
@@ -81,7 +82,7 @@ class TTS(tts.TTS):
             voice=voice,
             speed=speed,
             instructions=instructions if is_given(instructions) else None,
-            response_format=response_format if is_given(response_format) else "opus",
+            response_format=response_format if is_given(response_format) else "mp3",
         )
 
         self._client = client or openai.AsyncClient(
@@ -196,11 +197,11 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with oai_stream as stream:
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=stream.request_id or "",
                     sample_rate=SAMPLE_RATE,
                     num_channels=NUM_CHANNELS,
-                    format="audio/pcm" if self._opts.response_format == "pcm" else None,
+                    mime_type=f"audio/{self._opts.response_format}",
                 )
 
                 async for data in stream.iter_bytes():

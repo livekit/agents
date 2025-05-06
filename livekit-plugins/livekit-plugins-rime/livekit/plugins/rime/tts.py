@@ -220,11 +220,11 @@ class ChunkedStream(tts.ChunkedStream):
                     logger.error("Rime returned non-audio data: %s", content)
                     return
 
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._tts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    format=format,
+                    mime_type=format,
                 )
 
                 async for data, _ in resp.content.iter_chunks():

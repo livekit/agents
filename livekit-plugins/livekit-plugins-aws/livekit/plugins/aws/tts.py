@@ -135,7 +135,7 @@ class ChunkedStream(tts.ChunkedStream):
                 )
 
                 if "AudioStream" in response:
-                    output_emitter.start(
+                    output_emitter.initialize(
                         request_id=response["ResponseMetadata"]["RequestId"],
                         sample_rate=self._opts.sample_rate,
                         num_channels=NUM_CHANNELS,

@@ -29,6 +29,36 @@ from livekit.agents.log import logger
 from livekit.agents.utils import aio
 
 
+def _mime_to_av_format(mime: str | None) -> str | None:
+    """Return the libav *container* short‑name for a given MIME‑type.
+
+    If *mime* is *None* or not recognised, return *None* so that PyAV will
+    fall back to auto‑detection.
+    """
+
+    if not mime:
+        return None
+
+    mime = mime.lower()
+    _TABLE: dict[str, str] = {
+        "audio/mpeg": "mp3",
+        "audio/mp3": "mp3",
+        "audio/x-mpeg": "mp3",
+        "audio/aac": "aac",
+        "audio/x-aac": "aac",
+        "audio/flac": "flac",
+        "audio/x-flac": "flac",
+        "audio/wav": "wav",
+        "audio/wave": "wav",
+        "audio/x-wav": "wav",
+        "audio/opus": "ogg",
+        "audio/ogg": "ogg",
+        "audio/webm": "webm",
+        "audio/mp4": "mp4",
+    }
+    return _TABLE.get(mime)
+
+
 class StreamBuffer:
     """
     A thread-safe buffer that behaves like an IO stream.
@@ -106,7 +136,8 @@ class AudioStreamDecoder:
         if num_channels == 2:
             self._layout = "stereo"
 
-        self._format = format.lower() if format else None
+        self._mime_type = format.lower() if format else None
+        self._av_format = _mime_to_av_format(self._mime_type)
 
         self._output_ch = aio.Chan[rtc.AudioFrame]()
         self._closed = False
@@ -122,11 +153,7 @@ class AudioStreamDecoder:
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True
-            # choose decode loop based on format
-            if self._format == "wav":
-                target = self._decode_wav_loop
-            else:
-                target = self._decode_loop
+            target = self._decode_wav_loop if self._av_format == "wav" else self._decode_loop
             self._loop.run_in_executor(self.__class__._executor, target)
 
     def end_input(self):
@@ -143,19 +170,23 @@ class AudioStreamDecoder:
             container = av.open(
                 self._input_buf,
                 mode="r",
-                format=self._format,
-                buffer_size=1024,
+                format=self._av_format,
+                buffer_size=256,
                 options={
-                    "fflags": "nobuffer+flush_packets",
                     "probesize": "32",
                     "analyzeduration": "0",
+                    "fflags": "nobuffer+flush_packets",
+                    "flags": "low_delay",
+                    "reorder_queue_size": "0",
                     "max_delay": "0",
+                    "avioflags": "direct",
                 },
             )
             # explicitly disable internal buffering flags on the FFmpeg container
             container.flags |= (
                 av.container.Flags.no_buffer.value | av.container.Flags.flush_packets.value
             )
+
             if len(container.streams.audio) == 0:
                 raise ValueError("no audio stream found")
 

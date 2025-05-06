@@ -178,11 +178,11 @@ class ChunkedStream(tts.ChunkedStream):
             ) as resp:
                 resp.raise_for_status()
 
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
-                    format="audio/pcm",
+                    mime_type="audio/pcm",
                 )
 
                 async for line in resp.content:

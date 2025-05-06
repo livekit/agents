@@ -160,7 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
                     content = await resp.text()
                     raise APIError(message="Groq returned non-audio data", body=content)
 
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=utils.shortuuid(), sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS
                 )
 

@@ -93,11 +93,11 @@ class FakeChunkedStream(ChunkedStream):
 
         assert isinstance(self._tts, FakeTTS)
 
-        output_emitter.start(
+        output_emitter.initialize(
             request_id=utils.shortuuid("fake_tts_"),
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            format="audio/pcm",
+            mime_type="audio/pcm",
         )
 
         if self._tts._fake_timeout is not None:

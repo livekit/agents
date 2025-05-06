@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
@@ -66,14 +66,12 @@ class TTS(
         capabilities: TTSCapabilities,
         sample_rate: int,
         num_channels: int,
-        conn_options: APIConnectOptions | None = None,
     ) -> None:
         super().__init__()
         self._capabilities = capabilities
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
-        self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
 
     @property
     def label(self) -> str:
@@ -94,7 +92,7 @@ class TTS(
     @abstractmethod
     def synthesize(self, text: str, *, conn_options: APIConnectOptions) -> ChunkedStream: ...
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
+    def stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         raise NotImplementedError(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"  # noqa: E501
         )
@@ -206,7 +204,7 @@ class ChunkedStream(ABC):
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
-                if output_emitter.pushed_duration <= 0.0:
+                if output_emitter.pushed_duration() <= 0.0:
                     raise APIError("no audio frames were pushed")
 
                 return
@@ -276,10 +274,10 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     class _FlushSentinel: ...
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions | None = None) -> None:
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__()
         self._tts = tts
-        self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
+        self._conn_options = conn_options
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._event_aiter, self._monitor_aiter = aio.itertools.tee(self._event_ch, 2)
@@ -293,39 +291,49 @@ class SynthesizeStream(ABC):
         # used to track metrics
         self._mtc_pending_texts: list[str] = []
         self._mtc_text = ""
+        self._num_segments = 0
 
     @abstractmethod
     async def _run(self, output_emitter: SynthesizedAudioEmitter) -> None: ...
 
     async def _main_task(self) -> None:
         for i in range(self._conn_options.max_retry + 1):
+            output_emitter = SynthesizedAudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
-                return await self._run()
+                await self._run(output_emitter)
+
+                output_emitter.flush()
+                # wait for all audio frames to be pushed & propagate errors
+                await output_emitter.join()
+
+                if output_emitter.pushed_duration(idx=-1) <= 0.0:
+                    raise APIError("no audio frames were pushed on all segments")
+
+                if self._num_segments != output_emitter.num_segments:
+                    raise APIError(
+                        f"number of segments mismatch: expected {self._num_segments}, "
+                        f"but got {output_emitter.num_segments}"
+                    )
+
+                return
             except APIError as e:
                 retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0:
+                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
                     self._emit_error(e, recoverable=False)
                     raise
-                elif i == self._conn_options.max_retry:
-                    self._emit_error(e, recoverable=False)
-                    raise APIConnectionError(
-                        f"failed to synthesize speech after {self._conn_options.max_retry + 1} attempts",  # noqa: E501
-                    ) from e
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
                         f"failed to synthesize speech, retrying in {retry_interval}s",
                         exc_info=e,
-                        extra={
-                            "tts": self._tts._label,
-                            "attempt": i + 1,
-                            "streamed": True,
-                        },
+                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
                     )
 
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
+            finally:
+                await output_emitter.aclose()
 
     def _emit_error(self, api_error: APIError, recoverable: bool):
         self._current_attempt_has_error = True
@@ -349,9 +357,10 @@ class SynthesizeStream(ABC):
         audio_duration = 0.0
         ttfb = -1.0
         request_id = ""
+        segment_id = ""
 
         def _emit_metrics():
-            nonlocal audio_duration, ttfb, request_id
+            nonlocal audio_duration, ttfb, request_id, segment_id
 
             if not self._started_time or self._current_attempt_has_error:
                 return
@@ -368,6 +377,7 @@ class SynthesizeStream(ABC):
             metrics = TTSMetrics(
                 timestamp=time.time(),
                 request_id=request_id,
+                segment_id=segment_id,
                 ttfb=ttfb,
                 duration=duration,
                 characters_count=len(text),
@@ -389,20 +399,23 @@ class SynthesizeStream(ABC):
 
             audio_duration += ev.frame.duration
             request_id = ev.request_id
+            segment_id = ev.segment_id
 
             if ev.is_final:
                 _emit_metrics()
 
-        if request_id:
-            _emit_metrics()
-
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
+        if not token:
+            return
+
         if self._metrics_task is None:
             self._metrics_task = asyncio.create_task(
-                self._metrics_monitor_task(self._monitor_aiter),
-                name="TTS._metrics_task",
+                self._metrics_monitor_task(self._monitor_aiter), name="TTS._metrics_task"
             )
+
+        if not self._mtc_text:
+            self._num_segments += 1
 
         self._mtc_text += token
         self._check_input_not_ended()
@@ -426,7 +439,6 @@ class SynthesizeStream(ABC):
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
-        self._input_ch.close()
         await aio.cancel_and_wait(self._task)
 
         if self._metrics_task is not None:
@@ -474,6 +486,13 @@ class SynthesizedAudioEmitter:
     This class helps TTS implementers to correctly handle is_final logic when streaming responses.
     """
 
+    class _FlushSegment:
+        pass
+
+    @dataclass
+    class _StartSegment:
+        segment_id: str
+
     def __init__(
         self,
         *,
@@ -484,119 +503,110 @@ class SynthesizedAudioEmitter:
         self._label = label
         self._audio_decoder: codecs.AudioStreamDecoder | None = None
         self._audio_byte_stream: audio.AudioByteStream | None = None
-        self._frame: rtc.AudioFrame | None = None
         self._request_id: str | None = None
-        self._segment_id: str | None = None
         self._started = False
-        self._pushed_duration = 0.0
+        self._audio_durations = []
+        self._num_segments = 0
 
-        # when lk_dump_tts is 1
-        self._dump_tts_frames = []
+    def pushed_duration(self, idx: int = -1) -> float:
+        return (
+            self._audio_durations[idx]
+            if -len(self._audio_durations) <= idx < len(self._audio_durations)
+            else 0.0
+        )
 
     @property
-    def pushed_duration(self) -> float:
-        return self._pushed_duration
+    def num_segments(self) -> int:
+        return self._num_segments
 
-    def start(
+    def initialize(
         self,
         *,
         request_id: str | None = None,
-        segment_id: str | None = None,
         sample_rate: int | None = None,
         num_channels: int | None = None,
-        format: str | None = None,
+        mime_type: str | None = None,
         frame_size_ms: int = 200,
+        stream: bool = False,
     ) -> None:
         if self._started:
             raise RuntimeError("AudioEmitter already started")
 
-        is_raw_pcm = False
-        if format is not None:
-            format = format.lower().strip()
-            is_raw_pcm = format.startswith("audio/pcm") or format.startswith("audio/raw")
+        self._is_raw_pcm = False
+        if mime_type is not None:
+            mime_type = mime_type.lower().strip()
+            self._is_raw_pcm = mime_type.startswith("audio/pcm") or mime_type.startswith(
+                "audio/raw"
+            )
 
-        if is_raw_pcm and (sample_rate is None or num_channels is None):
+        self._mime_type = mime_type
+
+        if self._is_raw_pcm and (sample_rate is None or num_channels is None):
             raise ValueError(
                 "sample_rate and num_channels must be provided if the format is headless"
             )
 
         if not request_id:
-            logger.warning("No request_id provided for TTS %s", self._label)
+            logger.warning("no request_id provided for TTS %s", self._label)
             request_id = "unknown"
 
-        if not segment_id:
-            segment_id = ""  # defaults to empty (only available in streaming mode)
-
-        self._request_id = request_id
-        self._segment_id = segment_id
         self._started = True
+        self._request_id = request_id
         self._frame_size_ms = frame_size_ms
         self._sample_rate = sample_rate
         self._num_channels = num_channels
+        self._stream = stream
 
-        if not is_raw_pcm:
-            self._audio_decoder = codecs.AudioStreamDecoder(
-                sample_rate=sample_rate,
-                num_channels=num_channels,
-            )
-
-        self._write_ch = aio.Chan[bytes]()
+        self._write_ch = aio.Chan[
+            Union[
+                bytes, SynthesizedAudioEmitter._FlushSegment, SynthesizedAudioEmitter._StartSegment
+            ]
+        ]()
         self._main_atask = asyncio.create_task(
             self._main_task(), name="SynthesizedAudioEmitter._main_task"
         )
 
-    @log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
-        if self._audio_decoder is not None:
-            async for frame in self._audio_decoder:
-                if self._audio_byte_stream is None:
-                    self._audio_byte_stream = audio.AudioByteStream(
-                        sample_rate=frame.sample_rate,
-                        num_channels=frame.num_channels,
-                        samples_per_channel=int(frame.sample_rate // 1000 * self._frame_size_ms),
-                    )
+        # initialize default segment on non-streaming mode
+        # not using start_segment() to avoid assertion failure when stream=False
+        if not self._stream:
+            self._write_ch.send_nowait(self._StartSegment(segment_id=""))
 
-                for f in self._audio_byte_stream.push(frame.data):
-                    self._emit_frame(f)
-
-            if self._audio_byte_stream is not None:
-                for f in self._audio_byte_stream.flush():
-                    self._emit_frame(f)
-        else:
-            assert self._sample_rate is not None, "sample_rate isn't None if format is headless"
-            assert self._num_channels is not None, "num_channels isn't None if format is headless"
-            self._audio_byte_stream = audio.AudioByteStream(
-                sample_rate=self._sample_rate,
-                num_channels=self._num_channels,
-                samples_per_channel=int(self._sample_rate // 1000 * self._frame_size_ms),
+    def start_segment(self, *, segment_id: str) -> None:
+        if not self._stream:
+            raise RuntimeError(
+                "start_segment() can only be called when SynthesizeStream is initialized "
+                "with stream=True"
             )
 
-            async for data in self._write_ch:
-                for f in self._audio_byte_stream.push(data):
-                    self._emit_frame(f)
-
-            for f in self._audio_byte_stream.flush():
-                self._emit_frame(f)
-
-        self._emit_frame(is_final=True)
+        self._num_segments += 1
+        self._write_ch.send_nowait(self._StartSegment(segment_id=segment_id))
 
     def push(self, data: bytes) -> None:
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
 
-        if self._audio_decoder is not None:
-            self._audio_decoder.push(data)
-        else:
-            self._write_ch.send_nowait(data)
+        self._write_ch.send_nowait(data)
 
     def flush(self):
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
 
-        if self._audio_decoder is not None:
-            self._audio_decoder.end_input()
-        else:
-            self._write_ch.close()
+        if self._write_ch.closed:
+            return
+
+        self._write_ch.send_nowait(self._FlushSegment())
+
+        if not self._stream:
+            self.end_input()  # only one segment
+
+    def end_input(self) -> None:
+        if not self._started:
+            raise RuntimeError("AudioEmitter isn't started")
+
+        if self._write_ch.closed:
+            return
+
+        self._write_ch.close()
 
     async def join(self) -> None:
         if not self._started:
@@ -610,38 +620,153 @@ class SynthesizedAudioEmitter:
 
         await aio.cancel_and_wait(self._main_atask)
 
-        if self._audio_decoder is not None:
-            await self._audio_decoder.aclose()
+    @log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        """
+        Main loop processing & decoding one segment at a time.
+        """
+        audio_decoder: codecs.AudioStreamDecoder | None = None
+        decode_atask: asyncio.Task | None = None
 
-        if lk_dump_tts:
-            if len(self._dump_tts_frames) == 0:
-                logger.warning("No frames to dump for TTS %s", self._label)
+        current_segment: SynthesizedAudioEmitter._StartSegment | None = None
+
+        last_frame: rtc.AudioFrame | None = None
+        debug_segment_frames: list[rtc.AudioFrame] = []
+
+        def _emit_frame(
+            frame: rtc.AudioFrame | None = None, *, segment_id: str, is_final: bool = False
+        ) -> None:
+            nonlocal last_frame
+
+            if last_frame is None:
+                last_frame = frame
                 return
 
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            filename = f"lk_dump/tts_{self._label}_{self._request_id}_{timestamp}.wav"
-            with open(filename, "wb") as f:
-                f.write(rtc.combine_audio_frames(self._dump_tts_frames).to_wav_bytes())
+            assert self._request_id is not None
 
-    def _emit_frame(self, frame: rtc.AudioFrame | None = None, *, is_final: bool = False):
-        if self._frame is None:
-            self._frame = frame
-            return
-
-        assert self._request_id is not None
-        assert self._segment_id is not None
-
-        self._dst_ch.send_nowait(
-            SynthesizedAudio(
-                frame=self._frame,
-                request_id=self._request_id,
-                segment_id=self._segment_id,
-                is_final=is_final,
+            self._dst_ch.send_nowait(
+                SynthesizedAudio(
+                    frame=last_frame,
+                    request_id=self._request_id,
+                    segment_id=segment_id,
+                    is_final=is_final,
+                )
             )
-        )
 
-        if lk_dump_tts:
-            self._dump_tts_frames.append(self._frame)
+            if lk_dump_tts:
+                debug_segment_frames.append(last_frame)
 
-        self._pushed_duration += self._frame.duration
-        self._frame = frame
+            self._audio_durations[-1] += last_frame.duration
+            last_frame = frame
+
+        def dump_segment(segment_id: str):
+            if lk_dump_tts:
+                if len(debug_segment_frames) == 0:
+                    logger.warning("No frames to dump for TTS %s", self._label)
+                    return
+
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                if self._stream:
+                    filename = (
+                        f"lk_dump/{self._label}_{self._request_id}_{segment_id}_{timestamp}.wav"
+                    )
+                else:
+                    filename = f"lk_dump/{self._label}_{self._request_id}_{timestamp}.wav"
+                with open(filename, "wb") as f:
+                    f.write(rtc.combine_audio_frames(debug_segment_frames).to_wav_bytes())
+
+                debug_segment_frames.clear()
+
+        @log_exceptions(logger=logger)
+        async def _decode_task() -> None:
+            assert audio_decoder is not None, "audio_decoder must be initialized"
+            assert current_segment is not None, "current_segment must be initialized"
+
+            audio_byte_stream: audio.AudioByteStream | None = None
+            async for frame in audio_decoder:
+                if audio_byte_stream is None:
+                    audio_byte_stream = audio.AudioByteStream(
+                        sample_rate=frame.sample_rate,
+                        num_channels=frame.num_channels,
+                        samples_per_channel=int(frame.sample_rate // 1000 * self._frame_size_ms),
+                    )
+
+                for f in audio_byte_stream.push(frame.data):
+                    _emit_frame(f, segment_id=current_segment.segment_id)
+
+            if audio_byte_stream is not None:
+                for f in audio_byte_stream.flush():
+                    _emit_frame(f, segment_id=current_segment.segment_id)
+
+            _emit_frame(is_final=True, segment_id=current_segment.segment_id)
+
+        audio_byte_stream: audio.AudioByteStream | None = None
+        try:
+            async for data in self._write_ch:
+                if isinstance(data, SynthesizedAudioEmitter._StartSegment):
+                    if current_segment is not None:
+                        raise RuntimeError(
+                            "start_segment() called before the previous segment was flushed"
+                        )
+
+                    current_segment = data
+                    self._audio_durations.append(0.0)
+                    continue
+
+                if current_segment is None:
+                    if isinstance(data, SynthesizedAudioEmitter._FlushSegment):
+                        continue  # empty segment
+
+                    raise RuntimeError("start_segment() must be called before pushing audio data")
+
+                if self._is_raw_pcm:
+                    assert self._sample_rate is not None, (
+                        "sample_rate isn't None if format is headless"
+                    )
+                    assert self._num_channels is not None, (
+                        "num_channels isn't None if format is headless"
+                    )
+
+                    if not isinstance(data, self._FlushSegment):
+                        if audio_byte_stream is None:
+                            audio_byte_stream = audio.AudioByteStream(
+                                sample_rate=self._sample_rate,
+                                num_channels=self._num_channels,
+                                samples_per_channel=int(
+                                    self._sample_rate // 1000 * self._frame_size_ms
+                                ),
+                            )
+
+                        for f in audio_byte_stream.push(data):
+                            _emit_frame(f, segment_id=current_segment.segment_id)
+
+                    elif audio_byte_stream is not None:
+                        for f in audio_byte_stream.flush():
+                            _emit_frame(f, segment_id=current_segment.segment_id)
+
+                        _emit_frame(is_final=True, segment_id=current_segment.segment_id)
+                        dump_segment(current_segment.segment_id)
+                        current_segment = audio_byte_stream = last_frame = None
+                else:
+                    if not isinstance(data, self._FlushSegment):
+                        if audio_decoder is None:
+                            audio_decoder = codecs.AudioStreamDecoder(
+                                sample_rate=self._sample_rate,
+                                num_channels=self._num_channels,
+                                format=self._mime_type,
+                            )
+                            decode_atask = asyncio.create_task(_decode_task())
+
+                        audio_decoder.push(data)
+                    elif audio_decoder is not None:
+                        audio_decoder.end_input()
+                        assert decode_atask is not None
+                        await decode_atask
+                        await audio_decoder.aclose()
+                        dump_segment(current_segment.segment_id)
+                        current_segment = audio_decoder = last_frame = None
+        finally:
+            if audio_decoder is not None:
+                assert decode_atask is not None
+                await audio_decoder.aclose()
+                await aio.cancel_and_wait(decode_atask)

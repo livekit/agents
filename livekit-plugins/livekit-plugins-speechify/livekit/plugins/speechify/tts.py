@@ -230,7 +230,7 @@ class ChunkedStream(tts.ChunkedStream):
                     content = await resp.text()
                     raise APIError(message="Speechify returned non-audio data", body=content)
 
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=utils.shortuuid(), sample_rate=self._opts.sample_rate, num_channels=1
                 )
 

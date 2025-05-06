@@ -202,11 +202,11 @@ class ChunkedStream(tts.ChunkedStream):
                 timeout=self._conn_options.timeout,
             )
 
-            output_emitter.start(
+            output_emitter.initialize(
                 request_id=utils.shortuuid(),
                 sample_rate=self._opts.audio_config.sample_rate_hertz,
                 num_channels=1,
-                format="audio/pcm",
+                mime_type="audio/pcm",
             )
 
             output_emitter.push(response.audio_content)

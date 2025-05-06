@@ -1,360 +1,325 @@
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import os
-import weakref
-from copy import deepcopy
-from dataclasses import dataclass
+from livekit.agents.types import NOT_GIVEN
 
-import azure.cognitiveservices.speech as speechsdk  # type: ignore
-from livekit import rtc
+"""Minimal Azure Speech-to-Text implementation for LiveKit agents.
+
+Relies only on `aiohttp` and core LiveKit utilities. Designed to be compact yet
+fully functional: it supports streaming recognition with interim and final
+results in a single language.
+
+Environment variables required:
+  * AZURE_SPEECH_KEY – subscription key.
+  * AZURE_SPEECH_REGION – service region (e.g. "westeurope").
+
+For advanced features (language auto-detect, phrase hints, etc.) extend the
+`_build_context` method.
+"""
+
+import os
+import uuid
+import json
+import datetime as _dt
+import asyncio
+from urllib.parse import urlencode
+
+import aiohttp
+import datetime
+
+from livekit import rtc  # type: ignore
 from livekit.agents import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
-    APIConnectOptions,
     stt,
     utils,
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
 )
-from livekit.agents.types import (
-    NOT_GIVEN,
-    NotGivenOr,
+from livekit.agents.utils import AudioBuffer
+
+__all__ = ["AzureSTT"]
+
+_WS_ENDPOINT = (
+    "wss://{region}.stt.speech.microsoft.com/speech/recognition/{mode}/cognitiveservices/v1"
 )
-from livekit.agents.utils import is_given
-
-from .log import logger
-
-
-@dataclass
-class STTOptions:
-    speech_key: NotGivenOr[str]
-    speech_region: NotGivenOr[str]
-    # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-stt?tabs=container#use-the-container
-    speech_host: NotGivenOr[str]
-    # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
-    speech_auth_token: NotGivenOr[str]
-    sample_rate: int
-    num_channels: int
-    segmentation_silence_timeout_ms: NotGivenOr[int]
-    segmentation_max_time_ms: NotGivenOr[int]
-    segmentation_strategy: NotGivenOr[str]
-    language: list[
-        str
-    ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
-    speech_endpoint: NotGivenOr[str] = NOT_GIVEN
-    profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
 
 
 class STT(stt.STT):
+    """STT provider that talks to Azure Speech over raw WebSockets."""
+
     def __init__(
         self,
         *,
-        speech_key: NotGivenOr[str] = NOT_GIVEN,
-        speech_region: NotGivenOr[str] = NOT_GIVEN,
-        speech_host: NotGivenOr[str] = NOT_GIVEN,
-        speech_auth_token: NotGivenOr[str] = NOT_GIVEN,
+        language: str = "en-US",
+        interim_results: bool = True,
         sample_rate: int = 16000,
-        num_channels: int = 1,
-        segmentation_silence_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
-        segmentation_max_time_ms: NotGivenOr[int] = NOT_GIVEN,
-        segmentation_strategy: NotGivenOr[str] = NOT_GIVEN,
-        # Azure handles multiple languages and can auto-detect the language used. It requires the candidate set to be set.  # noqa: E501
-        language: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
-        profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
-        speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
-    ):
-        """
-        Create a new instance of Azure STT.
-
-        Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
-        ``speech_auth_token`` and ``speech_region`` or
-        ``speech_key`` and ``speech_endpoint``
-        must be set using arguments.
-         Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
-        and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
-        ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
-        """
-
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
-        if not language or not is_given(language):
-            language = ["en-US"]
-
-        if isinstance(language, str):
-            language = [language]
-
-        if not is_given(speech_host):
-            speech_host = os.environ.get("AZURE_SPEECH_HOST")
-
-        if not is_given(speech_key):
-            speech_key = os.environ.get("AZURE_SPEECH_KEY")
-
-        if not is_given(speech_region):
-            speech_region = os.environ.get("AZURE_SPEECH_REGION")
-
-        if not (
-            is_given(speech_host)
-            or (is_given(speech_key) and is_given(speech_region))
-            or (is_given(speech_auth_token) and is_given(speech_region))
-            or (is_given(speech_key) and is_given(speech_endpoint))
-        ):
-            raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and speech_endpoint must be set"  # noqa: E501
-            )
-
-        if speech_region and speech_endpoint:
-            logger.warning("speech_region and speech_endpoint both are set, using speech_endpoint")
-            speech_region = NOT_GIVEN
-
-        self._config = STTOptions(
-            speech_key=speech_key,
-            speech_region=speech_region,
-            speech_host=speech_host,
-            speech_auth_token=speech_auth_token,
-            language=language,
-            sample_rate=sample_rate,
-            num_channels=num_channels,
-            segmentation_silence_timeout_ms=segmentation_silence_timeout_ms,
-            segmentation_max_time_ms=segmentation_max_time_ms,
-            segmentation_strategy=segmentation_strategy,
-            profanity=profanity,
-            speech_endpoint=speech_endpoint,
+        format_: str = "detailed",
+        region: str | None = None,
+        key: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> None:
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=interim_results)
         )
-        self._streams = weakref.WeakSet[SpeechStream]()
 
-    async def _recognize_impl(
+        self._language = language
+        self._sample_rate = sample_rate
+        self._interim = interim_results
+        self._result_format = format_
+        self._region = region or os.getenv("AZURE_SPEECH_REGION")
+        self._key = key or os.getenv("AZURE_SPEECH_KEY")
+        if not (self._region and self._key):
+            raise ValueError("AZURE_SPEECH_KEY and AZURE_SPEECH_REGION env vars are required")
+
+        self._session = http_session or utils.http_context.http_session()
+        self._streams: set["SpeechStream"] = set()
+
+    def _recognize_impl(
         self,
-        buffer: utils.AudioBuffer,
+        buffer: list[AudioFrame] | rtc.AudioFrame,
         *,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: str | NotGiven = ...,
         conn_options: APIConnectOptions,
-    ) -> stt.SpeechEvent:
-        raise NotImplementedError("Azure STT does not support single frame recognition")
+    ) -> SpeechEvent:
+        pass
 
+    # ---------------------------------------------------------------------
+    # public API
+    # ---------------------------------------------------------------------
     def stream(
-        self,
-        *,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SpeechStream:
-        config = deepcopy(self._config)
-        if is_given(language):
-            config.language = [language]
-        stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> "SpeechStream":
+        stream = SpeechStream(
+            stt=self,
+            conn_options=conn_options,
+            language=self._language,
+            region=self._region,
+            key=self._key,
+            format_=self._result_format,
+            interim_results=self._interim,
+            sample_rate=self._sample_rate,
+            http_session=self._session,
+        )
         self._streams.add(stream)
         return stream
 
-    def update_options(self, *, language: NotGivenOr[list[str] | str] = NOT_GIVEN):
-        if is_given(language):
-            if isinstance(language, str):
-                language = [language]
-            self._config.language = language
-            for stream in self._streams:
-                stream.update_options(language=language)
+
+# -------------------------------------------------------------------------
+# Streaming worker
+# -------------------------------------------------------------------------
 
 
 class SpeechStream(stt.SpeechStream):
-    def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
-        self._opts = opts
-        self._speaking = False
+    _WAV_HEADER_SENT = object()
 
-        self._session_stopped_event = asyncio.Event()
-        self._session_started_event = asyncio.Event()
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        conn_options: APIConnectOptions,
+        language: str,
+        region: str,
+        key: str,
+        format_: str,
+        interim_results: bool,
+        sample_rate: int,
+        http_session: aiohttp.ClientSession,
+    ) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
+        self._lang = language
+        self._region = region
+        self._key = key
+        self._format = format_
+        self._interim = interim_results
+        self._sample_rate = sample_rate
+        self._session = http_session
+        self._connection_id = uuid.uuid4().hex.upper()
+        self._request_id = uuid.uuid4().hex.upper()
 
-        self._loop = asyncio.get_running_loop()
-        self._reconnect_event = asyncio.Event()
+    # -------------------------------------------------- helpers
+    def _endpoint(self) -> str:
+        params = {
+            "language": self._lang,
+            "format": self._format,
+        }
+        qs = urlencode(params)
+        return _WS_ENDPOINT.format(region=self._region, mode="conversation") + f"?{qs}"
 
-    def update_options(self, *, language: list[str]):
-        self._opts.language = language
-        self._reconnect_event.set()
-
-    async def _run(self) -> None:
-        while True:
-            self._stream = speechsdk.audio.PushAudioInputStream(
-                stream_format=speechsdk.audio.AudioStreamFormat(
-                    samples_per_second=self._opts.sample_rate,
-                    bits_per_sample=16,
-                    channels=self._opts.num_channels,
-                )
-            )
-            self._recognizer = _create_speech_recognizer(config=self._opts, stream=self._stream)
-            self._recognizer.recognizing.connect(self._on_recognizing)
-            self._recognizer.recognized.connect(self._on_recognized)
-            self._recognizer.speech_start_detected.connect(self._on_speech_start)
-            self._recognizer.speech_end_detected.connect(self._on_speech_end)
-            self._recognizer.session_started.connect(self._on_session_started)
-            self._recognizer.session_stopped.connect(self._on_session_stopped)
-            self._recognizer.start_continuous_recognition()
-
-            try:
-                await asyncio.wait_for(
-                    self._session_started_event.wait(), self._conn_options.timeout
-                )
-
-                async def process_input():
-                    async for input in self._input_ch:
-                        if isinstance(input, rtc.AudioFrame):
-                            self._stream.write(input.data.tobytes())
-
-                process_input_task = asyncio.create_task(process_input())
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        [process_input_task, wait_reconnect_task, wait_stopped_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task not in [wait_reconnect_task, wait_stopped_task]:
-                            task.result()
-
-                    if wait_stopped_task in done:
-                        raise APIConnectionError("SpeechRecognition session stopped")
-
-                    if wait_reconnect_task not in done:
-                        break
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
-
-                self._stream.close()
-                await self._session_stopped_event.wait()
-            finally:
-
-                def _cleanup():
-                    self._recognizer.stop_continuous_recognition()
-                    del self._recognizer
-
-                await asyncio.to_thread(_cleanup)
-
-    def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
-        text = evt.result.text.strip()
-        if not text:
-            return
-
-        if not detected_lg and self._opts.language:
-            detected_lg = self._opts.language[0]
-
-        final_data = stt.SpeechData(language=detected_lg, confidence=1.0, text=evt.result.text)
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
-                ),
-            )
-
-    def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        detected_lg = speechsdk.AutoDetectSourceLanguageResult(evt.result).language
-        text = evt.result.text.strip()
-        if not text:
-            return
-
-        if not detected_lg and self._opts.language:
-            detected_lg = self._opts.language[0]
-
-        interim_data = stt.SpeechData(language=detected_lg, confidence=0.0, text=evt.result.text)
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[interim_data],
-                ),
-            )
-
-    def _on_speech_start(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        if self._speaking:
-            return
-
-        self._speaking = True
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
-            )
-
-    def _on_speech_end(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        if not self._speaking:
-            return
-
-        self._speaking = False
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
-            )
-
-    def _on_session_started(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        self._session_started_event.set()
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._session_started_event.set)
-
-    def _on_session_stopped(self, evt: speechsdk.SpeechRecognitionEventArgs):
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._session_stopped_event.set)
-
-
-def _create_speech_recognizer(
-    *, config: STTOptions, stream: speechsdk.audio.AudioInputStream
-) -> speechsdk.SpeechRecognizer:
-    # let the SpeechConfig constructor to validate the arguments
-    speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key if is_given(config.speech_key) else None,
-        region=config.speech_region if is_given(config.speech_region) else None,
-        endpoint=config.speech_endpoint if is_given(config.speech_endpoint) else None,
-        host=config.speech_host if is_given(config.speech_host) else None,
-        auth_token=config.speech_auth_token if is_given(config.speech_auth_token) else None,
-    )
-
-    if config.segmentation_silence_timeout_ms:
-        speech_config.set_property(
-            speechsdk.enums.PropertyId.Speech_SegmentationSilenceTimeoutMs,
-            str(config.segmentation_silence_timeout_ms),
-        )
-    if config.segmentation_max_time_ms:
-        speech_config.set_property(
-            speechsdk.enums.PropertyId.Speech_SegmentationMaximumTimeMs,
-            str(config.segmentation_max_time_ms),
-        )
-    if config.segmentation_strategy:
-        speech_config.set_property(
-            speechsdk.enums.PropertyId.Speech_SegmentationStrategy,
-            str(config.segmentation_strategy),
-        )
-    if is_given(config.profanity):
-        speech_config.set_profanity(config.profanity)
-
-    auto_detect_source_language_config = None
-    if config.language and len(config.language) >= 1:
-        auto_detect_source_language_config = (
-            speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=config.language)
+    async def _connect(self) -> aiohttp.ClientWebSocketResponse:
+        print(self._endpoint())
+        return await asyncio.wait_for(
+            self._session.ws_connect(
+                self._endpoint(),
+                headers={
+                    "Ocp-Apim-Subscription-Key": self._key,
+                    "X-ConnectionId": self._connection_id,
+                },
+            ),
+            self._conn_options.timeout,
         )
 
-    audio_config = speechsdk.audio.AudioConfig(stream=stream)
-    speech_recognizer = speechsdk.SpeechRecognizer(
-        speech_config=speech_config,
-        audio_config=audio_config,
-        auto_detect_source_language_config=auto_detect_source_language_config,  # type: ignore
-    )
+    # -------------------------------------------------- message builders
+    @staticmethod
+    def _header(path: str, req_id: str) -> str:
+        ts = _dt.datetime.utcnow().isoformat() + "Z"
+        return f"Path: {path}\r\nX-RequestId: {req_id}\r\nX-Timestamp: {ts}\r\n"
 
-    return speech_recognizer
+    def _speech_config(self) -> str:
+        body = {
+            "context": {
+                "system": {"version": "1.0.0"},
+            }
+        }
+        return (
+            self._header("speech.config", self._request_id)
+            + "Content-Type: application/json; charset=utf-8\r\n\r\n"
+            + json.dumps(body)
+        )
+
+    def _speech_context(self) -> str:
+        body = {
+            # from https://github.com/microsoft/cognitive-services-speech-sdk-js/blob/68541424c991bd273e11ff87e6baf77b1d9a836b/src/common.speech/ServiceMessages/PhraseDetection/PhraseDetectionContext.ts#L29
+            "phraseDetection": {
+                "language": "en-US",
+                "mode": "Conversation",
+                "interimResults": self._interim,
+                "initialSilenceTimeout": 0,
+                "trailingSilenceTimeout": 0,
+                "conversation": {
+                    "segmentation": {
+                        "mode": "Normal",
+                    }
+                },
+            }
+        }
+        return (
+            self._header("speech.context", self._request_id)
+            + "Content-Type: application/json; charset=utf-8\r\n\r\n"
+            + json.dumps(body)
+        )
+
+    # -------------------------------------------------- run loop
+    async def _run(self) -> None:  # noqa: C901 – keep concise
+        ws = await self._connect()
+        print(ws)
+        await ws.send_str(self._speech_config())
+        await ws.send_str(self._speech_context())  # new
+
+        # micro-helper for audio chunking (50 ms per chunk)
+        samples_chunk = self._sample_rate // 20
+        byte_stream = utils.audio.AudioByteStream(
+            sample_rate=self._sample_rate,
+            num_channels=1,
+            samples_per_channel=samples_chunk,
+        )
+
+        import asyncio, datetime, struct, uuid
+
+        _CRLF = b"\r\n"
+
+        def _wav_header(num_samples: int, sample_rate: int = 16000) -> bytes:
+            """Return a minimal 44-byte PCM WAV header (16-bit, mono)."""
+            byte_rate = sample_rate * 2  # 16-bit mono
+            block_align = 2
+            data_bytes = num_samples * 2
+            riff_size = 36 + data_bytes
+            return (
+                b"RIFF"
+                + struct.pack("<I", riff_size)
+                + b"WAVEfmt "
+                + struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, byte_rate, block_align, 16)
+                + b"data"
+                + struct.pack("<I", data_bytes)
+            )
+
+        def _build_audio_frame(req_id: str, pcm: bytes, *, first=False) -> bytes:
+            """
+            Binary WS frame for Azure STT:
+            2-byte big-endian length of header block,
+            ASCII headers ending in CRLFCRLF,
+            raw PCM/WAV bytes.
+            """
+            ts = datetime.datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+            hdr_lines = [
+                "Path: audio",
+                f"X-RequestId: {req_id}",
+                f"X-Timestamp: {ts}",
+            ]
+            if first:
+                hdr_lines.append("Content-Type: audio/x-wav")
+            hdr = _CRLF.join(l.encode("ascii") for l in hdr_lines) + _CRLF * 2
+            return struct.pack(">H", len(hdr)) + hdr + pcm
+
+        async def _sender():
+            """Stream audio frames to Azure Speech over `ws`."""
+            wav_header_sent = False
+            req_id = self._request_id or uuid.uuid4().hex.upper()
+
+            async for item in self._input_ch:
+                if not isinstance(item, rtc.AudioFrame):
+                    continue  # ignore flush sentinels
+                for chunk in byte_stream.write(item.data.tobytes()):
+                    pcm = chunk.data.tobytes()
+                    if not wav_header_sent:  # first frame
+                        frame_bytes = _build_audio_frame(
+                            req_id,
+                            _wav_header(len(pcm), self._sample_rate) + pcm,
+                            first=True,
+                        )
+                        wav_header_sent = True
+                    else:
+                        frame_bytes = _build_audio_frame(req_id, pcm)
+                    await ws.send_bytes(frame_bytes)  # aiohttp expects raw bytes only
+
+            # signal end-of-stream with zero-length audio payload
+            await ws.send_bytes(_build_audio_frame(req_id, b""))
+
+        async def _receiver():
+            while True:
+                msg = await ws.receive()
+                print(msg)
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    self._process_server_msg(msg.data)
+                else:
+                    break  # connection closed
+
+        await asyncio.gather(_sender(), _receiver())
+
+    # -------------------------------------------------- result processing
+    def _process_server_msg(self, text: str) -> None:
+        # split headers & body
+        if "\r\n\r\n" in text:
+            headers, body = text.split("\r\n\r\n", 1)
+        else:
+            return  # malformed
+        path = None
+        for line in headers.split("\r\n"):
+            if line.lower().startswith("path:"):
+                path = line.split(":", 1)[1].strip()
+                break
+        if path == "speech.hypothesis":
+            data = json.loads(body)
+            alt = stt.SpeechData(language=self._lang, text=data.get("Text", ""))
+            evt = stt.SpeechEvent(
+                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                request_id=self._request_id,
+                alternatives=[alt],
+            )
+            self._event_ch.send_nowait(evt)
+        elif path == "speech.phrase":
+            data = json.loads(body)
+            alt = stt.SpeechData(
+                language=self._lang, text=data.get("DisplayText") or data.get("Text", "")
+            )
+            # evt_type = (
+            #     stt.SpeechEventType.FINAL_TRANSCRIPT
+            #     if data.get("RecognitionStatus") == "Success"
+            #     else stt.SpeechEventType.RECOGNITION_FAILED
+            # )
+            # evt = stt.SpeechEvent(
+            #     type=evt_type,
+            #     request_id=self._request_id,
+            #     alternatives=[alt],
+            # )
+            # self._event_ch.send_nowait(evt)

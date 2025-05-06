@@ -97,7 +97,7 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=False,
         )
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         config = {
             "encoding": self._opts.encoding,
@@ -109,7 +109,7 @@ class TTS(tts.TTS):
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
                 headers={"Authorization": f"Token {self._opts.api_key}"},
             ),
-            self._conn_options.timeout,
+            timeout,
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
@@ -149,14 +149,7 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            base_url=self._base_url,
-            api_key=self._api_key,
-            opts=self._opts,
-            session=self._ensure_session(),
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -199,11 +192,11 @@ class ChunkedStream(tts.ChunkedStream):
             ) as resp:
                 resp.raise_for_status()
 
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    format="audio/pcm",
+                    mime_type="audio/pcm",
                 )
 
                 async for data, _ in resp.content.iter_chunks():
@@ -225,23 +218,12 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        base_url: str,
-        api_key: str,
-        opts: _TTSOptions,
-        session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions,
-    ):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._opts = opts
-        self._session = session
-        self._base_url = base_url
-        self._api_key = api_key
+        self._tts = tts
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         self._reconnect_event = asyncio.Event()
+        self._opts = replace(tts._opts)
 
     def update_options(
         self,
@@ -256,14 +238,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         self._reconnect_event.set()
 
-    async def _run(self) -> None:
+    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter) -> None:
         closing_ws = False
-        request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-        audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
 
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():

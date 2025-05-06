@@ -156,7 +156,7 @@ class ChunkedStream(tts.ChunkedStream):
                 read_bufsize=10 * 1024 * 1024,
             ) as resp:
                 resp.raise_for_status()
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=self._tts.num_channels,
