@@ -1,6 +1,8 @@
-# LiveKit Plugins Silero
+# Silero VAD plugin for LiveKit Agents
 
-Agent Framework Plugin for Silero. Currently supports Voice Activity Detection.
+Support for VAD-based turn detection.
+
+See [https://docs.livekit.io/build/turns/vad/](https://docs.livekit.io/build/turns/vad/) for more information.
 
 ## Installation
 

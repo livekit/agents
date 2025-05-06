@@ -1,6 +1,8 @@
-# LiveKit Plugins PlayAI/PlayHT
+# PlayAI/PlayHT plugin for LiveKit Agents
 
-Agent Framework plugin for voice synthesis with [PlayAI](https://play.ai/) API.
+Support for voice synthesis with [PlayAI](https://play.ai/).
+
+See [https://docs.livekit.io/agents/integrations/tts/playai/](https://docs.livekit.io/agents/integrations/tts/playai/) for more information.
 
 ## Installation
 
