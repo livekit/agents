@@ -10,6 +10,7 @@ from typing_extensions import override
 import livekit.rtc as rtc
 from livekit.agents import utils
 
+# from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 from ...log import logger
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
@@ -232,10 +233,10 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         participant: rtc.RemoteParticipant,
     ) -> None:
         if self._pre_connect_audio_handler and publication.track:
-            # TODO(long): read the flag from track features
+            # TODO: and AudioTrackFeature.PRE_CONNECT_AUDIO in publication.audio_features
             try:
                 duration = 0
-                frames = await self._pre_connect_audio_handler.wait_for_data(participant)
+                frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
                 for frame in self._resample_frames(frames):
                     if self._attached:
                         await self._data_ch.send(frame)
@@ -243,19 +244,31 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 if frames:
                     logger.debug(
                         "pre-connect audio buffer pushed",
-                        extra={"duration": duration, "participant": participant.identity},
+                        extra={
+                            "duration": duration,
+                            "track_id": publication.track.sid,
+                            "participant": participant.identity,
+                        },
                     )
 
             except asyncio.TimeoutError:
                 logger.warning(
                     "timeout waiting for pre-connect audio buffer",
-                    extra={"participant": participant.identity},
+                    extra={
+                        "duration": duration,
+                        "track_id": publication.track.sid,
+                        "participant": participant.identity,
+                    },
                 )
 
             except Exception as e:
                 logger.error(
                     "error reading pre-connect audio buffer",
-                    extra={"error": e, "participant": participant.identity},
+                    extra={
+                        "error": e,
+                        "track_id": publication.track.sid,
+                        "participant": participant.identity,
+                    },
                 )
 
         await super()._forward_task(old_task, stream, publication, participant)

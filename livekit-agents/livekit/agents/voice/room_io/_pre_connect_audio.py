@@ -8,7 +8,6 @@ from livekit import rtc
 from ..agent import logger, utils
 
 PRE_CONNECT_AUDIO_BUFFER_STREAM = "lk.agent.pre-connect-audio-buffer"
-PRE_CONNECT_AUDIO_ATTRIBUTE = "lk.agent.pre-connect-audio"
 
 
 @dataclass
@@ -23,6 +22,7 @@ class PreConnectAudioHandler:
         self._timeout = timeout
         self._max_delta_s = max_delta_s
 
+        # track id -> buffer
         self._buffers: dict[str, asyncio.Future[_PreConnectAudioBuffer]] = {}
         self._tasks: set[asyncio.Task] = set()
 
@@ -49,14 +49,9 @@ class PreConnectAudioHandler:
         self._room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM)
         await utils.aio.cancel_and_wait(*self._tasks)
 
-    async def wait_for_data(self, participant: rtc.RemoteParticipant) -> list[rtc.AudioFrame]:
-        # TODO(long): index the buffer by track
-        if not participant.attributes.get(PRE_CONNECT_AUDIO_ATTRIBUTE) == "true":
-            return []
-
-        participant_identity = participant.identity
-        self._buffers.setdefault(participant_identity, asyncio.Future())
-        fut = self._buffers[participant_identity]
+    async def wait_for_data(self, track_id: str) -> list[rtc.AudioFrame]:
+        self._buffers.setdefault(track_id, asyncio.Future())
+        fut = self._buffers[track_id]
 
         try:
             if fut.done():
@@ -64,7 +59,7 @@ class PreConnectAudioHandler:
                 if (delta := time.time() - buf.timestamp) > self._max_delta_s:
                     logger.warning(
                         "pre-connect audio buffer is too old",
-                        extra={"participant": participant_identity, "delta_time": delta},
+                        extra={"track_id": track_id, "delta_time": delta},
                     )
                     return []
                 return buf.frames
@@ -72,15 +67,21 @@ class PreConnectAudioHandler:
             buf = await asyncio.wait_for(fut, self._timeout)
             return buf.frames
         finally:
-            self._buffers.pop(participant_identity)
+            self._buffers.pop(track_id)
 
     @utils.log_exceptions(logger=logger)
     async def _read_audio_task(self, reader: rtc.ByteStreamReader, participant_id: str):
-        if (fut := self._buffers.get(participant_id)) and fut.done():
+        if not (track_id := reader.info.attributes.get("trackId")):
+            logger.warning(
+                "pre-connect audio received but no trackId", extra={"participant": participant_id}
+            )
+            return
+
+        if (fut := self._buffers.get(track_id)) and fut.done():
             # reset the buffer if it's already set
-            self._buffers.pop(participant_id)
-        self._buffers.setdefault(participant_id, asyncio.Future())
-        fut = self._buffers[participant_id]
+            self._buffers.pop(track_id)
+        self._buffers.setdefault(track_id, asyncio.Future())
+        fut = self._buffers[track_id]
 
         buf = _PreConnectAudioBuffer(timestamp=time.time())
         try:
@@ -100,7 +101,7 @@ class PreConnectAudioHandler:
 
             logger.debug(
                 "pre-connect audio received",
-                extra={"duration": duration, "participant": participant_id},
+                extra={"duration": duration, "track_id": track_id, "participant": participant_id},
             )
 
             with contextlib.suppress(asyncio.InvalidStateError):
