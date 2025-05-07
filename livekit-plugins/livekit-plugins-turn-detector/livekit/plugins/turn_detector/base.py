@@ -13,7 +13,7 @@ from livekit.agents.job import get_job_context
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
 
-MAX_HISTORY_TOKENS = 256
+MAX_HISTORY_TOKENS = 128
 MAX_HISTORY_TURNS = 6
 
 
