@@ -1,6 +1,8 @@
-# Gladia plugin for LiveKit
+# Gladia plugin for LiveKit Agents
 
-Agent Framework plugin for speech-to-text with [Gladia](https://gladia.io/)'s API. Currently supports streaming speech-to-text with optional translation.
+Support for speech-to-text with [Gladia](https://gladia.io/).
+
+See [https://docs.livekit.io/agents/integrations/stt/gladia/](https://docs.livekit.io/agents/integrations/stt/gladia/) for more information.
 
 ## Installation
 

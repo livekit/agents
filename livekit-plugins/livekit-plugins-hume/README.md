@@ -1,6 +1,8 @@
-# LiveKit Plugins Hume AI TTS
+# Hume AI TTS plugin for LiveKit Agents
 
-LiveKit Agents Framework plugin for [Hume](https://www.hume.ai/) Text-to-Speech API.
+Support for text-to-speech with [Hume](https://www.hume.ai/).
+
+See [https://docs.livekit.io/agents/integrations/tts/hume/](https://docs.livekit.io/agents/integrations/tts/hume/) for more information.
 
 ## Installation
 

@@ -1,6 +1,8 @@
-# LiveKit Plugins Clova
+# Clova plugin for LiveKit Agents
 
-Agent Framework plugin for speech-to-text with [Clova](https://api.ncloud-docs.com/docs/)'s API. Currently supports speech-to-text.
+Support for speech-to-text with [Clova](https://api.ncloud-docs.com/docs/).
+
+See https://docs.livekit.io/agents/integrations/stt/clova/ for more information.
 
 ## Installation
 

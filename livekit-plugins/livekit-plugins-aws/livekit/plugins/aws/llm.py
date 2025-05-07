@@ -161,7 +161,7 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=tools or [],
             session=self._session,
             conn_options=conn_options,
             extra_kwargs=opts,
@@ -176,7 +176,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: ChatContext,
         session: aioboto3.Session,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool] | None,
+        tools: list[FunctionTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)

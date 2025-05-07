@@ -1,10 +1,12 @@
-# LiveKit Plugins Turn Detector
+# Turn detector plugin for LiveKit Agents
 
 This plugin introduces end-of-turn detection for LiveKit Agents using a custom open-weight model to determine when a user has finished speaking.
 
 Traditional voice agents use VAD (voice activity detection) for end-of-turn detection. However, VAD models lack language understanding, often causing false positives where the agent interrupts the user before they finish speaking.
 
 By leveraging a language model specifically trained for this task, this plugin offers a more accurate and robust method for detecting end-of-turns.
+
+See [https://docs.livekit.io/agents/build/turns/turn-detector/](https://docs.livekit.io/agents/build/turns/turn-detector/) for more information.
 
 ## Installation
 

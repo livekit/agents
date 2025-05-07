@@ -1,8 +1,8 @@
-# LiveKit Plugins Beyond Presence
+# Beyond Presence plugin for LiveKit Agents
 
-Agent Framework Plugin for human avatars with [Beyond Presence](https://docs.bey.dev)'s API.
+Support for [Beyond Presence](https://docs.bey.dev) virtual avatars.
 
-Currently supports speech to video.
+See [https://docs.livekit.io/agents/integrations/avatar/bey/](https://docs.livekit.io/agents/integrations/avatar/bey/) for more information.
 
 ## Installation
 

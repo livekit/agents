@@ -103,6 +103,7 @@ class STT(stt.STT):
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
         Create a new instance of Google STT.
@@ -125,8 +126,13 @@ class STT(stt.STT):
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
+            use_streaming(bool): whether to use streaming for recognition (default: True)
         """
-        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
+        if not is_given(use_streaming):
+            use_streaming = True
+        super().__init__(
+            capabilities=stt.STTCapabilities(streaming=use_streaming, interim_results=True)
+        )
 
         self._location = location
         self._credentials_info = credentials_info
@@ -251,7 +257,7 @@ class STT(stt.STT):
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(e.message, status_code=e.code or -1) from None
+            raise APIStatusError(f"{e.message} {e.details}", status_code=e.code or -1) from e
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -472,6 +478,7 @@ class SpeechStream(stt.SpeechStream):
                             features=cloud_speech.RecognitionFeatures(
                                 enable_automatic_punctuation=self._config.punctuate,
                                 enable_word_time_offsets=True,
+                                enable_spoken_punctuation=self._config.spoken_punctuation,
                             ),
                         ),
                         streaming_features=cloud_speech.StreamingRecognitionFeatures(
@@ -505,7 +512,12 @@ class SpeechStream(stt.SpeechStream):
             except DeadlineExceeded:
                 raise APITimeoutError() from None
             except GoogleAPICallError as e:
-                raise APIStatusError(e.message, status_code=e.code or -1) from None
+                if e.code == 409:
+                    logger.debug("stream timed out, restarting.")
+                else:
+                    raise APIStatusError(
+                        f"{e.message} {e.details}", status_code=e.code or -1
+                    ) from e
             except Exception as e:
                 raise APIConnectionError() from e
 

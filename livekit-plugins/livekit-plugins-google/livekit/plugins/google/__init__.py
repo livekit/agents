@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Google AI plugin for LiveKit Agents
+
+Supports Gemini, Cloud Speech-to-Text, and Cloud Text-to-Speech.
+
+See https://docs.livekit.io/agents/integrations/stt/google/ for more information.
+"""
+
 from . import beta
 from .llm import LLM
 from .stt import STT, SpeechStream

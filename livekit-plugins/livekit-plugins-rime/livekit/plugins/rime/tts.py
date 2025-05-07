@@ -131,6 +131,7 @@ class TTS(tts.TTS):
                 phonemize_between_brackets=phonemize_between_brackets,
             )
         self._session = http_session
+        self._api_url = api_url
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

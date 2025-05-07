@@ -1,6 +1,8 @@
-# LiveKit Plugins Resemble
+# Resemble plugin for LiveKit Agents
 
-Agent Framework plugin for voice synthesis with the [Resemble AI](https://www.resemble.ai/) API, using both their REST API and WebSocket streaming interface.
+Support for voice synthesis with the [Resemble AI](https://www.resemble.ai/) API, using both their REST API and WebSocket streaming interface.
+
+See [https://docs.livekit.io/agents/integrations/tts/resemble/](https://docs.livekit.io/agents/integrations/tts/resemble/) for more information.
 
 ## Installation
 

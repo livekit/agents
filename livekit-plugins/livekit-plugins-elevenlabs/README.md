@@ -1,6 +1,8 @@
-# LiveKit Plugins Elevenlabs
+# ElevenLabs plugin for LiveKit Agents
 
-Agent Framework plugin for voice synthesis with [ElevenLabs](https://elevenlabs.io/) API.
+Support for voice synthesis with [ElevenLabs](https://elevenlabs.io/).
+
+See [https://docs.livekit.io/agents/integrations/tts/elevenlabs/](https://docs.livekit.io/agents/integrations/tts/elevenlabs/) for more information.
 
 ## Installation
 
