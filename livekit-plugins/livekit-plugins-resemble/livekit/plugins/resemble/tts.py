@@ -39,7 +39,6 @@ from .log import logger
 
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
 RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
-NUM_CHANNELS = 1
 DEFAULT_VOICE_UUID = "55592656"
 BUFFERED_WORDS_COUNT = 3
 
@@ -78,7 +77,7 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
+            num_channels=1,
         )
 
         api_key = api_key or os.environ.get("RESEMBLE_API_KEY")
@@ -108,15 +107,13 @@ class TTS(tts.TTS):
             close_cb=self._close_ws,
         )
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        session = self._ensure_session()
-
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(
-            session.ws_connect(
+            self._ensure_session().ws_connect(
                 RESEMBLE_WEBSOCKET_URL,
                 headers={"Authorization": f"Bearer {self._api_key}"},
             ),
-            self._conn_options.timeout,
+            timeout,
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
@@ -135,30 +132,24 @@ class TTS(tts.TTS):
         self,
         *,
         voice_uuid: str | None = None,
-        sample_rate: int | None = None,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
 
         Args:
             voice_uuid (str, optional): The voice UUID for the desired voice.
-            sample_rate (int, optional): The audio sample rate in Hz.
         """  # noqa: E501
         self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
-        self._opts.sample_rate = sample_rate or self._opts.sample_rate
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
-    def stream(self, *, conn_options: APIConnectOptions | None = None) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            pool=self._pool,
-            opts=self._opts,
-            api_key=self._api_key,
-        )
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -212,8 +203,8 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
-                    num_channels=NUM_CHANNELS,
-                    mime_type="audio/pcm",
+                    num_channels=1,
+                    mime_type="audio/pcm"
                 )
 
                 audio_b64 = response_json["audio_content"]
@@ -240,44 +231,44 @@ class SynthesizeStream(tts.SynthesizeStream):
     synthesis. Note that this requires a Business plan subscription with Resemble AI.
     """
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
-        api_key: str,
-    ):
-        super().__init__(tts=tts)
-        self._opts, self._pool, self._api_key = opts, pool, api_key
-
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts = tts
+        self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
-        @utils.log_exceptions(logger=logger)
+    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+        request_id = utils.shortuuid()
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            stream=True,
+        )
+
         async def _tokenize_input():
             """tokenize text from the input_ch to words"""
             input_stream = None
-            async for input in self._input_ch:
-                if isinstance(input, str):
+            async for text in self._input_ch:
+                if isinstance(text, str):
                     if input_stream is None:
                         # new segment (after flush for e.g)
                         input_stream = self._opts.tokenizer.stream()
                         self._segments_ch.send_nowait(input_stream)
-                    input_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+                    input_stream.push_text(text)
+                elif isinstance(text, self._FlushSentinel):
                     if input_stream is not None:
                         input_stream.end_input()
                     input_stream = None
+
             if input_stream is not None:
                 input_stream.end_input()
+
             self._segments_ch.close()
 
-        @utils.log_exceptions(logger=logger)
         async def _process_segments():
             async for input_stream in self._segments_ch:
-                await self._run_ws(input_stream)
+                await self._run_ws(input_stream, output_emitter)
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -285,117 +276,77 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
-            ) from e
+                message=e.message, status_code=e.status, request_id=request_id, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
-        self,
-        input_stream: tokenize.SentenceStream,
+        self, input_stream: tokenize.SentenceStream, output_emitter: tts.SynthesizedAudioEmitter
     ) -> None:
-        async with self._pool.connection() as ws:
-            segment_id = utils.shortuuid()
-            decoder = utils.codecs.AudioStreamDecoder(
-                sample_rate=self._opts.sample_rate,
-                num_channels=NUM_CHANNELS,
-            )
-            index_lock = asyncio.Lock()
-            current_index = 0
-            pending_requests = set()
+        segment_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=segment_id)
 
-            @utils.log_exceptions(logger=logger)
-            async def _send_task(ws: aiohttp.ClientWebSocketResponse):
-                nonlocal current_index
-                index = 0
-                async for data in input_stream:
-                    payload = {
-                        "voice_uuid": self._opts.voice_uuid,
-                        "data": data.token,
-                        "request_id": index,
-                        "sample_rate": self._opts.sample_rate,
-                        "precision": "PCM_16",
-                        "output_format": "mp3",
-                    }
-                    async with index_lock:
-                        pending_requests.add(index)
-                    index += 1
-                    current_index = index
-                    await ws.send_str(json.dumps(payload))
+        last_index = 0
+        input_ended = False
 
-            @utils.log_exceptions(logger=logger)
-            async def _emit_task():
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=str(current_index),
-                    segment_id=segment_id,
-                )
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
+        async def _send_task(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal input_ended, last_index
+            async for data in input_stream:
+                last_index += 1
+                payload = {
+                    "voice_uuid": self._opts.voice_uuid,
+                    "data": data.token,
+                    "request_id": last_index,
+                    "sample_rate": self._opts.sample_rate,
+                    "precision": "PCM_16",
+                    "output_format": "mp3",
+                }
+                self._mark_started()
+                await ws.send_str(json.dumps(payload))
 
-            @utils.log_exceptions(logger=logger)
-            async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
-                while True:
-                    msg = await ws.receive()
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        raise APIStatusError(
-                            "Resemble connection closed unexpectedly",
-                            request_id=str(current_index),
-                        )
+            input_ended = True
 
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning("Unexpected Resemble message type %s", msg.type)
-                        continue
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    raise APIStatusError("Resemble connection closed unexpectedly")
 
-                    data = json.loads(msg.data)
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("Unexpected Resemble message type %s", msg.type)
+                    continue
 
-                    if data.get("type") == "audio":
-                        if data.get("audio_content", None):
-                            b64data = base64.b64decode(data["audio_content"])
-                            decoder.push(b64data)
+                data = json.loads(msg.data)
+                if data.get("type") == "audio":
+                    if data.get("audio_content", None):
+                        b64data = base64.b64decode(data["audio_content"])
+                        output_emitter.push(b64data)
 
-                    elif data.get("type") == "audio_end":
-                        async with index_lock:
-                            index = data["request_id"]
-                            pending_requests.remove(index)
-                            if not pending_requests:
-                                decoder.end_input()
-                                break  # we are not going to receive any more audio
-                    else:
-                        logger.error("Unexpected Resemble message %s", data)
+                elif data.get("type") == "audio_end":
+                    index = data["request_id"]
+                    if index == last_index and input_ended:
+                        output_emitter.flush()
+                        break
+                else:
+                    logger.error("Unexpected Resemble message %s", data)
 
+        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),
-                asyncio.create_task(_emit_task()),
             ]
-
             try:
                 await asyncio.gather(*tasks)
-            except asyncio.TimeoutError as e:
-                raise APITimeoutError() from e
-            except aiohttp.ClientResponseError as e:
-                raise APIStatusError(
-                    message=e.message,
-                    status_code=e.status,
-                    request_id=str(current_index),
-                    body=None,
-                ) from e
-            except Exception as e:
-                raise APIConnectionError() from e
             finally:
                 await utils.aio.gracefully_cancel(*tasks)

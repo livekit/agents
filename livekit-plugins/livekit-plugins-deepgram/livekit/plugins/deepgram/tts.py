@@ -212,8 +212,8 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts = tts
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         self._opts = replace(tts._opts)
+        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
     async def _run(self, output_emitter: tts.SynthesizedAudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -225,7 +225,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
             # Converts incoming text into WordStreams and sends them into _segments_ch
             word_stream = None
@@ -242,10 +241,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._segments_ch.close()
 
-        @utils.log_exceptions(logger=logger)
         async def _run_segments():
             async for word_stream in self._segments_ch:
-                await self._run_ws(word_stream, request_id)
+                await self._run_ws(word_stream, output_emitter)
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -253,21 +251,23 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
-            ) from e
+                message=e.message, status_code=e.status, request_id=request_id, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-    async def _run_ws(self, word_stream: tokenize.WordStream, request_id: str):
+    async def _run_ws(
+        self, word_stream: tokenize.WordStream, output_emitter: tts.SynthesizedAudioEmitter
+    ):
+        segment_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=segment_id)
+
         async def send_task(ws: aiohttp.ClientWebSocketResponse):
             async for word in word_stream:
                 speak_msg = {"type": "Speak", "text": f"{word.token} "}
@@ -286,22 +286,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    raise APIStatusError(
-                        "Deepgram websocket connection closed unexpectedly",
-                        request_id=request_id,
-                    )
+                    raise APIStatusError("Deepgram websocket connection closed unexpectedly")
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    data = msg.data
-                    for frame in audio_bstream.write(data):
-                        emitter.push(frame)
+                    output_emitter.push(msg.data)
                 elif msg.type == aiohttp.WSMsgType.TEXT:
                     resp = json.loads(msg.data)
                     mtype = resp.get("type")
                     if mtype == "Flushed":
-                        for frame in audio_bstream.flush():
-                            emitter.push(frame)
-                        emitter.flush()
+                        output_emitter.flush()
                         break
                     elif mtype == "Warning":
                         logger.warning("Deepgram warning: %s", resp.get("warn_msg"))
@@ -310,21 +303,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.debug("Unknown message type: %s", resp)
 
-        try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
+        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
+
+            try:
                 await asyncio.gather(*tasks)
-        except asyncio.TimeoutError:
-            raise APITimeoutError()
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except Exception as e:
-            raise APIConnectionError() from e
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
 
 
 def _to_deepgram_url(

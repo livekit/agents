@@ -24,6 +24,7 @@ class ConnectionPool(Generic[T]):
         mark_refreshed_on_get: bool = False,
         connect_cb: Optional[Callable[[float], Awaitable[T]]] = None,
         close_cb: Optional[Callable[[T], Awaitable[None]]] = None,
+        connect_timeout: float = 10.0,
     ) -> None:
         """Initialize the connection wrapper.
 
@@ -39,6 +40,7 @@ class ConnectionPool(Generic[T]):
         self._close_cb = close_cb
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
         self._available: set[T] = set()
+        self._connect_timeout = connect_timeout
 
         # store connections to be reaped (closed) later.
         self._to_close: set[T] = set()
@@ -160,7 +162,7 @@ class ConnectionPool(Generic[T]):
 
         async def _prewarm_impl():
             if not self._connections:
-                conn = await self._connect()
+                conn = await self._connect(timeout=self._connect_timeout)
                 self._available.add(conn)
 
         task = asyncio.create_task(_prewarm_impl())

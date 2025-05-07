@@ -6,6 +6,10 @@ import os
 import pathlib
 import ssl
 import time
+import io
+import av
+from av.error import InvalidDataError
+
 
 import aiohttp
 import pytest
@@ -14,7 +18,7 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, APITimeoutError
 from livekit.agents import tts
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
     azure,
@@ -58,8 +62,19 @@ async def assert_valid_synthesized_audio(
     *, frames: AudioBuffer, text: str, sample_rate: int, num_channels: int
 ):
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
-
     frame = rtc.combine_audio_frames(frames)
+
+    # Make sure the data is PCM and can't be another container.
+    # OpenAI STT seems to probe the input so the test could still pass even if the data isn't PCM.
+    with pytest.raises(InvalidDataError):
+        container = av.open(io.BytesIO(frame.data))
+        container.close()
+
+    assert len(frame.data) >= frame.samples_per_channel
+
+    assert frame.sample_rate == sample_rate, "sample rate should be the same"
+    assert frame.num_channels == num_channels, "num channels should be the same"
+
     data = frame.to_wav_bytes()
     form = aiohttp.FormData()
     form.add_field("file", data, filename="file.wav", content_type="audio/wav")
@@ -86,15 +101,12 @@ async def assert_valid_synthesized_audio(
 
     # semantic
     assert wer(result["text"], text) <= WER_THRESHOLD
-    combined_frame = rtc.combine_audio_frames(frames)
-    assert combined_frame.sample_rate == sample_rate, "sample rate should be the same"
-    assert combined_frame.num_channels == num_channels, "num channels should be the same"
 
     # clipping
     # signal = np.array(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
     # peak = np.iinfo(np.int16).max
     # num_clipped = np.sum((signal >= peak) | (signal <= -peak))
-    # assert num_clipped >= 0, f"{num_clipped} samples are clipped"
+    # assert num_clipped <= 10, f"{num_clipped} samples are clipped"
 
 
 SYNTHESIZE_TTS = [
@@ -257,7 +269,7 @@ async def test_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
         await tts_v.aclose()
 
     assert metrics_collected_events.count == 1, (
-        "expected 1 metrics collected event, got {metrics_collected_events.count}"
+        f"expected 1 metrics collected event, got {metrics_collected_events.count}"
     )
     logger.info(f"metrics: {metrics_collected_events.events[0][0][0]}")
 
@@ -353,6 +365,20 @@ STREAM_TTS = [
         },
         id="elevenlabs",
     ),
+    pytest.param(
+        lambda: {
+            "tts": deepgram.TTS(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": resemble.TTS(),
+            "proxy-upstream": "websocket.cluster.resemble.ai:443",
+        },
+        id="resemble",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
@@ -378,9 +404,14 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 
         audio_events: list[tts.SynthesizedAudio] = []
         audio_events_recv_times = []
-        async for event in tts_stream:
-            audio_events.append(event)
-            audio_events_recv_times.append(time.time())
+
+        try:
+            async for event in tts_stream:
+                audio_events.append(event)
+                audio_events_recv_times.append(time.time())
+        except BaseException:
+            await aio.cancel_and_wait(push_text_task)
+            raise
 
         assert push_text_task.done(), "expected push_text_task to be done"
 
@@ -398,6 +429,8 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
         assert len(by_segment) == len(segments), (
             "expected one unique segment_id per pushed text segment"
         )
+
+        assert len(by_segment) >= 1, "expected at least one segment"
 
         for seg_idx, (segment_text, segment_events) in enumerate(
             zip(segments, by_segment.values())
@@ -457,8 +490,9 @@ async def test_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger)
             timeout=30,
         )
 
+        # the metrics could not be emitted if the _mark_started() method was never called in streaming mode
         assert metrics_collected_events.count == 1, (
-            "expected 1 metrics collected event, got {metrics_collected_events.count}"
+            f"expected 1 metrics collected event, got {metrics_collected_events.count}"
         )
         logger.info(f"metrics: {metrics_collected_events.events[0][0][0]}")
 
@@ -525,21 +559,21 @@ async def test_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
         metrics_collected_events = EventCollector(tts_v, "metrics_collected")
         start_time = time.time()
         with pytest.raises(APITimeoutError):
-            await _do_synthesis(
+            await _do_stream(
                 tts_v,
-                TEST_AUDIO_SYNTHESIZE,
+                [TEST_AUDIO_SYNTHESIZE],
                 conn_options=APIConnectOptions(max_retry=3, timeout=0.5, retry_interval=0.0),
             )
 
         end_time = time.time()
         elapsed_time = end_time - start_time
 
-        assert error_events.count == 4, "expected 4 errors, got {error_events.count}"
+        assert error_events.count == 4, f"expected 4 errors, got {error_events.count}"
         assert 1 <= elapsed_time <= 3, (
             f"expected total timeout around 2 seconds, got {elapsed_time:.2f}s"
         )
         assert metrics_collected_events.count == 0, (
-            "expected 0 metrics collected events, got {metrics_collected_events.count}"
+            f"expected 0 metrics collected events, got {metrics_collected_events.count}"
         )
     finally:
         await tts_v.aclose()

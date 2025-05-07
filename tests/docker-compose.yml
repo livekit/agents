@@ -71,6 +71,7 @@ services:
       - "api.openai.com:172.30.0.10"
       - "api.play.ht:172.30.0.10"
       - "f.cluster.resemble.ai:172.30.0.10"
+      - "websocket.cluster.resemble.ai:172.30.0.10"
       - "users.rime.ai:172.30.0.10"
       - "api.hume.ai:172.30.0.10"
     networks:

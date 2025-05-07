@@ -17,7 +17,7 @@ from livekit import rtc
 from .._exceptions import APIError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import APIConnectOptions
 from ..utils import aio, audio, codecs, log_exceptions
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
@@ -303,6 +303,7 @@ class SynthesizeStream(ABC):
                 await self._run(output_emitter)
 
                 output_emitter.flush()
+                output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
@@ -672,6 +673,8 @@ class SynthesizedAudioEmitter:
                     )
                 else:
                     filename = f"lk_dump/{self._label}_{self._request_id}_{timestamp}.wav"
+
+                logger.debug("dumping segment %s", filename)
                 with open(filename, "wb") as f:
                     f.write(rtc.combine_audio_frames(debug_segment_frames).to_wav_bytes())
 
