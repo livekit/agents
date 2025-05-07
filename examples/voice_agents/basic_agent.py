@@ -45,11 +45,7 @@ class MyAgent(Agent):
     # agent is active
     @function_tool
     async def lookup_weather(
-        self,
-        context: RunContext,
-        location: str,
-        latitude: str,
-        longitude: str,
+        self, context: RunContext, location: str, latitude: str, longitude: str
     ):
         """Called when the user asks for weather related information.
         Ensure the user's location (city or region) is provided.

@@ -25,8 +25,10 @@ import av
 import av.container
 
 from livekit import rtc
-from livekit.agents.log import logger
-from livekit.agents.utils import aio
+
+from ...log import logger
+from .. import aio
+from ..audio import AudioByteStream
 
 
 class StreamBuffer:
@@ -187,8 +189,6 @@ class AudioStreamDecoder:
         """
 
         try:
-            from livekit.agents.utils.audio import AudioByteStream
-
             # parse RIFF header
             header = b""
             while len(header) < 12:

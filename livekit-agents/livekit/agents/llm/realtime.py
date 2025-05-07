@@ -9,8 +9,8 @@ from typing import Any, Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
-from livekit.agents._exceptions import APIError
 
+from .._exceptions import APIError
 from ..types import NOT_GIVEN, NotGivenOr
 from .chat_context import ChatContext, FunctionCall
 from .tool_context import FunctionTool, RawFunctionTool, ToolChoice, ToolContext
