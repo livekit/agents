@@ -18,6 +18,8 @@ See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quick
 documentation, and examples.
 """
 
+import typing
+
 from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice  # noqa: F401
 from ._exceptions import (
     APIConnectionError,
