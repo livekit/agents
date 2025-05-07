@@ -19,7 +19,6 @@ class CliArgs:
     devmode: bool
     asyncio_debug: bool
     watch: bool
-    drain_timeout: int
 
     console: bool = False
     # whether to run the worker in console mode (console subcommand

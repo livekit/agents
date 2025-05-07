@@ -53,13 +53,16 @@ class _ParticipantAudioOutput(io.AudioOutput):
     async def start(self) -> None:
         await self._publish_track()
         self._started_fut.set_result(None)
+        self._room.on("reconnected", self._on_reconnected)
 
-        def _on_reconnected() -> None:
-            if self._republish_task:
-                self._republish_task.cancel()
-            self._republish_task = asyncio.create_task(self._publish_track())
+    async def aclose(self) -> None:
+        self._room.off("reconnected", self._on_reconnected)
+        if self._republish_task:
+            await utils.aio.cancel_and_wait(self._republish_task)
+        if self._flush_task:
+            await utils.aio.cancel_and_wait(self._flush_task)
 
-        self._room.on("reconnected", _on_reconnected)
+        await self._audio_source.aclose()
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await self._started_fut
@@ -113,6 +116,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._pushed_duration = 0
         self._interrupted_event.clear()
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
+
+    def _on_reconnected(self) -> None:
+        if self._republish_task:
+            self._republish_task.cancel()
+        self._republish_task = asyncio.create_task(self._publish_track())
 
 
 class _ParticipantLegacyTranscriptionOutput(io.TextOutput):

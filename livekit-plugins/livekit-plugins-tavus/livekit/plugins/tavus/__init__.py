@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Tavus virtual avatar plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/avatar/tavus/ for more information.
+"""
 
 from .avatar import AvatarSession, TavusException
 from .version import __version__

@@ -1,6 +1,8 @@
-# LiveKit Plugins Speechify
+# Speechify TTS plugin for LiveKit Agents
 
-Agent Framework plugin for voice synthesis with [Speechify](https://www.speechify.ai/) API.
+Support for voice synthesis with the [Speechify](https://www.speechify.ai/) API.
+
+See [https://docs.livekit.io/agents/integrations/tts/speechify/](https://docs.livekit.io/agents/integrations/tts/speechify/) for more information.
 
 ## Installation
 

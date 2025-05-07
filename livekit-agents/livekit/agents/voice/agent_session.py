@@ -41,6 +41,7 @@ class VoiceOptions:
     allow_interruptions: bool
     discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
+    min_interruption_words: int
     min_endpointing_delay: float
     max_endpointing_delay: float
     max_tool_steps: int
@@ -110,6 +111,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         allow_interruptions: bool = True,
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
+        min_interruption_words: int = 0,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
@@ -154,6 +156,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 interrupted. Default ``True``.
             min_interruption_duration (float): Minimum speech length (s) to
                 register as an interruption. Default ``0.5`` s.
+            min_interruption_words (int): Minimum number of words to consider
+                an interruption, only used if stt enabled. Default ``0``.
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
                 or an EOU model) before it declares the user’s turn complete.
@@ -183,6 +187,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions=allow_interruptions,
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
+            min_interruption_words=min_interruption_words,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,

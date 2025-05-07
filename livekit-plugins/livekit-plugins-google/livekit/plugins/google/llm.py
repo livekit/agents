@@ -241,7 +241,7 @@ class LLM(llm.LLM):
             client=self._client,
             model=self._opts.model,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
         )
@@ -256,7 +256,7 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool] | None,
+        tools: list[FunctionTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)

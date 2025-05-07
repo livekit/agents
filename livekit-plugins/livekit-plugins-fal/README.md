@@ -1,6 +1,8 @@
-# LiveKit Plugins fal
+# fal plugin for LiveKit Agents
 
-This plugin provides a simple way to integrate fal.ai models into the LiveKit Agent Framework. currently supports Wizper model for STT.
+Support for speech-to-text with [fal.ai](https://fal.ai/).
+
+See [https://docs.livekit.io/agents/integrations/stt/fal/](https://docs.livekit.io/agents/integrations/stt/fal/) for more information.
 
 ## Installation
 
