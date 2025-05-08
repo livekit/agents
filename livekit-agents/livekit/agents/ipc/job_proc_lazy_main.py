@@ -21,7 +21,6 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import socket
-import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -74,16 +73,10 @@ def proc_main(args: ProcStartArgs) -> None:
     )
 
     client.initialize_logger()
-
-    pid = current_process().pid
-    logger.info("initializing job process", extra={"pid": pid})
     try:
         client.initialize()
     except Exception:
-        return  # initialization failed, exit
-
-    logger.info("job process initialized", extra={"pid": pid})
-
+        return  # initialization failed, exit (initialize will send an error to the worker)
     client.run()
 
 
@@ -336,8 +329,6 @@ def thread_main(
     args: ThreadStartArgs,
 ) -> None:
     """main function for the job process when using the ThreadedJobRunner"""
-    tid = threading.get_native_id()
-
     try:
         from .proc_client import _ProcClient
 
@@ -355,10 +346,7 @@ def thread_main(
             job_proc.entrypoint,
         )
 
-        logger.info("initializing job runner", extra={"tid": tid})
         client.initialize()
-        logger.info("job runner initialized", extra={"tid": tid})
-
         client.run()
     finally:
         args.join_fnc()
