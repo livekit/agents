@@ -562,7 +562,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
-        logger.error(f"AgentSession is closing due to unrecoverable error: {error.error}")
+        logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
 
         async def drain_and_close() -> None:
             await self.drain()
