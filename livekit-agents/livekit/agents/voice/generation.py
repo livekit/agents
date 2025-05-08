@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -40,7 +40,7 @@ class _ACloseable(Protocol):
 
 @dataclass
 class _LLMGenerationData:
-    text_ch: aio.Chan[str]
+    text_ch: aio.Chan[str | llm.FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
@@ -85,6 +85,9 @@ def perform_llm_inference(
                     # io.LLMNode can either return a string or a ChatChunk
                     if isinstance(chunk, str):
                         data.generated_text += chunk
+                        text_ch.send_nowait(chunk)
+
+                    elif isinstance(chunk, llm.FlushSentinel):
                         text_ch.send_nowait(chunk)
 
                     elif isinstance(chunk, ChatChunk):
@@ -132,23 +135,45 @@ class _TTSGenerationData:
 
 
 def perform_tts_inference(
-    *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
+    *,
+    node: io.TTSNode,
+    input: AsyncIterable[str | llm.FlushSentinel],
+    model_settings: ModelSettings,
 ) -> tuple[asyncio.Task, _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task():
-        tts_node = node(input, model_settings)
-        if asyncio.iscoroutine(tts_node):
-            tts_node = await tts_node
+        # convert any input to a generator
+        async def _input() -> AsyncGenerator[str | llm.FlushSentinel, None]:
+            async for chunk in input:
+                yield chunk
 
-        if isinstance(tts_node, AsyncIterable):
-            async for audio_frame in tts_node:
-                audio_ch.send_nowait(audio_frame)
+        input_gen = _input()
+        audio_generated = False
+        done = False
 
-            return True
+        # split the input into segments
+        async def _input_segment() -> AsyncIterable[str]:
+            async for chunk in input_gen:
+                if isinstance(chunk, llm.FlushSentinel):
+                    return
+                yield chunk
 
-        return False
+            nonlocal done
+            done = True
+
+        while not done:
+            # create a new tts node for each segment
+            tts_node = node(_input_segment(), model_settings)
+            if asyncio.iscoroutine(tts_node):
+                tts_node = await tts_node
+
+            if isinstance(tts_node, AsyncIterable):
+                async for audio_frame in tts_node:
+                    audio_ch.send_nowait(audio_frame)
+                audio_generated = True
+        return audio_generated
 
     tts_task = asyncio.create_task(_inference_task())
     tts_task.add_done_callback(lambda _: audio_ch.close())
