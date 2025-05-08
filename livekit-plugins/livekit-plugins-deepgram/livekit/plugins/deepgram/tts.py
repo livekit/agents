@@ -24,6 +24,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from ._utils import _to_deepgram_url
 
 from .log import logger
 
@@ -436,18 +437,3 @@ class SynthesizeStream(tts.SynthesizeStream):
             finally:
                 if ws is not None and not ws.closed:
                     await ws.close()
-
-
-def _to_deepgram_url(
-    opts: dict,
-    base_url: str,
-    *,
-    websocket: bool,
-) -> str:
-    if websocket and base_url.startswith("http"):
-        base_url = base_url.replace("http", "ws", 1)
-
-    elif not websocket and base_url.startswith("ws"):
-        base_url = base_url.replace("ws", "http", 1)
-
-    return f"{base_url}?{urlencode(opts, doseq=True)}"

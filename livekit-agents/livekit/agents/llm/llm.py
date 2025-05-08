@@ -10,9 +10,9 @@ from typing import Any, Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
-from livekit.agents._exceptions import APIConnectionError, APIError
 
 from .. import utils
+from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..types import (

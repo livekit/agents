@@ -8,10 +8,10 @@ from typing import Generic, TypeVar, Union
 from typing_extensions import override
 
 import livekit.rtc as rtc
-from livekit.agents import utils
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 from ...log import logger
+from ...utils import aio, log_exceptions
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
 
@@ -37,7 +37,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             else set(track_source)
         )
 
-        self._data_ch = utils.aio.Chan[T]()
+        self._data_ch = aio.Chan[T]()
         self._publication: rtc.RemoteTrackPublication | None = None
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
         self._participant_identity: str | None = None
@@ -118,12 +118,12 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._stream = None
         self._publication = None
         if self._forward_atask:
-            await utils.aio.cancel_and_wait(self._forward_atask)
+            await aio.cancel_and_wait(self._forward_atask)
 
         self._room.off("track_subscribed", self._on_track_available)
         self._data_ch.close()
 
-    @utils.log_exceptions(logger=logger)
+    @log_exceptions(logger=logger)
     async def _forward_task(
         self,
         old_task: asyncio.Task | None,
@@ -132,7 +132,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         participant: rtc.RemoteParticipant,
     ) -> None:
         if old_task:
-            await utils.aio.cancel_and_wait(old_task)
+            await aio.cancel_and_wait(old_task)
 
         extra = {
             "participant": participant.identity,

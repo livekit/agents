@@ -7,8 +7,9 @@ from typing import Union
 import numpy as np
 
 from livekit import rtc
-from livekit.agents import utils
-from livekit.agents.log import logger
+
+from ...log import logger
+from ...utils import aio, log_exceptions
 
 
 @dataclass
@@ -57,8 +58,8 @@ class SpeakingRateStream:
         self._detector = detector
         self._opts = opts
 
-        self._input_ch = utils.aio.Chan[Union[rtc.AudioFrame, SpeakingRateStream._FlushSentinel]]()
-        self._event_ch = utils.aio.Chan[SpeakingRateEvent]()
+        self._input_ch = aio.Chan[Union[rtc.AudioFrame, SpeakingRateStream._FlushSentinel]]()
+        self._event_ch = aio.Chan[SpeakingRateEvent]()
 
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -67,7 +68,7 @@ class SpeakingRateStream:
         self._window_size_samples = 0
         self._step_size_samples = 0
 
-    @utils.log_exceptions(logger=logger)
+    @log_exceptions(logger=logger)
     async def _main_task(self):
         _inference_sample_rate = 0
         inference_f32_data = np.empty(0, dtype=np.float32)
@@ -81,7 +82,7 @@ class SpeakingRateStream:
                 # estimate the speech rate for the last frame
                 available_samples = sum(frame.samples_per_channel for frame in inference_frames)
                 if available_samples > self._window_size_samples * 0.5:
-                    frame = utils.combine_frames(inference_frames)
+                    frame = rtc.combine_audio_frames(inference_frames)
                     frame_f32_data = np.divide(frame.data, np.iinfo(np.int16).max, dtype=np.float32)
 
                     sr = self._compute_speaking_rate(frame_f32_data, _inference_sample_rate)
@@ -132,7 +133,7 @@ class SpeakingRateStream:
                 if available_samples < self._window_size_samples:
                     break
 
-                inference_frame = utils.combine_frames(inference_frames)
+                inference_frame = rtc.combine_audio_frames(inference_frames)
                 np.divide(
                     inference_frame.data[: self._window_size_samples],
                     np.iinfo(np.int16).max,
@@ -242,7 +243,7 @@ class SpeakingRateStream:
     async def aclose(self) -> None:
         """Close this stream immediately"""
         self._input_ch.close()
-        await utils.aio.cancel_and_wait(self._task)
+        await aio.cancel_and_wait(self._task)
         self._event_ch.close()
 
     def __aiter__(self):
