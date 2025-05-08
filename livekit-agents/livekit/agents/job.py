@@ -29,7 +29,8 @@ from livekit.protocol import agent, models
 
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .utils import http_context
+from .types import NotGivenOr
+from .utils import http_context, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
@@ -109,6 +110,7 @@ class JobContext:
             ]
         ] = []
         self._participant_tasks = dict[tuple[str, Callable], asyncio.Task[None]]()
+        self._pending_tasks = list[asyncio.Task]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
@@ -237,32 +239,7 @@ class JobContext:
         participant that joins the room will be returned.
         If the participant has already joined, the function will return immediately.
         """
-        if not self._room.isconnected():
-            raise RuntimeError("room is not connected")
-
-        fut = asyncio.Future[rtc.RemoteParticipant]()
-
-        def kind_match(p: rtc.RemoteParticipant) -> bool:
-            if isinstance(kind, list):
-                return p.kind in kind
-
-            return p.kind == kind
-
-        for p in self._room.remote_participants.values():
-            if (identity is None or p.identity == identity) and kind_match(p):
-                fut.set_result(p)
-                break
-
-        def _on_participant_connected(p: rtc.RemoteParticipant):
-            if (identity is None or p.identity == identity) and kind_match(p):
-                self._room.off("participant_connected", _on_participant_connected)
-                if not fut.done():
-                    fut.set_result(p)
-
-        if not fut.done():
-            self._room.on("participant_connected", _on_participant_connected)
-
-        return await fut
+        return await wait_for_participant(self._room, identity=identity, kind=kind)
 
     async def connect(
         self,
@@ -290,6 +267,91 @@ class JobContext:
             self._participant_available(p)
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
+
+    def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:
+        """Deletes the room and disconnects all participants."""
+        task = asyncio.create_task(
+            self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+        )
+        self._pending_tasks.append(task)
+        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        return task
+
+    def add_sip_participant(
+        self,
+        *,
+        call_to: str,
+        trunk_id: str,
+        participant_identity: str,
+        participant_name: str | NotGivenOr[str] = "SIP-participant",
+    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        """
+        Add a SIP participant to the room.
+
+        Args:
+            call_to: The number or SIP destination to transfer the participant to.
+                         This can either be a number (+12345555555) or a
+                         sip host (sip:<user>@<host>)
+            trunk_id: The ID of the SIP trunk to use
+            participant_identity: The identity of the participant to add
+            participant_name: The name of the participant to add
+
+        Make sure you have an outbound SIP trunk created in LiveKit.
+        See https://docs.livekit.io/sip/trunk-outbound/ for more information.
+        """
+        task = asyncio.create_task(
+            self.api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=participant_identity,
+                    sip_trunk_id=trunk_id,
+                    sip_call_to=call_to,
+                    participant_name=participant_name,
+                )
+            ),
+        )
+        self._pending_tasks.append(task)
+        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        return task
+
+    def transfer_sip_participant(
+        self,
+        participant: rtc.RemoteParticipant | str,
+        transfer_to: str,
+        play_dialtone: bool = False,
+    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        """Transfer a SIP participant to another number.
+
+        Args:
+            participant: The participant to transfer
+            transfer_to: The number or SIP destination to transfer the participant to.
+                         This can either be a number (+12345555555) or a
+                         sip host (sip:<user>@<host>)
+            play_dialtone: Whether to play a dialtone during transfer. Defaults to True.
+
+
+        Returns:
+            Future that completes when the transfer is complete
+
+        Make sure you have enabled call transfer on your provider SIP trunk.
+        See https://docs.livekit.io/sip/transfer-cold/ for more information.
+        """
+        assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
+            "Participant must be a SIP participant"
+        )
+        task = asyncio.create_task(
+            self.api.sip.transfer_sip_participant(
+                api.TransferSIPParticipantRequest(
+                    room_name=self._room.name,
+                    participant_identity=participant.identity,
+                    transfer_to=transfer_to,
+                    play_dialtone=play_dialtone,
+                )
+            ),
+        )
+        self._pending_tasks.append(task)
+        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        return task
 
     def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
@@ -363,7 +425,7 @@ class JobProcess:
         self._mp_proc = mp.current_process()
         self._userdata: dict[str, Any] = {}
         self._user_arguments = user_arguments
-        self._http_proxy: str | None = None
+        self._http_proxy: str | None = http_proxy
 
     @property
     def executor_type(self) -> JobExecutorType:

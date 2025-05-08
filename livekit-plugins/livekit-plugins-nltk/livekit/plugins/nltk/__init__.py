@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""NLTK plugin for LiveKit Agents
+
+Support for [NLTK](https://www.nltk.org/)-based text processing.
+Currently featuring a `SentenceTokenizer`.
+"""
 
 from .sentence_tokenizer import SentenceTokenizer
 from .version import __version__

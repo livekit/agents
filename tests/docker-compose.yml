@@ -50,6 +50,7 @@ services:
       - AWS_SECRET_ACCESS_KEY
       - NEUPHONIC_API_KEY
       - RESEMBLE_API_KEY
+      - SPEECHIFY_API_KEY
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"
@@ -57,10 +58,11 @@ services:
       - "api.cartesia.ai:172.30.0.10"
       - "api.deepgram.com:172.30.0.10"
       - "api.elevenlabs.io:172.30.0.10"
+      - "api.sws.speechify.com:172.30.0.10"
       - "texttospeech.googleapis.com:172.30.0.10"
       - "api.groq.com:172.30.0.10"
       - "api.neuphonic.com:172.30.0.10"
-      # - "api.openai.com:172.30.0.10"
+      - "api.openai.com:172.30.0.10"
       - "api.play.ht:172.30.0.10"
       - "f.cluster.resemble.ai:172.30.0.10"
       - "users.rime.ai:172.30.0.10"

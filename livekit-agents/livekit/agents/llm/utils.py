@@ -8,6 +8,7 @@ from typing import (
     Annotated,
     Any,
     Callable,
+    Union,
     get_args,
     get_origin,
     get_type_hints,
@@ -15,16 +16,22 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
-from pydantic_core import PydanticUndefined
+from pydantic_core import PydanticUndefined, from_json
 from typing_extensions import TypeVar
 
 from livekit import rtc
-from livekit.agents import llm, utils
 
 from ..log import logger
+from ..utils import images
 from . import _strict
-from .chat_context import ChatContext
-from .tool_context import FunctionTool, get_function_info
+from .chat_context import ChatContext, ImageContent
+from .tool_context import (
+    FunctionTool,
+    RawFunctionTool,
+    get_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -114,7 +121,7 @@ class SerializedImage:
     external_url: str | None = None
 
 
-def serialize_image(image: llm.ImageContent) -> SerializedImage:
+def serialize_image(image: ImageContent) -> SerializedImage:
     if isinstance(image.image, str):
         if image.image.startswith("data:"):
             header, b64_data = image.image.split(",", 1)
@@ -147,14 +154,14 @@ def serialize_image(image: llm.ImageContent) -> SerializedImage:
             )
 
     elif isinstance(image.image, rtc.VideoFrame):
-        opts = utils.images.EncodeOptions()
+        opts = images.EncodeOptions()
         if image.inference_width and image.inference_height:
-            opts.resize_options = utils.images.ResizeOptions(
+            opts.resize_options = images.ResizeOptions(
                 width=image.inference_width,
                 height=image.inference_height,
                 strategy="scale_aspect_fit",
             )
-        encoded_data = utils.images.encode(image.image, opts)
+        encoded_data = images.encode(image.image, opts)
 
         return SerializedImage(
             data_bytes=encoded_data,
@@ -312,33 +319,72 @@ def function_arguments_to_pydantic_model(func: Callable) -> type[BaseModel]:
     return create_model(model_name, **fields)
 
 
-def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
-    result = {}
-    for name, field in model.model_fields.items():
-        key = field.alias if by_alias and field.alias else name
-        result[key] = getattr(model, name)
-    return result
-
-
-def pydantic_model_to_function_arguments(
+def prepare_function_arguments(
     *,
-    function_tool: Callable,
-    model: BaseModel,
+    fnc: FunctionTool | RawFunctionTool,
+    json_arguments: str,  # raw function output from the LLM
     call_ctx: RunContext | None = None,
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
+) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """
-    Convert a model’s fields into function args/kwargs.
-    Raises TypeError if required params are missing
+    Create the positional and keyword arguments to call a function tool from
+    the raw function output from the LLM.
     """
-    signature = inspect.signature(function_tool)
-    type_hints = get_type_hints(function_tool, include_extras=True)
 
+    signature = inspect.signature(fnc)
+    type_hints = get_type_hints(fnc, include_extras=True)
+    args_dict = from_json(json_arguments)
+
+    if is_function_tool(fnc):
+        model_type = function_arguments_to_pydantic_model(fnc)
+
+        # Function arguments with default values are treated as optional
+        # when converted to strict LLM function descriptions. (e.g., we convert default
+        # parameters to type: ["string", "null"]).
+        # The following make sure to use the default value when we receive None.
+        # (Only if the type can't be Optional)
+        for param_name, param in signature.parameters.items():
+            type_hint = type_hints[param_name]
+            if param_name in args_dict and args_dict[param_name] is None:
+                if not _is_optional_type(type_hint):
+                    if param.default is not inspect.Parameter.empty:
+                        args_dict[param_name] = param.default
+                    else:
+                        raise ValueError(
+                            f"Received None for required parameter '{param_name} ;"
+                            "this argument cannot be None and no default is available."
+                        )
+
+        model = model_type.model_validate(args_dict)  # can raise ValidationError
+        raw_fields = _shallow_model_dump(model)
+    elif is_raw_function_tool(fnc):
+        # e.g async def open_gate(self, raw_arguments: dict[str, object]):
+        # raw_arguments is required when using raw function tools
+        raw_fields = {
+            "raw_arguments": args_dict,
+        }
+    else:
+        raise ValueError(f"Unsupported function tool type: {type(fnc)}")
+
+    # inject RunContext if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
         if is_context_type(type_hint) and call_ctx is not None:
             context_dict[param_name] = call_ctx
 
-    bound = signature.bind(**{**_shallow_model_dump(model), **context_dict})
+    bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()
     return bound.args, bound.kwargs
+
+
+def _is_optional_type(hint: Any) -> bool:
+    origin = get_origin(hint)
+    return origin is Union and type(None) in get_args(hint)
+
+
+def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
+    result = {}
+    for name, field in model.model_fields.items():
+        key = field.alias if by_alias and field.alias else name
+        result[key] = getattr(model, name)
+    return result

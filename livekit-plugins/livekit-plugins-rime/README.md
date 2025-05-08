@@ -1,6 +1,8 @@
-# LiveKit Plugins Rime
+# Rime plugin for LiveKit Agents
 
-Agent Framework plugin for voice synthesis with the [Rime](https://rime.ai/) API ([documentation](https://rimelabs.mintlify.app/api-reference/quickstart)).
+Support for voice synthesis with the [Rime](https://rime.ai/) API.
+
+See [https://docs.livekit.io/agents/integrations/tts/rime/](https://docs.livekit.io/agents/integrations/tts/rime/) for more information.
 
 ## Installation
 

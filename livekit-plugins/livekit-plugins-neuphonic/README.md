@@ -1,6 +1,8 @@
-# LiveKit Plugins Neuphonic
+# Neuphonic plugin for LiveKit Agents
 
-Agent Framework plugin for voice synthesis with [Neuphonic](https://neuphonic.com) API.
+Support for voice synthesis with [Neuphonic](https://neuphonic.com).
+
+See [https://docs.livekit.io/agents/integrations/tts/neuphonic/](https://docs.livekit.io/agents/integrations/tts/neuphonic/) for more information.
 
 ## Installation
 

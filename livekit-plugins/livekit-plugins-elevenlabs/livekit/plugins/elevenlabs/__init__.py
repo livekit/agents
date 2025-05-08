@@ -12,11 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""ElevenLabs plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/tts/elevenlabs/ for more information.
+"""
+
 from .models import TTSEncoding, TTSModels
+from .stt import STT
 from .tts import DEFAULT_VOICE_ID, TTS, Voice, VoiceSettings
 from .version import __version__
 
 __all__ = [
+    "STT",
     "TTS",
     "Voice",
     "VoiceSettings",

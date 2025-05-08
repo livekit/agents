@@ -24,6 +24,11 @@ livekit-plugins-playai = { workspace = true }
 livekit-plugins-groq = { workspace = true }
 livekit-plugins-gladia = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
+livekit-plugins-bey = { workspace = true }
+livekit-plugins-bithuman = { workspace = true }
+livekit-plugins-speechify = { workspace = true }
+livekit-plugins-tavus = { workspace = true }
+livekit-plugins-hume = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]

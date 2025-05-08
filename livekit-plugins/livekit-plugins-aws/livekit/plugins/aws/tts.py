@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-import boto3
 import aioboto3
 import aiohttp
 

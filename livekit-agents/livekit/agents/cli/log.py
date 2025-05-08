@@ -24,6 +24,7 @@ NOISY_LOGGERS = [
     "livekit",
     "botocore",
     "aiobotocore",
+    "mcp.client",
 ]
 
 

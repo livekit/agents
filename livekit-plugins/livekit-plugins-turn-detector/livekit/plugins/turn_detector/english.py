@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from livekit.agents.inference_runner import _InferenceRunner
 
 from .base import EOUModelBase, _EUORunnerBase
@@ -11,8 +13,8 @@ class _EUORunnerEn(_EUORunnerBase):
 
 
 class EnglishModel(EOUModelBase):
-    def __init__(self):
-        super().__init__(model_type="en")
+    def __init__(self, *, unlikely_threshold: float | None = None):
+        super().__init__(model_type="en", unlikely_threshold=unlikely_threshold)
 
     def _inference_method(self) -> str:
         return _EUORunnerEn.INFERENCE_METHOD

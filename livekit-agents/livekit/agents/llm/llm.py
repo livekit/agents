@@ -10,9 +10,9 @@ from typing import Any, Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
-from livekit.agents._exceptions import APIConnectionError, APIError
 
 from .. import utils
+from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..types import (
@@ -202,7 +202,7 @@ class LLMStream(ABC):
             label=self._llm._label,
             completion_tokens=usage.completion_tokens if usage else 0,
             prompt_tokens=usage.prompt_tokens if usage else 0,
-            cached_prompt_tokens=usage.prompt_cached_tokens if usage else 0,
+            prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
         )
@@ -225,7 +225,7 @@ class LLMStream(ABC):
             val = await self._event_aiter.__anext__()
         except StopAsyncIteration:
             if not self._task.cancelled() and (exc := self._task.exception()):
-                raise exc
+                raise exc  # noqa: B904
 
             raise StopAsyncIteration from None
 
@@ -244,3 +244,17 @@ class LLMStream(ABC):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+    def to_str_iterable(self) -> AsyncIterable[str]:
+        """
+        Convert the LLMStream to an async iterable of strings.
+        This assumes the stream will not call any tools.
+        """
+
+        async def _iterable():
+            async with self:
+                async for chunk in self:
+                    if chunk.delta and chunk.delta.content:
+                        yield chunk.delta.content
+
+        return _iterable()

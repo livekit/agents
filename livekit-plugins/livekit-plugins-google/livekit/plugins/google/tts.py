@@ -35,6 +35,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .models import Gender, SpeechLanguages
+
 
 @dataclass
 class _TTSOptions:
@@ -46,12 +48,15 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: NotGivenOr[texttospeech.VoiceSelectionParams] = NOT_GIVEN,
+        language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
+        gender: NotGivenOr[Gender | str] = NOT_GIVEN,
+        voice_name: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
         pitch: int = 0,
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
         location: str = "global",
+        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -63,7 +68,9 @@ class TTS(tts.TTS):
         environmental variable.
 
         Args:
-            voice (texttospeech.VoiceSelectionParams, optional): Voice selection parameters.
+            language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
+            gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
+            voice_name (str, optional): Specific voice name. Default is an empty string.
             sample_rate (int, optional): Audio sample rate in Hz. Default is 24000.
             location (str, optional): Location for the TTS client. Default is "global".
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
@@ -85,17 +92,21 @@ class TTS(tts.TTS):
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
         self._location = location
-        if not is_given(voice):
-            voice = texttospeech.VoiceSelectionParams(
-                name="",
-                language_code="en-US",
-                ssml_gender=SsmlVoiceGender.NEUTRAL,
-            )
+
+        lang = language if is_given(language) else "en-US"
+        ssml_gender = _gender_from_str("neutral" if not is_given(gender) else gender)
+        name = "" if not is_given(voice_name) else voice_name
+
+        voice_params = texttospeech.VoiceSelectionParams(
+            name=name,
+            language_code=lang,
+            ssml_gender=ssml_gender,
+        )
 
         self._opts = _TTSOptions(
-            voice=voice,
+            voice=voice_params,
             audio_config=texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.OGG_OPUS,
+                audio_encoding=audio_encoding,
                 sample_rate_hertz=sample_rate,
                 pitch=pitch,
                 effects_profile_id=effects_profile_id,
@@ -106,18 +117,31 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: NotGivenOr[texttospeech.VoiceSelectionParams] = NOT_GIVEN,
+        language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
+        gender: NotGivenOr[Gender | str] = NOT_GIVEN,
+        voice_name: NotGivenOr[str] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
 
         Args:
-            voice (texttospeech.VoiceSelectionParams, optional): Voice selection parameters.
+            language (SpeechLanguages | str, optional): Language code (e.g., "en-US").
+            gender (Gender | str, optional): Voice gender ("male", "female", "neutral").
+            voice_name (str, optional): Specific voice name.
             speaking_rate (float, optional): Speed of speech.
         """  # noqa: E501
-        if is_given(voice):
-            self._opts.voice = voice
+        params = {}
+        if is_given(language):
+            params["language_code"] = str(language)
+        if is_given(gender):
+            params["ssml_gender"] = _gender_from_str(str(gender))
+        if is_given(voice_name):
+            params["name"] = voice_name
+
+        if params:
+            self._opts.voice = texttospeech.VoiceSelectionParams(**params)
+
         if is_given(speaking_rate):
             self._opts.audio_config.speaking_rate = speaking_rate
 
