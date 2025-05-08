@@ -47,6 +47,7 @@ class _TTSOptions:
     arcana_options: _ArcanaOptions | None = None
     mistv2_options: _Mistv2Options | None = None
 
+
 @dataclass
 class _ArcanaOptions:
     repetition_penalty: NotGivenOr[float] = NOT_GIVEN

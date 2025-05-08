@@ -452,9 +452,9 @@ class Agent:
             """Default implementation for `Agent.llm_node`"""
             activity = agent._get_activity_or_raise()
             assert activity.llm is not None, "llm_node called but no LLM node is available"
-            assert isinstance(activity.llm, llm.LLM), (
-                "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
-            )
+            assert isinstance(
+                activity.llm, llm.LLM
+            ), "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
 
             tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
             activity_llm = activity.llm
@@ -509,9 +509,9 @@ class Agent:
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.realtime_audio_output_node`"""
             activity = agent._get_activity_or_raise()
-            assert activity.realtime_llm_session is not None, (
-                "realtime_audio_output_node called but no realtime LLM session is available"
-            )
+            assert (
+                activity.realtime_llm_session is not None
+            ), "realtime_audio_output_node called but no realtime LLM session is available"
 
             async for frame in audio:
                 yield frame

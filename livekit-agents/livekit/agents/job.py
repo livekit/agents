@@ -336,9 +336,9 @@ class JobContext:
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
-        assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
-            "Participant must be a SIP participant"
-        )
+        assert (
+            participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        ), "Participant must be a SIP participant"
         task = asyncio.create_task(
             self.api.sip.transfer_sip_participant(
                 api.TransferSIPParticipantRequest(
