@@ -496,11 +496,11 @@ class RealtimeSession(llm.RealtimeSession):
                         break
                 if isinstance(msg, LiveClientContent):
                     await session.send_client_content(
-                        turns=[Content(
-                            parts=[turn.parts[-1]] if turn.parts else [],
-                            role=turn.role
-                        ) for turn in msg.turns],
-                        turn_complete=msg.turn_complete
+                        turns=[
+                            Content(parts=[turn.parts[-1]] if turn.parts else [], role=turn.role)
+                            for turn in msg.turns
+                        ],
+                        turn_complete=msg.turn_complete,
                     )
                 elif isinstance(msg, LiveClientToolResponse):
                     await session.send_tool_response(function_responses=msg.function_responses)
