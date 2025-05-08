@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
-from .._exceptions import APIError
 from ..types import NOT_GIVEN, NotGivenOr
 from .chat_context import ChatContext, FunctionCall
 from .tool_context import FunctionTool, RawFunctionTool, ToolChoice, ToolContext
@@ -46,7 +45,7 @@ class RealtimeModelError(BaseModel):
     type: Literal["realtime_model_error"] = "realtime_model_error"
     timestamp: float
     label: str
-    error: APIError = Field(..., exclude=True)
+    error: Exception = Field(..., exclude=True)
     recoverable: bool
 
 
