@@ -8,6 +8,11 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from ..vad import VAD, VADEventType
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
+# already a retry mechanism in STT.recognize, don't retry in stream adapter
+DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
+    max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
+)
+
 
 class StreamAdapter(STT):
     def __init__(self, *, stt: STT, vad: VAD) -> None:
@@ -18,10 +23,6 @@ class StreamAdapter(STT):
         @self._stt.on("metrics_collected")
         def _forward_metrics(*args, **kwargs):
             self.emit("metrics_collected", *args, **kwargs)
-
-        @self.on("error")
-        def _forward_error(*args, **kwargs):
-            self._stt.emit("error", *args, **kwargs)
 
     @property
     def wrapped_stt(self) -> STT:
@@ -63,9 +64,10 @@ class StreamAdapterWrapper(RecognizeStream):
         language: NotGivenOr[str | None],
         conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options)
+        super().__init__(stt=stt, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._vad = vad
         self._wrapped_stt = wrapped_stt
+        self._wrapped_stt_conn_options = conn_options
         self._vad_stream = self._vad.stream()
         self._language = language
 
@@ -99,7 +101,7 @@ class StreamAdapterWrapper(RecognizeStream):
                     t_event = await self._wrapped_stt.recognize(
                         buffer=merged_frames,
                         language=self._language,
-                        conn_options=self._conn_options,
+                        conn_options=self._wrapped_stt_conn_options,
                     )
 
                     if len(t_event.alternatives) == 0:
