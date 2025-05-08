@@ -7,7 +7,6 @@ from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .tts import TTS, ChunkedStream, SynthesizedAudio, SynthesizeStream, TTSCapabilities
 
-
 # already a retry mechanism in TTS.synthesize, don't retry in stream adapter
 DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
