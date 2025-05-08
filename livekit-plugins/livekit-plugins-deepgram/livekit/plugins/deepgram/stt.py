@@ -22,7 +22,6 @@ import weakref
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
