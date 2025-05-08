@@ -9,8 +9,8 @@ from typing_extensions import override
 
 import livekit.rtc as rtc
 from livekit.agents import utils
+from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
-# from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 from ...log import logger
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
@@ -232,8 +232,11 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        if self._pre_connect_audio_handler and publication.track:
-            # TODO: and AudioTrackFeature.PRE_CONNECT_AUDIO in publication.audio_features
+        if (
+            self._pre_connect_audio_handler
+            and publication.track
+            and AudioTrackFeature.TF_PRECONNECT_BUFFER in publication.audio_features
+        ):
             try:
                 duration = 0
                 frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
