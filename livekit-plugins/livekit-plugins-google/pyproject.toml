@@ -27,7 +27,7 @@ dependencies = [
     "google-cloud-speech >= 2, < 3",
     "google-cloud-texttospeech >= 2, < 3",
     "google-genai >= 1.12.1",
-    "livekit-agents>=1.0.19",
+    "livekit-agents>=1.0.20",
 ]
 
 [project.urls]
