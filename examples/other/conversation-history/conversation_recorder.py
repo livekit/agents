@@ -1,23 +1,21 @@
 import asyncio
-import io
 import logging
 import wave
 from collections.abc import AsyncIterable
 from functools import update_wrapper
 
 from dotenv import load_dotenv
-from pydub import AudioSegment
 
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, RunContext
 from livekit.agents.voice.agent import ModelSettings
-from livekit.plugins import cartesia, deepgram, openai, silero
-from livekit.rtc import AudioFrame
+from livekit.plugins import deepgram, openai, silero
+from livekit.rtc import AudioFrame, AudioResampler
 
 # Default settings for the file
-FRAMERATE = 24000
+FRAMERATE = 48000
 CHANNELS = 1
 SAMPLEWIDTH = 2
 
@@ -81,26 +79,38 @@ class SessionRecorder:
         Agent.default.tts_node = tts_recorder(tts=Agent.default.tts_node, recorder=self)
 
     async def queue_audio(self, audioframe: AudioFrame):
-        wav_bytes = audioframe.to_wav_bytes()
-
-        audio_segment = AudioSegment.from_file(io.BytesIO(wav_bytes), format="wav")
-        audio = (
-            audio_segment.set_channels(CHANNELS)
-            .set_frame_rate(FRAMERATE)
-            .set_sample_width(SAMPLEWIDTH)
-        )
-        output = io.BytesIO()
-        audio.export(output, format="raw")
-
-        self._audio_q.put_nowait(output.getvalue())
+        self._audio_q.put_nowait(audioframe)
 
     async def _main_atask(self) -> None:
+        self._current_input_rate = 0
+        self._audio_resampler = None
+
         while True:
             frame = await self._audio_q.get()
             if frame is None:
                 break
 
-            self._file.writeframes(frame)
+            elif frame.sample_rate != FRAMERATE:
+                if frame.sample_rate != self._current_input_rate:
+                    if self._audio_resampler:
+                        frames = self._audio_resampler.flush()
+                        if frames:
+                            for frame in frames:
+                                self._file.writeframes(frame.data.tobytes())
+                    else:
+                        self._audio_resampler = AudioResampler(
+                            input_rate=frame.sample_rate, output_rate=FRAMERATE
+                        )
+                        self._current_input_rate = frame.sample_rate
+                        frame = self._audio_resampler.push(frame)
+                        if frame:
+                            self._file.writeframes(frame[0].data.tobytes())
+                else:
+                    frame = self._audio_resampler.push(frame)
+                    if frame:
+                        self._file.writeframes(frame[0].data.tobytes())
+            else:
+                self._file.writeframes(frame.data.tobytes())
 
     async def aclose(self) -> None:
         self._audio_q.put_nowait(None)
@@ -158,7 +168,7 @@ async def entrypoint(ctx: JobContext):
         userdata=agent_bank,
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
-        tts=cartesia.TTS(),
+        tts=deepgram.TTS(),
         vad=silero.VAD.load(),
     )
     recorder = SessionRecorder(session=session, file_name="recording.wav")
