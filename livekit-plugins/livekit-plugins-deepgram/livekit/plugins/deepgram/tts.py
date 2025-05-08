@@ -5,7 +5,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from urllib.parse import urlencode
 
 import aiohttp
 
@@ -24,8 +23,8 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from ._utils import _to_deepgram_url
 
+from ._utils import _to_deepgram_url
 from .log import logger
 
 BASE_URL = "https://api.deepgram.com/v1/speak"
