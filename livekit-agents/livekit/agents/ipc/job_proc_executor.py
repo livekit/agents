@@ -104,9 +104,7 @@ class ProcJobExecutor(SupervisedProc):
         )
 
         return self._mp_ctx.Process(  # type: ignore
-            target=proc_main,
-            args=(proc_args,),
-            name="job_proc",
+            target=proc_main, args=(proc_args,), name="job_proc"
         )
 
     @log_exceptions(logger=logger)

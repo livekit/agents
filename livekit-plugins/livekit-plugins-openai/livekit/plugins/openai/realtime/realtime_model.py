@@ -78,7 +78,7 @@ SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 
-_log_oai_events = int(os.getenv("LOG_OAI_EVENTS", 0))
+lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 @dataclass
@@ -490,7 +490,7 @@ class RealtimeSession(
             azure_deployment=self._realtime_model._opts.azure_deployment,
         )
 
-        if _log_oai_events:
+        if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
         ws_conn = await self._realtime_model._ensure_http_session().ws_connect(
@@ -512,7 +512,7 @@ class RealtimeSession(
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
 
-                    if _log_oai_events:
+                    if lk_oai_debug:
                         msg_copy = msg.copy()
                         if msg_copy["type"] == "input_audio_buffer.append":
                             msg_copy = {**msg_copy, "audio": "..."}
@@ -555,7 +555,7 @@ class RealtimeSession(
                 self.emit("openai_server_event_received", event)
 
                 try:
-                    if _log_oai_events:
+                    if lk_oai_debug:
                         event_copy = event.copy()
                         if event_copy["type"] == "response.audio.delta":
                             event_copy = {**event_copy, "delta": "..."}
