@@ -184,7 +184,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         oai_stream = self._tts._client.audio.speech.with_streaming_response.create(
             input=self.input_text,
             model=self._opts.model,

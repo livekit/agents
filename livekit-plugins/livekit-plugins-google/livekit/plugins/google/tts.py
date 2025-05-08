@@ -193,7 +193,7 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         try:
             response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
                 input=texttospeech.SynthesisInput(text=self._input_text),

@@ -162,7 +162,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         try:
             async with self._tts._ensure_session().post(
                 _to_deepgram_url(
@@ -215,7 +215,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter) -> None:
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -262,9 +262,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-    async def _run_ws(
-        self, word_stream: tokenize.WordStream, output_emitter: tts.SynthesizedAudioEmitter
-    ):
+    async def _run_ws(self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 

@@ -233,7 +233,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice_settings))
             if is_given(self._opts.voice_settings)
@@ -290,7 +290,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter) -> None:
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id, sample_rate=self._opts.sample_rate, num_channels=1, stream=True
@@ -339,7 +339,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
-        self, word_stream: tokenize.WordStream, output_emitter: tts.SynthesizedAudioEmitter
+        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)

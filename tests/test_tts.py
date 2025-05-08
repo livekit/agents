@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, APITimeoutError
-from livekit.agents import tts
+from livekit.agents import tts, tokenize
 from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
@@ -245,7 +245,7 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
-async def test_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger):
+async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger):
     setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
@@ -276,7 +276,7 @@ async def test_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
-async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
+async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
     setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
@@ -332,7 +332,7 @@ async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
         await tts_v.aclose()
 
 
-async def test_synthesize_error_propagation():
+async def test_tts_synthesize_error_propagation():
     tts = FakeTTS(fake_audio_duration=0.0)
 
     try:
@@ -378,6 +378,15 @@ STREAM_TTS = [
             "proxy-upstream": "websocket.cluster.resemble.ai:443",
         },
         id="resemble",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": tts.StreamAdapter(
+                tts=openai.TTS(), sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+            ),
+            "proxy-upstream": "api.openai.com:443",
+        },
+        id="openai-stream-adapter",
     ),
 ]
 
@@ -468,7 +477,7 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
-async def test_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger):
+async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger):
     setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
@@ -491,10 +500,18 @@ async def test_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger)
         )
 
         # the metrics could not be emitted if the _mark_started() method was never called in streaming mode
-        assert metrics_collected_events.count == 1, (
-            f"expected 1 metrics collected event, got {metrics_collected_events.count}"
-        )
-        logger.info(f"metrics: {metrics_collected_events.events[0][0][0]}")
+
+        if isinstance(tts_v, tts.StreamAdapter):
+            assert metrics_collected_events.count >= 1, (
+                f"expected >=1 metrics collected event, got {metrics_collected_events.count}"
+            )
+        else:
+            assert metrics_collected_events.count == 1, (
+                f"expected 1 metrics collected event, got {metrics_collected_events.count}"
+            )
+
+        for event in metrics_collected_events.events:
+            logger.info(f"metrics: {event[0][0]}")
 
         metrics_collected_events.clear()
 
@@ -523,7 +540,7 @@ async def test_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger)
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
-async def test_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
+async def test_tts__stream_timeout(tts_factory, toxiproxy: Toxiproxy):
     setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
@@ -577,3 +594,163 @@ async def test_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
         )
     finally:
         await tts_v.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tts_audio_emitter():
+    # build a known PCM chunk: 100 samples × 2 bytes each = 200 bytes
+    # sample_rate=1000, frame_size_ms=100 => 100 samples per frame
+    pcm_chunk = b"\xff\xff" * 100
+
+    # --- Test streaming logic with explicit flush ---
+    rx_stream = aio.Chan[tts.SynthesizedAudio]()
+    emitter_stream = tts.AudioEmitter(label="test", dst_ch=rx_stream)
+    emitter_stream.initialize(
+        request_id="req-stream",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/pcm",
+        frame_size_ms=100,
+        stream=True,
+    )
+
+    # segment 1: flush before final
+    emitter_stream.start_segment(segment_id="seg1")
+    emitter_stream.push(pcm_chunk)
+    emitter_stream.flush()  # non-final
+    emitter_stream.push(pcm_chunk)
+    emitter_stream.end_segment()  # final
+
+    # segment 2: no flush, two pushes then end
+    emitter_stream.start_segment(segment_id="seg2")
+    emitter_stream.push(pcm_chunk)
+    emitter_stream.push(pcm_chunk)
+    emitter_stream.end_segment()
+
+    # signal end of input so main loop can exit
+    emitter_stream.end_input()
+    await emitter_stream.join()
+    rx_stream.close()
+
+    msgs = [msg async for msg in rx_stream]
+    assert len(msgs) == 4
+
+    # seg1: one non-final, one final
+    m0, m1, m2, m3 = msgs
+    assert (m0.segment_id, m0.is_final, m0.frame.data.tobytes()) == ("seg1", False, pcm_chunk)
+    assert (m1.segment_id, m1.is_final, m1.frame.data.tobytes()) == ("seg1", True, pcm_chunk)
+
+    # seg2: direct end without flush still yields non-final then final
+    assert (m2.segment_id, m2.is_final, m2.frame.data.tobytes()) == ("seg2", False, pcm_chunk)
+    assert (m3.segment_id, m3.is_final, m3.frame.data.tobytes()) == ("seg2", True, pcm_chunk)
+
+    # durations: two frames × 0.1s = 0.2s
+    assert emitter_stream.pushed_duration(0) == 0.2
+    assert emitter_stream.pushed_duration(1) == 0.2
+
+    # --- Test multiple flush in streaming ---
+    rx_multi = aio.Chan[tts.SynthesizedAudio]()
+    emitter_multi = tts.AudioEmitter(label="multi", dst_ch=rx_multi)
+    emitter_multi.initialize(
+        request_id="req-multi",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/pcm",
+        frame_size_ms=100,
+        stream=True,
+    )
+
+    emitter_multi.start_segment(segment_id="S")
+    emitter_multi.push(pcm_chunk)
+    emitter_multi.flush()  # A (non-final)
+    emitter_multi.push(pcm_chunk)
+    emitter_multi.flush()  # B (non-final)
+    emitter_multi.push(pcm_chunk)
+    emitter_multi.end_segment()  # C (final)
+
+    emitter_multi.end_input()
+    await emitter_multi.join()
+    rx_multi.close()
+
+    msgs2 = [msg async for msg in rx_multi]
+    assert len(msgs2) == 3
+    assert (msgs2[0].frame.data.tobytes(), msgs2[0].is_final) == (pcm_chunk, False)
+    assert (msgs2[1].frame.data.tobytes(), msgs2[1].is_final) == (pcm_chunk, False)
+    assert (msgs2[2].frame.data.tobytes(), msgs2[2].is_final) == (pcm_chunk, True)
+
+    # --- Test non-streaming logic (flush acts as final) ---
+    rx_nostream = aio.Chan[tts.SynthesizedAudio]()
+    emitter_nostream = tts.AudioEmitter(label="nos", dst_ch=rx_nostream)
+    emitter_nostream.initialize(
+        request_id="req-nos",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/pcm",
+        frame_size_ms=100,
+        stream=False,
+    )
+    emitter_nostream.push(pcm_chunk)
+    emitter_nostream.push(pcm_chunk)
+    emitter_nostream.flush()  # acts as final
+
+    # no end_input needed: flush() already closed in non-streaming
+    await emitter_nostream.join()
+    rx_nostream.close()
+
+    msgs3 = [msg async for msg in rx_nostream]
+    assert len(msgs3) == 2
+    assert (msgs3[0].frame.data.tobytes(), msgs3[0].is_final) == (pcm_chunk, False)
+    assert (msgs3[1].frame.data.tobytes(), msgs3[1].is_final) == (pcm_chunk, True)
+
+    # --- Test direct end_segment without flush in streaming ---
+    rx_noflush = aio.Chan[tts.SynthesizedAudio]()
+    emitter_noflush = tts.AudioEmitter(label="noflush", dst_ch=rx_noflush)
+    emitter_noflush.initialize(
+        request_id="req-noflush",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/pcm",
+        frame_size_ms=100,
+        stream=True,
+    )
+
+    emitter_noflush.start_segment(segment_id="empty")
+    emitter_noflush.push(pcm_chunk)
+    emitter_noflush.end_segment()  # no prior flush
+    emitter_noflush.end_input()
+    await emitter_noflush.join()
+    rx_noflush.close()
+
+    msgs4 = [msg async for msg in rx_noflush]
+    assert len(msgs4) == 1
+
+    # no flush, direct end_segment will not having the "fake frame"
+    assert msgs4[0].is_final is True and msgs4[0].frame.data.tobytes() == pcm_chunk
+
+    # test fake audio
+    rx_noflush = aio.Chan[tts.SynthesizedAudio]()
+    emitter_noflush = tts.AudioEmitter(label="fakeaudio", dst_ch=rx_noflush)
+    emitter_noflush.initialize(
+        request_id="req-fake-audio",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/pcm",
+        frame_size_ms=100,
+        stream=True,
+    )
+
+    emitter_noflush.start_segment(segment_id="empty")
+    emitter_noflush.push(pcm_chunk)
+    emitter_noflush.flush()
+    emitter_noflush.end_segment()  # no prior flush
+    emitter_noflush.end_input()
+    await emitter_noflush.join()
+    rx_noflush.close()
+
+    def all_bytes_zero(b):
+        return b == bytes(len(b))
+
+    msgs5 = [msg async for msg in rx_noflush]
+    assert len(msgs5) == 2
+    assert msgs5[0].is_final is False and msgs5[0].frame.data.tobytes() == pcm_chunk
+    assert msgs5[1].is_final is True and all_bytes_zero(msgs5[1].frame.data.tobytes())

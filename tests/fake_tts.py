@@ -88,7 +88,7 @@ class FakeChunkedStream(ChunkedStream):
     def attempt(self) -> int:
         return self._attempt
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         self._attempt += 1
 
         assert isinstance(self._tts, FakeTTS)

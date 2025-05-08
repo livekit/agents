@@ -132,7 +132,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         utterance: PostedUtterance = {"text": self._input_text}
         utterance.update(self._opts.utterance_options)
 

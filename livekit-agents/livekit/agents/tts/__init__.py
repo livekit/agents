@@ -9,7 +9,7 @@ from .tts import (
     TTS,
     ChunkedStream,
     SynthesizedAudio,
-    SynthesizedAudioEmitter,
+    AudioEmitter,
     SynthesizeStream,
     TTSCapabilities,
     TTSError,
@@ -27,6 +27,6 @@ __all__ = [
     "FallbackAdapter",
     "FallbackChunkedStream",
     "FallbackSynthesizeStream",
-    "SynthesizedAudioEmitter",
+    "AudioEmitter",
     "TTSError",
 ]

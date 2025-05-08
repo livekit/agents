@@ -169,7 +169,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         try:
             async with self._tts._ensure_session().post(
                 RESEMBLE_REST_API_URL,
@@ -204,7 +204,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
-                    mime_type="audio/pcm"
+                    mime_type="audio/pcm",
                 )
 
                 audio_b64 = response_json["audio_content"]
@@ -237,7 +237,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -288,7 +288,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
-        self, input_stream: tokenize.SentenceStream, output_emitter: tts.SynthesizedAudioEmitter
+        self, input_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
