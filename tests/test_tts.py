@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import wave
 import asyncio
 import logging
 import os
@@ -596,8 +597,9 @@ async def test_tts__stream_timeout(tts_factory, toxiproxy: Toxiproxy):
         await tts_v.aclose()
 
 
-@pytest.mark.asyncio
-async def test_tts_audio_emitter():
+async def test_tts_audio_emitter(monkeypatch):
+    monkeypatch.setattr(tts.tts, "lk_dump_tts", False)
+
     # build a known PCM chunk: 100 samples × 2 bytes each = 200 bytes
     # sample_rate=1000, frame_size_ms=100 => 100 samples per frame
     pcm_chunk = b"\xff\xff" * 100
@@ -747,10 +749,148 @@ async def test_tts_audio_emitter():
     await emitter_noflush.join()
     rx_noflush.close()
 
-    def all_bytes_zero(b):
-        return b == bytes(len(b))
-
     msgs5 = [msg async for msg in rx_noflush]
     assert len(msgs5) == 2
     assert msgs5[0].is_final is False and msgs5[0].frame.data.tobytes() == pcm_chunk
-    assert msgs5[1].is_final is True and all_bytes_zero(msgs5[1].frame.data.tobytes())
+    assert msgs5[1].is_final is True and msgs5[1].frame.data.tobytes() == b"\x00\x00" * 10
+
+    # --- No silence on empty flush or double flush ---
+    rx_empty = aio.Chan[tts.SynthesizedAudio]()
+    emitter_empty = tts.AudioEmitter(label="empty", dst_ch=rx_empty)
+    emitter_empty.initialize(
+        request_id="req-empty",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/pcm",
+        frame_size_ms=100,
+        stream=True,
+    )
+    emitter_empty.start_segment(segment_id="e1")
+    emitter_empty.flush()  # no data
+    emitter_empty.flush()  # still no data
+    emitter_empty.end_segment()
+    emitter_empty.end_input()
+    await emitter_empty.join()
+    rx_empty.close()
+
+    msgs6 = [msg async for msg in rx_empty]
+    # no data => no frames at all
+    assert len(msgs6) == 0
+    assert emitter_empty.pushed_duration(0) == 0.0
+
+
+async def test_tts_audio_emitter_wav(monkeypatch):
+    monkeypatch.setattr(tts.tts, "lk_dump_tts", False)
+
+    # build a small WAV: 300 ms total (3 × 100 ms chunks)
+    # sample_rate=1000, 1 channel, 16-bit
+    pcm_chunk = b"\x7f\x7f" * 100  # 100 samples
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(1000)
+        wf.writeframes(pcm_chunk * 3)
+    wav_bytes = buf.getvalue()
+
+    # --- Streaming, two segments ---
+    rx = aio.Chan[tts.SynthesizedAudio]()
+    emitter = tts.AudioEmitter(label="wav-multi", dst_ch=rx)
+    emitter.initialize(
+        request_id="req-wav-multi",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/wav",
+        frame_size_ms=100,
+        stream=True,
+    )
+
+    # Segment 1
+    emitter.start_segment(segment_id="w1")
+    emitter.push(wav_bytes)
+    emitter.end_segment()
+
+    # Segment 2
+    emitter.start_segment(segment_id="w2")
+    emitter.push(wav_bytes)
+    emitter.end_segment()
+
+    # finish and collect
+    emitter.end_input()
+    await emitter.join()
+    rx.close()
+    msgs = [msg async for msg in rx]
+
+    # Expect 2 segments × 3 frames each = 6 frames
+    assert len(msgs) == 6
+
+    # Check IDs and is_final flags
+    for i, msg in enumerate(msgs):
+        expected_seg = "w1" if i < 3 else "w2"
+        expected_final = i % 3 == 2
+        assert msg.segment_id == expected_seg
+        assert msg.is_final is expected_final
+
+    # Use pushed_duration() to verify each segment duration = 0.3s
+    assert pytest.approx(emitter.pushed_duration(0), rel=1e-3) == 0.3
+    assert pytest.approx(emitter.pushed_duration(1), rel=1e-3) == 0.3
+
+    # --- Non‐streaming with a single WAV blob ---
+    rx2 = aio.Chan[tts.SynthesizedAudio]()
+    emitter2 = tts.AudioEmitter(label="wav-nos", dst_ch=rx2)
+    emitter2.initialize(
+        request_id="req-wav-nos",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/wav",
+        frame_size_ms=100,
+        stream=False,
+    )
+
+    # push one WAV blob, then flush() to mark final
+    emitter2.push(wav_bytes)
+    emitter2.flush()
+
+    await emitter2.join()
+    rx2.close()
+    msgs2 = [msg async for msg in rx2]
+
+    # Should split into 3 frames, last one is_final=True
+    assert len(msgs2) == 3
+    for i, msg in enumerate(msgs2):
+        assert msg.is_final is (i == 2)
+
+    # Duration via pushed_duration() = 0.3s
+    assert pytest.approx(emitter2.pushed_duration(0), rel=1e-3) == 0.3
+
+    # --- Injected silence on flush + end_segment ---
+    rx3 = aio.Chan[tts.SynthesizedAudio]()
+    emitter3 = tts.AudioEmitter(label="silence-test", dst_ch=rx3)
+    emitter3.initialize(
+        request_id="req-silence",
+        sample_rate=1000,
+        num_channels=1,
+        mime_type="audio/pcm",
+        frame_size_ms=100,
+        stream=True,
+    )
+
+    # one chunk, flush to emit it, then immediately end_segment
+    emitter3.start_segment(segment_id="s1")
+    emitter3.push(b"\xff\xff" * 100)
+    emitter3.flush()  # emits real frame, last_frame cleared
+    emitter3.end_segment()  # should inject a 10ms silent frame with all-zero data
+    emitter3.end_input()
+    await emitter3.join()
+    rx3.close()
+
+    msgs3 = [msg async for msg in rx3]
+    # first: real frame, second: injected silence
+    assert len(msgs3) == 2
+    # verify first is real
+    assert msgs3[0].is_final is False
+    assert msgs3[0].frame.data.tobytes() == b"\xff\xff" * 100
+    # verify second is silence, 10ms = 10 samples @1000Hz
+    silence = msgs3[1].frame.data.tobytes()
+    assert msgs3[1].is_final is True
+    assert silence == b"\x00\x00" * 10

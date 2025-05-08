@@ -728,6 +728,7 @@ class AudioEmitter:
             )
             with open(fname, "wb") as f:
                 f.write(rtc.combine_audio_frames(debug_frames).to_wav_bytes())
+
             debug_frames.clear()
 
         @log_exceptions(logger=logger)
@@ -788,17 +789,21 @@ class AudioEmitter:
 
                         for f in audio_byte_stream.push(data):
                             _emit_frame(f)
-                    elif isinstance(data, AudioEmitter._FlushSegment) and audio_byte_stream:
-                        for f in audio_byte_stream.flush():
-                            _emit_frame(f)
+                    elif audio_byte_stream:
+                        if isinstance(data, AudioEmitter._FlushSegment):
+                            for f in audio_byte_stream.flush():
+                                _emit_frame(f)
 
-                        _flush_frame()
-                    elif isinstance(data, AudioEmitter._EndSegment):
-                        _emit_frame(is_final=True)
-                        dump_segment()
-                        segment_ctx = audio_byte_stream = last_frame = None
-                    else:
-                        logger.warning("unknown data type: %s", type(data))
+                            _flush_frame()
+                        elif isinstance(data, AudioEmitter._EndSegment):
+                            for f in audio_byte_stream.flush():
+                                _emit_frame(f)
+
+                            _emit_frame(is_final=True)
+                            dump_segment()
+                            segment_ctx = audio_byte_stream = last_frame = None
+                        else:
+                            logger.warning("unknown data type: %s", type(data))
                 else:
                     if isinstance(data, bytes):
                         if not audio_decoder:
@@ -821,7 +826,7 @@ class AudioEmitter:
                             await decode_atask
                             _emit_frame(is_final=True)
                             dump_segment()
-                            segment_ctx = audio_byte_stream = last_frame = None
+                            audio_decoder = segment_ctx = audio_byte_stream = last_frame = None
                         else:
                             logger.warning("unknown data type: %s", type(data))
 
