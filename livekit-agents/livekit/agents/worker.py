@@ -204,6 +204,7 @@ class WorkerOptions:
     """API secret to authenticate with LiveKit.
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
+    hosted: bool = False
     host: str = ""  # default to all interfaces
     port: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
@@ -231,6 +232,9 @@ class WorkerOptions:
                 f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
             )
 
+        if self.hosted:
+            self.port = 8081
+
 
 @dataclass
 class WorkerInfo:
@@ -253,6 +257,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         opts.ws_url = opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
         opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
+        opts.hosted = os.environ.get("LK_HOSTED_AGENTS") or False
 
         if not opts.ws_url:
             raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
@@ -629,8 +634,11 @@ class Worker(utils.EventEmitter[EventTypes]):
                 join_jwt = (
                     api.AccessToken(self._opts.api_key, self._opts.api_secret)
                     .with_grants(api.VideoGrants(agent=True))
-                    .to_jwt()
+                    .with_kind("agent")
                 )
+                if self._opts.hosted:
+                    join_jwt = join_jwt.with_kind_detail("cloud_agent")
+                join_jwt = join_jwt.to_jwt()
 
                 headers = {"Authorization": f"Bearer {join_jwt}"}
 
