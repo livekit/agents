@@ -52,9 +52,9 @@ class _ProcClient:
             cch = aio.duplex_unix._Duplex.open(self._mp_cch)
             first_req = recv_message(cch, IPC_MESSAGES)
 
-            assert isinstance(
-                first_req, InitializeRequest
-            ), "first message must be proto.InitializeRequest"
+            assert isinstance(first_req, InitializeRequest), (
+                "first message must be proto.InitializeRequest"
+            )
 
             self._init_req = first_req
             try:

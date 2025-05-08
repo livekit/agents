@@ -215,9 +215,9 @@ async def test_cancelled_calls(llm_factory: Callable[[], llm.LLM]):
     await stream.aclose()
 
     assert len(calls) == 1
-    assert isinstance(
-        calls[0].exception, asyncio.CancelledError
-    ), "toggle_light should have been cancelled"
+    assert isinstance(calls[0].exception, asyncio.CancelledError), (
+        "toggle_light should have been cancelled"
+    )
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -240,9 +240,9 @@ async def test_calls_arrays(llm_factory: Callable[[], llm.LLM]):
     call = calls[0]
     currencies = call.call_info.arguments["currencies"]
     assert len(currencies) == 3, "select_currencies should have 3 currencies"
-    assert (
-        "eur" in currencies and "gbp" in currencies and "sek" in currencies
-    ), "select_currencies should have eur, gbp, sek"
+    assert "eur" in currencies and "gbp" in currencies and "sek" in currencies, (
+        "select_currencies should have eur, gbp, sek"
+    )
 
 
 @pytest.mark.parametrize("llm_factory", LLMS)
@@ -360,9 +360,9 @@ async def test_tool_choice_options(
 
     call_names = {call.call_info.function_info.name for call in calls}
     if tool_choice == "none":
-        assert (
-            call_names == expected_calls
-        ), f"Test '{description}' failed: Expected calls {expected_calls}, but got {call_names}"
+        assert call_names == expected_calls, (
+            f"Test '{description}' failed: Expected calls {expected_calls}, but got {call_names}"
+        )
 
 
 async def _request_fnc_call(

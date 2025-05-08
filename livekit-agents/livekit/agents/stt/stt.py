@@ -290,9 +290,9 @@ class RecognizeStream(ABC):
 
         async for ev in event_aiter:
             if ev.type == SpeechEventType.RECOGNITION_USAGE:
-                assert (
-                    ev.recognition_usage is not None
-                ), "recognition_usage must be provided for RECOGNITION_USAGE event"
+                assert ev.recognition_usage is not None, (
+                    "recognition_usage must be provided for RECOGNITION_USAGE event"
+                )
 
                 stt_metrics = STTMetrics(
                     request_id=ev.request_id,
