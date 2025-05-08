@@ -578,6 +578,9 @@ class AudioEmitter:
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
 
+        if self._write_ch.closed:
+            return
+
         self._num_segments += 1
         self._write_ch.send_nowait(self._StartSegment(segment_id=segment_id))
 
@@ -594,17 +597,26 @@ class AudioEmitter:
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
 
+        if self._write_ch.closed:
+            return
+
         self._write_ch.send_nowait(self._EndSegment())
 
     def push(self, data: bytes) -> None:
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
 
+        if self._write_ch.closed:
+            return
+
         self._write_ch.send_nowait(data)
 
     def flush(self) -> None:
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
+
+        if self._write_ch.closed:
+            return
 
         if self._streaming:
             self._write_ch.send_nowait(self._FlushSegment())
@@ -615,9 +627,10 @@ class AudioEmitter:
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
 
-        if not self._streaming:
-            self.__end_segment()
+        if self._write_ch.closed:
+            return
 
+        self.__end_segment()
         self._write_ch.close()
 
     async def join(self) -> None:
