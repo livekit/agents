@@ -7,6 +7,7 @@ import multiprocessing as mp
 import socket
 import sys
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
@@ -162,6 +163,8 @@ class SupervisedProc(ABC):
 
         # wait for the process to become ready
         try:
+            logger.info("initializing process", extra=self.logging_extra())
+            start_time = time.perf_counter()
             init_res = await asyncio.wait_for(
                 channel.arecv_message(self._pch, proto.IPC_MESSAGES),
                 timeout=self._opts.initialize_timeout,
@@ -175,6 +178,13 @@ class SupervisedProc(ABC):
             else:
                 self._initialize_fut.set_result(None)
 
+            logger.info(
+                "process initialized",
+                extra={
+                    **self.logging_extra(),
+                    "elapsed_time": round(time.perf_counter() - start_time, 2),
+                },
+            )
         except asyncio.TimeoutError:
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("process initialization timed out")

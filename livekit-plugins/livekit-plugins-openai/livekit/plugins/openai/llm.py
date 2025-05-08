@@ -40,6 +40,7 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion_chunk import Choice
 
+from .log import logger
 from .models import (
     CerebrasChatModels,
     ChatModels,
@@ -51,9 +52,6 @@ from .models import (
     XAIChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, to_chat_ctx, to_fnc_ctx
-
-from .log import logger
-
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
