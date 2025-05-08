@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from livekit import rtc
-from livekit.agents.utils.audio import AudioBuffer
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
+from ..utils.audio import AudioBuffer
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 # don't retry when using the fallback adapter

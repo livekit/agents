@@ -88,7 +88,7 @@ class _TTSOptions:
     sample_rate: int
     streaming_latency: NotGivenOr[int]
     word_tokenizer: tokenize.WordTokenizer
-    chunk_length_schedule: list[int]
+    chunk_length_schedule: NotGivenOr[list[int]]
     enable_ssml_parsing: bool
     inactivity_timeout: int
 
@@ -99,7 +99,7 @@ class TTS(tts.TTS):
         *,
         voice_id: str = DEFAULT_VOICE_ID,
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
-        model: TTSModels | str = "eleven_flash_v2_5",
+        model: TTSModels | str = "eleven_turbo_v2_5",
         encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -124,13 +124,10 @@ class TTS(tts.TTS):
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             word_tokenizer (NotGivenOr[tokenize.WordTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
-            chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults to [80, 120, 200, 260].
+            chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
         """  # noqa: E501
-
-        if not is_given(chunk_length_schedule):
-            chunk_length_schedule = [80, 120, 200, 260]
 
         if not is_given(encoding):
             encoding = _DefaultEncoding
@@ -404,11 +401,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         # 11labs protocol expects the first message to be an "init msg"
         init_pkt = {
             "text": " ",
-            "voice_settings": _strip_nones(dataclasses.asdict(self._opts.voice_settings))
-            if is_given(self._opts.voice_settings)
-            else None,
-            "generation_config": {"chunk_length_schedule": self._opts.chunk_length_schedule},
         }
+        if is_given(self._opts.chunk_length_schedule):
+            init_pkt["generation_config"] = {
+                "chunk_length_schedule": self._opts.chunk_length_schedule
+            }
+        if is_given(self._opts.voice_settings):
+            init_pkt["voice_settings"] = _strip_nones(dataclasses.asdict(self._opts.voice_settings))
         await ws_conn.send_str(json.dumps(init_pkt))
         eos_sent = False
 
@@ -418,20 +417,25 @@ class SynthesizeStream(tts.SynthesizeStream):
             xml_content = []
             async for data in word_stream:
                 text = data.token
-                # send the xml phoneme in one go
+                # send xml tags fully formed
+                xml_start_tokens = ["<phoneme", "<break"]
+                xml_end_tokens = ["</phoneme>", "/>"]
+
                 if (
                     self._opts.enable_ssml_parsing
-                    and data.token.startswith("<phoneme")
+                    and any(data.token.startswith(start) for start in xml_start_tokens)
                     or xml_content
                 ):
                     xml_content.append(text)
-                    if data.token.find("</phoneme>") > -1:
+
+                    if any(data.token.find(end) > -1 for end in xml_end_tokens):
                         text = self._opts.word_tokenizer.format_words(xml_content)
                         xml_content = []
                     else:
                         continue
 
                 data_pkt = {"text": f"{text} "}  # must always end with a space
+
                 self._mark_started()
                 await ws_conn.send_str(json.dumps(data_pkt))
             if xml_content:

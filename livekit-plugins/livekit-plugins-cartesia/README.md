@@ -1,6 +1,8 @@
-# LiveKit Plugins Cartesia
+# Cartesia plugin for LiveKit Agents
 
-Agent Framework plugin for voice synthesis with [Cartesia](https://cartesia.ai/) API.
+Support for voice synthesis with [Cartesia](https://cartesia.ai/).
+
+See https://docs.livekit.io/agents/integrations/tts/cartesia/ for more information.
 
 ## Installation
 

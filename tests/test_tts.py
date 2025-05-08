@@ -1,33 +1,35 @@
 from __future__ import annotations
 
-import time
+import asyncio
 import os
 import pathlib
-import asyncio
+import ssl
+import time
 
+import aiohttp
 import pytest
-
 from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APITimeoutError
 from livekit.agents.utils import AudioBuffer
 from livekit.plugins import (
-    cartesia,
-    openai,
     aws,
     azure,
+    cartesia,
     deepgram,
     elevenlabs,
     google,
     groq,
     neuphonic,
+    openai,
     playai,
     resemble,
     rime,
+    speechify,
 )
 
-from .toxic_proxy import Toxiproxy
+from .toxic_proxy import Proxy, Toxiproxy
 from .utils import wer
 
 load_dotenv(override=True)
@@ -37,14 +39,41 @@ WER_THRESHOLD = 0.2
 TEST_AUDIO_SYNTHESIZE = pathlib.Path(os.path.dirname(__file__), "long_synthesize.txt").read_text()
 
 PROXY_LISTEN = "0.0.0.0:443"
+OAI_LISTEN = "0.0.0.0:500"
+
+
+def setup_oai_proxy(toxiproxy: Toxiproxy) -> Proxy:
+    return toxiproxy.create("api.openai.com:443", "oai-stt-proxy", listen=OAI_LISTEN, enabled=True)
 
 
 async def assert_valid_synthesized_audio(frames: AudioBuffer, sample_rate: int, num_channels: int):
     # use whisper as the source of truth to verify synthesized speech (smallest WER)
-    whisper_stt = openai.STT(model="whisper-1")
-    res = await whisper_stt.recognize(buffer=frames)
-    assert wer(res.alternatives[0].text, TEST_AUDIO_SYNTHESIZE) <= WER_THRESHOLD
 
+    data = rtc.combine_audio_frames(frames).to_wav_bytes()
+    form = aiohttp.FormData()
+    form.add_field("file", data, filename="file.wav", content_type="audio/wav")
+    form.add_field("model", "whisper-1")
+    form.add_field("response_format", "verbose_json")
+
+    ssl_ctx = ssl.create_default_context()
+    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+
+    async with aiohttp.ClientSession(
+        connector=connector, timeout=aiohttp.ClientTimeout(total=30)
+    ) as session:
+        async with session.post(
+            "https://toxiproxy:500/v1/audio/transcriptions",
+            data=form,
+            headers={
+                "Host": "api.openai.com",
+                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+            },
+            ssl=ssl_ctx,
+            server_hostname="api.openai.com",
+        ) as resp:
+            result = await resp.json()
+
+    assert wer(result["text"], TEST_AUDIO_SYNTHESIZE) <= WER_THRESHOLD
     combined_frame = rtc.combine_audio_frames(frames)
     assert combined_frame.sample_rate == sample_rate, "sample rate should be the same"
     assert combined_frame.num_channels == num_channels, "num channels should be the same"
@@ -107,13 +136,13 @@ SYNTHESIZE_TTS = [
         },
         id="neuphonic",
     ),
-    # pytest.param(
-    #     lambda: {
-    #         "tts": openai.TTS(),
-    #         "proxy-upstream": "api.openai.com:443",
-    #     },
-    #     id="openai",
-    # ),
+    pytest.param(
+        lambda: {
+            "tts": openai.TTS(),
+            "proxy-upstream": "api.openai.com:443",
+        },
+        id="openai",
+    ),
     pytest.param(
         lambda: {
             "tts": playai.TTS(),
@@ -130,10 +159,19 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": rime.TTS(),
+            "tts": rime.TTS(
+                model="mistv2",
+            ),
             "proxy-upstream": "users.rime.ai:443",
         },
         id="rime",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": speechify.TTS(),
+            "proxy-upstream": "api.sws.speechify.com:443",
+        },
+        id="speechify",
     ),
 ]
 
@@ -145,6 +183,7 @@ if PLUGIN:
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_synthesize(tts_factory, toxiproxy: Toxiproxy):
+    setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -161,9 +200,9 @@ async def test_synthesize(tts_factory, toxiproxy: Toxiproxy):
                 async for audio in stream:
                     frames.append(audio.frame)
 
-        await asyncio.wait_for(process_synthesis(), timeout=25)
+        await asyncio.wait_for(process_synthesis(), timeout=30)
     except asyncio.TimeoutError:
-        pytest.fail("test timed out after 25 seconds")
+        pytest.fail("test timed out after 30 seconds")
     finally:
         await tts.aclose()
 
@@ -173,6 +212,7 @@ async def test_synthesize(tts_factory, toxiproxy: Toxiproxy):
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
+    setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]

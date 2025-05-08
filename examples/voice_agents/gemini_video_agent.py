@@ -1,7 +1,6 @@
 import logging
 
 from dotenv import load_dotenv
-from google.genai import types
 
 from livekit.agents import (
     Agent,
@@ -12,7 +11,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-from livekit.plugins import google
+from livekit.plugins import google, silero
 
 logger = logging.getLogger("gemini-video-agent")
 
@@ -22,13 +21,10 @@ load_dotenv()
 class GeminiAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="you are gemini, a helpful assistant",
-            llm=google.beta.realtime.RealtimeModel(
-                input_audio_transcription=types.AudioTranscriptionConfig(),
-                vertexai=True,
-                project="project-id",
-                location="us-central1",
-            ),
+            instructions="You are gemini, a helpful assistant",
+            llm=google.beta.realtime.RealtimeModel(),
+            #  By default, additional video frames are transmitted while the user is speaking
+            vad=silero.VAD.load(),
         )
 
     async def on_enter(self):
@@ -41,8 +37,6 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession()
-
-    await ctx.wait_for_participant()
 
     await session.start(
         agent=GeminiAgent(),

@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Browser plugin for LiveKit Agents
+
+Support for Chromium Embedded Framework (CEF).
+"""
+
 from livekit.agents import Plugin
 
 from .log import logger

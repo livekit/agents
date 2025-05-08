@@ -102,13 +102,13 @@ def run_app(
             root.removeHandler(handler)
 
     opts.job_executor_type = JobExecutorType.THREAD
+    opts.drain_timeout = 0
     args = proto.CliArgs(
         opts=opts,
         log_level="DEBUG",
         devmode=True,
         asyncio_debug=False,
         watch=False,
-        drain_timeout=0,
         register=False,
         simulate_job=agent_token,
     )

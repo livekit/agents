@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Union
 
 from livekit.agents import llm
+from livekit.agents.llm.tool_context import (
+    get_raw_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 from livekit.agents.log import logger
 from openai.types.chat import (
     ChatCompletionContentPartParam,
@@ -24,8 +29,23 @@ def get_base_url(base_url: str | None) -> str:
     return base_url
 
 
-def to_fnc_ctx(fnc_ctx: list[llm.FunctionTool]) -> list[ChatCompletionToolParam]:
-    return [llm.utils.build_strict_openai_schema(fnc) for fnc in fnc_ctx]
+def to_fnc_ctx(
+    fnc_ctx: list[llm.FunctionTool | llm.RawFunctionTool],
+) -> list[ChatCompletionToolParam]:
+    tools: list[ChatCompletionToolParam] = []
+    for fnc in fnc_ctx:
+        if is_raw_function_tool(fnc):
+            info = get_raw_function_info(fnc)
+            tools.append(
+                {
+                    "type": "function",
+                    "function": info.raw_schema,  # type: ignore
+                }
+            )
+        elif is_function_tool(fnc):
+            tools.append(llm.utils.build_strict_openai_schema(fnc))  # type: ignore
+
+    return tools
 
 
 @dataclass

@@ -14,20 +14,21 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
 
 from livekit import rtc
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.misc import is_given
 
 from .. import utils
 from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils.misc import is_given
 
 if TYPE_CHECKING:
-    from ..llm import FunctionTool
+    from ..llm import FunctionTool, RawFunctionTool
 
 
 class ImageContent(BaseModel):
@@ -109,6 +110,7 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     hash: bytes | None = None
+    created_at: float = Field(default_factory=time.time)
 
     @property
     def text_content(self) -> str | None:
@@ -171,12 +173,15 @@ class ChatContext:
         content: list[ChatContent] | str,
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
+        created_at: NotGivenOr[float] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs = {}
         if is_given(id):
             kwargs["id"] = id
         if is_given(interrupted):
             kwargs["interrupted"] = interrupted
+        if is_given(created_at):
+            kwargs["created_at"] = created_at
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
@@ -197,17 +202,27 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
-        tools: NotGivenOr[list[FunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
-        from .tool_context import get_function_info
+        from .tool_context import (
+            get_function_info,
+            get_raw_function_info,
+            is_function_tool,
+            is_raw_function_tool,
+        )
 
         valid_tools = set()
         if is_given(tools):
-            valid_tools = {
-                tool if isinstance(tool, str) else get_function_info(tool).name for tool in tools
-            }
+            for tool in tools:
+                if isinstance(tool, str):
+                    valid_tools.add(tool)
+                elif is_function_tool(tool):
+                    valid_tools.add(get_function_info(tool).name)
+                elif is_raw_function_tool(tool):
+                    valid_tools.add(get_raw_function_info(tool).name)
+                # TODO(theomonnom): other tools
 
         for item in self.items:
             if exclude_function_call and item.type in [
@@ -264,6 +279,7 @@ class ChatContext:
         *,
         exclude_image: bool = True,
         exclude_audio: bool = True,
+        exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
     ) -> dict:
         items = []
@@ -283,9 +299,35 @@ class ChatContext:
 
             items.append(item)
 
+        exclude_fields = set()
+        if exclude_timestamp:
+            exclude_fields.add("created_at")
+
         return {
-            "items": [item.model_dump(mode="json", exclude_none=True) for item in items],
+            "items": [
+                item.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=False,
+                    exclude=exclude_fields,
+                )
+                for item in items
+            ],
         }
+
+    def find_insertion_index(self, *, created_at: float) -> int:
+        """
+        Returns the index to insert an item by creation time.
+
+        Iterates in reverse, assuming items are sorted by `created_at`.
+        Finds the position after the last item with `created_at <=` the given timestamp.
+        """
+        for i in reversed(range(len(self._items))):
+            item = self._items[i]
+            if item.type == "message" and item.created_at <= created_at:
+                return i + 1
+
+        return 0
 
     @classmethod
     def from_dict(cls, data: dict) -> ChatContext:

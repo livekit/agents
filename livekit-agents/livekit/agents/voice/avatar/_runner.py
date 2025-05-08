@@ -5,8 +5,8 @@ import logging
 from dataclasses import dataclass
 
 from livekit import rtc
-from livekit.agents import utils
 
+from ...utils import aio, log_exceptions
 from ._types import AudioReceiver, AudioSegmentEnd, VideoGenerator
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ class AvatarRunner:
                 self._audio_playing = True
             await self._video_gen.push_audio(frame)
 
-    @utils.log_exceptions(logger=logger)
+    @log_exceptions(logger=logger)
     async def _publish_video(self) -> None:
         """Process audio frames and generate synchronized video"""
 
@@ -147,10 +147,10 @@ class AvatarRunner:
 
     async def aclose(self) -> None:
         if self._publish_video_atask:
-            await utils.aio.cancel_and_wait(self._publish_video_atask)
+            await aio.cancel_and_wait(self._publish_video_atask)
         if self._read_audio_atask:
-            await utils.aio.cancel_and_wait(self._read_audio_atask)
-        await utils.aio.cancel_and_wait(*self._tasks)
+            await aio.cancel_and_wait(self._read_audio_atask)
+        await aio.cancel_and_wait(*self._tasks)
 
         await self._av_sync.aclose()
         await self._audio_source.aclose()

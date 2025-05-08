@@ -173,7 +173,8 @@ class WorkerOptions:
     Defaults to 0 (disabled).
     """  # noqa: E501
 
-    """Number of idle processes to keep warm."""
+    drain_timeout: int = 1800
+    """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
         dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
     )

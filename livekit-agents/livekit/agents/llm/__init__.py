@@ -21,7 +21,6 @@ from .llm import (
     LLMStream,
 )
 from .realtime import (
-    ErrorEvent,
     GenerationCreatedEvent,
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
@@ -30,10 +29,12 @@ from .realtime import (
     RealtimeCapabilities,
     RealtimeError,
     RealtimeModel,
+    RealtimeModelError,
     RealtimeSession,
 )
 from .tool_context import (
     FunctionTool,
+    RawFunctionTool,
     StopResponse,
     ToolChoice,
     ToolContext,
@@ -41,6 +42,7 @@ from .tool_context import (
     find_function_tools,
     function_tool,
     is_function_tool,
+    is_raw_function_tool,
 )
 
 __all__ = [
@@ -55,7 +57,6 @@ __all__ = [
     "AudioContent",
     "ImageContent",
     "ChatItem",
-    "ChatContext",
     "ChoiceDelta",
     "ChatChunk",
     "CompletionUsage",
@@ -66,6 +67,8 @@ __all__ = [
     "function_tool",
     "find_function_tools",
     "FunctionTool",
+    "is_raw_function_tool",
+    "RawFunctionTool",
     "ToolContext",
     "ToolError",
     "StopResponse",
@@ -74,14 +77,22 @@ __all__ = [
     "FunctionToolCall",
     "RealtimeModel",
     "RealtimeError",
+    "RealtimeModelError",
     "RealtimeCapabilities",
     "RealtimeSession",
     "InputTranscriptionCompleted",
-    "InputTranscriptionFailed",
     "InputSpeechStartedEvent",
     "InputSpeechStoppedEvent",
     "GenerationCreatedEvent",
-    "ErrorEvent",
     "MessageGeneration",
     "LLMError",
 ]
+
+# Cleanup docs of unexported modules
+_module = dir()
+NOT_IN_ALL = [m for m in _module if m not in __all__]
+
+__pdoc__ = {}
+
+for n in NOT_IN_ALL:
+    __pdoc__[n] = False

@@ -18,6 +18,10 @@ from ..llm import (
     ToolError,
     utils as llm_utils,
 )
+from ..llm.tool_context import (
+    is_function_tool,
+    is_raw_function_tool,
+)
 from ..log import logger
 from ..types import NotGivenOr
 from ..utils import aio
@@ -233,6 +237,8 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
+            # set the first frame future if not already set
+            # (after completing the first frame)
             if not out.first_frame_fut.done():
                 out.first_frame_fut.set_result(None)
     finally:
@@ -315,11 +321,27 @@ async def _execute_tools_task(
                 )
                 continue
 
+            if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
+                logger.error(
+                    f"unknown tool type: {type(function_tool)}",
+                    extra={
+                        "function": fnc_call.name,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                continue
+
             try:
-                function_model = llm_utils.function_arguments_to_pydantic_model(function_tool)
                 json_args = fnc_call.arguments or "{}"
-                parsed_args = function_model.model_validate_json(json_args)
-            except ValidationError:
+                fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
+                    fnc=function_tool,
+                    json_arguments=json_args,
+                    call_ctx=RunContext(
+                        session=session, speech_handle=speech_handle, function_call=fnc_call
+                    ),
+                )
+
+            except (ValidationError, ValueError):
                 logger.exception(
                     f"tried to call AI function `{fnc_call.name}` with invalid arguments",
                     extra={
@@ -342,26 +364,27 @@ async def _execute_tools_task(
                 },
             )
 
-            fnc_args, fnc_kwargs = llm_utils.pydantic_model_to_function_arguments(
-                model=parsed_args,
-                function_tool=function_tool,
-                call_ctx=RunContext(
-                    session=session, speech_handle=speech_handle, function_call=fnc_call
-                ),
-            )
+            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
+            try:
+                task = asyncio.create_task(
+                    function_tool(*fnc_args, **fnc_kwargs),
+                    name=f"function_tool_{fnc_call.name}",
+                )
 
-            py_out = _PythonOutput(
-                fnc_call=fnc_call,
-                output=None,
-                exception=None,
-            )
-
-            task = asyncio.create_task(
-                function_tool(*fnc_args, **fnc_kwargs),
-                name=f"function_tool_{fnc_call.name}",
-            )
-            tasks.append(task)
-            _authorize_inline_task(task, function_call=fnc_call)
+                tasks.append(task)
+                _authorize_inline_task(task, function_call=fnc_call)
+            except Exception:
+                # catching exceptions here because even though the function is asynchronous,
+                # errors such as missing or incompatible arguments can still occur at
+                # invocation time.
+                logger.exception(
+                    "exception occurred while executing tool",
+                    extra={
+                        "function": fnc_call.name,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                continue
 
             def _log_exceptions(
                 task: asyncio.Task,
@@ -604,24 +627,3 @@ def remove_instructions(chat_ctx: ChatContext) -> None:
             chat_ctx.items.remove(msg)
         else:
             break
-
-
-STANDARD_SPEECH_RATE = 0.5  # words per second
-
-
-def truncate_message(*, message: str, played_duration: float) -> str:
-    # TODO(theomonnom): this is very naive
-    from ..tokenize import _basic_word
-
-    words = _basic_word.split_words(message, ignore_punctuation=False)
-    total_duration = len(words) * STANDARD_SPEECH_RATE
-
-    if total_duration <= played_duration:
-        return message
-
-    max_words = int(played_duration // STANDARD_SPEECH_RATE)
-    if max_words < 1:
-        return ""
-
-    _, _, end_pos = words[max_words - 1]
-    return message[:end_pos]

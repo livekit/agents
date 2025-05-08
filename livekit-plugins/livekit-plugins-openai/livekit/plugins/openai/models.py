@@ -60,8 +60,9 @@ TelnyxChatModels = Literal[
 
 CerebrasChatModels = Literal[
     "llama3.1-8b",
-    "llama3.1-70b",
     "llama-3.3-70b",
+    "llama-4-scout-17b-16e-instruct",
+    "deepseek-r1-distill-llama-70b",
 ]
 
 PerplexityChatModels = Literal[

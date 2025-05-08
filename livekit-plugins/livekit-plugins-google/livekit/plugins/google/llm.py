@@ -53,6 +53,7 @@ class _LLMOptions:
     top_k: NotGivenOr[float]
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
+    thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
 
 
 class LLM(llm.LLM):
@@ -71,6 +72,7 @@ class LLM(llm.LLM):
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -95,6 +97,7 @@ class LLM(llm.LLM):
             presence_penalty (float, optional): Penalizes the model for generating previously mentioned concepts. Defaults to None.
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
+            thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -121,6 +124,22 @@ class LLM(llm.LLM):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
+        # Validate thinking_config
+        if is_given(thinking_config):
+            _thinking_budget = None
+            if isinstance(thinking_config, dict):
+                _thinking_budget = thinking_config.get("thinking_budget")
+            elif isinstance(thinking_config, types.ThinkingConfig):
+                _thinking_budget = thinking_config.thinking_budget
+
+            if _thinking_budget is not None:
+                if not isinstance(_thinking_budget, int):
+                    raise ValueError("thinking_budget inside thinking_config must be an integer")
+                if not (0 <= _thinking_budget <= 24576):
+                    raise ValueError(
+                        "thinking_budget inside thinking_config must be between 0 and 24576"
+                    )
+
         self._opts = _LLMOptions(
             model=model,
             temperature=temperature,
@@ -133,6 +152,7 @@ class LLM(llm.LLM):
             top_k=top_k,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
+            thinking_config=thinking_config,
         )
         self._client = genai.Client(
             api_key=gemini_api_key,
@@ -212,12 +232,16 @@ class LLM(llm.LLM):
         if is_given(self._opts.frequency_penalty):
             extra["frequency_penalty"] = self._opts.frequency_penalty
 
+        # Add thinking config if thinking_budget is provided
+        if is_given(self._opts.thinking_config):
+            extra["thinking_config"] = self._opts.thinking_config
+
         return LLMStream(
             self,
             client=self._client,
             model=self._opts.model,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
         )
@@ -232,7 +256,7 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool] | None,
+        tools: list[FunctionTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -246,7 +270,7 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm))
+            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm), generate=True)
             function_declarations = to_fnc_ctx(self._tools)
             if function_declarations:
                 self._extra_kwargs["tools"] = [
@@ -310,7 +334,7 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: client error",
                 status_code=e.code,
-                body=e.message + e.status,
+                body=f"{e.message} {e.status}",
                 request_id=request_id,
                 retryable=False if e.code != 429 else True,
             ) from e
@@ -318,7 +342,7 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: server error",
                 status_code=e.code,
-                body=e.message + e.status,
+                body=f"{e.message} {e.status}",
                 request_id=request_id,
                 retryable=retryable,
             ) from e
@@ -326,7 +350,7 @@ class LLMStream(llm.LLMStream):
             raise APIStatusError(
                 "gemini llm: api error",
                 status_code=e.code,
-                body=e.message + e.status,
+                body=f"{e.message} {e.status}",
                 request_id=request_id,
                 retryable=retryable,
             ) from e

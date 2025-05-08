@@ -78,7 +78,6 @@ class TTS(tts.TTS):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
         """
-
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=False,
@@ -128,7 +127,7 @@ class TTS(tts.TTS):
             self._opts.instructions = instructions
 
     @staticmethod
-    def create_azure_client(
+    def with_azure(
         *,
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
@@ -143,8 +142,12 @@ class TTS(tts.TTS):
         organization: str | None = None,
         project: str | None = None,
         base_url: str | None = None,
+        response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
     ) -> TTS:
         """
+        Create a new instance of Azure OpenAI TTS.
+
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
         - `api_key` from `AZURE_OPENAI_API_KEY`
         - `organization` from `OPENAI_ORG_ID`
@@ -165,6 +168,9 @@ class TTS(tts.TTS):
             organization=organization,
             project=project,
             base_url=base_url,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
         return TTS(
@@ -173,6 +179,7 @@ class TTS(tts.TTS):
             speed=speed,
             instructions=instructions,
             client=azure_client,
+            response_format=response_format,
         )
 
     def synthesize(
@@ -239,7 +246,10 @@ class ChunkedStream(tts.ChunkedStream):
             )
             async for frame in decoder:
                 emitter.push(frame)
+
             emitter.flush()
+
+            await decode_task  # await here to raise the error if any
         except openai.APITimeoutError:
             raise APITimeoutError() from None
         except openai.APIStatusError as e:
@@ -249,5 +259,5 @@ class ChunkedStream(tts.ChunkedStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            await utils.aio.gracefully_cancel(decode_task)
+            await utils.aio.cancel_and_wait(decode_task)
             await decoder.aclose()
