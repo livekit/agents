@@ -140,6 +140,7 @@ class STT(
                         f"failed to recognize speech after {conn_options.max_retry + 1} attempts",
                     ) from e
                 else:
+                    self._emit_error(e, recoverable=True)
                     logger.warning(
                         f"failed to recognize speech, retrying in {retry_interval}s",
                         exc_info=e,
