@@ -3,40 +3,66 @@ from __future__ import annotations
 import base64
 import inspect
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
-import boto3
+import aioboto3
+from botocore.exceptions import NoCredentialsError
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.function_context import _is_optional_type
 
-__all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_credentials"]
+__all__ = ["_build_aws_ctx", "_build_tools", "_get_aws_async_session"]
 
 
-def _get_aws_credentials(
-    api_key: Optional[str], api_secret: Optional[str], region: Optional[str]
-):
-    region = region or os.environ.get("AWS_DEFAULT_REGION")
+def _get_aws_async_session(
+    api_key: str | None = None,
+    api_secret: str | None = None,
+    region: str | None = None,
+) -> aioboto3.Session:
+    """Get an AWS session with the given credentials and region.
+
+    Args:
+        api_key: AWS access key id.
+        api_secret: AWS secret access key.
+        region: AWS region.
+
+    Returns:
+        An AWS session.
+
+    Raises:
+        NoCredentialsError: If no valid credentials are found.
+    """
+    # Validate AWS region first
+    region = (
+        region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    )
+
     if not region:
         raise ValueError(
-            "AWS_DEFAULT_REGION must be set using the argument or by setting the AWS_DEFAULT_REGION environment variable."
+            "AWS region must be set using the argument or by setting the AWS_REGION environment variable."
         )
 
-    # If API key and secret are provided, create a session with them
+    session_params = {"region_name": region}
     if api_key and api_secret:
-        session = boto3.Session(
-            aws_access_key_id=api_key,
-            aws_secret_access_key=api_secret,
-            region_name=region,
+        session_params.update(
+            {
+                "aws_access_key_id": api_key,
+                "aws_secret_access_key": api_secret,
+            }
         )
-    else:
-        session = boto3.Session(region_name=region)
 
-    credentials = session.get_credentials()
-    if not credentials or not credentials.access_key or not credentials.secret_key:
-        raise ValueError("No valid AWS credentials found.")
-    return credentials.access_key, credentials.secret_key
+    session = aioboto3.Session(**session_params)
+
+    # Validate session by checking if we can get credentials
+    try:
+        session.get_credentials()
+    except NoCredentialsError as e:
+        logging.error("Unable to locate AWS credentials")
+        raise e
+
+    return session
 
 
 JSON_SCHEMA_TYPE_MAP: Dict[type, str] = {
