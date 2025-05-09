@@ -485,7 +485,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
                     decoder.push(b64data)
-
                 elif data.get("isFinal"):
                     decoder.end_input()
                     break
@@ -497,12 +496,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         body=None,
                     )
                 else:
-                    raise APIStatusError(
-                        message=f"unexpected 11labs message {data}",
-                        status_code=500,
-                        request_id=request_id,
-                        body=None,
-                    )
+                    logger.warning(f"unexpected 11labs message {data}")
 
         tasks = [
             asyncio.create_task(send_task()),
