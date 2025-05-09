@@ -54,8 +54,8 @@ class MyAgent(Agent):
 
         Args:
             location: The location they are asking for
-            latitude: The latitude of the location
-            longitude: The longitude of the location
+            latitude: The latitude of the location, do not ask user for it
+            longitude: The longitude of the location, do not ask user for it
         """
 
         logger.info(f"Looking up weather for {location}")

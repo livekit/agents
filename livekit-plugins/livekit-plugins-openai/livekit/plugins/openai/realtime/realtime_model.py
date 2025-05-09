@@ -214,6 +214,7 @@ class RealtimeModel(llm.RealtimeModel):
                 message_truncation=True,
                 turn_detection=turn_detection is not None,
                 user_transcription=input_audio_transcription is not None,
+                auto_tool_reply_generation=False,
             )
         )
 
@@ -1139,7 +1140,11 @@ class RealtimeSession(
 
         self.emit(
             "input_audio_transcription_completed",
-            llm.InputTranscriptionCompleted(item_id=event.item_id, transcript=event.transcript),
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id,
+                transcript=event.transcript,
+                is_final=True,
+            ),
         )
 
     def _handle_conversion_item_input_audio_transcription_failed(

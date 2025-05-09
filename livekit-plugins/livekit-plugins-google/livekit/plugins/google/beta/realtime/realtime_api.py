@@ -12,6 +12,7 @@ from google import genai
 from google.genai.live import AsyncSession
 from google.genai.types import (
     AudioTranscriptionConfig,
+    AutomaticActivityDetection,
     Blob,
     Content,
     FunctionDeclaration,
@@ -27,6 +28,7 @@ from google.genai.types import (
     Modality,
     Part,
     PrebuiltVoiceConfig,
+    RealtimeInputConfig,
     SessionResumptionConfig,
     SpeechConfig,
     Tool,
@@ -84,18 +86,14 @@ class _RealtimeOptions:
 
 
 @dataclass
-class _MessageGeneration:
-    message_id: str
-    text_ch: utils.aio.Chan[str]
-    audio_ch: utils.aio.Chan[rtc.AudioFrame]
-
-
-@dataclass
 class _ResponseGeneration:
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
 
-    messages: dict[str, _MessageGeneration]
+    response_id: str
+    text_ch: utils.aio.Chan[str]
+    audio_ch: utils.aio.Chan[rtc.AudioFrame]
+    input_transcription: str = ""
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -155,11 +153,17 @@ class RealtimeModel(llm.RealtimeModel):
         Raises:
             ValueError: If the API key is required but not found.
         """  # noqa: E501
+        if not is_given(input_audio_transcription):
+            input_audio_transcription = AudioTranscriptionConfig()
+        if not is_given(output_audio_transcription):
+            output_audio_transcription = AudioTranscriptionConfig()
+
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
                 turn_detection=True,
-                user_transcription=is_given(input_audio_transcription),
+                user_transcription=input_audio_transcription is not None,
+                auto_tool_reply_generation=True,
             )
         )
 
@@ -190,11 +194,6 @@ class RealtimeModel(llm.RealtimeModel):
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
-
-        if not is_given(input_audio_transcription):
-            input_audio_transcription = None
-        if not is_given(output_audio_transcription):
-            output_audio_transcription = AudioTranscriptionConfig()
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -276,7 +275,6 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._session_resumption_handle: str | None = None
 
-        self._update_lock = asyncio.Lock()
         self._session_lock = asyncio.Lock()
 
     async def _close_active_session(self) -> None:
@@ -295,57 +293,59 @@ class RealtimeSession(llm.RealtimeSession):
             # reset the msg_ch, do not send messages from previous session
             self._msg_ch = utils.aio.Chan[ClientEvents]()
 
-    async def update_options(
+    def update_options(
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
     ) -> None:
-        async with self._update_lock:
-            should_restart = False
-            if is_given(voice) and self._opts.voice != voice:
-                self._opts.voice = voice
-                should_restart = True
+        should_restart = False
+        if is_given(voice) and self._opts.voice != voice:
+            self._opts.voice = voice
+            should_restart = True
 
-            if is_given(temperature) and self._opts.temperature != temperature:
-                self._opts.temperature = temperature if is_given(temperature) else NOT_GIVEN
-                should_restart = True
+        if is_given(temperature) and self._opts.temperature != temperature:
+            self._opts.temperature = temperature if is_given(temperature) else NOT_GIVEN
+            should_restart = True
 
-            if should_restart:
-                self._mark_restart_needed()
+        if should_restart:
+            self._mark_restart_needed()
 
     async def update_instructions(self, instructions: str) -> None:
-        async with self._update_lock:
-            if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
-                self._opts.instructions = instructions
-                self._mark_restart_needed()
+        if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
+            self._opts.instructions = instructions
+            self._mark_restart_needed()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        async with self._update_lock:
-            self._chat_ctx = chat_ctx.copy()
-            turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
-            tool_results = get_tool_results_for_realtime(
-                self._chat_ctx, vertexai=self._opts.vertexai
-            )
-            # TODO(dz): need to compute delta and then either append or recreate session
+        diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+
+        if diff_ops.to_remove:
+            logger.warning("Gemini Live does not support removing messages")
+
+        append_ctx = llm.ChatContext.empty()
+        for _, item_id in diff_ops.to_create:
+            item = chat_ctx.get_by_id(item_id)
+            if item:
+                append_ctx.items.append(item)
+
+        if append_ctx.items:
+            turns, _ = to_chat_ctx(append_ctx, id(self), ignore_functions=True)
+            tool_results = get_tool_results_for_realtime(append_ctx, vertexai=self._opts.vertexai)
             if turns:
                 self._send_client_event(LiveClientContent(turns=turns, turn_complete=False))
             if tool_results:
                 self._send_client_event(tool_results)
 
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
-        async with self._update_lock:
-            new_declarations: list[FunctionDeclaration] = [
-                _build_gemini_fnc(tool) for tool in tools
-            ]
-            current_tool_names = {f.name for f in self._gemini_declarations}
-            new_tool_names = {f.name for f in new_declarations}
+        new_declarations: list[FunctionDeclaration] = [_build_gemini_fnc(tool) for tool in tools]
+        current_tool_names = {f.name for f in self._gemini_declarations}
+        new_tool_names = {f.name for f in new_declarations}
 
-            if current_tool_names != new_tool_names:
-                self._gemini_declarations = new_declarations
-                self._tools = llm.ToolContext(tools)
-                self._mark_restart_needed()
+        if current_tool_names != new_tool_names:
+            self._gemini_declarations = new_declarations
+            self._tools = llm.ToolContext(tools)
+            self._mark_restart_needed()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -436,7 +436,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._response_created_futures.clear()
 
         if self._current_generation:
-            self._finalize_response(closed=True)
+            self._finalize_response()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
@@ -561,7 +561,7 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.error(f"error in receive task: {e}", exc_info=e)
                 self._mark_restart_needed()
         finally:
-            self._finalize_response(closed=True)
+            self._finalize_response()
 
     def _build_connect_config(self) -> LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
@@ -598,32 +598,30 @@ class RealtimeSession(llm.RealtimeSession):
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
+            realtime_input_config=RealtimeInputConfig(
+                automatic_activity_detection=AutomaticActivityDetection(),
+            ),
         )
 
     def _start_new_generation(self):
         if self._current_generation:
             logger.warning("starting new generation while another is active. Finalizing previous.")
-            self._finalize_response(closed=True)
+            self._finalize_response()
 
         response_id = utils.shortuuid("gemini-turn-")
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
             function_ch=utils.aio.Chan[llm.FunctionCall](),
-            messages={},
-        )
-
-        item_generation = _MessageGeneration(
-            message_id=response_id,
+            response_id=response_id,
             text_ch=utils.aio.Chan[str](),
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
         )
-        self._current_generation.messages[response_id] = item_generation
 
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
-                text_stream=item_generation.text_ch,
-                audio_stream=item_generation.audio_ch,
+                text_stream=self._current_generation.text_ch,
+                audio_stream=self._current_generation.audio_ch,
             )
         )
 
@@ -641,17 +639,15 @@ class RealtimeSession(llm.RealtimeSession):
         self.emit("generation_created", generation_event)
 
     def _handle_server_content(self, server_content: LiveServerContent):
-        if not self._current_generation:
+        current_gen = self._current_generation
+        if not current_gen:
             logger.warning("received server content but no active generation.")
             return
-
-        response_id = list(self._current_generation.messages.keys())[0]
-        item_generation = self._current_generation.messages[response_id]
 
         if model_turn := server_content.model_turn:
             for part in model_turn.parts:
                 if part.text:
-                    item_generation.text_ch.send_nowait(part.text)
+                    current_gen.text_ch.send_nowait(part.text)
                 if part.inline_data:
                     frame_data = part.inline_data.data
                     try:
@@ -661,43 +657,56 @@ class RealtimeSession(llm.RealtimeSession):
                             num_channels=OUTPUT_AUDIO_CHANNELS,
                             samples_per_channel=len(frame_data) // (2 * OUTPUT_AUDIO_CHANNELS),
                         )
-                        item_generation.audio_ch.send_nowait(frame)
+                        current_gen.audio_ch.send_nowait(frame)
                     except ValueError as e:
                         logger.error(f"Error creating audio frame from Gemini data: {e}")
 
         if input_transcription := server_content.input_transcription:
+            logger.info(f"input_transcription: {input_transcription}")
             if input_transcription.text:
+                current_gen.input_transcription += input_transcription.text
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
-                        item_id=response_id, transcript=input_transcription.text
+                        item_id=current_gen.response_id,
+                        transcript=current_gen.input_transcription,
+                        is_final=False,
                     ),
                 )
-                self._handle_input_speech_started()
 
         if output_transcription := server_content.output_transcription:
             if output_transcription.text:
-                item_generation.text_ch.send_nowait(output_transcription.text)
+                current_gen.text_ch.send_nowait(output_transcription.text)
 
-        if server_content.interrupted:
-            self._finalize_response(interrupted=True)
-            self._handle_input_speech_started()
-
-        if server_content.turn_complete:
+        if server_content.generation_complete:
+            # The only way we'd know that the transcription is complete is by when they are
+            # done with generation
+            if current_gen.input_transcription:
+                self.emit(
+                    "input_audio_transcription_completed",
+                    llm.InputTranscriptionCompleted(
+                        item_id=current_gen.response_id,
+                        transcript=current_gen.input_transcription,
+                        is_final=True,
+                    ),
+                )
             self._finalize_response()
 
-    def _finalize_response(self, interrupted: bool = False, closed: bool = False) -> None:
+        if server_content.interrupted:
+            self._finalize_response()
+            self._handle_input_speech_started()
+
+    def _finalize_response(self) -> None:
         if not self._current_generation:
             return
 
         gen = self._current_generation
         self._current_generation = None
 
-        for item_generation in gen.messages.values():
-            if not item_generation.text_ch.closed:
-                item_generation.text_ch.close()
-            if not item_generation.audio_ch.closed:
-                item_generation.audio_ch.close()
+        if not gen.text_ch.closed:
+            gen.text_ch.close()
+        if not gen.audio_ch.closed:
+            gen.audio_ch.close()
 
         gen.function_ch.close()
         gen.message_ch.close()

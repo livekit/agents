@@ -54,6 +54,7 @@ class RealtimeCapabilities:
     message_truncation: bool
     turn_detection: bool
     user_transcription: bool
+    auto_tool_reply_generation: bool
 
 
 class RealtimeError(Exception):
@@ -94,6 +95,7 @@ class InputTranscriptionCompleted:
     """id of the item"""
     transcript: str
     """transcript of the input audio"""
+    is_final: bool
 
 
 class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
