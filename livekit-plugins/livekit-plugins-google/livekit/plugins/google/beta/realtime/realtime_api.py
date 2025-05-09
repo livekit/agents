@@ -47,7 +47,7 @@ INPUT_AUDIO_CHANNELS = 1
 OUTPUT_AUDIO_SAMPLE_RATE = 24000
 OUTPUT_AUDIO_CHANNELS = 1
 
-DEFAULT_ENCODE_OPTIONS = images.EncodeOptions(
+DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
     format="JPEG",
     quality=75,
     resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
@@ -80,6 +80,7 @@ class _RealtimeOptions:
     instructions: NotGivenOr[str]
     input_audio_transcription: AudioTranscriptionConfig | None
     output_audio_transcription: AudioTranscriptionConfig | None
+    image_encode_options: NotGivenOr[images.EncodeOptions]
 
 
 @dataclass
@@ -119,6 +120,7 @@ class RealtimeModel(llm.RealtimeModel):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
+        image_encode_options: NotGivenOr[images.EncodeOptions] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -148,6 +150,7 @@ class RealtimeModel(llm.RealtimeModel):
             frequency_penalty (float, optional): The frequency penalty for response generation
             input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
             output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
+            image_encode_options (images.EncodeOptions, optional): The configuration for image encoding. Defaults to DEFAULT_ENCODE_OPTIONS.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -212,6 +215,7 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription=input_audio_transcription,
             output_audio_transcription=output_audio_transcription,
             language=language,
+            image_encode_options=image_encode_options,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -360,7 +364,9 @@ class RealtimeSession(llm.RealtimeSession):
                 self._send_client_event(realtime_input)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        encoded_data = images.encode(frame, DEFAULT_ENCODE_OPTIONS)
+        encoded_data = images.encode(
+            frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
+        )
         realtime_input = LiveClientRealtimeInput(
             media_chunks=[Blob(data=encoded_data, mime_type="image/jpeg")]
         )
