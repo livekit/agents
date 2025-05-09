@@ -398,6 +398,7 @@ class TranscriptSynchronizer:
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
         self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task())
+        self._rotate_lock = asyncio.Lock()
 
     @property
     def audio_output(self) -> _SyncedAudioOutput:
@@ -438,7 +439,8 @@ class TranscriptSynchronizer:
         self.set_enabled(self._audio_attached and self._text_attached)
 
     async def _rotate_segment_task(self) -> None:
-        await self._impl.aclose()
+        async with self._rotate_lock:
+            await self._impl.aclose()
         self._impl = _SegmentSynchronizerImpl(
             options=self._opts, next_in_chain=self._text_output._next_in_chain
         )
