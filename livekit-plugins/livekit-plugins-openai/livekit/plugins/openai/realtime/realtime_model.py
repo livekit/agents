@@ -1142,7 +1142,7 @@ class RealtimeSession(
             llm.InputTranscriptionCompleted(
                 item_id=event.item_id,
                 transcript=event.transcript,
-                final=True,
+                is_final=True,
             ),
         )
 

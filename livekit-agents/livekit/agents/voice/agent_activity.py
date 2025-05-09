@@ -761,9 +761,9 @@ class AgentActivity(RecognitionHooks):
         log_event("input_audio_transcription_completed")
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.final),
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final),
         )
-        if ev.final:
+        if ev.is_final:
             msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
             self._agent._chat_ctx.items.append(msg)
             self._session._conversation_item_added(msg)

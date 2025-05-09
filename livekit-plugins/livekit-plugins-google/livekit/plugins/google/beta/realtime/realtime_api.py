@@ -85,19 +85,14 @@ class _RealtimeOptions:
 
 
 @dataclass
-class _MessageGeneration:
-    message_id: str
-    text_ch: utils.aio.Chan[str]
-    audio_ch: utils.aio.Chan[rtc.AudioFrame]
-    input_transcription: str = ""
-
-
-@dataclass
 class _ResponseGeneration:
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
 
-    messages: dict[str, _MessageGeneration]
+    response_id: str
+    text_ch: utils.aio.Chan[str]
+    audio_ch: utils.aio.Chan[rtc.AudioFrame]
+    input_transcription: str = ""
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -435,7 +430,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._response_created_futures.clear()
 
         if self._current_generation:
-            self._finalize_response(closed=True)
+            self._finalize_response()
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self):
@@ -560,7 +555,7 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.error(f"error in receive task: {e}", exc_info=e)
                 self._mark_restart_needed()
         finally:
-            self._finalize_response(closed=True)
+            self._finalize_response()
 
     def _build_connect_config(self) -> LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
@@ -605,27 +600,22 @@ class RealtimeSession(llm.RealtimeSession):
     def _start_new_generation(self):
         if self._current_generation:
             logger.warning("starting new generation while another is active. Finalizing previous.")
-            self._finalize_response(closed=True)
+            self._finalize_response()
 
         response_id = utils.shortuuid("gemini-turn-")
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
             function_ch=utils.aio.Chan[llm.FunctionCall](),
-            messages={},
-        )
-
-        item_generation = _MessageGeneration(
-            message_id=response_id,
+            response_id=response_id,
             text_ch=utils.aio.Chan[str](),
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
         )
-        self._current_generation.messages[response_id] = item_generation
 
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
-                text_stream=item_generation.text_ch,
-                audio_stream=item_generation.audio_ch,
+                text_stream=self._current_generation.text_ch,
+                audio_stream=self._current_generation.audio_ch,
             )
         )
 
@@ -643,17 +633,15 @@ class RealtimeSession(llm.RealtimeSession):
         self.emit("generation_created", generation_event)
 
     def _handle_server_content(self, server_content: LiveServerContent):
-        if not self._current_generation:
+        current_gen = self._current_generation
+        if not current_gen:
             logger.warning("received server content but no active generation.")
             return
-
-        response_id = list(self._current_generation.messages.keys())[0]
-        item_generation = self._current_generation.messages[response_id]
 
         if model_turn := server_content.model_turn:
             for part in model_turn.parts:
                 if part.text:
-                    item_generation.text_ch.send_nowait(part.text)
+                    current_gen.text_ch.send_nowait(part.text)
                 if part.inline_data:
                     frame_data = part.inline_data.data
                     try:
@@ -663,55 +651,56 @@ class RealtimeSession(llm.RealtimeSession):
                             num_channels=OUTPUT_AUDIO_CHANNELS,
                             samples_per_channel=len(frame_data) // (2 * OUTPUT_AUDIO_CHANNELS),
                         )
-                        item_generation.audio_ch.send_nowait(frame)
+                        current_gen.audio_ch.send_nowait(frame)
                     except ValueError as e:
                         logger.error(f"Error creating audio frame from Gemini data: {e}")
 
         if input_transcription := server_content.input_transcription:
+            logger.info(f"input_transcription: {input_transcription}")
             if input_transcription.text:
-                item_generation.input_transcription += input_transcription.text
+                current_gen.input_transcription += input_transcription.text
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
-                        item_id=response_id,
-                        transcript=item_generation.input_transcription,
-                        final=False,
+                        item_id=current_gen.response_id,
+                        transcript=current_gen.input_transcription,
+                        is_final=False,
                     ),
                 )
 
-        if server_content.generation_complete and item_generation.input_transcription:
-            self.emit(
-                "input_audio_transcription_completed",
-                llm.InputTranscriptionCompleted(
-                    item_id=response_id,
-                    transcript=item_generation.input_transcription,
-                    final=True,
-                ),
-            )
-
         if output_transcription := server_content.output_transcription:
             if output_transcription.text:
-                item_generation.text_ch.send_nowait(output_transcription.text)
+                current_gen.text_ch.send_nowait(output_transcription.text)
 
-        if server_content.interrupted:
-            self._finalize_response(interrupted=True)
-            self._handle_input_speech_started()
-
-        if server_content.turn_complete:
+        if server_content.generation_complete:
+            # The only way we'd know that the transcription is complete is by when they are
+            # done with generation
+            if current_gen.input_transcription:
+                self.emit(
+                    "input_audio_transcription_completed",
+                    llm.InputTranscriptionCompleted(
+                        item_id=current_gen.response_id,
+                        transcript=current_gen.input_transcription,
+                        is_final=True,
+                    ),
+                )
             self._finalize_response()
 
-    def _finalize_response(self, interrupted: bool = False, closed: bool = False) -> None:
+        if server_content.interrupted:
+            self._finalize_response()
+            self._handle_input_speech_started()
+
+    def _finalize_response(self) -> None:
         if not self._current_generation:
             return
 
         gen = self._current_generation
         self._current_generation = None
 
-        for item_generation in gen.messages.values():
-            if not item_generation.text_ch.closed:
-                item_generation.text_ch.close()
-            if not item_generation.audio_ch.closed:
-                item_generation.audio_ch.close()
+        if not gen.text_ch.closed:
+            gen.text_ch.close()
+        if not gen.audio_ch.closed:
+            gen.audio_ch.close()
 
         gen.function_ch.close()
         gen.message_ch.close()
