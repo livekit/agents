@@ -214,6 +214,7 @@ class RealtimeModel(llm.RealtimeModel):
                 message_truncation=True,
                 turn_detection=turn_detection is not None,
                 user_transcription=input_audio_transcription is not None,
+                auto_tool_reply_generation=False,
             )
         )
 

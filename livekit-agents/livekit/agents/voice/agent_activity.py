@@ -1606,7 +1606,7 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-            if generate_tool_reply and self.llm.capabilities.auto_tool_reply_generation:
+            if generate_tool_reply and not self.llm.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 
                 handle = SpeechHandle.create(
