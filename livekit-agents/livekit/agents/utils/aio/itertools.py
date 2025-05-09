@@ -1,16 +1,8 @@
 import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Iterator
-from typing import (
-    Any,
-    AsyncContextManager,
-    Generic,
-    Protocol,
-    TypeVar,
-    Union,
-    overload,
-    runtime_checkable,
-)
+from typing import Any, Generic, Protocol, TypeVar, Union, overload, runtime_checkable
+from typing_extensions import AsyncContextManager
 
 # based on https://github.com/maxfischer2781/asyncstdlib/blob/master/asyncstdlib/itertools.py
 
