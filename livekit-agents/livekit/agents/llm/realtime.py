@@ -54,7 +54,7 @@ class RealtimeCapabilities:
     message_truncation: bool
     turn_detection: bool
     user_transcription: bool
-    manual_interruption: bool = True
+    auto_tool_reply_generation: bool = True
 
 
 class RealtimeError(Exception):
