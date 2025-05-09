@@ -325,6 +325,7 @@ class LLMStream(llm.LLMStream):
                             usage=llm.CompletionUsage(
                                 completion_tokens=usage.candidates_token_count or 0,
                                 prompt_tokens=usage.prompt_token_count or 0,
+                                prompt_cached_tokens=usage.cached_content_token_count or 0,
                                 total_tokens=usage.total_token_count or 0,
                             ),
                         )
