@@ -1139,7 +1139,11 @@ class RealtimeSession(
 
         self.emit(
             "input_audio_transcription_completed",
-            llm.InputTranscriptionCompleted(item_id=event.item_id, transcript=event.transcript),
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id,
+                transcript=event.transcript,
+                final=True,
+            ),
         )
 
     def _handle_conversion_item_input_audio_transcription_failed(

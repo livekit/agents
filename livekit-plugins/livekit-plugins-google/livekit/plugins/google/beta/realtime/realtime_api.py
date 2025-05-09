@@ -12,6 +12,7 @@ from google import genai
 from google.genai.live import AsyncSession
 from google.genai.types import (
     AudioTranscriptionConfig,
+    AutomaticActivityDetection,
     Blob,
     Content,
     FunctionDeclaration,
@@ -27,6 +28,7 @@ from google.genai.types import (
     Modality,
     Part,
     PrebuiltVoiceConfig,
+    RealtimeInputConfig,
     SessionResumptionConfig,
     SpeechConfig,
     Tool,
@@ -87,6 +89,7 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
+    input_transcription: str = ""
 
 
 @dataclass
@@ -152,11 +155,17 @@ class RealtimeModel(llm.RealtimeModel):
         Raises:
             ValueError: If the API key is required but not found.
         """  # noqa: E501
+        if not is_given(input_audio_transcription):
+            input_audio_transcription = AudioTranscriptionConfig()
+        if not is_given(output_audio_transcription):
+            output_audio_transcription = AudioTranscriptionConfig()
+
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
                 turn_detection=True,
-                user_transcription=is_given(input_audio_transcription),
+                user_transcription=input_audio_transcription is not None,
+                manual_interruption=False,
             )
         )
 
@@ -187,11 +196,6 @@ class RealtimeModel(llm.RealtimeModel):
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
-
-        if not is_given(input_audio_transcription):
-            input_audio_transcription = None
-        if not is_given(output_audio_transcription):
-            output_audio_transcription = AudioTranscriptionConfig()
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -272,7 +276,6 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._session_resumption_handle: str | None = None
 
-        self._update_lock = asyncio.Lock()
         self._session_lock = asyncio.Lock()
 
     async def _close_active_session(self) -> None:
@@ -291,57 +294,59 @@ class RealtimeSession(llm.RealtimeSession):
             # reset the msg_ch, do not send messages from previous session
             self._msg_ch = utils.aio.Chan[ClientEvents]()
 
-    async def update_options(
+    def update_options(
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
     ) -> None:
-        async with self._update_lock:
-            should_restart = False
-            if is_given(voice) and self._opts.voice != voice:
-                self._opts.voice = voice
-                should_restart = True
+        should_restart = False
+        if is_given(voice) and self._opts.voice != voice:
+            self._opts.voice = voice
+            should_restart = True
 
-            if is_given(temperature) and self._opts.temperature != temperature:
-                self._opts.temperature = temperature if is_given(temperature) else NOT_GIVEN
-                should_restart = True
+        if is_given(temperature) and self._opts.temperature != temperature:
+            self._opts.temperature = temperature if is_given(temperature) else NOT_GIVEN
+            should_restart = True
 
-            if should_restart:
-                self._mark_restart_needed()
+        if should_restart:
+            self._mark_restart_needed()
 
     async def update_instructions(self, instructions: str) -> None:
-        async with self._update_lock:
-            if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
-                self._opts.instructions = instructions
-                self._mark_restart_needed()
+        if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
+            self._opts.instructions = instructions
+            self._mark_restart_needed()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        async with self._update_lock:
-            self._chat_ctx = chat_ctx.copy()
-            turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
-            tool_results = get_tool_results_for_realtime(
-                self._chat_ctx, vertexai=self._opts.vertexai
-            )
-            # TODO(dz): need to compute delta and then either append or recreate session
+        diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+
+        if diff_ops.to_remove:
+            logger.warning("Gemini Live does not support removing messages")
+
+        append_ctx = llm.ChatContext.empty()
+        for _, item_id in diff_ops.to_create:
+            item = chat_ctx.get_by_id(item_id)
+            if item:
+                append_ctx.items.append(item)
+
+        if append_ctx.items:
+            turns, _ = to_chat_ctx(append_ctx, id(self), ignore_functions=True)
+            tool_results = get_tool_results_for_realtime(append_ctx, vertexai=self._opts.vertexai)
             if turns:
                 self._send_client_event(LiveClientContent(turns=turns, turn_complete=False))
             if tool_results:
                 self._send_client_event(tool_results)
 
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
-        async with self._update_lock:
-            new_declarations: list[FunctionDeclaration] = [
-                _build_gemini_fnc(tool) for tool in tools
-            ]
-            current_tool_names = {f.name for f in self._gemini_declarations}
-            new_tool_names = {f.name for f in new_declarations}
+        new_declarations: list[FunctionDeclaration] = [_build_gemini_fnc(tool) for tool in tools]
+        current_tool_names = {f.name for f in self._gemini_declarations}
+        new_tool_names = {f.name for f in new_declarations}
 
-            if current_tool_names != new_tool_names:
-                self._gemini_declarations = new_declarations
-                self._tools = llm.ToolContext(tools)
-                self._mark_restart_needed()
+        if current_tool_names != new_tool_names:
+            self._gemini_declarations = new_declarations
+            self._tools = llm.ToolContext(tools)
+            self._mark_restart_needed()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -592,6 +597,9 @@ class RealtimeSession(llm.RealtimeSession):
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
+            realtime_input_config=RealtimeInputConfig(
+                automatic_activity_detection=AutomaticActivityDetection(),
+            ),
         )
 
     def _start_new_generation(self):
@@ -661,13 +669,25 @@ class RealtimeSession(llm.RealtimeSession):
 
         if input_transcription := server_content.input_transcription:
             if input_transcription.text:
+                item_generation.input_transcription += input_transcription.text
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
-                        item_id=response_id, transcript=input_transcription.text
+                        item_id=response_id,
+                        transcript=item_generation.input_transcription,
+                        final=False,
                     ),
                 )
-                self._handle_input_speech_started()
+
+        if server_content.generation_complete and item_generation.input_transcription:
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=response_id,
+                    transcript=item_generation.input_transcription,
+                    final=True,
+                ),
+            )
 
         if output_transcription := server_content.output_transcription:
             if output_transcription.text:
