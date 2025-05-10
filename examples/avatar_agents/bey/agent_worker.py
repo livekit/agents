@@ -1,6 +1,5 @@
 import logging
 import os
-from typing import NoReturn
 
 from dotenv import load_dotenv
 
@@ -21,12 +20,7 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
-async def entrypoint(ctx: JobContext) -> None:
-    """Main entrypoint for the Bey avatar agent.
-    
-    Args:
-        ctx: The job context containing room information.
-    """
+async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     session = AgentSession(
