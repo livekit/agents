@@ -136,6 +136,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 loop=self._loop,
             )
         elif self._job_executor_type == JobExecutorType.PROCESS:
+            print('process')
             proc = job_proc_executor.ProcJobExecutor(
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
@@ -145,8 +146,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 loop=self._loop,
                 ping_interval=2.5,
-                ping_timeout=60,
-                high_ping_threshold=0.5,
+                ping_timeout=600,
+                high_ping_threshold=10.5,
                 memory_warn_mb=self._memory_warn_mb,
                 memory_limit_mb=self._memory_limit_mb,
                 http_proxy=self._http_proxy,

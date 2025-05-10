@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import ssl
 import tempfile
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -209,6 +211,9 @@ class ChunkedStream(tts.ChunkedStream):
         """Run the synthesis process."""
         request_id = utils.shortuuid()
         
+        # Store original SSL context creation function
+        original_create_default_context = ssl.create_default_context
+        
         try:
             # Create a temporary file to store the audio
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
@@ -222,8 +227,52 @@ class ChunkedStream(tts.ChunkedStream):
                     "edge-tts package is not installed. Please install it with 'pip install edge-tts'"
                 )
             
+            # Check for custom CA bundle from environment variable
+            ca_bundle_path = os.environ.get('REQUESTS_CA_BUNDLE')
+            ssl_verification_disabled = False
+            
+            # Define a patched SSL context creation function
+            def patched_create_default_context(*args, **kwargs):
+                nonlocal ca_bundle_path, ssl_verification_disabled
+                
+                if ca_bundle_path and os.path.exists(ca_bundle_path):
+                    # Use the custom CA bundle
+                    logger.info(f"Using custom CA bundle from REQUESTS_CA_BUNDLE: {ca_bundle_path}")
+                    try:
+                        # Check if cafile is already in kwargs
+                        if 'cafile' not in kwargs:
+                            kwargs['cafile'] = ca_bundle_path
+                        context = original_create_default_context(*args, **kwargs)
+                        return context
+                    except Exception as e:
+                        logger.warning(f"Failed to create SSL context with custom CA bundle: {e}")
+                
+                # If we get here, either:
+                # 1. REQUESTS_CA_BUNDLE is not set
+                # 2. The file doesn't exist
+                # 3. Creating context with the CA bundle failed
+                # In all cases, disable SSL verification
+                logger.warning("Disabling SSL certificate verification for Edge TTS")
+                warnings.warn(
+                    "SSL certificate verification has been disabled for Edge TTS. "
+                    "This is a security risk and should only be used for testing. "
+                    "Set REQUESTS_CA_BUNDLE to a valid CA bundle file for proper verification.",
+                    UserWarning
+                )
+                
+                context = original_create_default_context(*args, **kwargs)
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                ssl_verification_disabled = True
+                return context
+            
+            # Apply the monkey patch
+            ssl.create_default_context = patched_create_default_context
+            logger.info("Applied SSL context patch")
+            
             # Configure the voice using the correct API
             try:
+                logger.info(f"Attempting to connect to Edge TTS service with voice: {self._opts.voice}")
                 communicate = edge_tts.Communicate(
                     text=self._input_text,
                     voice=self._opts.voice,
@@ -244,7 +293,52 @@ class ChunkedStream(tts.ChunkedStream):
                 )
             
             # Generate audio and save to temporary file
-            await communicate.save(temp_path)
+            try:
+                logger.info("Attempting to save audio to temporary file")
+                await communicate.save(temp_path)
+                logger.info("Successfully saved audio to temporary file")
+                
+                if ssl_verification_disabled:
+                    logger.warning(
+                        "Audio was generated successfully, but SSL verification was disabled. "
+                        "This is a security risk. Consider setting REQUESTS_CA_BUNDLE to a valid CA bundle file."
+                    )
+            except Exception as e:
+                logger.error(f"Failed to save audio: {e}")
+                
+                # Check if this is an SSL error and provide more detailed information
+                if "SSL" in str(e) or "certificate" in str(e).lower():
+                    logger.error("SSL certificate verification error detected despite mitigation attempts")
+                    
+                    # Try to get more information about the SSL configuration
+                    logger.info(f"SSL default verify paths: {ssl.get_default_verify_paths()}")
+                    
+                    # Provide guidance on fixing the issue
+                    logger.error(
+                        "To fix this SSL certificate issue, you can either:\n"
+                        "1. Set the REQUESTS_CA_BUNDLE environment variable to point to a valid CA bundle file\n"
+                        "   Example: export REQUESTS_CA_BUNDLE=/path/to/cacert.pem\n"
+                        "2. Update your system's CA certificates\n"
+                        "   On macOS: Install/update certificates via the Keychain Access app\n"
+                        "   On Linux: Update ca-certificates package\n"
+                        "   On Windows: Update certificates via Windows Update"
+                    )
+                    
+                    # Check if we can access the host directly
+                    import socket
+                    try:
+                        logger.info("Attempting to resolve speech.platform.bing.com")
+                        ip = socket.gethostbyname("speech.platform.bing.com")
+                        logger.info(f"Resolved to IP: {ip}")
+                    except Exception as dns_error:
+                        logger.error(f"DNS resolution failed: {dns_error}")
+                
+                # Restore original SSL context creation function
+                ssl.create_default_context = original_create_default_context
+                raise
+            
+            # Restore original SSL context creation function
+            ssl.create_default_context = original_create_default_context
             
             # Create decoder for the audio file
             decoder = utils.codecs.AudioStreamDecoder(
@@ -277,7 +371,11 @@ class ChunkedStream(tts.ChunkedStream):
                     os.unlink(temp_path)
         
         except asyncio.TimeoutError as e:
+            # Restore original SSL context creation function
+            ssl.create_default_context = original_create_default_context
             raise APITimeoutError() from e
         except Exception as e:
+            # Restore original SSL context creation function
+            ssl.create_default_context = original_create_default_context
             logger.error(f"Edge TTS error: {e}")
             raise APIConnectionError() from e

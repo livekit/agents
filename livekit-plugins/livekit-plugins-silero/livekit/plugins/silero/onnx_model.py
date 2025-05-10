@@ -13,9 +13,27 @@ SUPPORTED_SAMPLE_RATES = [8000, 16000]
 
 
 def new_inference_session(force_cpu: bool) -> onnxruntime.InferenceSession:
+    from .log import logger
+    import os
+    
     res = importlib.resources.files("livekit.plugins.silero.resources") / "silero_vad.onnx"
     ctx = importlib.resources.as_file(res)
     path = str(_resource_files.enter_context(ctx))
+    
+    # Check if file is a Git LFS pointer
+    file_size = os.path.getsize(path)
+    logger.info(f"Loading ONNX model from {path} (size: {file_size} bytes)")
+    
+    if file_size < 1000:  # Suspiciously small for an ONNX model
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read(100)  # Read first 100 chars
+            if 'version https://git-lfs.github.com' in content:
+                logger.error("Found Git LFS pointer file instead of actual model!")
+                logger.error("Please install Git LFS and pull the repository again:")
+                logger.error("  1. Install Git LFS: brew install git-lfs (macOS) or apt-get install git-lfs (Linux)")
+                logger.error("  2. Set up Git LFS: git lfs install")
+                logger.error("  3. Pull the files: git lfs pull")
+                raise RuntimeError("Git LFS model file not downloaded. See logs for instructions.")
 
     opts = onnxruntime.SessionOptions()
     opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
