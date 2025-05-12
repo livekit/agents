@@ -42,7 +42,7 @@ from livekit.agents.utils import audio as audio_utils, images, is_given
 from livekit.plugins.google.beta.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ...log import logger
-from ...utils import _build_gemini_fnc, get_tool_results_for_realtime, to_chat_ctx
+from ...utils import get_tool_results_for_realtime, to_chat_ctx, to_fnc_ctx
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
@@ -338,7 +338,7 @@ class RealtimeSession(llm.RealtimeSession):
                 self._send_client_event(tool_results)
 
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
-        new_declarations: list[FunctionDeclaration] = [_build_gemini_fnc(tool) for tool in tools]
+        new_declarations: list[FunctionDeclaration] = to_fnc_ctx(tools)
         current_tool_names = {f.name for f in self._gemini_declarations}
         new_tool_names = {f.name for f in new_declarations}
 
