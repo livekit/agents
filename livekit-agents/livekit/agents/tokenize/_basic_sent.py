@@ -39,17 +39,11 @@ def split_sentences(
     text = re.sub(r" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
     text = re.sub(r" "+suffixes+"[.]"," \\1<prd>",text)
     text = re.sub(r" " + alphabets + "[.]"," \\1<prd>",text)
-    if "”" in text:
-        text = text.replace(".”","”.")
-    if "\"" in text:
-        text = text.replace(".\"","\".")
-    if "!" in text:
-        text = text.replace("!\"","\"!")
-    if "?" in text:
-        text = text.replace("?\"","\"?")
-    text = text.replace(".",".<stop>")
-    text = text.replace("?","?<stop>")
-    text = text.replace("!","!<stop>")
+
+    # mark end of sentence punctuations with <stop>
+    text = re.sub(r"([.!?。！？])([\"”])", "\\1\\2<stop>", text)
+    text = re.sub(r"([.!?。！？])(?![\"”])", "\\1<stop>", text)
+
     text = text.replace("<prd>",".")
     # fmt: on
 
