@@ -697,6 +697,12 @@ class RealtimeSession(
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        max_response_output_tokens: NotGivenOr[int] = NOT_GIVEN,
+        modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
+        output_audio_transcription: NotGivenOr[OutputAudioTranscription | None] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
