@@ -662,9 +662,13 @@ class RealtimeSession(llm.RealtimeSession):
                         logger.error(f"Error creating audio frame from Gemini data: {e}")
 
         if input_transcription := server_content.input_transcription:
-            logger.info(f"input_transcription: {input_transcription}")
-            if input_transcription.text:
-                current_gen.input_transcription += input_transcription.text
+            text = input_transcription.text
+            if text:
+                if current_gen.input_transcription == "":
+                    # gemini would start with a space, which doesn't make sense
+                    # at beginning of the transcript
+                    text = text.lstrip()
+                current_gen.input_transcription += text
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
@@ -675,8 +679,9 @@ class RealtimeSession(llm.RealtimeSession):
                 )
 
         if output_transcription := server_content.output_transcription:
-            if output_transcription.text:
-                current_gen.text_ch.send_nowait(output_transcription.text)
+            text = output_transcription.text
+            if text:
+                current_gen.text_ch.send_nowait(text)
 
         if server_content.generation_complete:
             # The only way we'd know that the transcription is complete is by when they are
