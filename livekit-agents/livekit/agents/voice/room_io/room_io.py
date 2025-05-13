@@ -139,8 +139,6 @@ class RoomIO:
                 room=self._room,
                 timeout=self._input_options.pre_connect_audio_timeout,
             )
-            if self._room.isconnected():
-                logger.warning("pre-connect audio handler registered after room is connected")
             self._pre_connect_audio_handler.register()
 
         if self._input_options.text_enabled:

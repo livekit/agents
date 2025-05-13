@@ -26,6 +26,8 @@ class PreConnectAudioHandler:
         self._buffers: dict[str, asyncio.Future[_PreConnectAudioBuffer]] = {}
         self._tasks: set[asyncio.Task] = set()
 
+        self._registered_after_connect = False
+
     def register(self):
         def _handler(reader: rtc.ByteStreamReader, participant_id: str):
             task = asyncio.create_task(self._read_audio_task(reader, participant_id))
@@ -44,6 +46,8 @@ class PreConnectAudioHandler:
             task.add_done_callback(lambda _: timeout_handle.cancel())
 
         try:
+            if self._room.isconnected():
+                self._registered_after_connect = True
             self._room.register_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM, _handler)
         except ValueError:
             logger.warning(
@@ -56,6 +60,14 @@ class PreConnectAudioHandler:
         await utils.aio.cancel_and_wait(*self._tasks)
 
     async def wait_for_data(self, track_id: str) -> list[rtc.AudioFrame]:
+        # the handler is enabled by default, log a warning only if the buffer is actually used
+        if self._registered_after_connect:
+            logger.warning(
+                "pre-connect audio handler registered after room connection, "
+                "start RoomIO before ctx.connect() to ensure seamless audio buffer.",
+                extra={"track_id": track_id},
+            )
+
         self._buffers.setdefault(track_id, asyncio.Future())
         fut = self._buffers[track_id]
 
