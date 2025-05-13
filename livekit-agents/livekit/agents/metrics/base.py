@@ -73,14 +73,22 @@ class EOUMetrics(BaseModel):
 
 
 class RealtimeModelMetrics(BaseModel):
+    class CachedTokenDetails(BaseModel):
+        audio_tokens: int
+        text_tokens: int
+        image_tokens: int
+
     class InputTokenDetails(BaseModel):
         audio_tokens: int
-        cached_tokens: int
         text_tokens: int
+        image_tokens: int
+        cached_tokens: int
+        cached_tokens_details: RealtimeModelMetrics.CachedTokenDetails | None
 
     class OutputTokenDetails(BaseModel):
         text_tokens: int
         audio_tokens: int
+        image_tokens: int
 
     type: Literal["realtime_model_metrics"] = "realtime_model_metrics"
     label: str
