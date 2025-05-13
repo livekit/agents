@@ -71,7 +71,7 @@ class RoomInputOptions:
     participant_identity: NotGivenOr[str] = NOT_GIVEN
     """The participant to link to. If not provided, link to the first participant.
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
-    pre_connect_audio: bool = False
+    pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 5.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""

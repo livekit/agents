@@ -43,7 +43,13 @@ class PreConnectAudioHandler:
             timeout_handle = asyncio.get_event_loop().call_later(self._timeout, _on_timeout)
             task.add_done_callback(lambda _: timeout_handle.cancel())
 
-        self._room.register_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM, _handler)
+        try:
+            self._room.register_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM, _handler)
+        except ValueError:
+            logger.warning(
+                f"pre-connect audio handler for {PRE_CONNECT_AUDIO_BUFFER_STREAM} "
+                "already registered, ignoring"
+            )
 
     async def aclose(self):
         self._room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM)
