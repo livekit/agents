@@ -122,8 +122,9 @@ class RoomIO:
         self._room_connected_fut = asyncio.Future[None]()
 
         self._init_atask: asyncio.Task | None = None
+        self._update_state_atask: asyncio.Task | None = None
+        self._user_transcript_atask: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
-        self._update_state_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         # -- create inputs --
@@ -208,6 +209,12 @@ class RoomIO:
 
         if self._init_atask:
             await utils.aio.cancel_and_wait(self._init_atask)
+
+        if self._user_transcript_atask:
+            await utils.aio.cancel_and_wait(self._user_transcript_atask)
+
+        if self._update_state_atask:
+            await utils.aio.cancel_and_wait(self._update_state_atask)
 
         if self._audio_input:
             await self._audio_input.aclose()
@@ -333,7 +340,10 @@ class RoomIO:
         self._participant_available_fut.set_result(participant)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-        async def _capture_text():
+        async def _capture_text(prev_task: asyncio.Task | None = None):
+            if prev_task:
+                await prev_task
+
             if self._user_tr_output is None:
                 return
 
@@ -342,9 +352,9 @@ class RoomIO:
                 # TODO(theomonnom): should we wait for the end of turn before sending the final transcript?  # noqa: E501
                 self._user_tr_output.flush()
 
-        task = asyncio.create_task(_capture_text())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._user_transcript_atask = asyncio.create_task(
+            _capture_text(self._user_transcript_atask)
+        )
 
     def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         if participant_identity != self._participant_identity:
@@ -378,10 +388,10 @@ class RoomIO:
                     {ATTRIBUTE_AGENT_STATE: ev.new_state}
                 )
 
-        if self._update_state_task is not None:
-            self._update_state_task.cancel()
+        if self._update_state_atask is not None:
+            self._update_state_atask.cancel()
 
-        self._update_state_task = asyncio.create_task(_set_state())
+        self._update_state_atask = asyncio.create_task(_set_state())
 
     def _create_transcription_output(
         self, is_delta_stream: bool, participant: rtc.Participant | str | None = None
