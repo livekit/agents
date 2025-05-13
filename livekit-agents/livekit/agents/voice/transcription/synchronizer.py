@@ -397,7 +397,7 @@ class TranscriptSynchronizer:
 
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
-        self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task())
+        self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task(None))
 
     @property
     def audio_output(self) -> _SyncedAudioOutput:
@@ -437,7 +437,10 @@ class TranscriptSynchronizer:
 
         self.set_enabled(self._audio_attached and self._text_attached)
 
-    async def _rotate_segment_task(self) -> None:
+    async def _rotate_segment_task(self, old_task: asyncio.Task | None) -> None:
+        if old_task:
+            await old_task
+
         await self._impl.aclose()
         self._impl = _SegmentSynchronizerImpl(
             options=self._opts, next_in_chain=self._text_output._next_in_chain
@@ -450,7 +453,9 @@ class TranscriptSynchronizer:
         if not self._rotate_segment_atask.done():
             logger.warning("rotate_segment called while previous segment is still being rotated")
 
-        self._rotate_segment_atask = asyncio.create_task(self._rotate_segment_task())
+        self._rotate_segment_atask = asyncio.create_task(
+            self._rotate_segment_task(self._rotate_segment_atask)
+        )
 
     async def barrier(self) -> None:
         if self._rotate_segment_atask is None:

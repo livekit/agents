@@ -39,14 +39,6 @@ from .generation import (
 )
 from .speech_handle import SpeechHandle
 
-try:
-    from livekit.plugins.google.beta.realtime.realtime_api import (
-        RealtimeModel as GoogleRealtimeModel,
-    )
-
-except ImportError:
-    GoogleRealtimeModel = None
-
 
 def log_event(event: str, **kwargs) -> None:
     debug.Tracing.log_event(event, kwargs)
@@ -769,11 +761,12 @@ class AgentActivity(RecognitionHooks):
         log_event("input_audio_transcription_completed")
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final),
         )
-        msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
-        self._agent._chat_ctx.items.append(msg)
-        self._session._conversation_item_added(msg)
+        if ev.is_final:
+            msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
+            self._agent._chat_ctx.items.append(msg)
+            self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
@@ -1613,10 +1606,7 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-            if generate_tool_reply and (
-                # no direct cancellation in Gemini
-                GoogleRealtimeModel is None or not isinstance(self.llm, GoogleRealtimeModel)
-            ):
+            if generate_tool_reply and not self.llm.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 
                 handle = SpeechHandle.create(

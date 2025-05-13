@@ -40,6 +40,7 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion_chunk import Choice
 
+from .log import logger
 from .models import (
     CerebrasChatModels,
     ChatModels,
@@ -51,6 +52,8 @@ from .models import (
     XAIChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, to_chat_ctx, to_fnc_ctx
+
+lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 @dataclass
@@ -563,9 +566,22 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
+            chat_ctx = to_chat_ctx(self._chat_ctx, id(self._llm))
+            fnc_ctx = to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN
+            if lk_oai_debug:
+                tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
+                logger.debug(
+                    "chat.completions.create",
+                    extra={
+                        "fnc_ctx": fnc_ctx,
+                        "tool_choice": tool_choice,
+                        "chat_ctx": chat_ctx,
+                    },
+                )
+
             self._oai_stream = stream = await self._client.chat.completions.create(
-                messages=to_chat_ctx(self._chat_ctx, id(self._llm)),
-                tools=to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN,
+                messages=chat_ctx,
+                tools=fnc_ctx,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,

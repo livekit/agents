@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import socket
 import threading
+import time
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -160,6 +161,8 @@ class ThreadJobExecutor:
         )
 
         try:
+            logger.info("initializing job runner", extra=self.logging_extra())
+            start_time = time.perf_counter()
             init_res = await asyncio.wait_for(
                 channel.arecv_message(self._pch, proto.IPC_MESSAGES),
                 timeout=self._opts.initialize_timeout,
@@ -167,13 +170,16 @@ class ThreadJobExecutor:
             assert isinstance(init_res, proto.InitializeResponse), (
                 "first message must be InitializeResponse"
             )
+            logger.info(
+                "job runner initialized",
+                extra={
+                    **self.logging_extra(),
+                    "elapsed_time": round(time.perf_counter() - start_time, 2),
+                },
+            )
         except asyncio.TimeoutError:
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("runner initialization timed out")
-            )
-            logger.error(
-                "job initialization is taking too much time..",
-                extra=self.logging_extra(),
             )
             raise
         except Exception as e:  # should be channel.ChannelClosed most of the time

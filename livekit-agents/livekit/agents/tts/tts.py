@@ -44,7 +44,7 @@ class TTSError(BaseModel):
     type: Literal["tts_error"] = "tts_error"
     timestamp: float
     label: str
-    error: APIError = Field(..., exclude=True)
+    error: Exception = Field(..., exclude=True)
     recoverable: bool
 
 
@@ -227,7 +227,11 @@ class ChunkedStream(ABC):
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
+    def _emit_error(self, api_error: Exception, recoverable: bool):
         self._current_attempt_has_error = True
         self._tts.emit(
             "error",
@@ -325,7 +329,11 @@ class SynthesizeStream(ABC):
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
+    def _emit_error(self, api_error: Exception, recoverable: bool):
         self._current_attempt_has_error = True
         self._tts.emit(
             "error",

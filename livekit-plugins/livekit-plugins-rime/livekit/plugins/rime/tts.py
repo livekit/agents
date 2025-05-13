@@ -73,7 +73,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        api_url: str = "https://users.rime.ai/v1/rime-tts",
+        base_url: str = "https://users.rime.ai/v1/rime-tts",
         model: TTSModels | str = "arcana",
         speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
         # Arcana options
@@ -131,7 +131,7 @@ class TTS(tts.TTS):
                 phonemize_between_brackets=phonemize_between_brackets,
             )
         self._session = http_session
-        self._api_url = api_url
+        self._base_url = base_url
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -235,7 +235,7 @@ class ChunkedStream(tts.ChunkedStream):
         decode_task: asyncio.Task | None = None
         try:
             async with self._session.post(
-                self._tts._api_url,
+                self._tts._base_url,
                 headers=headers,
                 json=payload,
                 timeout=self._conn_options.timeout,

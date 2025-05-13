@@ -18,6 +18,10 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 
+# This example demonstrates how to handle errors from STT, TTS, and LLM
+# and how to continue the conversation after an error if the error is recoverable
+
+
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
@@ -43,6 +47,22 @@ async def entrypoint(ctx: JobContext):
             audio=audio_frames_from_file(custom_error_audio),
             allow_interruptions=False,
         )
+
+        # If want to continue the conversation, we can set the recoverable to True
+
+        # TTS and LLM errors can be marked as recoverable
+        # since these components are recreated for each response
+
+        # if isinstance(ev.source, (tts.TTS, llm.LLM)):
+        #     ev.error.recoverable = True
+        #     return
+
+        # STT stream persists for the entire agent lifetime
+        # we can reset the agent if we want to continue the conversation
+        # if isinstance(ev.source, stt.STT):
+        #     session.update_agent(session.current_agent)
+        #     ev.error.recoverable = True
+        #     return
 
     @session.on("close")
     def on_close(_: CloseEvent):
