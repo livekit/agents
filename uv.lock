@@ -1612,7 +1612,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.34" },
+    { name = "anthropic", specifier = ">=0.41" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -1777,7 +1777,7 @@ dependencies = [
 requires-dist = [
     { name = "google-auth", specifier = ">=2,<3" },
     { name = "google-cloud-speech", specifier = ">=2,<3" },
-    { name = "google-cloud-texttospeech", specifier = ">=2,<3" },
+    { name = "google-cloud-texttospeech", specifier = ">=2.24,<3" },
     { name = "google-genai", specifier = ">=1.14.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
