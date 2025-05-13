@@ -528,7 +528,7 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
-        # @utils.log_exceptions(logger=logger)
+        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
             while True:
