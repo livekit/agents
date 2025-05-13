@@ -45,6 +45,7 @@ from .models import (
     CerebrasChatModels,
     ChatModels,
     DeepSeekChatModels,
+    MetaChatModels,
     OctoChatModels,
     PerplexityChatModels,
     TelnyxChatModels,
@@ -104,9 +105,11 @@ class LLM(llm.LLM):
             base_url=base_url if is_given(base_url) else None,
             max_retries=0,
             http_client=httpx.AsyncClient(
-                timeout=timeout
-                if timeout
-                else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                timeout=(
+                    timeout
+                    if timeout
+                    else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0)
+                ),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=50,
@@ -156,9 +159,9 @@ class LLM(llm.LLM):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            timeout=(
+                timeout if timeout else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0)
+            ),
         )  # type: ignore
 
         return LLM(
@@ -468,6 +471,42 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "Telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+        )
+
+    @staticmethod
+    def with_meta(
+        *,
+        model: str | MetaChatModels = "Llama-4-Maverick-17B-128E-Instruct-FP8",
+        api_key: str | None = None,
+        base_url: str = "https://api.llama.com/compat/v1/",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+    ) -> LLM:
+        """
+        Create a new instance of Meta Llama LLM.
+
+        ``api_key`` must be set to your Meta Llama API key, either using the argument or by setting
+        the ``LLAMA_API_KEY`` environmental variable.
+        """
+
+        api_key = api_key or os.environ.get("LLAMA_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "Meta Llama API key is required, either as argument or set LLAMA_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
