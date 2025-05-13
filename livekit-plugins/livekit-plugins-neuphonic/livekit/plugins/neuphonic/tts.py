@@ -372,7 +372,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise APIStatusError(
                         "Neuphonic connection closed unexpectedly",
                         request_id=request_id,
-                    )
+                    ) from e
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
