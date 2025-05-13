@@ -366,7 +366,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
 
             while True:
-                msg = await ws.receive()
+                try:
+                    msg = await ws.receive()
+                except Exception as e:
+                    raise APIStatusError(
+                        "Neuphonic connection closed unexpectedly",
+                        request_id=request_id,
+                    )
+
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
