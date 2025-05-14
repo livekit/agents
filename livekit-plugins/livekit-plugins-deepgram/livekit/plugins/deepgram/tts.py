@@ -221,7 +221,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                 },
                 json={"text": self._input_text},
-                timeout=self._conn_options.timeout,
+                timeout=aiohttp.ClientTimeout(connect=self._conn_options.timeout, total=30),
             ) as res:
                 if res.status != 200:
                     raise APIStatusError(
