@@ -122,9 +122,10 @@ class RoomIO:
         self._room_connected_fut = asyncio.Future[None]()
 
         self._init_atask: asyncio.Task | None = None
-        self._update_state_atask: asyncio.Task | None = None
+        self._user_transcript_ch = utils.aio.Chan[UserInputTranscribedEvent]()
         self._user_transcript_atask: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
+        self._update_state_atask: asyncio.Task | None = None
 
     async def start(self) -> None:
         # -- create inputs --
@@ -160,6 +161,7 @@ class RoomIO:
             self._user_tr_output = self._create_transcription_output(
                 is_delta_stream=False, participant=self._participant_identity
             )
+            self._user_transcript_atask = asyncio.create_task(self._forward_user_transcript())
             # TODO(long): add next in the chain for session.output.transcription
             self._agent_tr_output = self._create_transcription_output(
                 is_delta_stream=True, participant=None
@@ -206,10 +208,13 @@ class RoomIO:
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
+        self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
+        self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
 
         if self._init_atask:
             await utils.aio.cancel_and_wait(self._init_atask)
 
+        self._user_transcript_ch.close()
         if self._user_transcript_atask:
             await utils.aio.cancel_and_wait(self._user_transcript_atask)
 
@@ -314,6 +319,16 @@ class RoomIO:
         if self._audio_output:
             await self._audio_output.start()
 
+    @utils.log_exceptions(logger=logger)
+    async def _forward_user_transcript(self) -> None:
+        async for ev in self._user_transcript_ch:
+            if self._user_tr_output is None:
+                continue
+
+            await self._user_tr_output.capture_text(ev.transcript)
+            if ev.is_final:
+                self._user_tr_output.flush()
+
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
@@ -340,21 +355,8 @@ class RoomIO:
         self._participant_available_fut.set_result(participant)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-        async def _capture_text(prev_task: asyncio.Task | None = None):
-            if prev_task:
-                await prev_task
-
-            if self._user_tr_output is None:
-                return
-
-            await self._user_tr_output.capture_text(ev.transcript)
-            if ev.is_final:
-                # TODO(theomonnom): should we wait for the end of turn before sending the final transcript?  # noqa: E501
-                self._user_tr_output.flush()
-
-        self._user_transcript_atask = asyncio.create_task(
-            _capture_text(self._user_transcript_atask)
-        )
+        if self._output_options.transcription_enabled:
+            self._user_transcript_ch.send_nowait(ev)
 
     def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         if participant_identity != self._participant_identity:
