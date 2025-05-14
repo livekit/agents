@@ -73,7 +73,7 @@ class RoomInputOptions:
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
-    pre_connect_audio_timeout: float = 5.0
+    pre_connect_audio_timeout: float = 3.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
 
 
