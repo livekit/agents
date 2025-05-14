@@ -28,9 +28,11 @@ class GeminiAgent(Agent):
         )
 
     async def on_enter(self):
-        self.session.generate_reply(
-            instructions="introduce yourself very briefly and ask about the user's day"
-        )
+        if await self.session.ensure_silence_for(timeout=3):
+            logger.info("generating proactive reply")
+            self.session.generate_reply(
+                instructions="introduce yourself very briefly and ask about the user's day"
+            )
 
 
 async def entrypoint(ctx: JobContext):
