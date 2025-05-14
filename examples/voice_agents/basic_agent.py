@@ -36,6 +36,8 @@ class MyAgent(Agent):
         )
 
     async def on_enter(self):
+        # when the agent is added to the session, it'll generate a reply
+        # according to its instructions if the user remains silent
         if await self.session.ensure_silence_for(timeout=3):
             logger.info("generating proactive reply")
             self.session.generate_reply()
