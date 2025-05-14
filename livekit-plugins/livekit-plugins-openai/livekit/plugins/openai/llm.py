@@ -65,6 +65,7 @@ class _LLMOptions:
     tool_choice: NotGivenOr[ToolChoice]
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
+    max_completion_tokens: NotGivenOr[int]
 
 
 class LLM(llm.LLM):
@@ -81,6 +82,7 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
         """
@@ -98,6 +100,7 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
             store=store,
             metadata=metadata,
+            max_completion_tokens=max_completion_tokens,
         )
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
@@ -503,6 +506,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.user):
             extra["user"] = self._opts.user
+
+        if is_given(self._opts.max_completion_tokens):
+            extra["max_completion_tokens"] = self._opts.max_completion_tokens
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls

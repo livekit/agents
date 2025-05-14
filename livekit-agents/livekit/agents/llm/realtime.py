@@ -83,6 +83,7 @@ EventTypes = Literal[
     "input_speech_stopped",  # serverside VAD
     "input_audio_transcription_completed",
     "generation_created",
+    "metrics_collected",
     "error",
 ]
 

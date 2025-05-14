@@ -12,7 +12,14 @@ from livekit import rtc
 from .. import debug, llm, stt, tts, utils, vad
 from ..llm.tool_context import StopResponse
 from ..log import logger
-from ..metrics import EOUMetrics, LLMMetrics, STTMetrics, TTSMetrics, VADMetrics
+from ..metrics import (
+    EOUMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+    VADMetrics,
+)
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -338,6 +345,7 @@ class AgentActivity(RecognitionHooks):
                     "input_audio_transcription_completed",
                     self._on_input_audio_transcription_completed,
                 )
+                self._rt_session.on("metrics_collected", self._on_metrics_collected)
                 self._rt_session.on("error", self._on_error)
 
                 remove_instructions(self._agent._chat_ctx)
@@ -705,7 +713,9 @@ class AgentActivity(RecognitionHooks):
 
     # -- Realtime Session events --
 
-    def _on_metrics_collected(self, ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics) -> None:
+    def _on_metrics_collected(
+        self, ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics
+    ) -> None:
         if (speech_handle := _SpeechHandleContextVar.get(None)) and (
             isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
         ):

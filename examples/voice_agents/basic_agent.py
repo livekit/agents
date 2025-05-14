@@ -20,7 +20,6 @@ from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
-# currently supported on Linux and MacOS
 # from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")

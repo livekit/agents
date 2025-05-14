@@ -1,7 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 
-from .base import AgentMetrics, LLMMetrics, STTMetrics, TTSMetrics
+from .base import AgentMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
 
 
 @dataclass
@@ -25,6 +25,11 @@ class UsageCollector:
             self._summary.llm_prompt_tokens += metrics.prompt_tokens
             self._summary.llm_prompt_cached_tokens += metrics.prompt_cached_tokens
             self._summary.llm_completion_tokens += metrics.completion_tokens
+
+        elif isinstance(metrics, RealtimeModelMetrics):
+            self._summary.llm_prompt_tokens += metrics.input_tokens
+            self._summary.llm_prompt_cached_tokens += metrics.input_token_details.cached_tokens
+            self._summary.llm_completion_tokens += metrics.output_tokens
 
         elif isinstance(metrics, TTSMetrics):
             self._summary.tts_characters_count += metrics.characters_count
