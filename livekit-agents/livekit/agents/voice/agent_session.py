@@ -160,7 +160,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 an interruption, only used if stt enabled. Default ``0``.
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
-                or an EOU model) before it declares the user’s turn complete.
+                or an EOU model) before it declares the user's turn complete.
                 Default ``0.5`` s.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``6.0`` s.
@@ -221,6 +221,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
+        self._user_speaking = asyncio.Event()
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task | None = None
@@ -544,6 +545,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt()
 
+    async def ensure_silence_for(self, timeout: float) -> bool:
+        """Ensure user remains silent for the specified duration.
+        Returns immediately with False if user speaks during the timeout period.
+
+        Args:
+            timeout: Time in seconds to monitor for silence
+
+        Returns:
+            True if silence maintained for entire duration, False if speech detected
+        """
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        if not self._activity.vad:
+            # skip the timeout if vad is not enabled
+            return True
+
+        try:
+            await asyncio.wait_for(self._user_speaking.wait(), timeout=timeout)
+            return False
+        except asyncio.TimeoutError:
+            return True
+
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn
         if self._activity is None:
@@ -634,6 +658,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_user_state(self, state: UserState) -> None:
         if self._user_state == state:
             return
+
+        if state == "speaking":
+            self._user_speaking.set()
+        else:
+            self._user_speaking.clear()
 
         old_state = self._user_state
         self._user_state = state
