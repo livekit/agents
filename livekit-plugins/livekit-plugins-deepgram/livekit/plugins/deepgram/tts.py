@@ -44,7 +44,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: str = "aura-asteria-en",
+        model: str = "aura-2-andromeda-en",
         encoding: str = "linear16",
         sample_rate: int = 24000,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -57,7 +57,7 @@ class TTS(tts.TTS):
         Create a new instance of Deepgram TTS.
 
         Args:
-            model (str): TTS model to use. Defaults to "aura-asteria-en".
+            model (str): TTS model to use. Defaults to "aura-2-andromeda-en".
             encoding (str): Audio encoding to use. Defaults to "linear16".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
