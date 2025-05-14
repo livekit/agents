@@ -39,6 +39,8 @@ from .langs import TTSLangs
 from .log import logger
 from .models import ArcanaVoices, TTSModels
 
+ARCANA_MODEL_TIMEOUT = 60 * 5 # 5 minutes, arcana takes longer to generate audio
+MISTV2_MODEL_TIMEOUT = 30 # mistv2 is faster
 
 @dataclass
 class _TTSOptions:
@@ -133,6 +135,8 @@ class TTS(tts.TTS):
         self._session = http_session
         self._base_url = base_url
 
+        self._tts_http_timeout = ARCANA_MODEL_TIMEOUT if model == "arcana" else MISTV2_MODEL_TIMEOUT
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -154,6 +158,7 @@ class TTS(tts.TTS):
             session=self._ensure_session(),
             segment_id=segment_id if is_given(segment_id) else None,
             api_key=self._api_key,
+            tts_http_timeout=self._tts_http_timeout,
         )
 
     def update_options(
@@ -180,12 +185,14 @@ class ChunkedStream(tts.ChunkedStream):
         session: aiohttp.ClientSession,
         conn_options: APIConnectOptions,
         segment_id: NotGivenOr[str] = NOT_GIVEN,
+        tts_http_timeout: int = MISTV2_MODEL_TIMEOUT,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts = opts
         self._session = session
         self._segment_id = segment_id if is_given(segment_id) else utils.shortuuid()
         self._api_key = api_key
+        self._tts_http_timeout = tts_http_timeout
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
@@ -238,7 +245,7 @@ class ChunkedStream(tts.ChunkedStream):
                 self._tts._base_url,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(connect=self._conn_options.timeout, total=30),
+                timeout=aiohttp.ClientTimeout(connect=self._conn_options.timeout, total=self._tts_http_timeout),
             ) as response:
                 if not response.content_type.startswith("audio"):
                     content = await response.text()
