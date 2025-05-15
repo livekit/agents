@@ -126,6 +126,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
+        user_away_timeout: NotGivenOr[float] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -180,6 +181,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
                 when silent by default.
+            user_away_timeout (float, optional): Timeout in seconds to set the
+                user state to "away" if they remain silent. If not provided,
+                the user will not be set to "away" automatically.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
         """
@@ -231,6 +235,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
+        self._user_away_timeout: NotGivenOr[float] = user_away_timeout
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task | None = None
@@ -413,6 +418,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._update_agent_state("listening")
+            if is_given(self._user_away_timeout):
+                self.call_later_if_silent(self._user_away_timeout, self._update_user_state, "away")
 
     async def _trace_chat_ctx(self) -> None:
         if self._activity is None:
@@ -686,6 +693,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         old_state = self._user_state
         self._user_state = state
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
+
+        if state == "listening" and is_given(self._user_away_timeout):
+            self.call_later_if_silent(self._user_away_timeout, self._update_user_state, "away")
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.items.append(message)
