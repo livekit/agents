@@ -37,10 +37,14 @@ class MyAgent(Agent):
 
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
-        # according to its instructions if the user remains silent
-        if await self.session.ensure_silence_for(timeout=3):
-            logger.info("generating proactive reply")
-            self.session.generate_reply()
+        # according to its instructions if the user remains silent for a while
+        def _self_introduction():
+            logger.info("generating self introduction")
+            self.session.generate_reply(
+                instructions="introduce yourself very briefly and ask about the user's day"
+            )
+
+        self.session.call_later_if_silent(3, _self_introduction)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active

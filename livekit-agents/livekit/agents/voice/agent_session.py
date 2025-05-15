@@ -5,7 +5,16 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    Union,
+    runtime_checkable,
+)
 
 from livekit import rtc
 
@@ -24,6 +33,7 @@ from .events import (
     AgentEvent,
     AgentState,
     AgentStateChangedEvent,
+    Any,
     CloseEvent,
     ConversationItemAddedEvent,
     EventTypes,
@@ -221,10 +231,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
-        self._user_speaking = asyncio.Event()
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task | None = None
+        self._call_later_handles: list[asyncio.TimerHandle] = []
 
     @property
     def userdata(self) -> Userdata_T:
@@ -429,6 +439,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self.emit("close", CloseEvent(error=error))
 
+            for handle in self._call_later_handles:
+                handle.cancel()
+            self._call_later_handles.clear()
+
             if self._activity is not None:
                 await self._activity.aclose()
 
@@ -545,28 +559,33 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt()
 
-    async def ensure_silence_for(self, timeout: float) -> bool:
-        """Ensure user remains silent for the specified duration.
-        Returns immediately with False if user speaks during the timeout period.
+    def call_later_if_silent(
+        self,
+        delay: float,
+        callback: Callable[..., None],
+        *args: Any,
+    ) -> asyncio.TimerHandle:
+        """Execute callback after timeout if user remains silent.
+        The callback will be cancelled immediately if the user starts speaking.
 
         Args:
-            timeout: Time in seconds to monitor for silence
+            delay: Seconds to wait while monitoring for silence
+            callback: Function to call if silence maintained
+            *args: Arguments to pass to callback
 
         Returns:
-            True if silence maintained for entire duration, False if speech detected
+            asyncio.TimerHandle: Timer handle for the scheduled callback
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        if not self._activity.vad:
-            # skip the timeout if vad is not enabled
-            return True
+        handle = self._loop.call_later(delay, callback, *args)
+        if self._user_state == "speaking":
+            handle.cancel()
+            return handle
 
-        try:
-            await asyncio.wait_for(self._user_speaking.wait(), timeout=timeout)
-            return False
-        except asyncio.TimeoutError:
-            return True
+        self._call_later_handles.append(handle)
+        return handle
 
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn
@@ -660,9 +679,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         if state == "speaking":
-            self._user_speaking.set()
-        else:
-            self._user_speaking.clear()
+            for handle in self._call_later_handles:
+                handle.cancel()
+            self._call_later_handles.clear()
 
         old_state = self._user_state
         self._user_state = state
