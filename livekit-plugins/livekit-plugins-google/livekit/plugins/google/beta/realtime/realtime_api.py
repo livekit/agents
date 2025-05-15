@@ -45,7 +45,7 @@ from livekit.agents.utils import audio as audio_utils, images, is_given
 from livekit.plugins.google.beta.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ...log import logger
-from ...utils import get_tool_results_for_realtime, to_chat_ctx, to_fnc_ctx
+from ...utils import get_tool_results_for_realtime, to_fnc_ctx
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
@@ -347,7 +347,10 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns, _ = to_chat_ctx(append_ctx, id(self), ignore_functions=True)
+            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                provider="google", cache_key=id(self)
+            )
+            turns = [Content.model_validate(turn) for turn in turns_dict]
             tool_results = get_tool_results_for_realtime(append_ctx, vertexai=self._opts.vertexai)
             if turns:
                 self._send_client_event(LiveClientContent(turns=turns, turn_complete=False))

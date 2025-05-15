@@ -321,10 +321,20 @@ class ChatContext:
         self, provider: Literal["openai"], generating_reply: bool = True, *, cache_key: Any
     ) -> tuple[list[dict], Literal[None]]: ...
 
+    @overload
     def to_provider_format(
-        self, provider: Literal["openai"], generating_reply: bool = True, **kwargs: Any
+        self, provider: Literal["google"], generating_reply: bool = True, *, cache_key: Any
+    ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
+
+    def to_provider_format(
+        self, provider: Literal["openai", "google"], generating_reply: bool = True, **kwargs: Any
     ) -> tuple[list[dict], Any]:
-        return _provider_format.openai.to_chat_ctx(self, generating_reply, **kwargs)
+        if provider == "openai":
+            return _provider_format.openai.to_chat_ctx(self, generating_reply, **kwargs)
+        elif provider == "google":
+            return _provider_format.google.to_chat_ctx(self, generating_reply, **kwargs)
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
 
     def find_insertion_index(self, *, created_at: float) -> int:
         """
