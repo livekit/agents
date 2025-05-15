@@ -54,7 +54,7 @@ def to_chat_ctx(
                     "function_call": {
                         "id": msg.call_id,
                         "name": msg.name,
-                        "args": json.loads(msg.arguments),
+                        "args": json.loads(msg.arguments or "{}"),
                     }
                 }
             )
