@@ -240,6 +240,14 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             try:
                 duration = 0
                 frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
+
+                import time
+
+                from livekit.agents import utils
+
+                with open(f"pre_connect_{time.time()}.wav", "wb") as f:
+                    f.write(utils.combine_frames(frames).to_wav_bytes())
+
                 for frame in self._resample_frames(frames):
                     if self._attached:
                         await self._data_ch.send(frame)
