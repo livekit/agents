@@ -19,6 +19,7 @@ from ...types import (
 from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
+from ._pre_connect_audio import PreConnectAudioHandler
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -70,6 +71,10 @@ class RoomInputOptions:
     participant_identity: NotGivenOr[str] = NOT_GIVEN
     """The participant to link to. If not provided, link to the first participant.
     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
+    pre_connect_audio: bool = True
+    """Pre-connect audio enabled or not."""
+    pre_connect_audio_timeout: float = 3.0
+    """The pre-connect audio will be ignored if it doesn't arrive within this time."""
 
 
 @dataclass
@@ -127,8 +132,17 @@ class RoomIO:
         self._tasks: set[asyncio.Task] = set()
         self._update_state_atask: asyncio.Task | None = None
 
+        self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
+
     async def start(self) -> None:
         # -- create inputs --
+        if self._input_options.pre_connect_audio:
+            self._pre_connect_audio_handler = PreConnectAudioHandler(
+                room=self._room,
+                timeout=self._input_options.pre_connect_audio_timeout,
+            )
+            self._pre_connect_audio_handler.register()
+
         if self._input_options.text_enabled:
             try:
                 self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
@@ -146,6 +160,7 @@ class RoomIO:
                 sample_rate=self._input_options.audio_sample_rate,
                 num_channels=self._input_options.audio_num_channels,
                 noise_cancellation=self._input_options.noise_cancellation,
+                pre_connect_audio_handler=self._pre_connect_audio_handler,
             )
 
         # -- create outputs --
@@ -220,6 +235,9 @@ class RoomIO:
 
         if self._update_state_atask:
             await utils.aio.cancel_and_wait(self._update_state_atask)
+
+        if self._pre_connect_audio_handler:
+            await self._pre_connect_audio_handler.aclose()
 
         if self._audio_input:
             await self._audio_input.aclose()

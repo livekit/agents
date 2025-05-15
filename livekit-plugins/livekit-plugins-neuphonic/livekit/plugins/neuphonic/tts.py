@@ -134,9 +134,14 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        neuphonic_api_key = api_key if is_given(api_key) else os.environ.get("NEUPHONIC_API_TOKEN")
+        neuphonic_api_key = (
+            api_key
+            if is_given(api_key)
+            else os.environ.get("NEUPHONIC_API_KEY") or os.environ.get("NEUPHONIC_API_TOKEN")
+        )
+
         if not neuphonic_api_key:
-            raise ValueError("API key must be provided or set in NEUPHONIC_API_TOKEN")
+            raise ValueError("API key must be provided or set in NEUPHONIC_API_KEY")
 
         self._opts = _TTSOptions(
             model=model,
@@ -366,7 +371,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
 
             while True:
-                msg = await ws.receive()
+                try:
+                    msg = await ws.receive()
+                except Exception as e:
+                    raise APIStatusError(
+                        "Neuphonic connection closed unexpectedly",
+                        request_id=request_id,
+                    ) from e
+
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,

@@ -118,7 +118,7 @@ class RealtimeModel(llm.RealtimeModel):
         voice: Voice | str = "Puck",
         language: NotGivenOr[str] = NOT_GIVEN,
         modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
-        vertexai: bool = False,
+        vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         candidate_count: int = 1,
@@ -136,7 +136,7 @@ class RealtimeModel(llm.RealtimeModel):
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
 
         Environment Requirements:
-        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file.
+        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file or use any of the other Google Cloud auth methods.
         The Google Cloud project and location can be set via `project` and `location` arguments or the environment variables
         `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
         and the location defaults to "us-central1".
@@ -192,8 +192,13 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(location)
             else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
         )
+        use_vertexai = (
+            vertexai
+            if is_given(vertexai)
+            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
+        )
 
-        if vertexai:
+        if use_vertexai:
             if not gcp_project or not gcp_location:
                 raise ValueError(
                     "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
@@ -212,7 +217,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_key=gemini_api_key,
             voice=voice,
             response_modalities=modalities,
-            vertexai=vertexai,
+            vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
             candidate_count=candidate_count,
