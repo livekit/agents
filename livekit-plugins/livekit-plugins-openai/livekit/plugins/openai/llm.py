@@ -572,7 +572,10 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            chat_ctx = to_chat_ctx(self._chat_ctx, id(self._llm))
+            # chat_ctx = to_chat_ctx(self._chat_ctx, id(self._llm))
+            chat_ctx, _ = self._chat_ctx.to_provider_format(
+                provider="openai", cache_key=id(self._llm)
+            )
             fnc_ctx = to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)

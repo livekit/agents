@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
@@ -26,6 +26,7 @@ from .. import utils
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
+from . import _provider_format
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool, RawFunctionTool
@@ -314,6 +315,16 @@ class ChatContext:
                 for item in items
             ],
         }
+
+    @overload
+    def to_provider_format(
+        self, provider: Literal["openai"], generating_reply: bool = True, *, cache_key: Any
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    def to_provider_format(
+        self, provider: Literal["openai"], generating_reply: bool = True, **kwargs: Any
+    ) -> tuple[list[dict], Any]:
+        return _provider_format.openai.to_chat_ctx(self, generating_reply, **kwargs)
 
     def find_insertion_index(self, *, created_at: float) -> int:
         """
