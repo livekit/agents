@@ -494,7 +494,6 @@ class LLM(llm.LLM):
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice = "auto",
     ) -> LLM:
         """
         Create a new instance of Meta Llama LLM.
@@ -517,7 +516,7 @@ class LLM(llm.LLM):
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
-            tool_choice=tool_choice,
+            tool_choice="auto",
         )
 
     def chat(
