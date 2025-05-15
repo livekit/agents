@@ -31,7 +31,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import get_aws_async_session, to_chat_ctx, to_fnc_ctx
+from .utils import get_aws_async_session, to_fnc_ctx
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
 
@@ -140,10 +140,10 @@ class LLM(llm.LLM):
         tool_config = _get_tool_config()
         if tool_config:
             opts["toolConfig"] = tool_config
-        messages, system_message = to_chat_ctx(chat_ctx, id(self))
+        messages, extra_data = chat_ctx.to_provider_format(provider="aws", cache_key=id(self))
         opts["messages"] = messages
-        if system_message:
-            opts["system"] = [system_message]
+        if extra_data.system_instruction:
+            opts["system"] = [{"text": extra_data.system_instruction}]
 
         inference_config = {}
         if is_given(self._opts.max_output_tokens):
