@@ -9,20 +9,20 @@ from livekit.agents import llm
 
 @dataclass
 class AWSFormatData:
-    system_instruction: str | None
+    system_messages: list[str] | None
 
 
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, generating_reply: bool, *, cache_key: Any
 ) -> tuple[list[dict], AWSFormatData]:
     messages: list[dict] = []
-    system_message: str | None = None
+    system_messages: list[str] = []
     current_role: str | None = None
     current_content: list[dict] = []
 
     for msg in chat_ctx.items:
         if msg.type == "message" and msg.role == "system":
-            system_message = msg.text_content
+            system_messages.append(msg.text_content)
             continue
 
         if msg.type == "message":
@@ -77,7 +77,7 @@ def to_chat_ctx(
     if generating_reply and (not messages or messages[0]["role"] != "user"):
         messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
 
-    return messages, AWSFormatData(system_instruction=system_message)
+    return messages, AWSFormatData(system_messages=system_messages)
 
 
 def _build_image(image: llm.ImageContent, cache_key: Any) -> dict:

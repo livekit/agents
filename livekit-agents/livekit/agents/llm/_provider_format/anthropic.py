@@ -10,7 +10,7 @@ from livekit.agents import llm
 
 @dataclass
 class AnthropicFormatData:
-    system_instruction: str | None
+    system_messages: list[str] | None
 
 
 def to_chat_ctx(
@@ -21,13 +21,13 @@ def to_chat_ctx(
     cache_control: dict[str, Any] | None,
 ) -> tuple[list[dict], AnthropicFormatData]:
     messages: list[dict[str, Any]] = []
-    system_message: str | None = None
+    system_messages: list[str] = []
     current_role: str | None = None
     content: list[dict[str, Any]] = []
 
     for i, msg in enumerate(chat_ctx.items):
         if msg.type == "message" and msg.role == "system":
-            system_message = msg.text_content
+            system_messages.append(msg.text_content)
             continue
 
         cache_ctrl_i = cache_control if (i == len(chat_ctx.items) - 1) else None
@@ -83,7 +83,7 @@ def to_chat_ctx(
             },
         )
 
-    return messages, AnthropicFormatData(system_instruction=system_message)
+    return messages, AnthropicFormatData(system_messages=system_messages)
 
 
 def _to_image_content(

@@ -284,7 +284,11 @@ class LLMStream(llm.LLMStream):
                     types.Tool(function_declarations=function_declarations)
                 ]
             config = types.GenerateContentConfig(
-                system_instruction=extra_data.system_instruction,
+                system_instruction=(
+                    [types.Part(text=content) for content in extra_data.system_messages]
+                    if extra_data.system_messages
+                    else None
+                ),
                 **self._extra_kwargs,
             )
 

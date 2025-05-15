@@ -10,20 +10,20 @@ from livekit.agents.log import logger
 
 @dataclass
 class GoogleFormatData:
-    system_instruction: str | None
+    system_messages: list[str] | None
 
 
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, generating_reply: bool, *, cache_key: Any
 ) -> tuple[list[dict], GoogleFormatData]:
     turns: list[dict] = []
-    system_instruction: str | None = None
+    system_messages: list[str] = []
     current_role: str | None = None
     parts: list[dict] = []
 
     for msg in chat_ctx.items:
         if msg.type == "message" and msg.role == "system":
-            system_instruction = msg.text_content
+            system_messages.append(msg.text_content)
             continue
 
         if msg.type == "message":
@@ -77,7 +77,7 @@ def to_chat_ctx(
     if generating_reply and current_role != "user":
         turns.append({"role": "user", "parts": [{"text": "."}]})
 
-    return turns, GoogleFormatData(system_instruction=system_instruction)
+    return turns, GoogleFormatData(system_messages=system_messages)
 
 
 def _to_image_part(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]:

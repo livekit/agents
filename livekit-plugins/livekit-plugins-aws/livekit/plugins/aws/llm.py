@@ -142,8 +142,8 @@ class LLM(llm.LLM):
             opts["toolConfig"] = tool_config
         messages, extra_data = chat_ctx.to_provider_format(provider="aws", cache_key=id(self))
         opts["messages"] = messages
-        if extra_data.system_instruction:
-            opts["system"] = [{"text": extra_data.system_instruction}]
+        if extra_data.system_messages:
+            opts["system"] = [{"text": content} for content in extra_data.system_messages]
 
         inference_config = {}
         if is_given(self._opts.max_output_tokens):

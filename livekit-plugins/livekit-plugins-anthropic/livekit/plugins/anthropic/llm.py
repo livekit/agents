@@ -173,11 +173,14 @@ class LLM(llm.LLM):
             cache_control=cache_ctrl,
         )
 
-        if extra_data.system_instruction:
+        if extra_data.system_messages:
             extra["system"] = [
                 anthropic.types.TextBlockParam(
-                    text=extra_data.system_instruction, type="text", cache_control=cache_ctrl
+                    text=content,
+                    type="text",
+                    cache_control=cache_ctrl if i == len(extra_data.system_messages) - 1 else None,
                 )
+                for i, content in enumerate(extra_data.system_messages)
             ]
 
         stream = self._client.messages.create(
