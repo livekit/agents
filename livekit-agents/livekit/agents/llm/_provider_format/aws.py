@@ -74,7 +74,7 @@ def to_chat_ctx(
         messages.append({"role": current_role, "content": current_content})
 
     # Ensure the message list starts with a "user" message
-    if not messages or messages[0]["role"] != "user":
+    if generating_reply and (not messages or messages[0]["role"] != "user"):
         messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
 
     return messages, AWSFormatData(system_instruction=system_message)

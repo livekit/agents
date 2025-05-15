@@ -331,9 +331,19 @@ class ChatContext:
         self, provider: Literal["aws"], generating_reply: bool = True, *, cache_key: Any
     ) -> tuple[list[dict], _provider_format.aws.AWSFormatData]: ...
 
+    @overload
     def to_provider_format(
         self,
-        provider: Literal["openai", "google", "aws"],
+        provider: Literal["anthropic"],
+        generating_reply: bool = True,
+        *,
+        cache_key: Any,
+        cache_control: dict[str, Any] | None,
+    ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
+
+    def to_provider_format(
+        self,
+        provider: Literal["openai", "google", "aws", "anthropic"],
         generating_reply: bool = True,
         **kwargs: Any,
     ) -> tuple[list[dict], Any]:
@@ -343,6 +353,8 @@ class ChatContext:
             return _provider_format.google.to_chat_ctx(self, generating_reply, **kwargs)
         elif provider == "aws":
             return _provider_format.aws.to_chat_ctx(self, generating_reply, **kwargs)
+        elif provider == "anthropic":
+            return _provider_format.anthropic.to_chat_ctx(self, generating_reply, **kwargs)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
