@@ -684,6 +684,7 @@ class RealtimeSession(
                     turn_detection=turn_detection,
                     input_audio_transcription=input_audio_transcription,
                     temperature=self._realtime_model._opts.temperature,
+                    tool_choice=self._realtime_model._opts.tool_choice,
                 ),
                 event_id=utils.shortuuid("session_update_"),
             )
