@@ -675,7 +675,9 @@ class RealtimeSession(
 
     def _initial_session_update(self) -> None:
         input_audio_transcription = self._realtime_model._opts.input_audio_transcription
-        input_audio_transcription_session: session_update_event.SessionInputAudioTranscription | None = (
+        input_audio_transcription_session: (
+            session_update_event.SessionInputAudioTranscription | None
+        ) = (
             session_update_event.SessionInputAudioTranscription.model_validate(
                 input_audio_transcription.model_dump(
                     by_alias=True,
@@ -701,7 +703,9 @@ class RealtimeSession(
         )
 
         input_audio_noise_reduction = self._realtime_model._opts.input_audio_noise_reduction
-        input_audio_noise_reduction_session: session_update_event.SessionInputAudioNoiseReduction | None = (
+        input_audio_noise_reduction_session: (
+            session_update_event.SessionInputAudioNoiseReduction | None
+        ) = (
             session_update_event.SessionInputAudioNoiseReduction.model_validate(
                 input_audio_noise_reduction.model_dump(
                     by_alias=True,
