@@ -34,7 +34,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
-from .utils import _strip_nones, get_aws_async_session
+from .utils import _strip_nones
 
 TTS_NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
@@ -90,10 +90,10 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=TTS_NUM_CHANNELS,
         )
-        self._session = session or get_aws_async_session(
-            api_key=api_key if is_given(api_key) else None,
-            api_secret=api_secret if is_given(api_secret) else None,
-            region=region if is_given(region) else None,
+        self._session = session or aioboto3.Session(
+            aws_access_key_id=api_key if is_given(api_key) else None,
+            aws_secret_access_key=api_secret if is_given(api_secret) else None,
+            region_name=region if is_given(region) else None,
         )
         self._opts = _TTSOptions(
             voice=voice,
