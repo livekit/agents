@@ -80,7 +80,7 @@ class RetrievalAgent(Agent):
             system_msg.content.append(instructions)
         else:
             chat_ctx.items.insert(0, llm.ChatMessage(role="system", content=[instructions]))
-        print(f"update instructions: {instructions[:100].replace('\n', '\\n')}...")
+        print(f"update instructions: {instructions[:100].replace('\n', r'\n')}...")
 
         # update the instructions for agent
         # await self.update_instructions(instructions)
