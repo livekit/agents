@@ -35,7 +35,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import ChatModels
-from .utils import to_chat_ctx, to_fnc_ctx
+from .utils import CACHE_CONTROL_EPHEMERAL, to_fnc_ctx
 
 
 @dataclass
@@ -166,10 +166,20 @@ class LLM(llm.LLM):
                         anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
                     extra["tool_choice"] = anthropic_tool_choice
 
-        anthropic_ctx, system_message = to_chat_ctx(chat_ctx, id(self), caching=self._opts.caching)
+        cache_ctrl = CACHE_CONTROL_EPHEMERAL if self._opts.caching == "ephemeral" else None
+        anthropic_ctx, extra_data = chat_ctx.to_provider_format(
+            format="anthropic", cache_control=cache_ctrl
+        )
 
-        if system_message:
-            extra["system"] = [system_message]
+        if extra_data.system_messages:
+            extra["system"] = [
+                anthropic.types.TextBlockParam(
+                    text=content,
+                    type="text",
+                    cache_control=cache_ctrl if i == len(extra_data.system_messages) - 1 else None,
+                )
+                for i, content in enumerate(extra_data.system_messages)
+            ]
 
         stream = self._client.messages.create(
             messages=anthropic_ctx,
