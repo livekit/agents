@@ -675,7 +675,7 @@ class RealtimeSession(
 
     def _initial_session_update(self) -> None:
         input_audio_transcription = self._realtime_model._opts.input_audio_transcription
-        input_audio_transcription = (
+        input_audio_transcription_session: session_update_event.SessionInputAudioTranscription | None = (
             session_update_event.SessionInputAudioTranscription.model_validate(
                 input_audio_transcription.model_dump(
                     by_alias=True,
@@ -688,7 +688,7 @@ class RealtimeSession(
         )
 
         turn_detection = self._realtime_model._opts.turn_detection
-        turn_detection = (
+        turn_detection_session: session_update_event.SessionTurnDetection | None = (
             session_update_event.SessionTurnDetection.model_validate(
                 turn_detection.model_dump(
                     by_alias=True,
@@ -701,7 +701,7 @@ class RealtimeSession(
         )
 
         input_audio_noise_reduction = self._realtime_model._opts.input_audio_noise_reduction
-        input_audio_noise_reduction = (
+        input_audio_noise_reduction_session: session_update_event.SessionInputAudioNoiseReduction | None = (
             session_update_event.SessionInputAudioNoiseReduction.model_validate(
                 input_audio_noise_reduction.model_dump(
                     by_alias=True,
@@ -725,9 +725,9 @@ class RealtimeSession(
                     input_audio_format="pcm16",
                     output_audio_format="pcm16",
                     modalities=["text", "audio"],
-                    turn_detection=turn_detection,
-                    input_audio_transcription=input_audio_transcription,
-                    input_audio_noise_reduction=input_audio_noise_reduction,
+                    turn_detection=turn_detection_session,
+                    input_audio_transcription=input_audio_transcription_session,
+                    input_audio_noise_reduction=input_audio_noise_reduction_session,
                     temperature=self._realtime_model._opts.temperature,
                 ),
                 event_id=utils.shortuuid("session_update_"),
@@ -800,7 +800,7 @@ class RealtimeSession(
                 self._remote_chat_ctx.to_chat_ctx(), chat_ctx
             )
 
-            futs = []
+            futs: list[asyncio.Future[None]] = []
 
             for msg_id in diff_ops.to_remove:
                 event_id = utils.shortuuid("chat_ctx_delete_")
@@ -811,7 +811,8 @@ class RealtimeSession(
                         event_id=event_id,
                     )
                 )
-                futs.append(f := asyncio.Future())
+                f: asyncio.Future[None] = asyncio.Future()
+                futs.append(f)
                 self._item_delete_future[msg_id] = f
 
             for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1366,16 +1367,16 @@ def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
         conversation_item.output = item.output
 
     elif item.type == "message":
-        role = "system" if item.role == "developer" else item.role
+        role_value = "system" if item.role == "developer" else item.role
         conversation_item.type = "message"
-        conversation_item.role = role
+        conversation_item.role = role_value  # type: ignore
 
         content_list: list[ConversationItemContent] = []
         for c in item.content:
             if isinstance(c, str):
                 content_list.append(
                     ConversationItemContent(
-                        type=("text" if role == "assistant" else "input_text"),
+                        type=("text" if role_value == "assistant" else "input_text"),
                         text=c,
                     )
                 )
@@ -1448,7 +1449,7 @@ def _openai_item_to_livekit_item(item: ConversationItem) -> llm.ChatItem:
 
 
 def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
-    audio_data = b"\x00\x00" * (SAMPLE_RATE * duration)
+    audio_data = b"\x00\x00" * int(SAMPLE_RATE * duration)
     return llm.ChatMessage(
         id=utils.shortuuid(_MOCK_AUDIO_ID_PREFIX),
         role="user",
