@@ -232,11 +232,18 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
+        if old_task:
+            await aio.cancel_and_wait(old_task)
+
         if (
             self._pre_connect_audio_handler
             and publication.track
             and AudioTrackFeature.TF_PRECONNECT_BUFFER in publication.audio_features
         ):
+            logging_extra = {
+                "track_id": publication.track.sid,
+                "participant": participant.identity,
+            }
             try:
                 duration = 0
                 frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
@@ -247,34 +254,32 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 if frames:
                     logger.debug(
                         "pre-connect audio buffer pushed",
-                        extra={
-                            "duration": duration,
-                            "track_id": publication.track.sid,
-                            "participant": participant.identity,
-                        },
+                        extra={"duration": duration, **logging_extra},
                     )
 
             except asyncio.TimeoutError:
                 logger.warning(
                     "timeout waiting for pre-connect audio buffer",
-                    extra={
-                        "duration": duration,
-                        "track_id": publication.track.sid,
-                        "participant": participant.identity,
-                    },
+                    extra=logging_extra,
                 )
 
             except Exception as e:
                 logger.error(
-                    "error reading pre-connect audio buffer",
-                    extra={
-                        "error": e,
-                        "track_id": publication.track.sid,
-                        "participant": participant.identity,
-                    },
+                    "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
                 )
 
         await super()._forward_task(old_task, stream, publication, participant)
+
+        # push a silent frame to flush the stt final result if any
+        silent_samples = int(self._sample_rate * 0.5)
+        await self._data_ch.send(
+            rtc.AudioFrame(
+                b"\x00\x00" * silent_samples,
+                sample_rate=self._sample_rate,
+                num_channels=self._num_channels,
+                samples_per_channel=silent_samples,
+            )
+        )
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None
