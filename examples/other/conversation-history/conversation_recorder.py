@@ -82,6 +82,11 @@ class SessionRecorder:
         self._audio_q.put_nowait(audioframe)
 
     async def _main_atask(self) -> None:
+        """
+        Resamples AudioFrames from the input queue and writes to the specified wav file.
+        Whenever the stream's sample rate switches (ex. STT to TTS), the existing AudioResampler
+        is flushed and a new one is created.
+        """
         self._current_input_rate = 0
         self._audio_resampler = None
 
@@ -95,16 +100,15 @@ class SessionRecorder:
                     if self._audio_resampler:
                         frames = self._audio_resampler.flush()
                         if frames:
-                            for frame in frames:
-                                self._file.writeframes(frame.data.tobytes())
-                    else:
-                        self._audio_resampler = AudioResampler(
-                            input_rate=frame.sample_rate, output_rate=FRAMERATE
-                        )
-                        self._current_input_rate = frame.sample_rate
-                        frame = self._audio_resampler.push(frame)
-                        if frame:
-                            self._file.writeframes(frame[0].data.tobytes())
+                            for flushed_frame in frames:
+                                self._file.writeframes(flushed_frame.data.tobytes())
+                    self._audio_resampler = AudioResampler(
+                        input_rate=frame.sample_rate, output_rate=FRAMERATE
+                    )
+                    self._current_input_rate = frame.sample_rate
+                    frame = self._audio_resampler.push(frame)
+                    if frame:
+                        self._file.writeframes(frame[0].data.tobytes())
                 else:
                     frame = self._audio_resampler.push(frame)
                     if frame:
