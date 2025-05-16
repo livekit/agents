@@ -49,4 +49,4 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Check Types
-        run: uv run mypy --config-file=.mypy.ini --ignore-missing-imports livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/realtime_model.py
+        run: uv run mypy --config-file=mypy_config.ini --ignore-missing-imports livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/realtime_model.py
