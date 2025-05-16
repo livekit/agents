@@ -107,7 +107,6 @@ class PreConnectAudioHandler:
             num_channels = int(reader.info.attributes["channels"])
 
             duration = 0
-            audio_stream = utils.audio.AudioByteStream(sample_rate, num_channels)
 
             # Check if we need to decode opus
             is_opus = reader.info.mime_type == "audio/opus"
@@ -127,6 +126,7 @@ class PreConnectAudioHandler:
                     duration += decoded_frame.duration
             else:
                 # Process raw audio directly through AudioByteStream
+                audio_stream = utils.audio.AudioByteStream(sample_rate, num_channels)
                 async for chunk in reader:
                     for frame in audio_stream.push(chunk):
                         buf.frames.append(frame)
