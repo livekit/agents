@@ -140,7 +140,7 @@ class LLM(llm.LLM):
         tool_config = _get_tool_config()
         if tool_config:
             opts["toolConfig"] = tool_config
-        messages, extra_data = chat_ctx.to_provider_format(provider="aws", cache_key=id(self))
+        messages, extra_data = chat_ctx.to_provider_format(format="aws")
         opts["messages"] = messages
         if extra_data.system_messages:
             opts["system"] = [{"text": content} for content in extra_data.system_messages]

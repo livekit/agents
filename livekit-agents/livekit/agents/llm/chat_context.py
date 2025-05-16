@@ -27,6 +27,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from . import _provider_format
+from ._provider_format import LLMFormatName
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool, RawFunctionTool
@@ -92,7 +93,7 @@ class ImageContent(BaseModel):
     """
     MIME type of the image
     """
-    _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
+    _cache: dict[Any, Any] = PrivateAttr(default_factory=dict)
 
 
 class AudioContent(BaseModel):
@@ -318,45 +319,42 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, provider: Literal["openai"], generating_reply: bool = True, *, cache_key: Any
+        self, format: Literal["openai"], *, generating_reply: bool = True
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
     def to_provider_format(
-        self, provider: Literal["google"], generating_reply: bool = True, *, cache_key: Any
+        self, format: Literal["google"], *, generating_reply: bool = True
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload
     def to_provider_format(
-        self, provider: Literal["aws"], generating_reply: bool = True, *, cache_key: Any
+        self, format: Literal["aws"], *, generating_reply: bool = True
     ) -> tuple[list[dict], _provider_format.aws.AWSFormatData]: ...
 
     @overload
     def to_provider_format(
         self,
-        provider: Literal["anthropic"],
-        generating_reply: bool = True,
+        format: Literal["anthropic"],
         *,
-        cache_key: Any,
-        cache_control: dict[str, Any] | None,
+        generating_reply: bool = True,
+        cache_control: dict[str, Any] | None = None,
     ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
 
     def to_provider_format(
-        self,
-        provider: Literal["openai", "google", "aws", "anthropic"],
-        generating_reply: bool = True,
-        **kwargs: Any,
+        self, format: LLMFormatName, *, generating_reply: bool = True, **kwargs: Any
     ) -> tuple[list[dict], Any]:
-        if provider == "openai":
-            return _provider_format.openai.to_chat_ctx(self, generating_reply, **kwargs)
-        elif provider == "google":
-            return _provider_format.google.to_chat_ctx(self, generating_reply, **kwargs)
-        elif provider == "aws":
-            return _provider_format.aws.to_chat_ctx(self, generating_reply, **kwargs)
-        elif provider == "anthropic":
-            return _provider_format.anthropic.to_chat_ctx(self, generating_reply, **kwargs)
+        kwargs.update(generating_reply=generating_reply)
+        if format == "openai":
+            return _provider_format.openai.to_chat_ctx(self, **kwargs)
+        elif format == "google":
+            return _provider_format.google.to_chat_ctx(self, **kwargs)
+        elif format == "aws":
+            return _provider_format.aws.to_chat_ctx(self, **kwargs)
+        elif format == "anthropic":
+            return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
         else:
-            raise ValueError(f"Unsupported provider: {provider}")
+            raise ValueError(f"Unsupported provider format: {format}")
 
     def find_insertion_index(self, *, created_at: float) -> int:
         """

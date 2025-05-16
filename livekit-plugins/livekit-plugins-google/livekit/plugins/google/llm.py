@@ -274,9 +274,7 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            turns_dict, extra_data = self._chat_ctx.to_provider_format(
-                provider="google", cache_key=id(self._llm)
-            )
+            turns_dict, extra_data = self._chat_ctx.to_provider_format(format="google")
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             function_declarations = to_fnc_ctx(self._tools)
             if function_declarations:

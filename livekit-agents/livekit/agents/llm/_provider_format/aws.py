@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
 
 from livekit.agents import llm
 
@@ -13,7 +12,7 @@ class AWSFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, generating_reply: bool, *, cache_key: Any
+    chat_ctx: llm.ChatContext, *, generating_reply: bool
 ) -> tuple[list[dict], AWSFormatData]:
     messages: list[dict] = []
     system_messages: list[str] = []
@@ -44,7 +43,7 @@ def to_chat_ctx(
                 if content and isinstance(content, str):
                     current_content.append({"text": content})
                 elif isinstance(content, llm.ImageContent):
-                    current_content.append(_build_image(content, cache_key))
+                    current_content.append(_build_image(content))
         elif msg.type == "function_call":
             current_content.append(
                 {
@@ -80,15 +79,18 @@ def to_chat_ctx(
     return messages, AWSFormatData(system_messages=system_messages)
 
 
-def _build_image(image: llm.ImageContent, cache_key: Any) -> dict:
-    img = llm.utils.serialize_image(image)
+def _build_image(image: llm.ImageContent) -> dict:
+    cache_key = "serialized_image"
+    if cache_key not in image._cache:
+        image._cache[cache_key] = llm.utils.serialize_image(image)
+    img: llm.utils.SerializedImage = image._cache[cache_key]
+
     if img.external_url:
         raise ValueError("external_url is not supported by AWS Bedrock.")
-    if cache_key not in image._cache:
-        image._cache[cache_key] = img.data_bytes
+
     return {
         "image": {
             "format": "jpeg",
-            "source": {"bytes": image._cache[cache_key]},
+            "source": {"bytes": img.data_bytes},
         }
     }

@@ -14,7 +14,7 @@ class GoogleFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, generating_reply: bool, *, cache_key: Any
+    chat_ctx: llm.ChatContext, *, generating_reply: bool
 ) -> tuple[list[dict], GoogleFormatData]:
     turns: list[dict] = []
     system_messages: list[str] = []
@@ -47,7 +47,7 @@ def to_chat_ctx(
                 elif content and isinstance(content, dict):
                     parts.append({"text": json.dumps(content)})
                 elif isinstance(content, llm.ImageContent):
-                    parts.append(_to_image_part(content, cache_key))
+                    parts.append(_to_image_part(content))
         elif msg.type == "function_call":
             parts.append(
                 {
@@ -80,8 +80,12 @@ def to_chat_ctx(
     return turns, GoogleFormatData(system_messages=system_messages)
 
 
-def _to_image_part(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]:
-    img = llm.utils.serialize_image(image)
+def _to_image_part(image: llm.ImageContent) -> dict[str, Any]:
+    cache_key = "serialized_image"
+    if cache_key not in image._cache:
+        image._cache[cache_key] = llm.utils.serialize_image(image)
+    img: llm.utils.SerializedImage = image._cache[cache_key]
+
     if img.external_url:
         if img.mime_type:
             mime_type = img.mime_type
@@ -89,6 +93,5 @@ def _to_image_part(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]:
             logger.debug("No media type provided for image, defaulting to image/jpeg.")
             mime_type = "image/jpeg"
         return {"file_data": {"file_uri": img.external_url, "mime_type": mime_type}}
-    if cache_key not in image._cache:
-        image._cache[cache_key] = img.data_bytes
-    return {"inline_data": {"data": image._cache[cache_key], "mime_type": img.mime_type}}
+
+    return {"inline_data": {"data": img.data_bytes, "mime_type": img.mime_type}}

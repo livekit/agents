@@ -14,11 +14,7 @@ class AnthropicFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext,
-    generating_reply: bool,
-    *,
-    cache_key: Any,
-    cache_control: dict[str, Any] | None,
+    chat_ctx: llm.ChatContext, *, generating_reply: bool, cache_control: dict[str, Any] | None
 ) -> tuple[list[dict], AnthropicFormatData]:
     messages: list[dict[str, Any]] = []
     system_messages: list[str] = []
@@ -49,7 +45,7 @@ def to_chat_ctx(
                 if c and isinstance(c, str):
                     content.append({"text": c, "type": "text", "cache_control": cache_ctrl_i})
                 elif isinstance(c, llm.ImageContent):
-                    content.append(_to_image_content(c, cache_key, cache_ctrl=cache_ctrl_i))
+                    content.append(_to_image_content(c, cache_ctrl=cache_ctrl_i))
         elif msg.type == "function_call":
             content.append(
                 {
@@ -86,19 +82,20 @@ def to_chat_ctx(
     return messages, AnthropicFormatData(system_messages=system_messages)
 
 
-def _to_image_content(
-    image: llm.ImageContent, cache_key: Any, cache_ctrl: dict[str, Any] | None
-) -> dict[str, Any]:
-    img = llm.utils.serialize_image(image)
+def _to_image_content(image: llm.ImageContent, cache_ctrl: dict[str, Any] | None) -> dict[str, Any]:
+    cache_key = "serialized_image"
+    if cache_key not in image._cache:
+        image._cache[cache_key] = llm.utils.serialize_image(image)
+    img: llm.utils.SerializedImage = image._cache[cache_key]
+
     if img.external_url:
         return {
             "type": "image",
             "source": {"type": "url", "url": img.external_url},
             "cache_control": cache_ctrl,
         }
-    if cache_key not in image._cache:
-        image._cache[cache_key] = img.data_bytes
-    b64_data = base64.b64encode(image._cache[cache_key]).decode("utf-8")
+
+    b64_data = base64.b64encode(img.data_bytes).decode("utf-8")
     return {
         "type": "image",
         "source": {

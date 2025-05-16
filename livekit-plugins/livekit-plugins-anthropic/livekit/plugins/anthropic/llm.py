@@ -168,9 +168,7 @@ class LLM(llm.LLM):
 
         cache_ctrl = CACHE_CONTROL_EPHEMERAL if self._opts.caching == "ephemeral" else None
         anthropic_ctx, extra_data = chat_ctx.to_provider_format(
-            provider="anthropic",
-            cache_key=id(self),
-            cache_control=cache_ctrl,
+            format="anthropic", cache_control=cache_ctrl
         )
 
         if extra_data.system_messages:

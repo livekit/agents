@@ -10,7 +10,7 @@ from livekit.agents.log import logger
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, generating_reply: bool, *, cache_key: Any
+    chat_ctx: llm.ChatContext, *, generating_reply: bool
 ) -> tuple[list[dict], Literal[None]]:
     # OAI requires the tool calls to be followed by the corresponding tool outputs
     # we group them first and remove invalid tool calls and outputs before converting
@@ -46,7 +46,7 @@ def to_chat_ctx(
 
     messages = []
     for group in item_groups.values():
-        messages.extend(group.to_chat_items(cache_key))
+        messages.extend(group.to_chat_items())
     return messages, None
 
 
@@ -66,7 +66,7 @@ class _ChatItemGroup:
             self.tool_outputs.append(item)
         return self
 
-    def to_chat_items(self, cache_key: Any) -> list[dict[str, Any]]:
+    def to_chat_items(self) -> list[dict[str, Any]]:
         tool_calls = {tool_call.call_id: tool_call for tool_call in self.tool_calls}
         tool_outputs = {tool_output.call_id: tool_output for tool_output in self.tool_outputs}
 
@@ -93,9 +93,7 @@ class _ChatItemGroup:
             return []
 
         msg = (
-            _to_chat_item(self.message, cache_key)
-            if self.message
-            else {"role": "assistant", "tool_calls": []}
+            _to_chat_item(self.message) if self.message else {"role": "assistant", "tool_calls": []}
         )
         if tool_calls:
             msg.setdefault("tool_calls", [])
@@ -109,11 +107,11 @@ class _ChatItemGroup:
             )
         items = [msg]
         for tool_output in tool_outputs.values():
-            items.append(_to_chat_item(tool_output, cache_key))
+            items.append(_to_chat_item(tool_output))
         return items
 
 
-def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> dict[str, Any]:
+def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
     if msg.type == "message":
         list_content: list[dict[str, Any]] = []
         text_content = ""
@@ -123,7 +121,7 @@ def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> dict[str, Any]:
                     text_content += "\n"
                 text_content += content
             elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_image_content(content, cache_key))
+                list_content.append(_to_image_content(content))
 
         if not list_content:
             # certain providers require text-only content in a string vs a list.
@@ -164,8 +162,12 @@ def _to_chat_item(msg: llm.ChatItem, cache_key: Any) -> dict[str, Any]:
         }
 
 
-def _to_image_content(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]:
-    img = llm.utils.serialize_image(image)
+def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
+    cache_key = "serialized_image"  # TODO(long): use hash of encoding options if available
+    if cache_key not in image._cache:
+        image._cache[cache_key] = llm.utils.serialize_image(image)
+    img: llm.utils.SerializedImage = image._cache[cache_key]
+
     if img.external_url:
         return {
             "type": "image_url",
@@ -174,9 +176,7 @@ def _to_image_content(image: llm.ImageContent, cache_key: Any) -> dict[str, Any]
                 "detail": img.inference_detail,
             },
         }
-    if cache_key not in image._cache:
-        image._cache[cache_key] = img.data_bytes
-    b64_data = base64.b64encode(image._cache[cache_key]).decode("utf-8")
+    b64_data = base64.b64encode(img.data_bytes).decode("utf-8")
     return {
         "type": "image_url",
         "image_url": {

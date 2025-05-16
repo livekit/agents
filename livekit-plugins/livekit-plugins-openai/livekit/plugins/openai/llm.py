@@ -17,14 +17,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
-from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.llm.chat_context import ChatContext, LLMFormatName
 from livekit.agents.llm.tool_context import FunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -84,7 +84,7 @@ class LLM(llm.LLM):
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
-        _provider: NotGivenOr[Literal["openai"] | str] = NOT_GIVEN,
+        _provider_fmt: NotGivenOr[LLMFormatName] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -103,7 +103,7 @@ class LLM(llm.LLM):
             metadata=metadata,
             max_completion_tokens=max_completion_tokens,
         )
-        self._provider = _provider or "openai"
+        self._provider_fmt = _provider_fmt or "openai"
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -280,7 +280,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
-            # TODO(long): add provider for grok
+            # TODO(long): add provider fmt for grok
         )
 
     @staticmethod
@@ -538,7 +538,7 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
-            provider=self._provider,
+            provider_fmt=self._provider_fmt,
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
@@ -553,7 +553,7 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         model: str | ChatModels,
-        provider: Literal["openai"] | str,
+        provider_fmt: LLMFormatName,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool],
@@ -562,7 +562,7 @@ class LLMStream(llm.LLMStream):
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
-        self._provider = provider
+        self._provider_fmt: LLMFormatName = provider_fmt
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
@@ -578,9 +578,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            chat_ctx, _ = self._chat_ctx.to_provider_format(
-                provider=self._provider, cache_key=id(self._llm)
-            )
+            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
             fnc_ctx = to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
