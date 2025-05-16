@@ -91,7 +91,7 @@ class TTS(tts.TTS):
             voice=voice,
             speed=speed,
             instructions=instructions if is_given(instructions) else None,
-            response_format=response_format if is_given(response_format) else "opus",
+            response_format=response_format if is_given(response_format) else "mp3",
         )
 
         self._client = client or openai.AsyncClient(

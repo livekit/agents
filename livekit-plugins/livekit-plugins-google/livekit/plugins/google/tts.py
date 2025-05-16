@@ -41,7 +41,7 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .models import Gender, SpeechLanguages
 
-BUFFERED_WORDS_COUNT = 3
+BUFFERED_WORDS_COUNT = 8
 NUM_CHANNELS = 1
 DEFAULT_VOICE_NAME = "en-US-Chirp3-HD-Charon"
 DEFAULT_LANGUAGE = "en-US"
