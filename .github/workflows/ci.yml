@@ -49,4 +49,4 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Check Types
-        run: uv run mypy --install-types --non-interactive .
+        run: uv run mypy --config-file=mypy.ini --install-types --non-interactive .
