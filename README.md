@@ -253,7 +253,7 @@ async def entrypoint(ctx: JobContext):
 </td>
 <td width="50%">
 <h3>💬 Text-only agent</h3>
-<p>Skip voice alltogether and use the same code for text-only integrations</p>
+<p>Skip voice altogether and use the same code for text-only integrations</p>
 <p>
 <a href="examples/text_only.py/text_only.py">Code</a>
 </p>
