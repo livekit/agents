@@ -19,12 +19,13 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 ## This example demonstrates a text-only agent.
-## When using with LiveKit client SDKs, this agent is automatically wired up to text input and output:
+## When using with LiveKit SDKs, this agent is automatically wired up to text input and output:
 ## - Send text input using TextStream to topic `lk.chat` (https://docs.livekit.io/home/client/data/text-streams)
 ## - The agent output is sent through TextStream to the `lk.transcription` topic
 ## You can also transport text via other means and directly send them to the agent
 ## - Send text input via: `generate_reply(user_input="user's input text")`
 ## - Receive agent's response via `session.on("conversation_item_added", ev)`. docs: https://docs.livekit.io/agents/build/events/#conversation_item_added
+
 
 class MyAgent(Agent):
     def __init__(self) -> None:
