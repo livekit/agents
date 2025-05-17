@@ -5,7 +5,16 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    Union,
+    runtime_checkable,
+)
 
 from livekit import rtc
 
@@ -24,6 +33,7 @@ from .events import (
     AgentEvent,
     AgentState,
     AgentStateChangedEvent,
+    Any,
     CloseEvent,
     ConversationItemAddedEvent,
     EventTypes,
@@ -116,6 +126,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
+        user_away_timeout: NotGivenOr[float] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -160,7 +171,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 an interruption, only used if stt enabled. Default ``0``.
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
-                or an EOU model) before it declares the user’s turn complete.
+                or an EOU model) before it declares the user's turn complete.
                 Default ``0.5`` s.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``6.0`` s.
@@ -170,6 +181,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
                 when silent by default.
+            user_away_timeout (float, optional): Timeout in seconds to set the
+                user state to "away" if they remain silent. If not provided,
+                the user will not be set to "away" automatically.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
         """
@@ -221,9 +235,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
+        self._user_away_timeout: NotGivenOr[float] = user_away_timeout
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task | None = None
+        self._call_later_handles: list[asyncio.TimerHandle] = []
 
     @property
     def userdata(self) -> Userdata_T:
@@ -402,6 +418,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._update_agent_state("listening")
+            if is_given(self._user_away_timeout):
+                self.call_later_if_silent(self._user_away_timeout, self._update_user_state, "away")
 
     async def _trace_chat_ctx(self) -> None:
         if self._activity is None:
@@ -427,6 +445,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
             self.emit("close", CloseEvent(error=error))
+
+            for handle in self._call_later_handles:
+                handle.cancel()
+            self._call_later_handles.clear()
 
             if self._activity is not None:
                 await self._activity.aclose()
@@ -544,6 +566,34 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt()
 
+    def call_later_if_silent(
+        self,
+        delay: float,
+        callback: Callable[..., None],
+        *args: Any,
+    ) -> asyncio.TimerHandle:
+        """Execute callback after timeout if user remains silent.
+        The callback will be cancelled immediately if the user starts speaking.
+
+        Args:
+            delay: Seconds to wait while monitoring for silence
+            callback: Function to call if silence maintained
+            *args: Arguments to pass to callback
+
+        Returns:
+            asyncio.TimerHandle: Timer handle for the scheduled callback
+        """
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        handle = self._loop.call_later(delay, callback, *args)
+        if self._user_state == "speaking":
+            handle.cancel()
+            return handle
+
+        self._call_later_handles.append(handle)
+        return handle
+
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn
         if self._activity is None:
@@ -635,9 +685,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._user_state == state:
             return
 
+        if state == "speaking":
+            for handle in self._call_later_handles:
+                handle.cancel()
+            self._call_later_handles.clear()
+
         old_state = self._user_state
         self._user_state = state
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
+
+        if state == "listening" and is_given(self._user_away_timeout):
+            self.call_later_if_silent(self._user_away_timeout, self._update_user_state, "away")
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.items.append(message)
