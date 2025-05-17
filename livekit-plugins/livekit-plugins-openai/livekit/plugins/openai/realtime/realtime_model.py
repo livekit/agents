@@ -684,6 +684,7 @@ class RealtimeSession(
                     turn_detection=turn_detection,
                     input_audio_transcription=input_audio_transcription,
                     temperature=self._realtime_model._opts.temperature,
+                    tool_choice=_to_oai_tool_choice(self._realtime_model._opts.tool_choice),
                 ),
                 event_id=utils.shortuuid("session_update_"),
             )
@@ -708,21 +709,19 @@ class RealtimeSession(
         kwargs = {}
 
         if is_given(tool_choice):
-            oai_tool_choice = tool_choice
-            if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
-                oai_tool_choice = tool_choice["function"]
-            if oai_tool_choice is None:
-                oai_tool_choice = DEFAULT_TOOL_CHOICE
-
-            kwargs["tool_choice"] = oai_tool_choice
+            self._realtime_model._opts.tool_choice = tool_choice
+            kwargs["tool_choice"] = _to_oai_tool_choice(tool_choice)
 
         if is_given(voice):
+            self._realtime_model._opts.voice = voice
             kwargs["voice"] = voice
 
         if is_given(temperature):
+            self._realtime_model._opts.temperature = temperature
             kwargs["temperature"] = temperature
 
         if is_given(turn_detection):
+            self._realtime_model._opts.turn_detection = turn_detection
             kwargs["turn_detection"] = turn_detection
 
         if kwargs:
@@ -1416,3 +1415,16 @@ def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
             )
         ],
     )
+
+
+def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
+    oai_tool_choice: str | None = None
+    if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
+        oai_tool_choice = tool_choice["function"]
+    else:
+        oai_tool_choice = tool_choice
+
+    if oai_tool_choice is None:
+        oai_tool_choice = "auto"
+
+    return oai_tool_choice
