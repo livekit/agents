@@ -1170,6 +1170,8 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*tasks)
             return
 
+        reply_started_at = time.time()
+
         tr_node = self._agent.transcription_node(llm_output, model_settings)
         if asyncio.iscoroutine(tr_node):
             tr_node = await tr_node
@@ -1214,7 +1216,11 @@ class AgentActivity(RecognitionHooks):
 
         # add the tools messages that triggers this reply to the chat context
         if _tools_messages:
-            self._agent._chat_ctx.items.extend(_tools_messages)
+            for msg in _tools_messages:
+                # reset the created_at to the reply start time
+                msg.created_at = reply_started_at
+            idx = self._agent._chat_ctx.find_insertion_index(created_at=reply_started_at)
+            self._agent._chat_ctx.items[idx:idx] = _tools_messages
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1242,8 +1248,10 @@ class AgentActivity(RecognitionHooks):
                 content=forwarded_text,
                 id=llm_gen_data.id,
                 interrupted=True,
+                created_at=reply_started_at,
             )
-            self._agent._chat_ctx.items.append(msg)
+            idx = self._agent._chat_ctx.find_insertion_index(created_at=reply_started_at)
+            self._agent._chat_ctx.items.insert(idx, msg)
             self._session._update_agent_state("listening")
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
@@ -1251,11 +1259,18 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(exe_task)
             return
 
+        idx = len(self._agent._chat_ctx.items)
         if text_out.text:
             msg = chat_ctx.add_message(
-                role="assistant", content=text_out.text, id=llm_gen_data.id, interrupted=False
+                role="assistant",
+                content=text_out.text,
+                id=llm_gen_data.id,
+                interrupted=False,
+                created_at=reply_started_at,
             )
-            self._agent._chat_ctx.items.append(msg)
+            idx = self._agent._chat_ctx.find_insertion_index(created_at=reply_started_at)
+            self._agent._chat_ctx.items.insert(idx, msg)
+            idx += 1
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
 
@@ -1320,9 +1335,9 @@ class AgentActivity(RecognitionHooks):
                 self._session.update_agent(new_agent_task)
                 draining = True
 
+            tool_messages = new_calls + new_fnc_outputs
             if generate_tool_reply:
-                chat_ctx.items.extend(new_calls)
-                chat_ctx.items.extend(new_fnc_outputs)
+                chat_ctx.items.extend(tool_messages)
 
                 handle = SpeechHandle.create(
                     allow_interruptions=speech_handle.allow_interruptions,
@@ -1343,7 +1358,7 @@ class AgentActivity(RecognitionHooks):
                         model_settings=ModelSettings(
                             tool_choice=model_settings.tool_choice if not draining else "none",
                         ),
-                        _tools_messages=[*new_calls, *new_fnc_outputs],
+                        _tools_messages=tool_messages,
                     ),
                     owned_speech_handle=handle,
                     name="AgentActivity.pipeline_reply",
@@ -1353,8 +1368,9 @@ class AgentActivity(RecognitionHooks):
                 )
             elif len(new_fnc_outputs) > 0:
                 # add the tool calls and outputs to the chat context even no reply is generated
-                self._agent._chat_ctx.items.extend(new_calls)
-                self._agent._chat_ctx.items.extend(new_fnc_outputs)
+                for msg in tool_messages:
+                    msg.created_at = reply_started_at
+                self._agent._chat_ctx.items[idx:idx] = tool_messages
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
