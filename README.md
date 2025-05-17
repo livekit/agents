@@ -255,7 +255,7 @@ async def entrypoint(ctx: JobContext):
 <h3>💬 Text-only agent</h3>
 <p>Skip voice altogether and use the same code for text-only integrations</p>
 <p>
-<a href="examples/text_only.py/text_only.py">Code</a>
+<a href="examples/other/text_only.py">Code</a>
 </p>
 </td>
 </tr>
@@ -266,7 +266,7 @@ async def entrypoint(ctx: JobContext):
 <h3>🍽️ Restaurant ordering and reservations</h3>
 <p>Full example of an agent that handles calls for a restaurant.</p>
 <p>
-<a href="examples/full_examples/restaurant_agent/">Code</a>
+<a href="examples/voice_agents/restaurant_agent.py">Code</a>
 </p>
 </td>
 <td width="50%">
