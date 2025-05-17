@@ -134,6 +134,7 @@ class FunctionCall(BaseModel):
     call_id: str
     arguments: str
     name: str
+    created_at: float = Field(default_factory=time.time)
 
 
 class FunctionCallOutput(BaseModel):
@@ -143,6 +144,7 @@ class FunctionCallOutput(BaseModel):
     call_id: str
     output: str
     is_error: bool
+    created_at: float = Field(default_factory=time.time)
 
 
 ChatItem = Annotated[
@@ -188,7 +190,11 @@ class ChatContext:
         else:
             message = ChatMessage(role=role, content=content, **kwargs)
 
-        self._items.append(message)
+        if is_given(created_at):
+            idx = self.find_insertion_index(created_at=created_at)
+            self._items.insert(idx, message)
+        else:
+            self._items.append(message)
         return message
 
     def get_by_id(self, item_id: str) -> ChatItem | None:
@@ -282,7 +288,7 @@ class ChatContext:
         exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
     ) -> dict:
-        items = []
+        items: list[ChatItem] = []
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -323,8 +329,7 @@ class ChatContext:
         Finds the position after the last item with `created_at <=` the given timestamp.
         """
         for i in reversed(range(len(self._items))):
-            item = self._items[i]
-            if item.type == "message" and item.created_at <= created_at:
+            if self._items[i].created_at <= created_at:
                 return i + 1
 
         return 0
