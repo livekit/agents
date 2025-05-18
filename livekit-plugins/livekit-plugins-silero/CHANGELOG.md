@@ -1,5 +1,11 @@
 # livekit-plugins-silero
 
+## 0.7.6
+
+### Patch Changes
+
+- update to livekit python 1.0 - [`32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d`](https://github.com/livekit/agents/commit/32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.7.5
 
 ### Patch Changes
