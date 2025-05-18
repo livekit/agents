@@ -1,5 +1,11 @@
 # livekit-agents
 
+## 0.12.21
+
+### Patch Changes
+
+- update to livekit python 1.0 - [`32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d`](https://github.com/livekit/agents/commit/32e129ff1a4c3d28f363f4f2b2a355e29c8fe64d) ([@davidzhao](https://github.com/davidzhao))
+
 ## 0.12.20
 
 ### Patch Changes
