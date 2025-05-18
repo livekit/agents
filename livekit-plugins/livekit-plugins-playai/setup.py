@@ -32,7 +32,7 @@ setuptools.setup(
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
     install_requires=[
-        "livekit-agents[codecs]>=0.12.16,<1.0.0",
+        "livekit-agents[codecs]>=0.12.20,<1.0.0",
         "pyht>=0.1.12",
         "aiohttp",
         "livekit>=1.0.8,<2",

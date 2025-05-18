@@ -46,7 +46,7 @@ setuptools.setup(
     license="Apache-2.0",
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents>=0.12.16,<1.0.0", "nltk >= 3.9.1, < 4"],
+    install_requires=["livekit-agents>=0.12.20,<1.0.0", "nltk >= 3.9.1, < 4"],
     package_data={"livekit.plugins.nltk": ["py.typed"]},
     project_urls={
         "Documentation": "https://docs.livekit.io",
