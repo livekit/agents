@@ -113,7 +113,7 @@ setuptools.setup(
     cmdclass={"build_ext": CMakeBuild},
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
     python_requires=">=3.9.0",
-    install_requires=["livekit-agents>=0.12.16,<1.0.0"],
+    install_requires=["livekit-agents>=0.12.20,<1.0.0"],
     package_data={
         "livekit.plugins.browser": ["py.typed"],
         "livekit.plugins.browser.resources": ["**", "lkcef_app.app"],
