@@ -1259,7 +1259,6 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(exe_task)
             return
 
-        idx = len(self._agent._chat_ctx.items)
         if text_out.text:
             msg = chat_ctx.add_message(
                 role="assistant",
@@ -1270,7 +1269,6 @@ class AgentActivity(RecognitionHooks):
             )
             idx = self._agent._chat_ctx.find_insertion_index(created_at=reply_started_at)
             self._agent._chat_ctx.items.insert(idx, msg)
-            idx += 1
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
 
@@ -1370,6 +1368,7 @@ class AgentActivity(RecognitionHooks):
                 # add the tool calls and outputs to the chat context even no reply is generated
                 for msg in tool_messages:
                     msg.created_at = reply_started_at
+                idx = self._agent._chat_ctx.find_insertion_index(created_at=reply_started_at)
                 self._agent._chat_ctx.items[idx:idx] = tool_messages
 
     @utils.log_exceptions(logger=logger)
