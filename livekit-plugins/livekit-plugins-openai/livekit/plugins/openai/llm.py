@@ -40,6 +40,7 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion_chunk import Choice
 
+from .log import logger
 from .models import (
     CerebrasChatModels,
     ChatModels,
@@ -52,6 +53,8 @@ from .models import (
 )
 from .utils import AsyncAzureADTokenProvider, to_chat_ctx, to_fnc_ctx
 
+lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+
 
 @dataclass
 class _LLMOptions:
@@ -62,6 +65,7 @@ class _LLMOptions:
     tool_choice: NotGivenOr[ToolChoice]
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
+    max_completion_tokens: NotGivenOr[int]
 
 
 class LLM(llm.LLM):
@@ -78,6 +82,7 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
         """
@@ -95,6 +100,7 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
             store=store,
             metadata=metadata,
+            max_completion_tokens=max_completion_tokens,
         )
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
@@ -501,6 +507,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.user):
             extra["user"] = self._opts.user
 
+        if is_given(self._opts.max_completion_tokens):
+            extra["max_completion_tokens"] = self._opts.max_completion_tokens
+
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
@@ -563,9 +572,22 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
+            chat_ctx = to_chat_ctx(self._chat_ctx, id(self._llm))
+            fnc_ctx = to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN
+            if lk_oai_debug:
+                tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
+                logger.debug(
+                    "chat.completions.create",
+                    extra={
+                        "fnc_ctx": fnc_ctx,
+                        "tool_choice": tool_choice,
+                        "chat_ctx": chat_ctx,
+                    },
+                )
+
             self._oai_stream = stream = await self._client.chat.completions.create(
-                messages=to_chat_ctx(self._chat_ctx, id(self._llm)),
-                tools=to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN,
+                messages=chat_ctx,
+                tools=fnc_ctx,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,

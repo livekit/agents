@@ -12,7 +12,14 @@ from livekit import rtc
 from .. import debug, llm, stt, tts, utils, vad
 from ..llm.tool_context import StopResponse
 from ..log import logger
-from ..metrics import EOUMetrics, LLMMetrics, STTMetrics, TTSMetrics, VADMetrics
+from ..metrics import (
+    EOUMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+    VADMetrics,
+)
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -38,14 +45,6 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
-
-try:
-    from livekit.plugins.google.beta.realtime.realtime_api import (
-        RealtimeModel as GoogleRealtimeModel,
-    )
-
-except ImportError:
-    GoogleRealtimeModel = None
 
 
 def log_event(event: str, **kwargs) -> None:
@@ -346,6 +345,7 @@ class AgentActivity(RecognitionHooks):
                     "input_audio_transcription_completed",
                     self._on_input_audio_transcription_completed,
                 )
+                self._rt_session.on("metrics_collected", self._on_metrics_collected)
                 self._rt_session.on("error", self._on_error)
 
                 remove_instructions(self._agent._chat_ctx)
@@ -713,7 +713,9 @@ class AgentActivity(RecognitionHooks):
 
     # -- Realtime Session events --
 
-    def _on_metrics_collected(self, ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics) -> None:
+    def _on_metrics_collected(
+        self, ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics
+    ) -> None:
         if (speech_handle := _SpeechHandleContextVar.get(None)) and (
             isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
         ):
@@ -769,11 +771,12 @@ class AgentActivity(RecognitionHooks):
         log_event("input_audio_transcription_completed")
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=True),
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final),
         )
-        msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
-        self._agent._chat_ctx.items.append(msg)
-        self._session._conversation_item_added(msg)
+        if ev.is_final:
+            msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
+            self._agent._chat_ctx.items.append(msg)
+            self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
@@ -1613,10 +1616,7 @@ class AgentActivity(RecognitionHooks):
                         extra={"error": str(e)},
                     )
 
-            if generate_tool_reply and (
-                # no direct cancellation in Gemini
-                GoogleRealtimeModel is None or not isinstance(self.llm, GoogleRealtimeModel)
-            ):
+            if generate_tool_reply and not self.llm.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 
                 handle = SpeechHandle.create(
