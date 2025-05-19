@@ -154,7 +154,7 @@ def function_tool(
         if raw_schema is not None:
             name = raw_schema.get("name")
             parameters = raw_schema.get("parameters")
-            
+
             if name is None or parameters is None:
                 raise ValueError("raw function description must contain a name and parameters key")
             if not name:
