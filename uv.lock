@@ -1632,7 +1632,6 @@ source = { editable = "livekit-plugins/livekit-plugins-aws" }
 dependencies = [
     { name = "aioboto3" },
     { name = "amazon-transcribe" },
-    { name = "boto3" },
     { name = "livekit-agents" },
 ]
 
@@ -1640,7 +1639,6 @@ dependencies = [
 requires-dist = [
     { name = "aioboto3", specifier = ">=14.1.0" },
     { name = "amazon-transcribe", specifier = ">=0.6.2" },
-    { name = "boto3", specifier = ">=1.37.1" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 

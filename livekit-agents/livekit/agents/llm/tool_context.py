@@ -151,6 +151,7 @@ def function_tool(
     raw_schema: RawFunctionDescription | dict | None = None,
 ) -> FunctionTool | RawFunctionTool | Callable[[F | Raw_F], FunctionTool | RawFunctionTool]:
     def deco(func: F | Raw_F) -> RawFunctionTool | FunctionTool:
+        nonlocal name
         if raw_schema is not None:
             name = raw_schema.get("name")
             parameters = raw_schema.get("parameters")
