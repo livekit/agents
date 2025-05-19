@@ -506,6 +506,13 @@ class LLM(llm.LLM):
         if not parsed.netloc:
             raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
 
+        api_key = api_key or os.environ.get("LETTA_API_KEY")
+        # Might not be necessary if self-hosted Letta instance
+        if base_url.startswith("https://api.letta.com/v1/") and api_key is None:
+            raise ValueError(
+                "Letta API key is required, either as argument or set LETTA_API_KEY environmental variable"
+            )
+
         return LLM(
             model="letta-fast",
             api_key=api_key,
