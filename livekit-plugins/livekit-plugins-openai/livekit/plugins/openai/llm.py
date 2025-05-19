@@ -510,7 +510,7 @@ class LLM(llm.LLM):
         # Might not be necessary if self-hosted Letta instance
         if base_url.startswith("https://api.letta.com/v1/") and api_key is None:
             raise ValueError(
-                "Letta API key is required, either as argument or set LETTA_API_KEY environmental variable"
+                "Letta API key is required, either as argument or set LETTA_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
