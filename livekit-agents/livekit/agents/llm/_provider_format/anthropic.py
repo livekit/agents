@@ -7,6 +7,8 @@ from typing import Any
 
 from livekit.agents import llm
 
+from .utils import group_tool_calls
+
 
 @dataclass
 class AnthropicFormatData:
@@ -24,12 +26,16 @@ def to_chat_ctx(
     current_role: str | None = None
     content: list[dict[str, Any]] = []
 
-    for i, msg in enumerate(chat_ctx.items):
+    chat_items: list[llm.ChatItem] = []
+    for group in group_tool_calls(chat_ctx):
+        chat_items.extend(group.flatten())
+
+    for i, msg in enumerate(chat_items):
         if msg.type == "message" and msg.role == "system":
             system_messages.append(msg.text_content)
             continue
 
-        cache_ctrl_i = cache_control if (i == len(chat_ctx.items) - 1) else None
+        cache_ctrl_i = cache_control if (i == len(chat_items) - 1) else None
         if msg.type == "message":
             role = "assistant" if msg.role == "assistant" else "user"
         elif msg.type == "function_call":

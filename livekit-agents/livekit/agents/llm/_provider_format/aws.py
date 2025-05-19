@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import itertools
 import json
 from dataclasses import dataclass
 
 from livekit.agents import llm
+
+from .utils import group_tool_calls
 
 
 @dataclass
@@ -19,7 +22,7 @@ def to_chat_ctx(
     current_role: str | None = None
     current_content: list[dict] = []
 
-    for msg in chat_ctx.items:
+    for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
         if msg.type == "message" and msg.role == "system":
             system_messages.append(msg.text_content)
             continue
