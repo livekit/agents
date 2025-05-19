@@ -90,6 +90,8 @@ class _RealtimeOptions:
     tool_choice: llm.ToolChoice | None
     input_audio_transcription: InputAudioTranscription | None
     turn_detection: TurnDetection | None
+    max_response_output_tokens: int | Literal["inf"] | None
+    modalities: list[Literal["text", "audio"]]
     api_key: str
     base_url: str
     is_azure: bool
@@ -152,6 +154,8 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
     model="gpt-4o-mini-transcribe",
 )
 DEFAULT_TOOL_CHOICE = "auto"
+DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS = "inf"
+DEFAULT_MODALITIES = ["text", "audio"]
 
 AZURE_DEFAULT_TURN_DETECTION = TurnDetection(
     type="server_vad",
@@ -264,6 +268,8 @@ class RealtimeModel(llm.RealtimeModel):
             azure_deployment=azure_deployment,
             entra_token=entra_token,
             api_version=api_version,
+            modalities=DEFAULT_MODALITIES,
+            max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
         )
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -359,7 +365,14 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
+        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
     ) -> None:
+        if is_given(model):
+            self._opts.model = model
+
         if is_given(voice):
             self._opts.voice = voice
 
@@ -372,12 +385,24 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
 
+        if is_given(input_audio_transcription):
+            self._opts.input_audio_transcription = input_audio_transcription
+
+        if is_given(max_response_output_tokens):
+            self._opts.max_response_output_tokens = max_response_output_tokens
+
+        if is_given(modalities):
+            self._opts.modalities = modalities
+
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
                 temperature=temperature,
                 turn_detection=turn_detection,
                 tool_choice=tool_choice,
+                input_audio_transcription=input_audio_transcription,
+                max_response_output_tokens=max_response_output_tokens,
+                modalities=modalities,
             )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
