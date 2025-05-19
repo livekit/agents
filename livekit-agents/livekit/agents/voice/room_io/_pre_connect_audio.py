@@ -107,19 +107,45 @@ class PreConnectAudioHandler:
             num_channels = int(reader.info.attributes["channels"])
 
             duration = 0
-            audio_stream = utils.audio.AudioByteStream(sample_rate, num_channels)
-            async for chunk in reader:
-                for frame in audio_stream.push(chunk):
+
+            # Check if we need to decode opus
+            is_opus = reader.info.mime_type == "audio/opus"
+
+            if is_opus:
+                decoder = utils.codecs.AudioStreamDecoder(
+                    sample_rate=sample_rate, num_channels=num_channels
+                )
+
+                async for chunk in reader:
+                    decoder.push(chunk)
+
+                decoder.end_input()
+
+                async for decoded_frame in decoder:
+                    buf.frames.append(decoded_frame)
+                    duration += decoded_frame.duration
+            else:
+                # Process raw audio directly through AudioByteStream
+                audio_stream = utils.audio.AudioByteStream(sample_rate, num_channels)
+                async for chunk in reader:
+                    for frame in audio_stream.push(chunk):
+                        buf.frames.append(frame)
+                        duration += frame.duration
+
+                # Get any remaining frames
+                for frame in audio_stream.flush():
                     buf.frames.append(frame)
                     duration += frame.duration
 
-            for frame in audio_stream.flush():
-                buf.frames.append(frame)
-                duration += frame.duration
-
             logger.debug(
                 "pre-connect audio received",
-                extra={"duration": duration, "track_id": track_id, "participant": participant_id},
+                extra={
+                    "duration": duration,
+                    "track_id": track_id,
+                    "participant": participant_id,
+                    "channels": num_channels,
+                    "sample_rate": sample_rate,
+                },
             )
 
             with contextlib.suppress(asyncio.InvalidStateError):
