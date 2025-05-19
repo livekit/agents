@@ -9,9 +9,7 @@ from livekit.agents import llm
 from livekit.agents.log import logger
 
 
-def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, generating_reply: bool
-) -> tuple[list[dict], Literal[None]]:
+def to_chat_ctx(chat_ctx: llm.ChatContext) -> tuple[list[dict], Literal[None]]:
     # OAI requires the tool calls to be followed by the corresponding tool outputs
     # we group them first and remove invalid tool calls and outputs before converting
 

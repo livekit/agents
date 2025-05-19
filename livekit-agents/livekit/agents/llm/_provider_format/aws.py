@@ -7,13 +7,13 @@ from livekit.agents import llm
 
 
 @dataclass
-class AWSFormatData:
+class BedrockFormatData:
     system_messages: list[str] | None
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, generating_reply: bool
-) -> tuple[list[dict], AWSFormatData]:
+    chat_ctx: llm.ChatContext, *, requires_first_user_message: bool = True
+) -> tuple[list[dict], BedrockFormatData]:
     messages: list[dict] = []
     system_messages: list[str] = []
     current_role: str | None = None
@@ -73,10 +73,10 @@ def to_chat_ctx(
         messages.append({"role": current_role, "content": current_content})
 
     # Ensure the message list starts with a "user" message
-    if generating_reply and (not messages or messages[0]["role"] != "user"):
+    if requires_first_user_message and (not messages or messages[0]["role"] != "user"):
         messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
 
-    return messages, AWSFormatData(system_messages=system_messages)
+    return messages, BedrockFormatData(system_messages=system_messages)
 
 
 def _build_image(image: llm.ImageContent) -> dict:

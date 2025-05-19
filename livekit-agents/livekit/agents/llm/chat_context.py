@@ -318,33 +318,34 @@ class ChatContext:
         }
 
     @overload
-    def to_provider_format(
-        self, format: Literal["openai"], *, generating_reply: bool = True
-    ) -> tuple[list[dict], Literal[None]]: ...
+    def to_provider_format(self, format: Literal["openai"]) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
     def to_provider_format(
-        self, format: Literal["google"], *, generating_reply: bool = True
+        self,
+        format: Literal["google"],
+        *,
+        requires_last_user_message: bool = True,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload
     def to_provider_format(
-        self, format: Literal["aws"], *, generating_reply: bool = True
-    ) -> tuple[list[dict], _provider_format.aws.AWSFormatData]: ...
+        self,
+        format: Literal["aws"],
+        *,
+        requires_first_user_message: bool = True,
+    ) -> tuple[list[dict], _provider_format.aws.BedrockFormatData]: ...
 
     @overload
     def to_provider_format(
         self,
         format: Literal["anthropic"],
         *,
-        generating_reply: bool = True,
         cache_control: dict[str, Any] | None = None,
+        requires_first_user_message: bool = True,
     ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
 
-    def to_provider_format(
-        self, format: LLMFormatName, *, generating_reply: bool = True, **kwargs: Any
-    ) -> tuple[list[dict], Any]:
-        kwargs.update(generating_reply=generating_reply)
+    def to_provider_format(self, format: LLMFormatName, **kwargs: Any) -> tuple[list[dict], Any]:
         if format == "openai":
             return _provider_format.openai.to_chat_ctx(self, **kwargs)
         elif format == "google":

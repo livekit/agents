@@ -14,7 +14,10 @@ class AnthropicFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, generating_reply: bool, cache_control: dict[str, Any] | None
+    chat_ctx: llm.ChatContext,
+    *,
+    cache_control: dict[str, Any] | None = None,
+    requires_first_user_message: bool = True,
 ) -> tuple[list[dict], AnthropicFormatData]:
     messages: list[dict[str, Any]] = []
     system_messages: list[str] = []
@@ -63,6 +66,7 @@ def to_chat_ctx(
                     "type": "tool_result",
                     "content": msg.output,
                     "cache_control": cache_ctrl_i,
+                    "is_error": msg.is_error,
                 }
             )
 
@@ -70,7 +74,7 @@ def to_chat_ctx(
         messages.append({"role": current_role, "content": content})
 
     # ensure the messages starts with a "user" message
-    if generating_reply and (not messages or messages[0]["role"] != "user"):
+    if requires_first_user_message and (not messages or messages[0]["role"] != "user"):
         messages.insert(
             0,
             {
