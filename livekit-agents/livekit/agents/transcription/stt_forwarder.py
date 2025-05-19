@@ -87,33 +87,23 @@ class STTSegmentsForwarder:
             logger.exception("error in stt transcription")
 
     def update(self, ev: stt.SpeechEvent):
-        if ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-            # TODO(theomonnom): We always take the first alternative, we should mb expose opt to the
-            # user?
-            text = ev.alternatives[0].text
-            self._queue.put_nowait(
-                rtc.TranscriptionSegment(
-                    id=self._current_id,
-                    text=text,
-                    start_time=0,
-                    end_time=0,
-                    final=False,
-                    language="",  # TODO
-                )
+        if ev.type not in [stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.FINAL_TRANSCRIPT]:
+            return
+        
+        final = ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        alternative = ev.alternatives[0]
+        self._queue.put_nowait(
+            rtc.TranscriptionSegment(
+                id=self._current_id,
+                text=alternative.text,
+                start_time=int(alternative.start_time * 1000),
+                end_time=int(alternative.end_time * 1000),
+                final=final,
+                language="",  # TODO
             )
-        elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            text = ev.alternatives[0].text
-            self._queue.put_nowait(
-                rtc.TranscriptionSegment(
-                    id=self._current_id,
-                    text=text,
-                    start_time=0,
-                    end_time=0,
-                    final=True,
-                    language="",  # TODO
-                )
-            )
+        )
 
+        if final:
             self._current_id = _utils.segment_uuid()
 
     async def aclose(self, *, wait: bool = True) -> None:
