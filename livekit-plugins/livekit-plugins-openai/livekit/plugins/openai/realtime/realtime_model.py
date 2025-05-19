@@ -706,11 +706,9 @@ class RealtimeSession(
         temperature: NotGivenOr[float] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         model: NotGivenOr[str] = NOT_GIVEN,
-        max_response_output_tokens: NotGivenOr[int] = NOT_GIVEN,
-        modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
+        max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
+        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
-        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
-        output_audio_transcription: NotGivenOr[OutputAudioTranscription | None] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
@@ -729,6 +727,22 @@ class RealtimeSession(
         if is_given(turn_detection):
             self._realtime_model._opts.turn_detection = turn_detection
             kwargs["turn_detection"] = turn_detection
+
+        if is_given(model):
+            self._realtime_model._opts.model = model
+            kwargs["model"] = model
+
+        if is_given(max_response_output_tokens):
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
+            kwargs["max_response_output_tokens"] = max_response_output_tokens
+
+        if is_given(modalities):
+            self._realtime_model._opts.modalities = modalities
+            kwargs["modalities"] = modalities
+
+        if is_given(input_audio_transcription):
+            self._realtime_model._opts.input_audio_transcription = input_audio_transcription
+            kwargs["input_audio_transcription"] = input_audio_transcription
 
         if kwargs:
             self.send_event(
