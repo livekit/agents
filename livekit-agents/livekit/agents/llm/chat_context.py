@@ -27,7 +27,6 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from . import _provider_format
-from ._provider_format import LLMFormatName
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool, RawFunctionTool
@@ -345,7 +344,12 @@ class ChatContext:
         requires_first_user_message: bool = True,
     ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
 
-    def to_provider_format(self, format: LLMFormatName, **kwargs: Any) -> tuple[list[dict], Any]:
+    @overload
+    def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
+
+    def to_provider_format(
+        self, format: Literal["openai", "google", "aws", "anthropic"] | str, **kwargs: Any
+    ) -> tuple[list[dict], Any]:
         if format == "openai":
             return _provider_format.openai.to_chat_ctx(self, **kwargs)
         elif format == "google":

@@ -24,7 +24,7 @@ import httpx
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
-from livekit.agents.llm.chat_context import ChatContext, LLMFormatName
+from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import FunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -84,7 +84,7 @@ class LLM(llm.LLM):
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
-        _provider_fmt: NotGivenOr[LLMFormatName] = NOT_GIVEN,
+        _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -553,7 +553,7 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         model: str | ChatModels,
-        provider_fmt: LLMFormatName,
+        provider_fmt: str,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool],
@@ -562,7 +562,7 @@ class LLMStream(llm.LLMStream):
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
-        self._provider_fmt: LLMFormatName = provider_fmt
+        self._provider_fmt = provider_fmt
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
