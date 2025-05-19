@@ -197,6 +197,27 @@ class ChatContext:
             self._items.append(message)
         return message
 
+    def insert_item(
+        self,
+        item: ChatItem | list[ChatItem],
+        *,
+        created_at: NotGivenOr[float] = NOT_GIVEN,
+    ) -> None:
+        """Insert an item into the chat context by creation time. If a list is provided,
+        all items will be inserted at the same position based on the first item's creation time.
+        """
+        if not item:
+            return
+
+        if not is_given(created_at):
+            created_at = item[0].created_at if isinstance(item, list) else item.created_at
+
+        idx = self.find_insertion_index(created_at=created_at)
+        if isinstance(item, list):
+            self._items[idx:idx] = item
+        else:
+            self._items.insert(idx, item)
+
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
 

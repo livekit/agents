@@ -640,8 +640,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
-        idx = self._chat_ctx.find_insertion_index(created_at=message.created_at)
-        self._chat_ctx.items.insert(idx, message)
+        self._chat_ctx.insert_item(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     # -- User changed input/output streams/sinks --
