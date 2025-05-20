@@ -1341,7 +1341,11 @@ class AgentActivity(RecognitionHooks):
                         chat_ctx=chat_ctx,
                         tools=tools,
                         model_settings=ModelSettings(
-                            tool_choice=model_settings.tool_choice if not draining else "none",
+                            # Avoid setting tool_choice to "required" or a specific function when
+                            # passing tool response back to the LLM
+                            tool_choice="none"
+                            if draining or model_settings.tool_choice == "none"
+                            else "auto",
                         ),
                         _tools_messages=[*new_calls, *new_fnc_outputs],
                     ),
@@ -1636,7 +1640,11 @@ class AgentActivity(RecognitionHooks):
                     self._realtime_reply_task(
                         speech_handle=handle,
                         model_settings=ModelSettings(
-                            tool_choice=model_settings.tool_choice if not draining else "none",
+                            # Avoid setting tool_choice to "required" or a specific function when
+                            # passing tool response back to the LLM
+                            tool_choice="none"
+                            if draining or model_settings.tool_choice == "none"
+                            else "auto",
                         ),
                     ),
                     owned_speech_handle=handle,
