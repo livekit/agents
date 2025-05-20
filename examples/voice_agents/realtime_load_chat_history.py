@@ -1,5 +1,4 @@
 import logging
-from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
@@ -11,19 +10,6 @@ from livekit.plugins import openai
 logger = logging.getLogger("realtime-load-chat-history")
 
 load_dotenv()
-
-
-class CustomAgent(Agent):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    async def realtime_audio_output_node(self, audio: AsyncIterable, model_settings):
-        logger.info("Updated updating model settings everytime we have audio output")
-        self.llm.update_options(
-            modalities=["text"],
-        )
-
-        return super().realtime_audio_output_node(audio, model_settings)
 
 
 async def entrypoint(ctx: JobContext):
@@ -52,16 +38,12 @@ async def entrypoint(ctx: JobContext):
     for item in chat_history:
         chat_ctx.add_message(role=item["role"], content=item["content"])
 
-    model = openai.realtime.RealtimeModel()
-
     session = AgentSession()
-    agent = CustomAgent(
+    agent = Agent(
         instructions="You are a helpful travel planner.",
-        llm=model,
+        llm=openai.realtime.RealtimeModel(),
         chat_ctx=chat_ctx,
     )
-
-    logger.info(f"Model: {model}")
 
     await session.start(agent=agent, room=ctx.room)
 
