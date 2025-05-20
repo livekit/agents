@@ -1,12 +1,7 @@
 from ._datastream_io import DataStreamAudioOutput, DataStreamAudioReceiver
 from ._queue_io import QueueAudioOutput
-from ._runner import (
-    AudioReceiver,
-    AudioSegmentEnd,
-    AvatarOptions,
-    AvatarRunner,
-    VideoGenerator,
-)
+from ._runner import AvatarOptions, AvatarRunner
+from ._types import AudioReceiver, AudioSegmentEnd, VideoGenerator
 
 __all__ = [
     "AvatarRunner",

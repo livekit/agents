@@ -2,10 +2,12 @@ import asyncio
 import contextlib
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from livekit import rtc
 
-from ..agent import logger, utils
+from ... import utils
+from ...log import logger
 
 PRE_CONNECT_AUDIO_BUFFER_STREAM = "lk.agent.pre-connect-audio-buffer"
 
@@ -24,17 +26,17 @@ class PreConnectAudioHandler:
 
         # track id -> buffer
         self._buffers: dict[str, asyncio.Future[_PreConnectAudioBuffer]] = {}
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
 
         self._registered_after_connect = False
 
-    def register(self):
-        def _handler(reader: rtc.ByteStreamReader, participant_id: str):
+    def register(self) -> None:
+        def _handler(reader: rtc.ByteStreamReader, participant_id: str) -> None:
             task = asyncio.create_task(self._read_audio_task(reader, participant_id))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
 
-            def _on_timeout():
+            def _on_timeout() -> None:
                 logger.warning(
                     "pre-connect audio received but not completed in time",
                     extra={"participant": participant_id},
@@ -55,7 +57,7 @@ class PreConnectAudioHandler:
                 "already registered, ignoring"
             )
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         self._room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM)
         await utils.aio.cancel_and_wait(*self._tasks)
 
@@ -88,8 +90,8 @@ class PreConnectAudioHandler:
             self._buffers.pop(track_id)
 
     @utils.log_exceptions(logger=logger)
-    async def _read_audio_task(self, reader: rtc.ByteStreamReader, participant_id: str):
-        if not (track_id := reader.info.attributes.get("trackId")):
+    async def _read_audio_task(self, reader: rtc.ByteStreamReader, participant_id: str) -> None:
+        if not reader.info.attributes or not (track_id := reader.info.attributes.get("trackId")):
             logger.warning(
                 "pre-connect audio received but no trackId", extra={"participant": participant_id}
             )
@@ -103,10 +105,16 @@ class PreConnectAudioHandler:
 
         buf = _PreConnectAudioBuffer(timestamp=time.time())
         try:
+            if (
+                "sampleRate" not in reader.info.attributes
+                or "channels" not in reader.info.attributes
+            ):
+                raise ValueError("sampleRate or channels not found in pre-connect byte stream")
+
             sample_rate = int(reader.info.attributes["sampleRate"])
             num_channels = int(reader.info.attributes["channels"])
 
-            duration = 0
+            duration: float = 0
 
             # Check if we need to decode opus
             is_opus = reader.info.mime_type == "audio/opus"

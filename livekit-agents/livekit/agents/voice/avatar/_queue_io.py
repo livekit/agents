@@ -52,7 +52,7 @@ class QueueAudioOutput(
                 self._data_ch.recv_nowait()
             except utils.aio.channel.ChanEmpty:
                 break
-        self.emit("clear_buffer")
+        self.emit("clear_buffer")  # type: ignore
 
     def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
         self.on_playback_finished(playback_position=playback_position, interrupted=interrupted)

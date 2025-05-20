@@ -127,13 +127,13 @@ class AudioStreamDecoder:
                 target = self._decode_loop
             self._loop.run_in_executor(self.__class__._executor, target)
 
-    def end_input(self):
+    def end_input(self) -> None:
         self._input_buf.end_input()
         if not self._started:
             # if no data was pushed, close the output channel
             self._output_ch.close()
 
-    def _decode_loop(self):
+    def _decode_loop(self) -> None:
         container: av.container.InputContainer | None = None
         resampler: av.AudioResampler | None = None
         try:
