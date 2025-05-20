@@ -16,6 +16,7 @@ from google.genai.types import (
     AutomaticActivityDetection,
     Blob,
     Content,
+    ContextWindowCompressionConfig,
     FunctionDeclaration,
     GenerationConfig,
     LiveClientContent,
@@ -86,6 +87,7 @@ class _RealtimeOptions:
     input_audio_transcription: AudioTranscriptionConfig | None
     output_audio_transcription: AudioTranscriptionConfig | None
     image_encode_options: NotGivenOr[images.EncodeOptions]
+    context_window_compression: NotGivenOr[ContextWindowCompressionConfig]
 
 
 @dataclass
@@ -131,6 +133,7 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         image_encode_options: NotGivenOr[images.EncodeOptions] = NOT_GIVEN,
+        context_window_compression: NotGivenOr[ContextWindowCompressionConfig | None] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -161,6 +164,7 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
             output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
             image_encode_options (images.EncodeOptions, optional): The configuration for image encoding. Defaults to DEFAULT_ENCODE_OPTIONS.
+            context_window_compression (types.ContextWindowCompressionConfig, optional): Configuration for context window compression to enable longer sessions and avoid abrupt connection termination.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -232,6 +236,7 @@ class RealtimeModel(llm.RealtimeModel):
             output_audio_transcription=output_audio_transcription,
             language=language,
             image_encode_options=image_encode_options,
+            context_window_compression=context_window_compression,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -618,6 +623,9 @@ class RealtimeSession(llm.RealtimeSession):
             realtime_input_config=RealtimeInputConfig(
                 automatic_activity_detection=AutomaticActivityDetection(),
             ),
+            context_window_compression=self._opts.context_window_compression
+            if is_given(self._opts.context_window_compression)
+            else None,
         )
 
     def _start_new_generation(self):
