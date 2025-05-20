@@ -1,10 +1,11 @@
 import logging
-from typing import AsyncIterable
+from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, llm
 from livekit.plugins import openai
+
 ## This example shows how to load chat history for OpenAI Realtime Model
 
 logger = logging.getLogger("realtime-load-chat-history")
@@ -17,7 +18,7 @@ class CustomAgent(Agent):
         super().__init__(*args, **kwargs)
 
     async def realtime_audio_output_node(self, audio: AsyncIterable, model_settings):
-        logger.info(f"Updated updating model settings everytime we have audio output")
+        logger.info("Updated updating model settings everytime we have audio output")
         self.llm.update_options(
             modalities=["text"],
         )
