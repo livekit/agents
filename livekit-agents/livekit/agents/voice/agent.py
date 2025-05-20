@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -240,7 +240,7 @@ class Agent:
         return self._allow_interruptions
 
     @property
-    def realtime_llm_session(self) -> llm.RealtimeSession:
+    def realtime_llm_session(self) -> llm.RealtimeSession[Any]:
         """
         Retrieve the realtime LLM session associated with the current agent.
 
@@ -253,7 +253,7 @@ class Agent:
         return rt_session
 
     @property
-    def session(self) -> AgentSession:
+    def session(self) -> AgentSession[Any]:
         """
         Retrieve the VoiceAgent associated with the current agent.
 
@@ -432,7 +432,7 @@ class Agent:
             async with wrapped_stt.stream() as stream:
 
                 @utils.log_exceptions(logger=logger)
-                async def _forward_input():
+                async def _forward_input() -> None:
                     async for frame in audio:
                         stream.push_frame(frame)
 
@@ -483,7 +483,7 @@ class Agent:
 
             async with wrapped_tts.stream() as stream:
 
-                async def _forward_input():
+                async def _forward_input() -> None:
                     async for chunk in text:
                         stream.push_text(chunk)
 
@@ -530,10 +530,10 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT[Any] | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM[Any] | llm.RealtimeModel | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS[Any] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         super().__init__(
@@ -559,7 +559,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         else:
             self.__fut.set_result(result)
 
-    async def __await_impl(self):
+    async def __await_impl(self) -> TaskResult_T:
         if self.__started:
             raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
 
@@ -571,7 +571,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} should only be awaited inside an async ai_function or the on_enter/on_exit methods of an AgentTask"  # noqa: E501
             )
 
-        def _handle_task_done(_) -> None:
+        def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
                 return
 
@@ -591,10 +591,10 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         task.add_done_callback(_handle_task_done)
 
         # enter task
-        await asyncio.shield(self.__fut)
+        return await asyncio.shield(self.__fut)
         # exit task
 
-    def __await__(self):
+    def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
 
 
@@ -604,14 +604,14 @@ class _InlineTaskInfo:
 
 
 def _authorize_inline_task(
-    task: asyncio.Task, *, function_call: llm.FunctionCall | None = None
+    task: asyncio.Task[Any], *, function_call: llm.FunctionCall | None = None
 ) -> None:
     setattr(task, "__livekit_agents_inline_task", _InlineTaskInfo(function_call=function_call))
 
 
-def _get_inline_task_info(task: asyncio.Task) -> _InlineTaskInfo | None:
+def _get_inline_task_info(task: asyncio.Task[Any]) -> _InlineTaskInfo | None:
     return getattr(task, "__livekit_agents_inline_task", None)
 
 
-def _is_inline_task_authorized(task: asyncio.Task) -> bool:
+def _is_inline_task_authorized(task: asyncio.Task[Any]) -> bool:
     return getattr(task, "__livekit_agents_inline_task", None) is not None

@@ -47,7 +47,7 @@ class TextInputEvent:
 
 
 TextInputCallback = Callable[
-    [AgentSession[Any], TextInputEvent], Optional[Coroutine[None, None, None]]
+    ["AgentSession[Any]", TextInputEvent], Optional[Coroutine[None, None, None]]
 ]
 
 

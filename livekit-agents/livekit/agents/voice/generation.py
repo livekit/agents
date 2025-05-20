@@ -133,7 +133,7 @@ class _TTSGenerationData:
 
 def perform_tts_inference(
     *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
-) -> tuple[asyncio.Task, _TTSGenerationData]:
+) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
 
     @utils.log_exceptions(logger=logger)
@@ -159,7 +159,7 @@ def perform_tts_inference(
 @dataclass
 class _TextOutput:
     text: str
-    first_text_fut: asyncio.Future
+    first_text_fut: asyncio.Future[None]
 
 
 def perform_text_forwarding(

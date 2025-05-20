@@ -202,7 +202,7 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
-        tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+        tools: NotGivenOr[list[FunctionTool | RawFunctionTool]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 

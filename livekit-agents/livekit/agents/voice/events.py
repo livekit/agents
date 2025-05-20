@@ -107,7 +107,7 @@ class ConversationItemAddedEvent(BaseModel):
 class FunctionToolsExecutedEvent(BaseModel):
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
-    function_call_outputs: list[FunctionCallOutput]
+    function_call_outputs: list[FunctionCallOutput | None]
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
         return list(zip(self.function_calls, self.function_call_outputs))
