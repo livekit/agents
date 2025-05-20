@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 
 # Frank Liang hyphenator. impl from https://github.com/jfinkels/hyphenate
@@ -8,7 +9,7 @@ import re
 # Users that want different languages or more advanced hyphenation should use the livekit-plugins-*
 class Hyphenator:
     def __init__(self, patterns: str, exceptions: str = "") -> None:
-        self.tree: dict = {}
+        self.tree: dict[str | None, Any] = {}
         for pattern in patterns.split():
             self._insert_pattern(pattern)
 

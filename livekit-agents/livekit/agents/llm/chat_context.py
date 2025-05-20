@@ -202,7 +202,7 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
-        tools: NotGivenOr[list[FunctionTool | RawFunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
@@ -213,7 +213,7 @@ class ChatContext:
             is_raw_function_tool,
         )
 
-        valid_tools = set()
+        valid_tools = set[str]()
         if is_given(tools):
             for tool in tools:
                 if isinstance(tool, str):

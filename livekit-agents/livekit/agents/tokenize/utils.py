@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, AsyncGenerator
 from typing import overload
 
 from . import _basic_word, tokenizer
@@ -37,7 +37,7 @@ def replace_words(
 
     replacements = {k.lower(): v for k, v in replacements.items()}
 
-    def _process_words(text, words):
+    def _process_words(text: str, words: list[tuple[str, int, int]]) -> tuple[str, int]:
         offset = 0
         processed_index = 0
         for word, start_index, end_index in words:
@@ -62,7 +62,7 @@ def replace_words(
         return text
     else:
 
-        async def _replace_words():
+        async def _replace_words() -> AsyncGenerator[str, None]:
             buffer = ""
             async for chunk in text:
                 buffer += chunk

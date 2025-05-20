@@ -384,7 +384,7 @@ class Worker(utils.EventEmitter[EventTypes]):
     def worker_info(self) -> WorkerInfo:
         return WorkerInfo(http_port=self._http_server.port)
 
-    async def run(self):
+    async def run(self) -> None:
         if not self._closed:
             raise Exception("worker is already running")
 
