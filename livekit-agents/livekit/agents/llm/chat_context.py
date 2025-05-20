@@ -163,7 +163,7 @@ class ChatContext:
         return self._items
 
     @items.setter
-    def items(self, items: list[ChatItem]):
+    def items(self, items: list[ChatItem]) -> None:
         self._items = items
 
     def add_message(
@@ -175,7 +175,7 @@ class ChatContext:
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
     ) -> ChatMessage:
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if is_given(id):
             kwargs["id"] = id
         if is_given(interrupted):
@@ -240,7 +240,7 @@ class ChatContext:
 
             if (
                 is_given(tools)
-                and item.type in ["function_call", "function_call_output"]
+                and (item.type == "function_call" or item.type == "function_call_output")
                 and item.name not in valid_tools
             ):
                 continue
@@ -281,7 +281,7 @@ class ChatContext:
         exclude_audio: bool = True,
         exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         items = []
         for item in self.items:
             if exclude_function_call and item.type in [
@@ -330,7 +330,7 @@ class ChatContext:
         return 0
 
     @classmethod
-    def from_dict(cls, data: dict) -> ChatContext:
+    def from_dict(cls, data: dict[str, Any]) -> ChatContext:
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)
@@ -348,8 +348,8 @@ class _ReadOnlyChatContext(ChatContext):
         "please use .copy() and agent.update_chat_ctx() to modify the chat context"
     )
 
-    class _ImmutableList(list):
-        def _raise_error(self, *args, **kwargs):
+    class _ImmutableList(list[ChatItem]):
+        def _raise_error(self, *args: Any, **kwargs: Any) -> None:
             logger.error(_ReadOnlyChatContext.error_msg)
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
@@ -357,7 +357,7 @@ class _ReadOnlyChatContext(ChatContext):
         append = extend = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
         __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error  # type: ignore
 
-        def copy(self):
+        def copy(self) -> list[ChatItem]:
             return list(self)
 
     def __init__(self, items: list[ChatItem]):

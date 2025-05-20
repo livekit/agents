@@ -78,9 +78,9 @@ class MCPServer(ABC):
         return lk_tools
 
     def _make_function_tool(
-        self, name: str, description: str | None, input_schema: dict
+        self, name: str, description: str | None, input_schema: dict[str, Any]
     ) -> MCPTool:
-        async def _tool_called(raw_arguments: dict) -> Any:
+        async def _tool_called(raw_arguments: dict[str, Any]) -> Any:
             # In case (somehow), the tool is called after the MCPServer aclose.
             if self._client is None:
                 raise ToolError(

@@ -5,9 +5,9 @@ import atexit
 import contextlib
 import enum
 import random
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from importlib.resources import as_file, files
-from typing import NamedTuple, Union, cast
+from typing import Any, NamedTuple, Union, cast
 
 import numpy as np
 
@@ -309,6 +309,7 @@ class BackgroundAudioPlayer:
             if self._thinking_handle and not self._thinking_handle.done():
                 return
 
+            assert self._thinking_sound is not None
             self._thinking_handle = self.play(self._thinking_sound)
 
         elif self._thinking_handle:
@@ -379,8 +380,8 @@ class BackgroundAudioPlayer:
 
 class PlayHandle:
     def __init__(self) -> None:
-        self._done_fut = asyncio.Future()
-        self._stop_fut = asyncio.Future()
+        self._done_fut = asyncio.Future[None]()
+        self._stop_fut = asyncio.Future[None]()
 
     def done(self) -> bool:
         """
@@ -405,13 +406,12 @@ class PlayHandle:
         """
         await asyncio.shield(self._done_fut)
 
-    def __await__(self):
+    def __await__(self) -> Generator[Any, None, PlayHandle]:
         async def _await_impl() -> PlayHandle:
             await self.wait_for_playout()
             return self
 
         return _await_impl().__await__()
-
     def _mark_playout_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._done_fut.set_result(None)

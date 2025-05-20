@@ -145,7 +145,7 @@ class ChatCLI:
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._agent = agent
-        self._done_fut = asyncio.Future()
+        self._done_fut = asyncio.Future[None]()
         self._micro_db = INPUT_DB_MIN
 
         self._audio_input_ch = aio.Chan[rtc.AudioFrame](loop=self._loop)
@@ -154,7 +154,7 @@ class ChatCLI:
         self._output_stream: sd.OutputStream | None = None
         self._cli_mode: Literal["text", "audio"] = "audio"
 
-        self._text_input_buf = []
+        self._text_input_buf: list[str] = []
 
         self._text_sink = _TextOutput(self)
         self._audio_sink = _AudioOutput(self)
@@ -203,7 +203,7 @@ class ChatCLI:
             old_settings = termios.tcgetattr(fd)
             tty.setcbreak(fd)
 
-            def on_input():
+            def on_input() -> None:
                 try:
                     ch = sys.stdin.read(1)
                     stdin_ch.send_nowait(ch)
@@ -284,7 +284,7 @@ class ChatCLI:
             self._agent.output.transcription = None
             self._text_input_buf = []
 
-    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, *_) -> None:
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, *_) -> None:  # type: ignore
         self._output_delay = time.outputBufferDacTime - time.currentTime
 
         FRAME_SAMPLES = 240
@@ -317,7 +317,7 @@ class ChatCLI:
             )
             self._apm.process_reverse_stream(render_frame_for_aec)
 
-    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:
+    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:  # type: ignore
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
         self._apm.set_stream_delay_ms(int(total_delay * 1000))
@@ -396,7 +396,7 @@ class ChatCLI:
 
             await asyncio.sleep(max(0, next_frame - time.perf_counter()))
 
-    def _print_audio_mode(self):
+    def _print_audio_mode(self) -> None:
         amplitude_db = _normalize_db(self._micro_db, db_min=INPUT_DB_MIN, db_max=INPUT_DB_MAX)
         nb_bar = round(amplitude_db * MAX_AUDIO_BAR)
 
@@ -407,7 +407,7 @@ class ChatCLI:
         )
         sys.stdout.flush()
 
-    def _print_text_mode(self):
+    def _print_text_mode(self) -> None:
         sys.stdout.write("\r")
         sys.stdout.flush()
         prompt = "Enter your message: "

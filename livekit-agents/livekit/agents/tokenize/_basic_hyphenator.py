@@ -7,8 +7,8 @@ import re
 # This is English only, it is a good default.
 # Users that want different languages or more advanced hyphenation should use the livekit-plugins-*
 class Hyphenator:
-    def __init__(self, patterns, exceptions=""):
-        self.tree = {}
+    def __init__(self, patterns: str, exceptions: str = "") -> None:
+        self.tree: dict = {}
         for pattern in patterns.split():
             self._insert_pattern(pattern)
 
@@ -18,7 +18,7 @@ class Hyphenator:
             points = [0] + [int(h == "-") for h in re.split(r"[a-z]", ex)]
             self.exceptions[ex.replace("-", "")] = points
 
-    def _insert_pattern(self, pattern):
+    def _insert_pattern(self, pattern: str) -> None:
         # Convert the a pattern like 'a1bc3d4' into a string of chars 'abcd'
         # and a list of points [ 0, 1, 0, 3, 4 ].
         chars = re.sub("[0-9]", "", pattern)

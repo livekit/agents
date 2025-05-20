@@ -100,14 +100,14 @@ class RawFunctionDescription(TypedDict):
     """
 
     name: str
-    description: NotRequired[str]
+    description: NotRequired[str | None]
     parameters: dict[str, object]
 
 
 @dataclass
 class _RawFunctionToolInfo:
     name: str
-    raw_schema: dict
+    raw_schema: dict[str, Any]
 
 
 @runtime_checkable
@@ -122,12 +122,14 @@ Raw_F = TypeVar("Raw_F", bound=Callable[..., Awaitable[Any]])
 
 
 @overload
-def function_tool(f: Raw_F, *, raw_schema: RawFunctionDescription | dict) -> RawFunctionTool: ...
+def function_tool(
+    f: Raw_F, *, raw_schema: RawFunctionDescription | dict[str, Any]
+) -> RawFunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, raw_schema: RawFunctionDescription | dict
+    f: None = None, *, raw_schema: RawFunctionDescription | dict[str, Any]
 ) -> Callable[[Raw_F], RawFunctionTool]: ...
 
 
@@ -148,10 +150,12 @@ def function_tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    raw_schema: RawFunctionDescription | dict | None = None,
+    raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
 ) -> FunctionTool | RawFunctionTool | Callable[[F | Raw_F], FunctionTool | RawFunctionTool]:
     def deco(func: F | Raw_F) -> RawFunctionTool | FunctionTool:
         nonlocal name
+
+        info: _FunctionToolInfo | _RawFunctionToolInfo
         if raw_schema is not None:
             name = raw_schema.get("name")
             parameters = raw_schema.get("parameters")
@@ -181,20 +185,20 @@ def function_tool(
     return deco
 
 
-def is_function_tool(f: Callable) -> TypeGuard[FunctionTool]:
+def is_function_tool(f: Callable[..., Any]) -> TypeGuard[FunctionTool]:
     return hasattr(f, "__livekit_tool_info")
 
 
 def get_function_info(f: FunctionTool) -> _FunctionToolInfo:
-    return getattr(f, "__livekit_tool_info")
+    return cast(_FunctionToolInfo, getattr(f, "__livekit_tool_info"))
 
 
-def is_raw_function_tool(f: Callable) -> TypeGuard[RawFunctionTool]:
+def is_raw_function_tool(f: Callable[..., Any]) -> TypeGuard[RawFunctionTool]:
     return hasattr(f, "__livekit_raw_tool_info")
 
 
 def get_raw_function_info(f: RawFunctionTool) -> _RawFunctionToolInfo:
-    return getattr(f, "__livekit_raw_tool_info")
+    return cast(_RawFunctionToolInfo, getattr(f, "__livekit_raw_tool_info"))
 
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
@@ -225,7 +229,8 @@ class ToolContext:
         for method in find_function_tools(self):
             tools.append(method)
 
-        self._tools_map = {}
+        self._tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
+        info: _FunctionToolInfo | _RawFunctionToolInfo
         for tool in tools:
             if is_raw_function_tool(tool):
                 info = get_raw_function_info(tool)

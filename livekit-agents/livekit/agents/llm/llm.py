@@ -93,7 +93,7 @@ class LLM(
 
     async def aclose(self) -> None: ...
 
-    async def __aenter__(self) -> LLM:
+    async def __aenter__(self) -> LLM[Any]:
         return self
 
     async def __aexit__(
@@ -108,7 +108,7 @@ class LLM(
 class LLMStream(ABC):
     def __init__(
         self,
-        llm: LLM,
+        llm: LLM[Any],
         *,
         chat_ctx: ChatContext,
         tools: list[FunctionTool],
@@ -165,7 +165,7 @@ class LLMStream(ABC):
                 self._emit_error(e, recoverable=False)
                 raise
 
-    def _emit_error(self, api_error: Exception, recoverable: bool):
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
         self._llm.emit(
             "error",
@@ -255,7 +255,7 @@ class LLMStream(ABC):
         This assumes the stream will not call any tools.
         """
 
-        async def _iterable():
+        async def _iterable() -> AsyncIterable[str]:
             async with self:
                 async for chunk in self:
                     if chunk.delta and chunk.delta.content:
