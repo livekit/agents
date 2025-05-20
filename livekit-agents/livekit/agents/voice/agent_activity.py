@@ -855,7 +855,11 @@ class AgentActivity(RecognitionHooks):
 
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=False),
+            UserInputTranscribedEvent(
+                transcript=ev.alternatives[0].text,
+                is_final=False,
+                speaker=ev.alternatives[0].speaker,
+            ),
         )
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
@@ -865,7 +869,11 @@ class AgentActivity(RecognitionHooks):
 
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
+            UserInputTranscribedEvent(
+                transcript=ev.alternatives[0].text,
+                is_final=True,
+                speaker=ev.alternatives[0].speaker,
+            ),
         )
 
     async def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:

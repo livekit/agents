@@ -69,6 +69,7 @@ class STT(stt.STT):
                 operating_point="enhanced",
                 enable_partials=True,
                 max_delay=0.7,
+                speaker_diarization_config={"max_speakers": 2},
             )
         if not is_given(connection_settings):
             connection_settings = ConnectionSettings(  # noqa: B008
@@ -316,6 +317,7 @@ def live_transcription_to_speech_data(data: dict) -> list[stt.SpeechData]:
                 alt.get("confidence", 1.0),
                 alt.get("language", "en"),
             )
+            speaker = alt.get("speaker")
 
             if not content:
                 continue
@@ -326,8 +328,9 @@ def live_transcription_to_speech_data(data: dict) -> list[stt.SpeechData]:
             elif speech_data and start_time == speech_data[-1].end_time:
                 speech_data[-1].text += " " + content
             else:
-                speech_data.append(
-                    stt.SpeechData(language, content, start_time, end_time, confidence)
-                )
+                sd = stt.SpeechData(language, content, start_time, end_time, confidence)
+                if speaker is not None:
+                    sd.speaker = speaker
+                speech_data.append(sd)
 
     return speech_data
