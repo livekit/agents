@@ -22,7 +22,7 @@ STTNode = Callable[
     ],
 ]
 LLMNode = Callable[
-    [llm.ChatContext, list[llm.FunctionTool], ModelSettings],
+    [llm.ChatContext, list[llm.FunctionTool | llm.RawFunctionTool], ModelSettings],
     Union[
         Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]],
         Awaitable[Optional[Union[AsyncIterable[llm.ChatChunk], AsyncIterable[str], str]]],

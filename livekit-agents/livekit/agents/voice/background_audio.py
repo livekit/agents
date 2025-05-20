@@ -102,10 +102,10 @@ class BackgroundAudioPlayer:
         self._publication: rtc.LocalTrackPublication | None = None
         self._lock = asyncio.Lock()
 
-        self._republish_task: asyncio.Task | None = None  # republish the task on reconnect
-        self._mixer_atask: asyncio.Task | None = None
+        self._republish_task: asyncio.Task[None] | None = None  # republish the task on reconnect
+        self._mixer_atask: asyncio.Task[None] | None = None
 
-        self._play_tasks: list[asyncio.Task] = []
+        self._play_tasks: list[asyncio.Task[None]] = []
 
         self._ambient_handle: PlayHandle | None = None
         self._thinking_handle: PlayHandle | None = None
@@ -217,7 +217,7 @@ class BackgroundAudioPlayer:
         self,
         *,
         room: rtc.Room,
-        agent_session: NotGivenOr[AgentSession] = NOT_GIVEN,
+        agent_session: NotGivenOr[AgentSession[Any]] = NOT_GIVEN,
         track_publish_options: NotGivenOr[rtc.TrackPublishOptions] = NOT_GIVEN,
     ) -> None:
         """
@@ -412,6 +412,7 @@ class PlayHandle:
             return self
 
         return _await_impl().__await__()
+
     def _mark_playout_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._done_fut.set_result(None)

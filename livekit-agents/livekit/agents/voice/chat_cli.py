@@ -4,7 +4,7 @@ import asyncio
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import click
 import numpy as np
@@ -17,7 +17,7 @@ from . import io
 from .agent_session import AgentSession
 
 if TYPE_CHECKING:
-    import sounddevice as sd
+    import sounddevice as sd  # type: ignore
 
 MAX_AUDIO_BAR = 30
 INPUT_DB_MIN = -70.0
@@ -139,7 +139,7 @@ class _AudioOutput(io.AudioOutput):
 class ChatCLI:
     def __init__(
         self,
-        agent: AgentSession,
+        agent: AgentSession[Any],
         *,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -169,7 +169,7 @@ class ChatCLI:
         self._output_delay = 0.0
         self._input_delay = 0.0
 
-        self._main_atask: asyncio.Task | None = None
+        self._main_atask: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")

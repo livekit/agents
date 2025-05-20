@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Callable
+from collections.abc import Generator
+from typing import Any, Callable
 
 from .. import llm, utils
 
@@ -26,9 +27,9 @@ class SpeechHandle:
         self._id = speech_id
         self._step_index = step_index
         self._allow_interruptions = allow_interruptions
-        self._interrupt_fut = asyncio.Future()
-        self._authorize_fut = asyncio.Future()
-        self._playout_done_fut = asyncio.Future()
+        self._interrupt_fut = asyncio.Future[None]()
+        self._authorize_fut = asyncio.Future[None]()
+        self._playout_done_fut = asyncio.Future[None]()
         self._parent = parent
 
         self._chat_message: llm.ChatMessage | None = None
@@ -107,7 +108,7 @@ class SpeechHandle:
     async def wait_for_playout(self) -> None:
         await asyncio.shield(self._playout_done_fut)
 
-    def __await__(self):
+    def __await__(self) -> Generator[None, None, SpeechHandle]:
         async def _await_impl() -> SpeechHandle:
             await self.wait_for_playout()
             return self
@@ -117,7 +118,7 @@ class SpeechHandle:
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
         self._playout_done_fut.add_done_callback(lambda _: callback(self))
 
-    async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future]) -> None:
+    async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future[Any]]) -> None:
         await asyncio.wait(
             [asyncio.gather(*aw, return_exceptions=True), self._interrupt_fut],
             return_when=asyncio.FIRST_COMPLETED,
