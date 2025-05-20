@@ -151,9 +151,15 @@ def function_tool(
     raw_schema: RawFunctionDescription | dict | None = None,
 ) -> FunctionTool | RawFunctionTool | Callable[[F | Raw_F], FunctionTool | RawFunctionTool]:
     def deco(func: F | Raw_F) -> RawFunctionTool | FunctionTool:
+        nonlocal name
         if raw_schema is not None:
-            if not raw_schema.get("name") or not raw_schema.get("parameters"):
+            name = raw_schema.get("name")
+            parameters = raw_schema.get("parameters")
+
+            if name is None or parameters is None:
                 raise ValueError("raw function description must contain a name and parameters key")
+            if not name:
+                raise ValueError("raw function name can not be empty")
 
             info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
             setattr(func, "__livekit_raw_tool_info", info)

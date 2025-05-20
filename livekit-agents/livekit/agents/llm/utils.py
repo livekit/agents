@@ -20,11 +20,11 @@ from pydantic_core import PydanticUndefined, from_json
 from typing_extensions import TypeVar
 
 from livekit import rtc
-from livekit.agents import llm, utils
 
 from ..log import logger
+from ..utils import images
 from . import _strict
-from .chat_context import ChatContext
+from .chat_context import ChatContext, ImageContent
 from .tool_context import (
     FunctionTool,
     RawFunctionTool,
@@ -121,7 +121,7 @@ class SerializedImage:
     external_url: str | None = None
 
 
-def serialize_image(image: llm.ImageContent) -> SerializedImage:
+def serialize_image(image: ImageContent) -> SerializedImage:
     if isinstance(image.image, str):
         if image.image.startswith("data:"):
             header, b64_data = image.image.split(",", 1)
@@ -154,14 +154,14 @@ def serialize_image(image: llm.ImageContent) -> SerializedImage:
             )
 
     elif isinstance(image.image, rtc.VideoFrame):
-        opts = utils.images.EncodeOptions()
+        opts = images.EncodeOptions()
         if image.inference_width and image.inference_height:
-            opts.resize_options = utils.images.ResizeOptions(
+            opts.resize_options = images.ResizeOptions(
                 width=image.inference_width,
                 height=image.inference_height,
                 strategy="scale_aspect_fit",
             )
-        encoded_data = utils.images.encode(image.image, opts)
+        encoded_data = images.encode(image.image, opts)
 
         return SerializedImage(
             data_bytes=encoded_data,

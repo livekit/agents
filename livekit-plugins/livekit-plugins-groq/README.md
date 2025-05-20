@@ -1,6 +1,8 @@
-# LiveKit Plugins Groq
+# Groq plugin for LiveKit Agents
 
-Agent Framework plugin for services from Groq. Currently supporting STT, and LLM
+Support for STT, TTS, and LLM with [Groq](https://www.groq.com/) fast inference.
+
+See [https://docs.livekit.io/agents/integrations/groq/](https://docs.livekit.io/agents/integrations/groq/) for more information.
 
 ## Installation
 

@@ -301,11 +301,12 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                 ]
+                tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        [tasks_group, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
                     for task in done:
@@ -318,6 +319,7 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await tasks_group
             finally:
                 if ws is not None:
                     await ws.close()

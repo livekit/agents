@@ -51,8 +51,8 @@ jobs:
         run: |
           source .venv/bin/activate
           BRANCH="${GITHUB_REF#refs/heads/}"
-          # If branch is main, upload to /v1
-          if [[ $BRANCH == "main" ]]; then
+          # If branch is not 0.x, upload to /v1
+          if [[ $BRANCH != "0.x" ]]; then
             aws s3 cp docs/ s3://livekit-docs/python/v1 --recursive
           # Else, upload to root, preserving the v1 directory
           else

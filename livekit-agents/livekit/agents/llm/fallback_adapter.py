@@ -7,8 +7,7 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from livekit.agents._exceptions import APIConnectionError, APIError
-
+from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext

@@ -963,7 +963,7 @@ wheels = [
 
 [[package]]
 name = "google-genai"
-version = "1.12.1"
+version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -974,9 +974,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/38/9c/c907dbea921663bb7c41f415337bedd08259d17da8d156396c7237611744/google_genai-1.12.1.tar.gz", hash = "sha256:5c7eda422360643ce602a3f6b23152470ec1039310ef40080cbe4e71237f6391", size = 167752 }
+sdist = { url = "https://files.pythonhosted.org/packages/00/ba/c8e4c0b60c6dda40e51e2125709d097c2609fce1389b4a05f40cdd51c1ec/google_genai-1.14.0.tar.gz", hash = "sha256:7c608de5bb173486a546f5ec4562255c26bae72d33d758a3207bb26f695d0087", size = 169938 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/29/2c/5b454dec837328eb167e78f45a14da502af223f8b94a4824e2fd0df74f19/google_genai-1.12.1-py3-none-any.whl", hash = "sha256:7cbc1bc029712946ce41bcf80c0eaa89eb8c09c308efbbfe30fd491f402c258a", size = 165940 },
+    { url = "https://files.pythonhosted.org/packages/12/86/dde4cd028c8b0716b3f1f6d202647396a87a4ecbbdc7e4beb59b9d9284d3/google_genai-1.14.0-py3-none-any.whl", hash = "sha256:5916ee985bf69ac7b68c4488949225db71e21579afc7ba5ecd5321173b60d3b2", size = 168862 },
 ]
 
 [[package]]
@@ -1178,15 +1178,20 @@ wheels = [
 
 [[package]]
 name = "hume"
-version = "0.4.2"
+version = "0.8.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "requests" },
+    { name = "aiofiles" },
+    { name = "eval-type-backport" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
     { name = "typing-extensions" },
+    { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/cf/f834b3e1505b84c3daa4a5055c03b23eb7c2f05c2a78d7f5b7ddb3fa477d/hume-0.4.2.tar.gz", hash = "sha256:3a3c05a7081d2d6a4824c746a1e5b4935ac7060d025d5142aa1e68a3589fb3e7", size = 19826 }
+sdist = { url = "https://files.pythonhosted.org/packages/85/a7/13dcfa5eb32b8ff8a4d13f20fd72b01f86b048a0ee540b3c6189cfa0fc5f/hume-0.8.3.tar.gz", hash = "sha256:43faf4ea645c3784f8cc302641ac3f38af6f5b9d769c91658714602b2e09b963", size = 136851 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/43/4592759e302ce014b55e8d7be7161db4b29eed44df3e6a300d0f24dfb771/hume-0.4.2-py3-none-any.whl", hash = "sha256:64a59db184d090e39146c028f5c018a20c8d49ceda547ec5994320edd06d74f2", size = 31817 },
+    { url = "https://files.pythonhosted.org/packages/01/07/f25ae894713b4a92cb992bd14ea97c6b1e64399bc94b5c80a76a8ba407cd/hume-0.8.3-py3-none-any.whl", hash = "sha256:ceac4a2494908bb733dc68481128b2f2c0b54237ae67b287dafbd961ab88174b", size = 328010 },
 ]
 
 [[package]]
@@ -1392,7 +1397,7 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "1.0.6"
+version = "1.0.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1401,13 +1406,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/56/79d5749a781c3a5b7abf585344abf6fcba454b6804240799e5f6b951f12a/livekit-1.0.6.tar.gz", hash = "sha256:782b6dd99e28354b0d67b2464338f5b925c00a427d34da7a7ade9d9798053188", size = 309379 }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/6a/3e2e1b84c3ca0895f5d5453de93b84ca3bdb6dee3d8118cba059a1433fa7/livekit-1.0.7.tar.gz", hash = "sha256:e8b765fe9e2346a724d72835d6658d1accd21f10381e5be1e7c4bde11d8eb35f", size = 309968 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c2/43/e0e71ad63f8e8f4429a65b4e4709aac2c85a258addbc2dcdcbc9c318380a/livekit-1.0.6-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:938c4a62d08c5c9f4a577d28289193d20c79f3bb6e49ab866015297fc87c2925", size = 10772952 },
-    { url = "https://files.pythonhosted.org/packages/8d/e6/d6b0e90c2b66c5745e5957e534971f6cbb1fbe4f5feb8870b9a63f477399/livekit-1.0.6-py3-none-macosx_11_0_arm64.whl", hash = "sha256:ba850e7ae8eff217176b3f8d35d772de65148e896b19921fc5ee0e09ee2cf637", size = 9449530 },
-    { url = "https://files.pythonhosted.org/packages/27/a0/5a6b6dae2565a495008657f478fc22bfa2f9be375db66deb873979e504f3/livekit-1.0.6-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:295ba4b7252ed2c0322128586db6fe3a3c68ee799c95d8acfc9ea74990ca66a7", size = 10532248 },
-    { url = "https://files.pythonhosted.org/packages/87/8c/52c2dad375f06a1487745ee75fbfe3e4dd2a616a641c938e71a5b15cdf1b/livekit-1.0.6-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:0ffda3340d977435df2c1b03d5a512de29215a7144d2e282eb7aa764dfe1d54e", size = 12049921 },
-    { url = "https://files.pythonhosted.org/packages/d0/c4/b05062a673a66664e4cc4c113ed1d110863babeb573eb0a47a55bb9fdf09/livekit-1.0.6-py3-none-win_amd64.whl", hash = "sha256:a0503846cdd5fd9bdbe707c0d248f1c4bcbb33355787f418d35cc734ec64c8e0", size = 11378084 },
+    { url = "https://files.pythonhosted.org/packages/28/41/a65f1f5b75bec17b1b5424bf163a8ab6ac26544922b4ce3abbf448cbee9c/livekit-1.0.7-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:ea7c9edc08d8f2efd6d42226b705adfb952de0ce386c814e84f0ea4f0cd27387", size = 10779026 },
+    { url = "https://files.pythonhosted.org/packages/34/3c/9a97a46a12af18c5656f6a2f27e6a57a639c5d92d20cad794b9929f422bf/livekit-1.0.7-py3-none-macosx_11_0_arm64.whl", hash = "sha256:287a35f1a4b4b9d6383210282db5d23dc295934b239933cffbc3eef4096730c1", size = 9458748 },
+    { url = "https://files.pythonhosted.org/packages/f2/87/324183790b0a10fa55de2ecfff072ce856cf51d0541b9c27137b7db99be8/livekit-1.0.7-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:469b9259de3dc03c3ed48ff4134d7652789fc0a3a2a98ba7166db0071b2a71bb", size = 10541712 },
+    { url = "https://files.pythonhosted.org/packages/26/10/fe53f2099e498a015db847a8ce911e7f39e9fbbe503f3865f82107294ccf/livekit-1.0.7-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:e20520f3d295ddd18efe4f6c7dfe7a231798c91b5ad0996b8838abdcbcd13bba", size = 12051535 },
+    { url = "https://files.pythonhosted.org/packages/95/3a/893c1a9a1e245523aebc70905d688e4abc33c1fac5332aa1f8779d36e058/livekit-1.0.7-py3-none-win_amd64.whl", hash = "sha256:c5a1fe8fd4e503de2d9e80780549ceef82a115bc8ab0f87344cdbcbcf1a65a63", size = 11377599 },
 ]
 
 [[package]]
@@ -1490,6 +1495,9 @@ hume = [
 images = [
     { name = "pillow" },
 ]
+mcp = [
+    { name = "mcp", marker = "python_full_version >= '3.10'" },
+]
 neuphonic = [
     { name = "livekit-plugins-neuphonic" },
 ]
@@ -1533,7 +1541,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = ">=1.0.6,<2" },
+    { name = "livekit", specifier = ">=1.0.7,<2" },
     { name = "livekit-api", specifier = ">=1.0.2,<2" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
@@ -1562,6 +1570,7 @@ requires-dist = [
     { name = "livekit-plugins-tavus", marker = "extra == 'tavus'", editable = "livekit-plugins/livekit-plugins-tavus" },
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "livekit-protocol", specifier = "~=1.0" },
+    { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'mcp'", specifier = ">=1.6.0,<2" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
@@ -1575,7 +1584,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hume", "images", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechify", "speechmatics", "tavus", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hume", "images", "mcp", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechify", "speechmatics", "tavus", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1603,7 +1612,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.34" },
+    { name = "anthropic", specifier = ">=0.41" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -1623,15 +1632,13 @@ source = { editable = "livekit-plugins/livekit-plugins-aws" }
 dependencies = [
     { name = "aioboto3" },
     { name = "amazon-transcribe" },
-    { name = "boto3" },
     { name = "livekit-agents" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aioboto3", specifier = "==14.1.0" },
-    { name = "amazon-transcribe", specifier = "==0.6.2" },
-    { name = "boto3", specifier = "==1.37.1" },
+    { name = "aioboto3", specifier = ">=14.1.0" },
+    { name = "amazon-transcribe", specifier = ">=0.6.2" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -1768,8 +1775,8 @@ dependencies = [
 requires-dist = [
     { name = "google-auth", specifier = ">=2,<3" },
     { name = "google-cloud-speech", specifier = ">=2,<3" },
-    { name = "google-cloud-texttospeech", specifier = ">=2,<3" },
-    { name = "google-genai", specifier = ">=1.12.1" },
+    { name = "google-cloud-texttospeech", specifier = ">=2.24,<3" },
+    { name = "google-genai", specifier = ">=1.14.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -1803,7 +1810,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
-    { name = "hume" },
+    { name = "hume", specifier = ">=0.8.3" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -2149,6 +2156,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ab/5e/5e53d26b42ab75491cda89b871dab9e97c840bf12c63ec58a1919710cd06/marshmallow-3.26.1.tar.gz", hash = "sha256:e6d8affb6cb61d39d26402096dc0aee12d5a26d490a121f118d2e81dc0719dc6", size = 221825 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/34/75/51952c7b2d3873b44a0028b1bd26a25078c18f92f256608e8d1dc61b39fd/marshmallow-3.26.1-py3-none-any.whl", hash = "sha256:3350409f20a70a7e4e11a27661187b77cdcaeb20abca41c1454fe33636bea09c", size = 50878 },
+]
+
+[[package]]
+name = "mcp"
+version = "1.7.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio", marker = "python_full_version >= '3.10'" },
+    { name = "httpx", marker = "python_full_version >= '3.10'" },
+    { name = "httpx-sse", marker = "python_full_version >= '3.10'" },
+    { name = "pydantic", marker = "python_full_version >= '3.10'" },
+    { name = "pydantic-settings", marker = "python_full_version >= '3.10'" },
+    { name = "python-multipart", marker = "python_full_version >= '3.10'" },
+    { name = "sse-starlette", marker = "python_full_version >= '3.10'" },
+    { name = "starlette", marker = "python_full_version >= '3.10'" },
+    { name = "uvicorn", marker = "python_full_version >= '3.10' and sys_platform != 'emscripten'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/ae/588691c45b38f4fbac07fa3d6d50cea44cc6b35d16ddfdf26e17a0467ab2/mcp-1.7.1.tar.gz", hash = "sha256:eb4f1f53bd717f75dda8a1416e00804b831a8f3c331e23447a03b78f04b43a6e", size = 230903 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/79/fe0e20c3358997a80911af51bad927b5ea2f343ef95ab092b19c9cc48b59/mcp-1.7.1-py3-none-any.whl", hash = "sha256:f7e6108977db6d03418495426c7ace085ba2341b75197f8727f96f9cfd30057a", size = 100365 },
 ]
 
 [[package]]
@@ -3314,6 +3341,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-multipart"
+version = "0.0.20"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/87/f44d7c9f274c7ee665a29b885ec97089ec5dc034c7f3fafa03da9e39a09e/python_multipart-0.0.20.tar.gz", hash = "sha256:8dd0cab45b8e23064ae09147625994d090fa46f5b0d1e13af944c331a7fa9d13", size = 37158 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/58/38b5afbc1a800eeea951b9285d3912613f2603bdf897a4ab0f4bd7f405fc/python_multipart-0.0.20-py3-none-any.whl", hash = "sha256:8a62d3a8335e06589fe01f2a3e178cdcc632f3fbe0d492ad9ee0ec35aab1f104", size = 24546 },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4065,6 +4101,19 @@ wheels = [
 ]
 
 [[package]]
+name = "sse-starlette"
+version = "2.3.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio", marker = "python_full_version >= '3.10'" },
+    { name = "starlette", marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/86/35/7d8d94eb0474352d55f60f80ebc30f7e59441a29e18886a6425f0bccd0d3/sse_starlette-2.3.3.tar.gz", hash = "sha256:fdd47c254aad42907cfd5c5b83e2282be15be6c51197bf1a9b70b8e990522072", size = 17499 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5d/20/52fdb5ebb158294b0adb5662235dd396fc7e47aa31c293978d8d8942095a/sse_starlette-2.3.3-py3-none-any.whl", hash = "sha256:8b0a0ced04a329ff7341b01007580dd8cf71331cc21c0ccea677d500618da1e0", size = 10235 },
+]
+
+[[package]]
 name = "standard-aifc"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4096,6 +4145,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/e3/ce8d38cb2d70e05ffeddc28bb09bad77cfef979eb0a299c9117f7ed4e6a9/standard_sunau-3.13.0.tar.gz", hash = "sha256:b319a1ac95a09a2378a8442f403c66f4fd4b36616d6df6ae82b8e536ee790908", size = 9368 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/34/ae/e3707f6c1bc6f7aa0df600ba8075bfb8a19252140cd595335be60e25f9ee/standard_sunau-3.13.0-py3-none-any.whl", hash = "sha256:53af624a9529c41062f4c2fd33837f297f3baa196b0cfceffea6555654602622", size = 7364 },
+]
+
+[[package]]
+name = "starlette"
+version = "0.46.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio", marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/20/08dfcd9c983f6a6f4a1000d934b9e6d626cff8d2eeb77a89a68eef20a2b7/starlette-0.46.2.tar.gz", hash = "sha256:7f7361f34eed179294600af672f565727419830b54b7b084efe44bb82d2fccd5", size = 2580846 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8b/0c/9d30a4ebeb6db2b25a841afbb80f6ef9a854fc3b41be131d249a977b4959/starlette-0.46.2-py3-none-any.whl", hash = "sha256:595633ce89f8ffa71a015caed34a5b2dc1c0cdb3f0f1fbd1e69339cf2abeec35", size = 72037 },
 ]
 
 [[package]]
@@ -4338,6 +4399,20 @@ resolution-markers = [
 sdist = { url = "https://files.pythonhosted.org/packages/aa/63/e53da845320b757bf29ef6a9062f5c669fe997973f966045cb019c3f4b66/urllib3-2.3.0.tar.gz", hash = "sha256:f8c5449b3cf0861679ce7e0503c7b44b5ec981bec0d1d3795a07f1ba96f0204d", size = 307268 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/19/4ec628951a74043532ca2cf5d97b7b14863931476d117c471e8e2b1eb39f/urllib3-2.3.0-py3-none-any.whl", hash = "sha256:1cee9ad369867bfdbbb48b7dd50374c0967a0bb7710050facf0dd6911440e3df", size = 128369 },
+]
+
+[[package]]
+name = "uvicorn"
+version = "0.34.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click", marker = "python_full_version >= '3.10'" },
+    { name = "h11", marker = "python_full_version >= '3.10'" },
+    { name = "typing-extensions", marker = "python_full_version == '3.10.*'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/ae/9bbb19b9e1c450cf9ecaef06463e40234d98d95bf572fab11b4f19ae5ded/uvicorn-0.34.2.tar.gz", hash = "sha256:0e929828f6186353a80b58ea719861d2629d766293b6d19baf086ba31d4f3328", size = 76815 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/4b/4cef6ce21a2aaca9d852a6e84ef4f135d99fcd74fa75105e2fc0c8308acd/uvicorn-0.34.2-py3-none-any.whl", hash = "sha256:deb49af569084536d269fe0a6d67e3754f104cf03aba7c11c40f01aadf33c403", size = 62483 },
 ]
 
 [[package]]

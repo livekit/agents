@@ -10,9 +10,9 @@ from typing import Any, Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
-from livekit.agents._exceptions import APIConnectionError, APIError
 
 from .. import utils
+from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..types import (
@@ -59,7 +59,7 @@ class LLMError(BaseModel):
     type: Literal["llm_error"] = "llm_error"
     timestamp: float
     label: str
-    error: APIError = Field(..., exclude=True)
+    error: Exception = Field(..., exclude=True)
     recoverable: bool
 
 
@@ -161,7 +161,11 @@ class LLMStream(ABC):
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
+    def _emit_error(self, api_error: Exception, recoverable: bool):
         self._current_attempt_has_error = True
         self._llm.emit(
             "error",

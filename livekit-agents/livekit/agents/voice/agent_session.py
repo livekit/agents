@@ -5,7 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
+from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
 
 from livekit import rtc
 
@@ -32,12 +32,16 @@ from .events import (
 )
 from .speech_handle import SpeechHandle
 
+if TYPE_CHECKING:
+    from ..llm import mcp
+
 
 @dataclass
 class VoiceOptions:
     allow_interruptions: bool
     discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
+    min_interruption_words: int
     min_endpointing_delay: float
     max_endpointing_delay: float
     max_tool_steps: int
@@ -102,10 +106,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
+        min_interruption_words: int = 0,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
@@ -140,6 +146,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             vad (vad.VAD, optional): Voice-activity detector
             llm (llm.LLM | llm.RealtimeModel, optional): LLM or RealtimeModel
             tts (tts.TTS, optional): Text-to-speech engine.
+            mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
+                providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             allow_interruptions (bool): Whether the user can interrupt the
                 agent mid-utterance. Default ``True``.
@@ -148,6 +156,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 interrupted. Default ``True``.
             min_interruption_duration (float): Minimum speech length (s) to
                 register as an interruption. Default ``0.5`` s.
+            min_interruption_words (int): Minimum number of words to consider
+                an interruption, only used if stt enabled. Default ``0``.
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
                 or an EOU model) before it declares the user’s turn complete.
@@ -177,6 +187,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions=allow_interruptions,
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
+            min_interruption_words=min_interruption_words,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
@@ -187,6 +198,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+        self._mcp_servers = mcp_servers or None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -243,6 +255,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def vad(self) -> vad.VAD | None:
         return self._vad
+
+    @property
+    def mcp_servers(self) -> list[mcp.MCPServer] | None:
+        return self._mcp_servers
 
     @property
     def input(self) -> io.AgentInput:
@@ -556,6 +572,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         if self._closing_task or error.recoverable:
             return
+
+        logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
 
         async def drain_and_close() -> None:
             await self.drain()

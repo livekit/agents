@@ -1,6 +1,6 @@
-# LiveKit Plugins NLTK
+# NLTK plugin for LiveKit Agents
 
-Agent Framework plugin for [NLTK](https://www.nltk.org/)-based text processing. Currently featuring a `SentenceTokenizer`.
+Support for [NLTK](https://www.nltk.org/)-based text processing. Currently featuring a `SentenceTokenizer`.
 
 ## Installation
 

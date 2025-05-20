@@ -173,7 +173,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 if self._warmed_proc_queue.qsize() >= self._default_num_idle_processes:
                     self._idle_ready.set()
             except Exception:
-                pass
+                logger.exception("error initializing process", extra=proc.logging_extra())
 
         monitor_task = asyncio.create_task(self._monitor_process_task(proc))
         self._monitor_tasks.add(monitor_task)

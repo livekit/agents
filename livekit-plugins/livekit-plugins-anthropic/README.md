@@ -1,6 +1,8 @@
-# LiveKit Plugins Anthropic
+# Anthropic plugin for LiveKit Agents
 
-Agent Framework plugin for services from Anthropic.
+Support for the Claude family of LLMs from Anthropic.
+
+See [https://docs.livekit.io/agents/integrations/llm/anthropic/](https://docs.livekit.io/agents/integrations/llm/anthropic/) for more information.
 
 ## Installation
 

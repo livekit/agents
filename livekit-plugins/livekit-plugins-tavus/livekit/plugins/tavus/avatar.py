@@ -78,7 +78,7 @@ class AvatarSession:
             )
 
         livekit_token = (
-            api.AccessToken()
+            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)

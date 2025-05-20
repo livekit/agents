@@ -52,6 +52,7 @@ from .job import (
     RunningJobInfo,
 )
 from .log import DEV_LEVEL, logger
+from .plugin import Plugin
 from .types import NOT_GIVEN, NotGivenOr
 from .utils import is_given
 from .utils.hw import get_cpu_monitor
@@ -173,7 +174,8 @@ class WorkerOptions:
     Defaults to 0 (disabled).
     """  # noqa: E501
 
-    """Number of idle processes to keep warm."""
+    drain_timeout: int = 1800
+    """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
         dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
     )
@@ -213,6 +215,13 @@ class WorkerOptions:
     """HTTP proxy used to connect to the LiveKit server.
 
     By default it uses ``HTTP_PROXY`` or ``HTTPS_PROXY`` from environment
+    """
+    multiprocessing_context: Literal["spawn", "forkserver"] = (
+        "spawn" if not sys.platform.startswith("linux") else "forkserver"
+    )
+    """The multiprocessing context to use.
+
+    By default it uses "spawn" on all platforms, but "forkserver" on Linux.
     """
 
     def validate_config(self, devmode: bool):
@@ -277,9 +286,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._devmode = devmode
         self._register = register
 
-        # using spawn context for all platforms. We may have further optimizations for
-        # Linux with forkserver, but for now, this is the safest option
-        mp_ctx = mp.get_context("spawn")
+        self._mp_ctx = mp.get_context(self._opts.multiprocessing_context)
 
         self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = None
         if len(_InferenceRunner.registered_runners) > 0:
@@ -292,7 +299,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 ping_interval=5,
                 ping_timeout=60,
                 high_ping_threshold=2.5,
-                mp_ctx=mp_ctx,
+                mp_ctx=self._mp_ctx,
                 loop=self._loop,
                 http_proxy=opts.http_proxy or None,
             )
@@ -304,7 +311,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             loop=self._loop,
             job_executor_type=opts.job_executor_type,
             inference_executor=self._inference_executor,
-            mp_ctx=mp_ctx,
+            mp_ctx=self._mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,
             memory_warn_mb=opts.job_memory_warn_mb,
@@ -385,6 +392,11 @@ class Worker(utils.EventEmitter[EventTypes]):
             "starting worker",
             extra={"version": __version__, "rtc-version": rtc.__version__},
         )
+
+        if self._opts.multiprocessing_context == "forkserver":
+            plugin_packages = [p.package for p in Plugin.registered_plugins]
+            logger.info("preloading plugins", extra={"packages": plugin_packages})
+            self._mp_ctx.set_forkserver_preload(plugin_packages)
 
         if self._inference_executor is not None:
             logger.info("starting inference executor")

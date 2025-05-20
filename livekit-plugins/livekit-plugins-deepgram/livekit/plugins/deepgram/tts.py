@@ -5,7 +5,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from urllib.parse import urlencode
 
 import aiohttp
 
@@ -25,6 +24,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from ._utils import _to_deepgram_url
 from .log import logger
 
 BASE_URL = "https://api.deepgram.com/v1/speak"
@@ -44,7 +44,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: str = "aura-asteria-en",
+        model: str = "aura-2-andromeda-en",
         encoding: str = "linear16",
         sample_rate: int = 24000,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -57,7 +57,7 @@ class TTS(tts.TTS):
         Create a new instance of Deepgram TTS.
 
         Args:
-            model (str): TTS model to use. Defaults to "aura-asteria-en".
+            model (str): TTS model to use. Defaults to "aura-2-andromeda-en".
             encoding (str): Audio encoding to use. Defaults to "linear16".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
@@ -221,7 +221,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                 },
                 json={"text": self._input_text},
-                timeout=self._conn_options.timeout,
+                timeout=aiohttp.ClientTimeout(connect=self._conn_options.timeout, total=30),
             ) as res:
                 if res.status != 200:
                     raise APIStatusError(
@@ -436,18 +436,3 @@ class SynthesizeStream(tts.SynthesizeStream):
             finally:
                 if ws is not None and not ws.closed:
                     await ws.close()
-
-
-def _to_deepgram_url(
-    opts: dict,
-    base_url: str,
-    *,
-    websocket: bool,
-) -> str:
-    if websocket and base_url.startswith("http"):
-        base_url = base_url.replace("http", "ws", 1)
-
-    elif not websocket and base_url.startswith("ws"):
-        base_url = base_url.replace("ws", "http", 1)
-
-    return f"{base_url}?{urlencode(opts, doseq=True)}"
