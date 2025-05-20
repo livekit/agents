@@ -57,7 +57,11 @@ from openai.types.beta.realtime import (
     session_update_event,
 )
 from openai.types.beta.realtime.response_create_event import Response
-from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
+from openai.types.beta.realtime.session import (
+    InputAudioNoiseReduction,
+    InputAudioTranscription,
+    TurnDetection,
+)
 
 from ..log import logger
 
@@ -89,6 +93,7 @@ class _RealtimeOptions:
     temperature: float
     tool_choice: llm.ToolChoice | None
     input_audio_transcription: InputAudioTranscription | None
+    input_audio_noise_reduction: InputAudioNoiseReduction | None
     turn_detection: TurnDetection | None
     api_key: str
     base_url: str
@@ -174,6 +179,7 @@ class RealtimeModel(llm.RealtimeModel):
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
@@ -193,6 +199,7 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: str | None = None,
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
@@ -208,6 +215,7 @@ class RealtimeModel(llm.RealtimeModel):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -257,6 +265,9 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription=input_audio_transcription
             if is_given(input_audio_transcription)
             else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+            input_audio_noise_reduction=input_audio_noise_reduction
+            if is_given(input_audio_noise_reduction)
+            else None,
             turn_detection=turn_detection if is_given(turn_detection) else DEFAULT_TURN_DETECTION,
             api_key=api_key,
             base_url=base_url_val,
@@ -280,6 +291,7 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: str | None = None,
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: float = 0.8,
         http_session: aiohttp.ClientSession | None = None,
@@ -296,6 +308,7 @@ class RealtimeModel(llm.RealtimeModel):
             base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
             input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+            input_audio_noise_reduction (InputAudioNoiseReduction or None, optional): Configuration for input audio noise reduction. `near_field` is for close-talking microphones such as headphones, `far_field` is for far-field microphones such as laptop or conference room microphones. Defaults to None.
             turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
@@ -342,6 +355,7 @@ class RealtimeModel(llm.RealtimeModel):
         return cls(
             voice=voice,
             input_audio_transcription=input_audio_transcription,
+            input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection,
             temperature=temperature,
             api_key=api_key,
@@ -358,8 +372,21 @@ class RealtimeModel(llm.RealtimeModel):
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
     ) -> None:
+        """
+        Update the options for this RealtimeModel instance.
+
+        Args:
+            voice: Voice setting for audio outputs.
+            temperature: Sampling temperature for response generation.
+            turn_detection: Options for server-based voice activity detection (VAD).
+            input_audio_noise_reduction: Configuration for input audio noise reduction.
+                `near_field` is for close-talking microphones such as headphones,
+                `far_field` is for far-field microphones such as laptop or conference rooms.
+            tool_choice: Controls how the model uses tools.
+        """
         if is_given(voice):
             self._opts.voice = voice
 
@@ -369,6 +396,9 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(turn_detection):
             self._opts.turn_detection = turn_detection
 
+        if is_given(input_audio_noise_reduction):
+            self._opts.input_audio_noise_reduction = input_audio_noise_reduction
+
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
 
@@ -377,6 +407,7 @@ class RealtimeModel(llm.RealtimeModel):
                 voice=voice,
                 temperature=temperature,
                 turn_detection=turn_detection,
+                input_audio_noise_reduction=input_audio_noise_reduction,
                 tool_choice=tool_choice,
             )
 
@@ -644,7 +675,9 @@ class RealtimeSession(
 
     def _initial_session_update(self) -> None:
         input_audio_transcription = self._realtime_model._opts.input_audio_transcription
-        input_audio_transcription = (
+        input_audio_transcription_session: (
+            session_update_event.SessionInputAudioTranscription | None
+        ) = (
             session_update_event.SessionInputAudioTranscription.model_validate(
                 input_audio_transcription.model_dump(
                     by_alias=True,
@@ -657,7 +690,7 @@ class RealtimeSession(
         )
 
         turn_detection = self._realtime_model._opts.turn_detection
-        turn_detection = (
+        turn_detection_session: session_update_event.SessionTurnDetection | None = (
             session_update_event.SessionTurnDetection.model_validate(
                 turn_detection.model_dump(
                     by_alias=True,
@@ -666,6 +699,21 @@ class RealtimeSession(
                 )
             )
             if turn_detection
+            else None
+        )
+
+        input_audio_noise_reduction = self._realtime_model._opts.input_audio_noise_reduction
+        input_audio_noise_reduction_session: (
+            session_update_event.SessionInputAudioNoiseReduction | None
+        ) = (
+            session_update_event.SessionInputAudioNoiseReduction.model_validate(
+                input_audio_noise_reduction.model_dump(
+                    by_alias=True,
+                    exclude_unset=True,
+                    exclude_defaults=True,
+                )
+            )
+            if input_audio_noise_reduction
             else None
         )
 
@@ -681,8 +729,9 @@ class RealtimeSession(
                     input_audio_format="pcm16",
                     output_audio_format="pcm16",
                     modalities=["text", "audio"],
-                    turn_detection=turn_detection,
-                    input_audio_transcription=input_audio_transcription,
+                    turn_detection=turn_detection_session,
+                    input_audio_transcription=input_audio_transcription_session,
+                    input_audio_noise_reduction=input_audio_noise_reduction_session,
                     temperature=self._realtime_model._opts.temperature,
                     tool_choice=_to_oai_tool_choice(self._realtime_model._opts.tool_choice),
                 ),
@@ -705,6 +754,7 @@ class RealtimeSession(
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
@@ -723,6 +773,9 @@ class RealtimeSession(
         if is_given(turn_detection):
             self._realtime_model._opts.turn_detection = turn_detection
             kwargs["turn_detection"] = turn_detection
+
+        if is_given(input_audio_noise_reduction):
+            kwargs["input_audio_noise_reduction"] = input_audio_noise_reduction
 
         if kwargs:
             self.send_event(
@@ -750,7 +803,7 @@ class RealtimeSession(
                 self._remote_chat_ctx.to_chat_ctx(), chat_ctx
             )
 
-            futs = []
+            futs: list[asyncio.Future[None]] = []
 
             for msg_id in diff_ops.to_remove:
                 event_id = utils.shortuuid("chat_ctx_delete_")
@@ -761,7 +814,8 @@ class RealtimeSession(
                         event_id=event_id,
                     )
                 )
-                futs.append(f := asyncio.Future())
+                f: asyncio.Future[None] = asyncio.Future()
+                futs.append(f)
                 self._item_delete_future[msg_id] = f
 
             for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1316,16 +1370,16 @@ def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
         conversation_item.output = item.output
 
     elif item.type == "message":
-        role = "system" if item.role == "developer" else item.role
+        role_value = "system" if item.role == "developer" else item.role
         conversation_item.type = "message"
-        conversation_item.role = role
+        conversation_item.role = role_value  # type: ignore
 
         content_list: list[ConversationItemContent] = []
         for c in item.content:
             if isinstance(c, str):
                 content_list.append(
                     ConversationItemContent(
-                        type=("text" if role == "assistant" else "input_text"),
+                        type=("text" if role_value == "assistant" else "input_text"),
                         text=c,
                     )
                 )
@@ -1398,7 +1452,7 @@ def _openai_item_to_livekit_item(item: ConversationItem) -> llm.ChatItem:
 
 
 def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
-    audio_data = b"\x00\x00" * (SAMPLE_RATE * duration)
+    audio_data = b"\x00\x00" * int(SAMPLE_RATE * duration)
     return llm.ChatMessage(
         id=utils.shortuuid(_MOCK_AUDIO_ID_PREFIX),
         role="user",
