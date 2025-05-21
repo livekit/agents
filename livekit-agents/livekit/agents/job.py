@@ -274,7 +274,7 @@ class JobContext:
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
-    def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:
+    def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
         task = asyncio.create_task(
             self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
@@ -290,7 +290,7 @@ class JobContext:
         trunk_id: str,
         participant_identity: str,
         participant_name: NotGivenOr[str] = "SIP-participant",
-    ) -> asyncio.Future[api.SIPParticipantInfo]:
+    ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
         """
         Add a SIP participant to the room.
 
@@ -325,7 +325,7 @@ class JobContext:
         participant: rtc.RemoteParticipant | str,
         transfer_to: str,
         play_dialtone: bool = False,
-    ) -> asyncio.Future[api.SIPParticipantInfo]:
+    ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
         """Transfer a SIP participant to another number.
 
         Args:

@@ -257,7 +257,9 @@ class BackgroundAudioPlayer:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
 
             if self._ambient_sound:
-                normalized = self._normalize_sound_source(self._ambient_sound)
+                normalized = self._normalize_sound_source(
+                    cast(AudioSource | AudioConfig | list[AudioConfig], self._ambient_sound)
+                )
                 if normalized:
                     sound_source, volume = normalized
                     selected_sound = AudioConfig(sound_source, volume)
@@ -310,7 +312,9 @@ class BackgroundAudioPlayer:
                 return
 
             assert self._thinking_sound is not None
-            self._thinking_handle = self.play(self._thinking_sound)
+            self._thinking_handle = self.play(
+                cast(AudioSource | AudioConfig | list[AudioConfig], self._thinking_sound)
+            )
 
         elif self._thinking_handle:
             self._thinking_handle.stop()

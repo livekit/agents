@@ -4,8 +4,8 @@ import asyncio
 import contextvars
 import heapq
 import time
-from collections.abc import AsyncIterable, Coroutine
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterable, Coroutine, Sequence
+from typing import TYPE_CHECKING, Any, cast
 
 from livekit import rtc
 
@@ -83,8 +83,6 @@ class AgentActivity(RecognitionHooks):
         self._user_turn_completed_atask: asyncio.Task[None] | None = None
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
-        from .. import llm as large_language_model
-
         self._turn_detection_mode = (
             self.turn_detection if isinstance(self.turn_detection, str) else None
         )
@@ -100,7 +98,7 @@ class AgentActivity(RecognitionHooks):
             )
             self._turn_detection_mode = None
 
-        if isinstance(self.llm, large_language_model.RealtimeModel):
+        if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection and not self.allow_interruptions:
                 raise ValueError(
                     "the RealtimeModel uses a server-side turn detection, "
@@ -179,27 +177,12 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
-        return (
+        return cast(
+            "TurnDetectionMode | None",
             self._agent.turn_detection
             if is_given(self._agent.turn_detection)
-            else self._session.turn_detection
+            else self._session.turn_detection,
         )
-
-    @property
-    def stt(self) -> stt.STT[Any] | None:
-        return self._agent.stt if is_given(self._agent.stt) else self._session.stt
-
-    @property
-    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
-        return self._agent.llm if is_given(self._agent.llm) else self._session.llm
-
-    @property
-    def tts(self) -> tts.TTS[Any] | None:
-        return self._agent.tts if is_given(self._agent.tts) else self._session.tts
-
-    @property
-    def vad(self) -> vad.VAD | None:
-        return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     @property
     def mcp_servers(self) -> list[mcp.MCPServer] | None:
@@ -218,7 +201,7 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
-    def realtime_llm_session(self) -> llm.RealtimeSession | None:
+    def realtime_llm_session(self) -> llm.RealtimeSession[Any] | None:
         return self._rt_session
 
     @property
@@ -227,7 +210,7 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
-        return self._agent.tools + self._mcp_tools
+        return self._agent.tools + self._mcp_tools  # type: ignore
 
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
@@ -239,7 +222,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx, instructions=instructions, add_if_missing=True
             )
 
-    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         tools = list(set(tools))
         self._agent._tools = tools
 
@@ -265,7 +248,7 @@ class AgentActivity(RecognitionHooks):
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         if utils.is_given(tool_choice):
-            self._tool_choice = tool_choice
+            self._tool_choice = cast(llm.ToolChoice | None, tool_choice)
 
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
@@ -1109,7 +1092,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
-        _tools_messages: list[llm.ChatItem] | None = None,
+        _tools_messages: Sequence[llm.ChatItem] | None = None,
     ) -> None:
         from .agent import ModelSettings
 
@@ -1399,7 +1382,9 @@ class AgentActivity(RecognitionHooks):
 
         ori_tool_choice = self._tool_choice
         if utils.is_given(model_settings.tool_choice):
-            self._rt_session.update_options(tool_choice=model_settings.tool_choice)
+            self._rt_session.update_options(
+                tool_choice=cast(llm.ToolChoice, model_settings.tool_choice)
+            )
 
         try:
             generation_ev = await self._rt_session.generate_reply(
@@ -1675,3 +1660,23 @@ class AgentActivity(RecognitionHooks):
                     SpeechHandle.SPEECH_PRIORITY_NORMAL,
                     bypass_draining=True,
                 )
+
+    # move them to the end to avoid shadowing the same named modules for mypy
+    @property
+    def vad(self) -> vad.VAD | None:
+        return self._agent.vad if is_given(self._agent.vad) else self._session.vad
+
+    @property
+    def stt(self) -> stt.STT[Any] | None:
+        return self._agent.stt if is_given(self._agent.stt) else self._session.stt
+
+    @property
+    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
+        return cast(
+            llm.LLM[Any] | llm.RealtimeModel | None,
+            self._agent.llm if is_given(self._agent.llm) else self._session.llm,
+        )
+
+    @property
+    def tts(self) -> tts.TTS[Any] | None:
+        return self._agent.tts if is_given(self._agent.tts) else self._session.tts

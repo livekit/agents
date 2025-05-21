@@ -242,22 +242,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._turn_detection
 
     @property
-    def stt(self) -> stt.STT[Any] | None:
-        return self._stt
-
-    @property
-    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
-        return self._llm
-
-    @property
-    def tts(self) -> tts.TTS[Any] | None:
-        return self._tts
-
-    @property
-    def vad(self) -> vad.VAD | None:
-        return self._vad
-
-    @property
     def mcp_servers(self) -> list[mcp.MCPServer] | None:
         return self._mcp_servers
 
@@ -421,7 +405,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _aclose_impl(
         self,
         *,
-        error: llm.LLMError | stt.STTError | tts.TTSError | None = None,
+        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
     ) -> None:
         async with self._lock:
             if not self._started:
@@ -643,6 +627,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert_item(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    # move them to the end to avoid shadowing the same named modules for mypy
+    @property
+    def stt(self) -> stt.STT[Any] | None:
+        return self._stt
+
+    @property
+    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
+        return self._llm
+
+    @property
+    def tts(self) -> tts.TTS[Any] | None:
+        return self._tts
+
+    @property
+    def vad(self) -> vad.VAD | None:
+        return self._vad
 
     # -- User changed input/output streams/sinks --
 

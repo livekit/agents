@@ -151,38 +151,41 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
-) -> FunctionTool | RawFunctionTool | Callable[[F | Raw_F], FunctionTool | RawFunctionTool]:
-    def deco(func: F | Raw_F) -> RawFunctionTool | FunctionTool:
-        nonlocal name
+) -> (
+    FunctionTool
+    | RawFunctionTool
+    | Callable[[F], FunctionTool]
+    | Callable[[Raw_F], RawFunctionTool]
+):
+    def deco_raw(func: Raw_F) -> RawFunctionTool:
+        assert raw_schema is not None
 
-        info: _FunctionToolInfo | _RawFunctionToolInfo
-        if raw_schema is not None:
-            name = raw_schema.get("name")
-            parameters = raw_schema.get("parameters")
+        if not raw_schema.get("name"):
+            raise ValueError("raw function name cannot be empty")
 
-            if name is None or parameters is None:
-                raise ValueError("raw function description must contain a name and parameters key")
-            if not name:
-                raise ValueError("raw function name can not be empty")
+        if "parameters" not in raw_schema:
+            # support empty parameters
+            raise ValueError("raw function description must contain a parameters key")
 
-            info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
-            setattr(func, "__livekit_raw_tool_info", info)
-            return cast(RawFunctionTool, func)
-        else:
-            from docstring_parser import parse_from_object
+        info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
+        setattr(func, "__livekit_raw_tool_info", info)
+        return cast(RawFunctionTool, func)
 
-            docstring = parse_from_object(func)
-            info = _FunctionToolInfo(
-                name=name or func.__name__,
-                description=description or docstring.description,
-            )
-            setattr(func, "__livekit_tool_info", info)
-            return cast(FunctionTool, func)
+    def deco_func(func: F) -> FunctionTool:
+        from docstring_parser import parse_from_object
+
+        docstring = parse_from_object(func)
+        info = _FunctionToolInfo(
+            name=name or func.__name__,
+            description=description or docstring.description,
+        )
+        setattr(func, "__livekit_tool_info", info)
+        return cast(FunctionTool, func)
 
     if f is not None:
-        return deco(f)
+        return deco_raw(cast(Raw_F, f)) if raw_schema is not None else deco_func(cast(F, f))
 
-    return deco
+    return deco_raw if raw_schema is not None else deco_func
 
 
 def is_function_tool(f: Callable[..., Any]) -> TypeGuard[FunctionTool]:

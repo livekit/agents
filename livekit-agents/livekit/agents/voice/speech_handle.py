@@ -119,10 +119,11 @@ class SpeechHandle:
         self._playout_done_fut.add_done_callback(lambda _: callback(self))
 
     async def wait_if_not_interrupted(self, aw: list[asyncio.futures.Future[Any]]) -> None:
-        await asyncio.wait(
-            [asyncio.gather(*aw, return_exceptions=True), self._interrupt_fut],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        fs: list[asyncio.Future[Any]] = [
+            asyncio.gather(*aw, return_exceptions=True),
+            self._interrupt_fut,
+        ]
+        await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
 
     def _authorize_playout(self) -> None:
         self._authorize_fut.set_result(None)
