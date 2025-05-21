@@ -1131,10 +1131,8 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(tools)
 
         if new_message is not None:
-            idx = chat_ctx.find_insertion_index(created_at=new_message.created_at)
-            chat_ctx.items.insert(idx, new_message)
-            idx = self._agent._chat_ctx.find_insertion_index(created_at=new_message.created_at)
-            self._agent._chat_ctx.items.insert(idx, new_message)
+            chat_ctx.insert_item(new_message)
+            self._agent._chat_ctx.insert_item(new_message)
             self._session._conversation_item_added(new_message)
 
         if instructions is not None:
@@ -1171,6 +1169,8 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
             return
+
+        reply_started_at = time.time()
 
         tr_node = self._agent.transcription_node(llm_output, model_settings)
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
@@ -1218,7 +1218,10 @@ class AgentActivity(RecognitionHooks):
 
         # add the tools messages that triggers this reply to the chat context
         if _tools_messages:
-            self._agent._chat_ctx.items.extend(_tools_messages)
+            for msg in _tools_messages:
+                # reset the created_at to the reply start time
+                msg.created_at = reply_started_at
+            self._agent._chat_ctx.insert_item(_tools_messages)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1246,8 +1249,9 @@ class AgentActivity(RecognitionHooks):
                 content=forwarded_text,
                 id=llm_gen_data.id,
                 interrupted=True,
+                created_at=reply_started_at,
             )
-            self._agent._chat_ctx.items.append(msg)
+            self._agent._chat_ctx.insert_item(msg)
             self._session._update_agent_state("listening")
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
@@ -1257,9 +1261,13 @@ class AgentActivity(RecognitionHooks):
 
         if text_out and text_out.text:
             msg = chat_ctx.add_message(
-                role="assistant", content=text_out.text, id=llm_gen_data.id, interrupted=False
+                role="assistant",
+                content=text_out.text,
+                id=llm_gen_data.id,
+                interrupted=False,
+                created_at=reply_started_at,
             )
-            self._agent._chat_ctx.items.append(msg)
+            self._agent._chat_ctx.insert_item(msg)
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
 
@@ -1324,9 +1332,9 @@ class AgentActivity(RecognitionHooks):
                 self._session.update_agent(new_agent_task)
                 draining = True
 
+            tool_messages = new_calls + new_fnc_outputs
             if generate_tool_reply:
-                chat_ctx.items.extend(new_calls)
-                chat_ctx.items.extend(new_fnc_outputs)
+                chat_ctx.items.extend(tool_messages)
 
                 handle = SpeechHandle.create(
                     allow_interruptions=speech_handle.allow_interruptions,
@@ -1345,9 +1353,13 @@ class AgentActivity(RecognitionHooks):
                         chat_ctx=chat_ctx,
                         tools=tools,
                         model_settings=ModelSettings(
-                            tool_choice=model_settings.tool_choice if not draining else "none",
+                            # Avoid setting tool_choice to "required" or a specific function when
+                            # passing tool response back to the LLM
+                            tool_choice="none"
+                            if draining or model_settings.tool_choice == "none"
+                            else "auto",
                         ),
-                        _tools_messages=[*new_calls, *new_fnc_outputs],
+                        _tools_messages=tool_messages,
                     ),
                     owned_speech_handle=handle,
                     name="AgentActivity.pipeline_reply",
@@ -1357,8 +1369,9 @@ class AgentActivity(RecognitionHooks):
                 )
             elif len(new_fnc_outputs) > 0:
                 # add the tool calls and outputs to the chat context even no reply is generated
-                self._agent._chat_ctx.items.extend(new_calls)
-                self._agent._chat_ctx.items.extend(new_fnc_outputs)
+                for msg in tool_messages:
+                    msg.created_at = reply_started_at
+                self._agent._chat_ctx.insert_item(tool_messages)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -1647,7 +1660,11 @@ class AgentActivity(RecognitionHooks):
                     self._realtime_reply_task(
                         speech_handle=handle,
                         model_settings=ModelSettings(
-                            tool_choice=model_settings.tool_choice if not draining else "none",
+                            # Avoid setting tool_choice to "required" or a specific function when
+                            # passing tool response back to the LLM
+                            tool_choice="none"
+                            if draining or model_settings.tool_choice == "none"
+                            else "auto",
                         ),
                     ),
                     owned_speech_handle=handle,
