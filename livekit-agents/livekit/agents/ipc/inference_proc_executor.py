@@ -5,6 +5,7 @@ import contextlib
 import multiprocessing as mp
 import socket
 from multiprocessing.context import BaseContext
+from typing import Any
 
 from ..inference_runner import _RunnersDict
 from ..log import logger
@@ -94,7 +95,7 @@ class InferenceProcExecutor(SupervisedProc):
 
         return inf_resp.data
 
-    def logging_extra(self):
+    def logging_extra(self) -> dict[str, Any]:
         extra = super().logging_extra()
         extra["inference"] = True
         return extra

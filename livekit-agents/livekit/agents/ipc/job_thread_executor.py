@@ -308,7 +308,7 @@ class ThreadJobExecutor:
             except utils.aio.duplex_unix.DuplexClosed:
                 break
 
-    def logging_extra(self):
+    def logging_extra(self) -> dict[str, Any]:
         extra: dict[str, Any] = {
             "tid": self._thread.native_id,
         }

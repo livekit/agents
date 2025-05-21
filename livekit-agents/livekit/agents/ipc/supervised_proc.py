@@ -127,7 +127,7 @@ class SupervisedProc(ABC):
             self._pid = self._proc.pid
             self._join_fut = asyncio.Future[None]()
 
-            def _sync_run():
+            def _sync_run() -> None:
                 self._proc.join()
                 log_listener.stop()
                 try:
@@ -323,7 +323,7 @@ class SupervisedProc(ABC):
     async def _ping_pong_task(self, pong_timeout: aio.Sleep) -> None:
         ping_interval = aio.interval(self._opts.ping_interval)
 
-        async def _send_ping_co():
+        async def _send_ping_co() -> None:
             while True:
                 await ping_interval.tick()
                 try:
@@ -331,7 +331,7 @@ class SupervisedProc(ABC):
                 except duplex_unix.DuplexClosed:
                     break
 
-        async def _pong_timeout_co():
+        async def _pong_timeout_co() -> None:
             await pong_timeout
             logger.error("process is unresponsive, killing process", extra=self.logging_extra())
             self._send_kill_signal()
@@ -402,7 +402,7 @@ class SupervisedProc(ABC):
 
             await asyncio.sleep(5)  # check every 5 seconds
 
-    def logging_extra(self):
+    def logging_extra(self) -> dict[str, Any]:
         extra: dict[str, Any] = {
             "pid": self.pid,
         }
