@@ -656,7 +656,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     headers=headers,
                     params=params,
                     autoping=True,
-                    proxy=self._opts.http_proxy or None
+                    proxy=self._opts.http_proxy or None,
                 )
 
                 retry_count = 0
