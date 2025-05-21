@@ -1032,7 +1032,7 @@ class AgentActivity(RecognitionHooks):
             text_source = _read_text()
             audio_source = _read_text()
 
-        tasks = []
+        tasks: list[asyncio.Task[Any]] = []
 
         tr_node = self._agent.transcription_node(text_source, model_settings)
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
@@ -1142,7 +1142,7 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the instructions")
 
         self._session._update_agent_state("thinking")
-        tasks = []
+        tasks: list[asyncio.Task[Any]] = []
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
             chat_ctx=chat_ctx,

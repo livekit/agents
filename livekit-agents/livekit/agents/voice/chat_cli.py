@@ -169,13 +169,12 @@ class ChatCLI:
 
         self._text_sink = _TextOutput(self)
         self._audio_sink = _AudioOutput(self)
+        self._transcript_syncer: TranscriptSynchronizer | None = None
         if sync_transcription:
             self._transcript_syncer = TranscriptSynchronizer(
                 next_in_chain_audio=self._audio_sink,
                 next_in_chain_text=self._text_sink,
             )
-        else:
-            self._transcript_syncer = None
 
         self._apm = rtc.AudioProcessingModule(
             echo_cancellation=True,

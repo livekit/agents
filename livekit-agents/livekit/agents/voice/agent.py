@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, FunctionTool, ToolError, find_function_tools
+from ..llm import ChatContext, FunctionTool, RawFunctionTool, ToolError, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -313,7 +313,7 @@ class Agent:
     def llm_node(
         self,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         model_settings: ModelSettings,
     ) -> (
         AsyncIterable[llm.ChatChunk | str]
@@ -447,7 +447,7 @@ class Agent:
         async def llm_node(
             agent: Agent,
             chat_ctx: llm.ChatContext,
-            tools: list[FunctionTool],
+            tools: list[FunctionTool | RawFunctionTool],
             model_settings: ModelSettings,
         ) -> AsyncGenerator[llm.ChatChunk | str, None]:
             """Default implementation for `Agent.llm_node`"""

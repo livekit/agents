@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
@@ -197,13 +198,13 @@ class ChatContext:
             self._items.append(message)
         return message
 
-    def insert_item(self, item: ChatItem | list[ChatItem]) -> None:
+    def insert_item(self, item: ChatItem | Sequence[ChatItem]) -> None:
         """Insert an item or list of items into the chat context by creation time."""
         items = item if isinstance(item, list) else [item]
 
-        for item in items:
-            idx = self.find_insertion_index(created_at=item.created_at)
-            self._items.insert(idx, item)
+        for _item in items:
+            idx = self.find_insertion_index(created_at=_item.created_at)
+            self._items.insert(idx, _item)
 
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
@@ -216,7 +217,7 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
-        tools: NotGivenOr[list[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+        tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
