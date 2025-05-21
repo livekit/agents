@@ -556,7 +556,7 @@ class LLM(llm.LLM):
         if is_given(self._opts.max_completion_tokens):
             extra["max_completion_tokens"] = self._opts.max_completion_tokens
 
-        if is_given(self._opts.temperature): 
+        if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
 
         parallel_tool_calls = (
