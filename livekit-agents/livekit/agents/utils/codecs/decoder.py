@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import io
@@ -19,7 +21,6 @@ import struct
 import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
 
 import av
 import av.container
@@ -93,10 +94,10 @@ class AudioStreamDecoder:
     """
 
     _max_workers: int = 10
-    _executor: Optional[ThreadPoolExecutor] = None
+    _executor: ThreadPoolExecutor | None = None
 
     def __init__(
-        self, *, sample_rate: int = 48000, num_channels: int = 1, format: Optional[str] = None
+        self, *, sample_rate: int = 48000, num_channels: int = 1, format: str | None = None
     ):
         self._sample_rate = sample_rate
         self._layout = "mono"

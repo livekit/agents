@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from multiprocessing import current_process
 from types import TracebackType
 

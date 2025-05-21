@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
@@ -8,10 +10,10 @@ from typing import Any
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
-    from mcp import ClientSession, stdio_client
-    from mcp.client.sse import sse_client
-    from mcp.client.stdio import StdioServerParameters
-    from mcp.types import JSONRPCMessage
+    from mcp import ClientSession, stdio_client  # type: ignore
+    from mcp.client.sse import sse_client  # type: ignore
+    from mcp.client.stdio import StdioServerParameters  # type: ignore
+    from mcp.types import JSONRPCMessage  # type: ignore
 except ImportError as e:
     raise ImportError(
         "The 'mcp' package is required to run the MCP server integration but is not installed.\n"
@@ -54,7 +56,7 @@ class MCPServer(ABC):
                     else None,
                 )
             )
-            await self._client.initialize()
+            await self._client.initialize()  # type: ignore
             self._initialized = True
         except Exception:
             await self.aclose()
@@ -153,7 +155,7 @@ class MCPServerHTTP(MCPServer):
             MemoryObjectSendStream[JSONRPCMessage],
         ]
     ]:
-        return sse_client(
+        return sse_client(  # type: ignore
             url=self.url,
             headers=self.headers,
             timeout=self._timeout,
@@ -187,7 +189,7 @@ class MCPServerStdio(MCPServer):
             MemoryObjectSendStream[JSONRPCMessage],
         ]
     ]:
-        return stdio_client(
+        return stdio_client(  # type: ignore
             StdioServerParameters(command=self.command, args=self.args, env=self.env, cwd=self.cwd)
         )
 

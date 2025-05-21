@@ -17,15 +17,15 @@ from .agent import ModelSettings
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame], ModelSettings],
     Union[
-        Optional[Union[AsyncIterable[stt.SpeechEvent | str]]],
-        Awaitable[Optional[Union[AsyncIterable[stt.SpeechEvent | str]]]],
+        Optional[Union[AsyncIterable[Union[stt.SpeechEvent, str]]]],
+        Awaitable[Optional[Union[AsyncIterable[Union[stt.SpeechEvent, str]]]]],
     ],
 ]
 LLMNode = Callable[
-    [llm.ChatContext, list[llm.FunctionTool | llm.RawFunctionTool], ModelSettings],
+    [llm.ChatContext, list[Union[llm.FunctionTool, llm.RawFunctionTool]], ModelSettings],
     Union[
-        Optional[Union[AsyncIterable[llm.ChatChunk | str], str, llm.ChatChunk]],
-        Awaitable[Optional[Union[AsyncIterable[llm.ChatChunk | str], str, llm.ChatChunk]]],
+        Optional[Union[AsyncIterable[Union[llm.ChatChunk, str]], str, llm.ChatChunk]],
+        Awaitable[Optional[Union[AsyncIterable[Union[llm.ChatChunk, str]], str, llm.ChatChunk]]],
     ],
 ]
 TTSNode = Callable[

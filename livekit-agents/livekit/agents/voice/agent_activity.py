@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from livekit import rtc
 
@@ -248,7 +248,7 @@ class AgentActivity(RecognitionHooks):
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         if utils.is_given(tool_choice):
-            self._tool_choice = cast(llm.ToolChoice | None, tool_choice)
+            self._tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
 
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
@@ -1673,7 +1673,7 @@ class AgentActivity(RecognitionHooks):
     @property
     def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
         return cast(
-            llm.LLM[Any] | llm.RealtimeModel | None,
+            Optional[Union[llm.LLM[Any], llm.RealtimeModel]],
             self._agent.llm if is_given(self._agent.llm) else self._session.llm,
         )
 

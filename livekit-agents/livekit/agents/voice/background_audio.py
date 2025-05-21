@@ -258,7 +258,7 @@ class BackgroundAudioPlayer:
 
             if self._ambient_sound:
                 normalized = self._normalize_sound_source(
-                    cast(AudioSource | AudioConfig | list[AudioConfig], self._ambient_sound)
+                    cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._ambient_sound)
                 )
                 if normalized:
                     sound_source, volume = normalized
@@ -313,7 +313,7 @@ class BackgroundAudioPlayer:
 
             assert self._thinking_sound is not None
             self._thinking_handle = self.play(
-                cast(AudioSource | AudioConfig | list[AudioConfig], self._thinking_sound)
+                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound)
             )
 
         elif self._thinking_handle:
