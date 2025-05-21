@@ -105,7 +105,7 @@ class _EUORunnerBase(_InferenceRunner):
         )
         # Run inference
         outputs = self._session.run(None, {"input_ids": inputs["input_ids"].astype("int64")})
-        eou_probability = outputs[0][0]
+        eou_probability = outputs[0].flatten()[-1]
         end_time = time.perf_counter()
 
         data = {
