@@ -217,6 +217,7 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
+        exclude_empty_message: bool = False,
         tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
@@ -251,6 +252,9 @@ class ChatContext:
                 and item.type == "message"
                 and item.role in ["system", "developer"]
             ):
+                continue
+
+            if exclude_empty_message and item.type == "message" and not item.content:
                 continue
 
             if (

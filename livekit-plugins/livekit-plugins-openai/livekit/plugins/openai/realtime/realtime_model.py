@@ -546,7 +546,9 @@ class RealtimeSession(
                 await self.update_tools(tools)
 
             # sync chat messages to the new session
-            chat_ctx = self.chat_ctx.copy(exclude_function_call=True, exclude_instructions=True)
+            chat_ctx = self.chat_ctx.copy(
+                exclude_function_call=True, exclude_instructions=True, exclude_empty_message=True
+            )
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
             try:
                 await self.update_chat_ctx(chat_ctx)
