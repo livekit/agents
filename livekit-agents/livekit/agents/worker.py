@@ -204,6 +204,10 @@ class WorkerOptions:
     """API secret to authenticate with LiveKit.
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
+
+    _worker_token: str | None = None
+    """Internal token."""
+
     host: str = ""  # default to all interfaces
     port: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
@@ -253,6 +257,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         opts.ws_url = opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
         opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
+        opts._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or None
 
         if not opts.ws_url:
             raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
@@ -642,8 +647,16 @@ class Worker(utils.EventEmitter[EventTypes]):
                 path_parts = [f"{scheme}://{parse.netloc}", parse.path, "/agent"]
                 agent_url = reduce(urljoin, path_parts)
 
+                params = {}
+                if self._opts._worker_token:
+                    params["worker_token"] = self._opts._worker_token
+
                 ws = await self._http_session.ws_connect(
-                    agent_url, headers=headers, autoping=True, proxy=self._opts.http_proxy or None
+                    agent_url,
+                    headers=headers,
+                    params=params,
+                    autoping=True,
+                    proxy=self._opts.http_proxy or None,
                 )
 
                 retry_count = 0
