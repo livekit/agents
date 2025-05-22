@@ -384,7 +384,7 @@ class AgentActivity(RecognitionHooks):
                 ),
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
-                manual_turn_detection=self._turn_detection_mode == "manual",
+                turn_detection_mode=self._turn_detection_mode,
             )
             self._audio_recognition.start()
             self._started = True
@@ -794,8 +794,8 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("listening")
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
-        if self._turn_detection_mode not in ("vad", None):
-            # ignore vad inference done event if turn_detection is not set to vad or default
+        if self._turn_detection_mode in ("manual", "realtime_llm"):
+            # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
