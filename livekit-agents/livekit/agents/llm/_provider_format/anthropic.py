@@ -31,8 +31,8 @@ def to_chat_ctx(
         chat_items.extend(group.flatten())
 
     for i, msg in enumerate(chat_items):
-        if msg.type == "message" and msg.role == "system":
-            system_messages.append(msg.text_content)
+        if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
+            system_messages.append(text)
             continue
 
         cache_ctrl_i = cache_control if (i == len(chat_items) - 1) else None
@@ -105,6 +105,7 @@ def _to_image_content(image: llm.ImageContent, cache_ctrl: dict[str, Any] | None
             "cache_control": cache_ctrl,
         }
 
+    assert img.data_bytes is not None
     b64_data = base64.b64encode(img.data_bytes).decode("utf-8")
     return {
         "type": "image",

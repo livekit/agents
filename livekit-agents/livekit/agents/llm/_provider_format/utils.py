@@ -109,7 +109,7 @@ class _ChatItemGroup:
         self.tool_outputs = valid_tool_outputs
 
     def flatten(self) -> list[llm.ChatItem]:
-        items = []
+        items: list[llm.ChatItem] = []
         if self.message:
             items.append(self.message)
         items.extend(self.tool_calls)

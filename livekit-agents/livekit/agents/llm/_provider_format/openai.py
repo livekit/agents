@@ -101,6 +101,7 @@ def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
                 "detail": img.inference_detail,
             },
         }
+    assert img.data_bytes is not None
     b64_data = base64.b64encode(img.data_bytes).decode("utf-8")
     return {
         "type": "image_url",

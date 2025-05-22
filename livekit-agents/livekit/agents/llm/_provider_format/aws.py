@@ -23,8 +23,8 @@ def to_chat_ctx(
     current_content: list[dict] = []
 
     for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
-        if msg.type == "message" and msg.role == "system":
-            system_messages.append(msg.text_content)
+        if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
+            system_messages.append(text)
             continue
 
         if msg.type == "message":
@@ -58,18 +58,19 @@ def to_chat_ctx(
                 }
             )
         elif msg.type == "function_call_output":
-            tool_response = {
-                "toolResult": {
-                    "toolUseId": msg.call_id,
-                    "content": [],
-                    "status": "success",
+            current_content.append(
+                {
+                    "toolResult": {
+                        "toolUseId": msg.call_id,
+                        "content": [
+                            {"json": msg.output}
+                            if isinstance(msg.output, dict)
+                            else {"text": msg.output}
+                        ],
+                        "status": "success",
+                    }
                 }
-            }
-            if isinstance(msg.output, dict):
-                tool_response["toolResult"]["content"].append({"json": msg.output})
-            elif isinstance(msg.output, str):
-                tool_response["toolResult"]["content"].append({"text": msg.output})
-            current_content.append(tool_response)
+            )
 
     # Finalize the last message if there’s any content left
     if current_role is not None and current_content:
