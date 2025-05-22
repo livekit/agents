@@ -195,7 +195,7 @@ WORDS_PUNCT_EXPECTED = [
     "。",
 ]
 
-WORD_PUNCT_TOKENIZERS = [basic.WordTokenizer(ignore_punctuation=False)]
+WORD_PUNCT_TOKENIZERS = [basic.WordTokenizer(ignore_punctuation=False, split_character=True)]
 
 
 @pytest.mark.parametrize("tokenizer", WORD_PUNCT_TOKENIZERS)
