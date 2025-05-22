@@ -97,6 +97,8 @@ class _RealtimeOptions:
     azure_deployment: str | None
     entra_token: str | None
     api_version: str | None
+    session_lifetime: float | None
+    """reset the connection after this many seconds if provided"""
 
 
 @dataclass
@@ -104,6 +106,8 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
+
+    _text: str = ""
 
 
 @dataclass
@@ -113,6 +117,7 @@ class _ResponseGeneration:
 
     messages: dict[str, _MessageGeneration]
 
+    _closed_fut: asyncio.Future[None]
     _created_timestamp: float
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
@@ -182,6 +187,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        session_lifetime_s: float | None = None,
     ) -> None: ...
 
     @overload
@@ -199,6 +205,7 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        session_lifetime_s: float | None = None,
     ) -> None: ...
 
     def __init__(
@@ -216,6 +223,7 @@ class RealtimeModel(llm.RealtimeModel):
         azure_deployment: str | None = None,
         entra_token: str | None = None,
         api_version: str | None = None,
+        session_lifetime_s: float | None = None,
     ) -> None:
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -267,6 +275,7 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token=entra_token,
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
+            session_lifetime=session_lifetime_s,
         )
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -463,8 +472,13 @@ class RealtimeSession(
         self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
+        self._instructions: str | None = None
+        self._connected_fut = asyncio.Future[float]()
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
         self._initial_session_update()
+        self._reconnect_atask = asyncio.create_task(
+            self._reconnect_task(), name="RealtimeSession._reconnect_task"
+        )
 
         self._response_created_futures: dict[str, _CreateResponseHandle] = {}
         self._text_mode_recovery_atask: asyncio.Task | None = None
@@ -488,6 +502,56 @@ class RealtimeSession(
     def send_event(self, event: RealtimeClientEvent | dict) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+    @utils.log_exceptions(logger=logger)
+    async def _reconnect_task(self) -> None:
+        if not self._realtime_model._opts.session_lifetime:
+            return
+
+        while not self._msg_ch.closed:
+            if self._main_atask.done():
+                break
+
+            # wait session connected
+            start_time = await self._connected_fut
+            sleep_time = self._realtime_model._opts.session_lifetime - (time.time() - start_time)
+            wait_reconnect_task = asyncio.create_task(asyncio.sleep(sleep_time))
+            try:
+                done, _ = await asyncio.wait(
+                    [wait_reconnect_task, self._main_atask], return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    if task != wait_reconnect_task:
+                        task.result()
+                if wait_reconnect_task not in done:
+                    break
+            finally:
+                if not wait_reconnect_task.done():
+                    wait_reconnect_task.cancel()
+
+            if self._current_generation:
+                # wait for the current generation to complete
+                await self._current_generation._closed_fut
+
+            logger.debug("reconnecting realtime session")
+            await utils.aio.cancel_and_wait(self._main_atask)
+
+            self._connected_fut = asyncio.Future[None]()
+            self._main_atask = asyncio.create_task(
+                self._main_task(), name="RealtimeSession._main_task"
+            )
+            self._initial_session_update()
+            tools = list(self._tools.function_tools.values())
+            if tools:
+                await self.update_tools(tools)
+
+            # sync chat messages to the new session
+            chat_ctx = self.chat_ctx.copy(exclude_function_call=True, exclude_instructions=True)
+            self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+            try:
+                await self.update_chat_ctx(chat_ctx)
+            except llm.RealtimeError:
+                logger.exception("failed to update chat ctx")
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -516,6 +580,7 @@ class RealtimeSession(
         ws_conn = await self._realtime_model._ensure_http_session().ws_connect(
             url=url, headers=headers
         )
+        self._connected_fut.set_result(time.time())
 
         closing = False
 
@@ -682,23 +747,27 @@ class RealtimeSession(
             else None
         )
 
+        kwargs = {
+            "model": self._realtime_model._opts.model,
+            "voice": self._realtime_model._opts.voice,
+            "input_audio_format": "pcm16",
+            "output_audio_format": "pcm16",
+            "modalities": ["text", "audio"],
+            "turn_detection": turn_detection,
+            "input_audio_transcription": input_audio_transcription,
+            "temperature": self._realtime_model._opts.temperature,
+            "tool_choice": _to_oai_tool_choice(self._realtime_model._opts.tool_choice),
+        }
+        if self._instructions is not None:
+            kwargs["instructions"] = self._instructions
+
         # initial session update
         self.send_event(
             SessionUpdateEvent(
                 type="session.update",
                 # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
                 # Other providers support different voices, so we need to accommodate that.
-                session=session_update_event.Session.model_construct(
-                    model=self._realtime_model._opts.model,
-                    voice=self._realtime_model._opts.voice,
-                    input_audio_format="pcm16",
-                    output_audio_format="pcm16",
-                    modalities=["text", "audio"],
-                    turn_detection=turn_detection,
-                    input_audio_transcription=input_audio_transcription,
-                    temperature=self._realtime_model._opts.temperature,
-                    tool_choice=_to_oai_tool_choice(self._realtime_model._opts.tool_choice),
-                ),
+                session=session_update_event.Session.model_construct(**kwargs),
                 event_id=utils.shortuuid("session_update_"),
             )
         )
@@ -864,6 +933,7 @@ class RealtimeSession(
                 event_id=event_id,
             )
         )
+        self._instructions = instructions
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
@@ -911,6 +981,7 @@ class RealtimeSession(
 
     async def aclose(self) -> None:
         self._msg_ch.close()
+        await utils.aio.cancel_and_wait(self._reconnect_atask)
         await self._main_atask
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
@@ -1009,6 +1080,7 @@ class RealtimeSession(
             function_ch=utils.aio.Chan(),
             messages={},
             _created_timestamp=time.time(),
+            _closed_fut=asyncio.Future(),
         )
 
         if (
@@ -1196,6 +1268,7 @@ class RealtimeSession(
 
         item_generation = self._current_generation.messages[item_id]
         item_generation.text_ch.send_nowait(delta)
+        item_generation._text += delta
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -1260,6 +1333,14 @@ class RealtimeSession(
 
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
+        for item_id, item_generation in self._current_generation.messages.items():
+            if (remote_item := self._remote_chat_ctx.get(item_id)) and isinstance(
+                remote_item.item, llm.ChatMessage
+            ):
+                remote_item.item.content.append(item_generation._text)
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._current_generation._closed_fut.set_result(None)
         self._current_generation = None
 
         # calculate metrics
