@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, TypeVar, Union
+from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -108,7 +108,7 @@ class STT(
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         for i in range(conn_options.max_retry + 1):
@@ -159,7 +159,7 @@ class STT(
 
         raise RuntimeError("unreachable")
 
-    def _emit_error(self, api_error: Exception, recoverable: bool):
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self.emit(
             "error",
             STTError(
@@ -173,7 +173,7 @@ class STT(
     def stream(
         self,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         raise NotImplementedError(
@@ -184,7 +184,7 @@ class STT(
         """Close the STT, and every stream/requests associated with it"""
         ...
 
-    async def __aenter__(self) -> STT:
+    async def __aenter__(self) -> STT[Any]:
         return self
 
     async def __aexit__(
@@ -205,7 +205,7 @@ class RecognizeStream(ABC):
     def __init__(
         self,
         *,
-        stt: STT,
+        stt: STT[Any],
         conn_options: APIConnectOptions,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ):
@@ -274,7 +274,7 @@ class RecognizeStream(ABC):
                 self._emit_error(e, recoverable=False)
                 raise
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt.emit(
             "error",
             STTError(

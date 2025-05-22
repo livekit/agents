@@ -792,6 +792,9 @@ class RealtimeSession(llm.RealtimeSession):
                 return token_details_map
 
             for token_detail in token_details:
+                if not token_detail.token_count:
+                    continue
+
                 if token_detail.modality == Modality.AUDIO:
                     token_details_map["audio_tokens"] += token_detail.token_count
                 elif token_detail.modality == Modality.TEXT:

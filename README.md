@@ -260,6 +260,22 @@ async def entrypoint(ctx: JobContext):
 </td>
 </tr>
 
+<tr>
+<td width="50%">
+<h3>📝 Multi-user transcriber</h3>
+<p>Produce transcriptions from all users in the room</p>
+<p>
+<a href="examples/other/transcription/multi-user-transcriber.py">Code</a>
+</p>
+</td>
+<td width="50%">
+<h3>🎥 Video avatars</h3>
+<p>Add an AI avatar with Tavus, Beyond Presence, and Bithuman</p>
+<p>
+<a href="examples/avatar_agents/">Code</a>
+</p>
+</td>
+</tr>
 
 <tr>
 <td width="50%">

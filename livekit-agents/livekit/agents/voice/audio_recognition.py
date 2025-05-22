@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from livekit import rtc
 
@@ -67,7 +67,7 @@ class AudioRecognition:
         self._vad = vad
         self._manual_turn_detection = manual_turn_detection
         self._user_turn_committed = False
-        self._sample_rate: float | None = None
+        self._sample_rate: int | None = None
 
         self._speaking = False
         self._last_speaking_time: float = 0
@@ -86,7 +86,7 @@ class AudioRecognition:
 
         self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
 
     def start(self) -> None:
         self.update_stt(self._stt)
@@ -157,7 +157,7 @@ class AudioRecognition:
         self.update_stt(stt)
 
     def commit_user_turn(self, *, audio_detached: bool) -> None:
-        async def _commit_user_turn(delay: float = 0.5):
+        async def _commit_user_turn(delay: float = 0.5) -> None:
             if time.time() - self._last_final_transcript_time > delay:
                 # flush the stt by pushing silence
                 if audio_detached and self._sample_rate:
@@ -336,7 +336,7 @@ class AudioRecognition:
     async def _stt_task(
         self,
         stt_node: io.STTNode,
-        audio_input: io.AudioInput,
+        audio_input: AsyncIterable[rtc.AudioFrame],
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
@@ -356,7 +356,10 @@ class AudioRecognition:
 
     @utils.log_exceptions(logger=logger)
     async def _vad_task(
-        self, vad: vad.VAD, audio_input: io.AudioInput, task: asyncio.Task[None] | None
+        self,
+        vad: vad.VAD,
+        audio_input: AsyncIterable[rtc.AudioFrame],
+        task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
             await aio.cancel_and_wait(task)

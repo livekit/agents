@@ -5,9 +5,9 @@ import atexit
 import contextlib
 import enum
 import random
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from importlib.resources import as_file, files
-from typing import NamedTuple, Union, cast
+from typing import Any, NamedTuple, Union, cast
 
 import numpy as np
 
@@ -102,10 +102,10 @@ class BackgroundAudioPlayer:
         self._publication: rtc.LocalTrackPublication | None = None
         self._lock = asyncio.Lock()
 
-        self._republish_task: asyncio.Task | None = None  # republish the task on reconnect
-        self._mixer_atask: asyncio.Task | None = None
+        self._republish_task: asyncio.Task[None] | None = None  # republish the task on reconnect
+        self._mixer_atask: asyncio.Task[None] | None = None
 
-        self._play_tasks: list[asyncio.Task] = []
+        self._play_tasks: list[asyncio.Task[None]] = []
 
         self._ambient_handle: PlayHandle | None = None
         self._thinking_handle: PlayHandle | None = None
@@ -217,7 +217,7 @@ class BackgroundAudioPlayer:
         self,
         *,
         room: rtc.Room,
-        agent_session: NotGivenOr[AgentSession] = NOT_GIVEN,
+        agent_session: NotGivenOr[AgentSession[Any]] = NOT_GIVEN,
         track_publish_options: NotGivenOr[rtc.TrackPublishOptions] = NOT_GIVEN,
     ) -> None:
         """
@@ -257,7 +257,9 @@ class BackgroundAudioPlayer:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
 
             if self._ambient_sound:
-                normalized = self._normalize_sound_source(self._ambient_sound)
+                normalized = self._normalize_sound_source(
+                    cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._ambient_sound)
+                )
                 if normalized:
                     sound_source, volume = normalized
                     selected_sound = AudioConfig(sound_source, volume)
@@ -309,7 +311,10 @@ class BackgroundAudioPlayer:
             if self._thinking_handle and not self._thinking_handle.done():
                 return
 
-            self._thinking_handle = self.play(self._thinking_sound)
+            assert self._thinking_sound is not None
+            self._thinking_handle = self.play(
+                cast(Union[AudioSource, AudioConfig, list[AudioConfig]], self._thinking_sound)
+            )
 
         elif self._thinking_handle:
             self._thinking_handle.stop()
@@ -379,8 +384,8 @@ class BackgroundAudioPlayer:
 
 class PlayHandle:
     def __init__(self) -> None:
-        self._done_fut = asyncio.Future()
-        self._stop_fut = asyncio.Future()
+        self._done_fut = asyncio.Future[None]()
+        self._stop_fut = asyncio.Future[None]()
 
     def done(self) -> bool:
         """
@@ -405,7 +410,7 @@ class PlayHandle:
         """
         await asyncio.shield(self._done_fut)
 
-    def __await__(self):
+    def __await__(self) -> Generator[Any, None, PlayHandle]:
         async def _await_impl() -> PlayHandle:
             await self.wait_for_playout()
             return self

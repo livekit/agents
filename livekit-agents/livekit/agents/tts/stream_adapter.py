@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
+from typing import Any
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
@@ -13,11 +14,11 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
-class StreamAdapter(TTS):
+class StreamAdapter(TTS[Any]):
     def __init__(
         self,
         *,
-        tts: TTS,
+        tts: TTS[Any],
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(
@@ -31,7 +32,7 @@ class StreamAdapter(TTS):
         self._sentence_tokenizer = sentence_tokenizer
 
         @self._tts.on("metrics_collected")
-        def _forward_metrics(*args, **kwargs):
+        def _forward_metrics(*args: Any, **kwargs: Any) -> None:
             self.emit("metrics_collected", *args, **kwargs)
 
     def synthesize(
@@ -62,9 +63,9 @@ class StreamAdapterWrapper(SynthesizeStream):
     def __init__(
         self,
         *,
-        tts: TTS,
+        tts: TTS[Any],
         conn_options: APIConnectOptions,
-        wrapped_tts: TTS,
+        wrapped_tts: TTS[Any],
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
@@ -76,7 +77,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         pass  # do nothing
 
     async def _run(self) -> None:
-        async def _forward_input():
+        async def _forward_input() -> None:
             """forward input to vad"""
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
@@ -86,7 +87,7 @@ class StreamAdapterWrapper(SynthesizeStream):
 
             self._sent_stream.end_input()
 
-        async def _synthesize():
+        async def _synthesize() -> None:
             async for ev in self._sent_stream:
                 last_audio: SynthesizedAudio | None = None
                 async for audio in self._wrapped_tts.synthesize(

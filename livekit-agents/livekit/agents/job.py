@@ -30,7 +30,7 @@ from livekit.protocol import agent, models
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
 from .types import NotGivenOr
-from .utils import http_context, wait_for_participant
+from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
@@ -85,6 +85,10 @@ DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
 
 
 class JobContext:
+    _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
+        ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
+    ]
+
     # private ctor
     def __init__(
         self,
@@ -105,22 +109,24 @@ class JobContext:
         self._tracing_callbacks: list[Callable[[], Coroutine[None, None, None]]] = []
         self._participant_entrypoints: list[
             tuple[
-                Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
+                JobContext._PARTICIPANT_ENTRYPOINT_CALLBACK,
                 list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
             ]
         ] = []
-        self._participant_tasks = dict[tuple[str, Callable], asyncio.Task[None]]()
-        self._pending_tasks = list[asyncio.Task]()
+        self._participant_tasks = dict[
+            tuple[str, JobContext._PARTICIPANT_ENTRYPOINT_CALLBACK], asyncio.Task[None]
+        ]()
+        self._pending_tasks = list[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
         self._init_log_factory()
-        self._log_fields = {}
+        self._log_fields: dict[str, Any] = {}
 
     def _init_log_factory(self) -> None:
         old_factory = logging.getLogRecordFactory()
 
-        def record_factory(*args, **kwargs) -> logging.LogRecord:
+        def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
             record = old_factory(*args, **kwargs)
 
             if self.proc.executor_type != JobExecutorType.PROCESS:
@@ -268,7 +274,7 @@ class JobContext:
 
         _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
-    def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:
+    def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
         task = asyncio.create_task(
             self.api.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
@@ -283,8 +289,8 @@ class JobContext:
         call_to: str,
         trunk_id: str,
         participant_identity: str,
-        participant_name: str | NotGivenOr[str] = "SIP-participant",
-    ) -> asyncio.Future[api.SIPParticipantInfo]:
+        participant_name: NotGivenOr[str] = "SIP-participant",
+    ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
         """
         Add a SIP participant to the room.
 
@@ -306,7 +312,7 @@ class JobContext:
                     participant_identity=participant_identity,
                     sip_trunk_id=trunk_id,
                     sip_call_to=call_to,
-                    participant_name=participant_name,
+                    participant_name=participant_name if is_given(participant_name) else None,
                 )
             ),
         )
@@ -319,7 +325,7 @@ class JobContext:
         participant: rtc.RemoteParticipant | str,
         transfer_to: str,
         play_dialtone: bool = False,
-    ) -> asyncio.Future[api.SIPParticipantInfo]:
+    ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
         """Transfer a SIP participant to another number.
 
         Args:
@@ -336,14 +342,19 @@ class JobContext:
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
-        assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
-            "Participant must be a SIP participant"
-        )
+        if isinstance(participant, rtc.RemoteParticipant):
+            assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
+                "Participant must be a SIP participant"
+            )
+            participant_identity = participant.identity
+        else:
+            participant_identity = participant
+
         task = asyncio.create_task(
             self.api.sip.transfer_sip_participant(
                 api.TransferSIPParticipantRequest(
                     room_name=self._room.name,
-                    participant_identity=participant.identity,
+                    participant_identity=participant_identity,
                     transfer_to=transfer_to,
                     play_dialtone=play_dialtone,
                 )
@@ -359,10 +370,10 @@ class JobContext:
     def add_participant_entrypoint(
         self,
         entrypoint_fnc: Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
-        *_,
+        *_: Any,
         kind: list[rtc.ParticipantKind.ValueType]
         | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
-    ):
+    ) -> None:
         """Adds an entrypoint function to be run when a participant joins the room. In cases where
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
         added and they will each be run in parallel for each participant.
@@ -390,7 +401,7 @@ class JobContext:
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
             task.add_done_callback(
-                lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))
+                lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
             )
 
 
@@ -398,7 +409,7 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
     if auto_subscribe not in (AutoSubscribe.AUDIO_ONLY, AutoSubscribe.VIDEO_ONLY):
         return
 
-    def _subscribe_if_needed(pub: rtc.RemoteTrackPublication):
+    def _subscribe_if_needed(pub: rtc.RemoteTrackPublication) -> None:
         if (
             auto_subscribe == AutoSubscribe.AUDIO_ONLY and pub.kind == rtc.TrackKind.KIND_AUDIO
         ) or (auto_subscribe == AutoSubscribe.VIDEO_ONLY and pub.kind == rtc.TrackKind.KIND_VIDEO):
@@ -409,7 +420,7 @@ def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) ->
             _subscribe_if_needed(pub)
 
     @room.on("track_published")
-    def on_track_published(pub: rtc.RemoteTrackPublication, _: rtc.RemoteParticipant):
+    def on_track_published(pub: rtc.RemoteTrackPublication, _: rtc.RemoteParticipant) -> None:
         _subscribe_if_needed(pub)
 
 
@@ -436,7 +447,7 @@ class JobProcess:
         return self._mp_proc.pid
 
     @property
-    def userdata(self) -> dict:
+    def userdata(self) -> dict[Any, Any]:
         return self._userdata
 
     @property

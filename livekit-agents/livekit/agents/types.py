@@ -58,7 +58,7 @@ class APIConnectOptions:
     Timeout for connecting to the API in seconds.
     """
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.max_retry < 0:
             raise ValueError("max_retry must be greater than or equal to 0")
 

@@ -33,7 +33,7 @@ def split_words(text: str, ignore_punctuation: bool = True) -> list[tuple[str, i
         str.maketrans("", "", "".join(tokenizer.PUNCTUATIONS)) if ignore_punctuation else None
     )
 
-    def _add_current_word(start: int, end: int):
+    def _add_current_word(start: int, end: int) -> None:
         word = text[start:end]
         if translation_table and word:
             word = word.translate(translation_table)

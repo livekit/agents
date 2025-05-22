@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from livekit import rtc
 
@@ -44,7 +45,7 @@ class AvatarRunner:
         self._audio_recv = audio_recv
         self._playback_position = 0.0
         self._audio_playing = False
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
 
         self._lock = asyncio.Lock()
         self._audio_publication: rtc.LocalTrackPublication | None = None
@@ -78,7 +79,7 @@ class AvatarRunner:
         # start audio receiver
         await self._audio_recv.start()
 
-        def _on_clear_buffer():
+        def _on_clear_buffer() -> None:
             task = asyncio.create_task(self._handle_clear_buffer())
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
