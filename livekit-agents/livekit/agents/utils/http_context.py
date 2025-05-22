@@ -29,7 +29,7 @@ def _new_session_ctx() -> _ClientFactory:
             g_session = aiohttp.ClientSession(proxy=http_proxy)
         return g_session
 
-    _ContextVar.set(_new_session)  # type: ignore
+    _ContextVar.set(_new_session)
     return _new_session
 
 
@@ -38,7 +38,7 @@ def http_session() -> aiohttp.ClientSession:
     On job processes, this http session will be bound to the main event loop.
     """  # noqa: E501
 
-    val = _ContextVar.get(None)  # type: ignore
+    val = _ContextVar.get(None)
     if val is None:
         raise RuntimeError(
             "Attempted to use an http session outside of a job context. This is probably because you are trying to use a plugin without using the agent worker api. You may need to create your own aiohttp.ClientSession, pass it into the plugin constructor as a kwarg, and manage its lifecycle."  # noqa: E501
@@ -47,9 +47,9 @@ def http_session() -> aiohttp.ClientSession:
     return val()  # type: ignore
 
 
-async def _close_http_ctx():
-    val = _ContextVar.get(None)  # type: ignore
+async def _close_http_ctx() -> None:
+    val = _ContextVar.get(None)
     if val is not None:
         logger.debug("http_session(): closing the httpclient ctx")
-        await val().close()  # type: ignore
-        _ContextVar.set(None)  # type: ignore
+        await val().close()
+        _ContextVar.set(None)

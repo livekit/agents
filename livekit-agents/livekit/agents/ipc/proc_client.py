@@ -108,7 +108,7 @@ class _ProcClient:
             ipc_ch = aio.Chan[Message]()
 
             @log_exceptions(logger=logger)
-            async def _read_ipc_task():
+            async def _read_ipc_task() -> None:
                 while True:
                     try:
                         msg = await arecv_message(self._acch, IPC_MESSAGES)
@@ -127,7 +127,7 @@ class _ProcClient:
                     ipc_ch.send_nowait(msg)
 
             @log_exceptions(logger=logger)
-            async def _self_health_check():
+            async def _self_health_check() -> None:
                 await ping_timeout
                 print(
                     "worker process is not responding.. worker crashed?",
@@ -135,14 +135,14 @@ class _ProcClient:
                 )
 
             read_task = asyncio.create_task(_read_ipc_task(), name="ipc_read")
-            health_check_task: asyncio.Task | None = None
+            health_check_task: asyncio.Task[None] | None = None
             if self._init_req.ping_interval > 0:
                 health_check_task = asyncio.create_task(_self_health_check(), name="health_check")
             main_task = asyncio.create_task(
                 self._main_task_fnc(ipc_ch), name="main_task_entrypoint"
             )
 
-            def _done_cb(_: asyncio.Task) -> None:
+            def _done_cb(_: asyncio.Task[None]) -> None:
                 with contextlib.suppress(asyncio.InvalidStateError):
                     exit_flag.set()
 

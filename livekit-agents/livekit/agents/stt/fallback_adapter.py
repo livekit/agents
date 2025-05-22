@@ -4,16 +4,16 @@ import asyncio
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from livekit import rtc
-from livekit.agents.utils.audio import AudioBuffer
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
+from ..utils.audio import AudioBuffer
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 # don't retry when using the fallback adapter
@@ -24,15 +24,15 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
 
 @dataclass
 class AvailabilityChangedEvent:
-    stt: STT
+    stt: STT[Any]
     available: bool
 
 
 @dataclass
 class _STTStatus:
     available: bool
-    recovering_synthesize_task: asyncio.Task | None
-    recovering_stream_task: asyncio.Task | None
+    recovering_synthesize_task: asyncio.Task[None] | None
+    recovering_stream_task: asyncio.Task[None] | None
 
 
 class FallbackAdapter(
@@ -40,7 +40,7 @@ class FallbackAdapter(
 ):
     def __init__(
         self,
-        stt: list[STT],
+        stt: list[STT[Any]],
         *,
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
@@ -81,7 +81,7 @@ class FallbackAdapter(
     async def _try_recognize(
         self,
         *,
-        stt: STT,
+        stt: STT[Any],
         buffer: utils.AudioBuffer,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -140,7 +140,7 @@ class FallbackAdapter(
     def _try_recovery(
         self,
         *,
-        stt: STT,
+        stt: STT[Any],
         buffer: utils.AudioBuffer,
         language: NotGivenOr[str],
         conn_options: APIConnectOptions,
@@ -151,7 +151,7 @@ class FallbackAdapter(
             or stt_status.recovering_synthesize_task.done()
         ):
 
-            async def _recover_stt_task(stt: STT) -> None:
+            async def _recover_stt_task(stt: STT[Any]) -> None:
                 try:
                     await self._try_recognize(
                         stt=stt,
@@ -178,7 +178,7 @@ class FallbackAdapter(
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
-    ):
+    ) -> SpeechEvent:
         start_time = time.time()
 
         all_failed = all(not stt_status.available for stt_status in self._status)
@@ -214,7 +214,7 @@ class FallbackAdapter(
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         return await super().recognize(buffer, language=language, conn_options=conn_options)
@@ -222,7 +222,7 @@ class FallbackAdapter(
     def stream(
         self,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
@@ -241,10 +241,10 @@ class FallbackRecognizeStream(RecognizeStream):
         self,
         *,
         stt: FallbackAdapter,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ):
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=None)
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=NOT_GIVEN)
         self._language = language
         self._fallback_adapter = stt
         self._recovering_streams: list[RecognizeStream] = []
@@ -257,7 +257,7 @@ class FallbackRecognizeStream(RecognizeStream):
             logger.error("all STTs are unavailable, retrying..")
 
         main_stream: RecognizeStream | None = None
-        forward_input_task: asyncio.Task | None = None
+        forward_input_task: asyncio.Task[None] | None = None
 
         async def _forward_input_task() -> None:
             async for data in self._input_ch:
@@ -343,7 +343,7 @@ class FallbackRecognizeStream(RecognizeStream):
             f"all STTs failed ({[stt.label for stt in self._fallback_adapter._stt_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
         )
 
-    def _try_recovery(self, stt: STT) -> None:
+    def _try_recovery(self, stt: STT[Any]) -> None:
         stt_status = self._fallback_adapter._status[
             self._fallback_adapter._stt_instances.index(stt)
         ]

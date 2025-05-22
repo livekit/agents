@@ -5,7 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
 
 from livekit import rtc
 
@@ -31,6 +31,9 @@ from .events import (
     UserStateChangedEvent,
 )
 from .speech_handle import SpeechHandle
+
+if TYPE_CHECKING:
+    from ..llm import mcp
 
 
 @dataclass
@@ -64,7 +67,7 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 
 @runtime_checkable
 class _VideoSampler(Protocol):
-    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool: ...
+    def __call__(self, frame: rtc.VideoFrame, session: AgentSession[Any]) -> bool: ...
 
 
 # TODO(theomonnom): Should this be moved to another file?
@@ -77,7 +80,7 @@ class VoiceActivityVideoSampler:
         self.silent_fps = silent_fps
         self._last_sampled_time: float | None = None
 
-    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool:
+    def __call__(self, frame: rtc.VideoFrame, session: AgentSession[Any]) -> bool:
         now = time.time()
         is_speaking = session.user_state == "speaking"
         target_fps = self.speaking_fps if is_speaking else self.silent_fps
@@ -99,10 +102,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT[Any]] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM[Any] | llm.RealtimeModel] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS[Any]] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
         discard_audio_if_uninterruptible: bool = True,
@@ -142,6 +146,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             vad (vad.VAD, optional): Voice-activity detector
             llm (llm.LLM | llm.RealtimeModel, optional): LLM or RealtimeModel
             tts (tts.TTS, optional): Text-to-speech engine.
+            mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
+                providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             allow_interruptions (bool): Whether the user can interrupt the
                 agent mid-utterance. Default ``True``.
@@ -192,6 +198,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+        self._mcp_servers = mcp_servers or None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -201,8 +208,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._on_text_output_changed,
         )
 
-        self._forward_audio_atask: asyncio.Task | None = None
-        self._update_activity_atask: asyncio.Task | None = None
+        self._forward_audio_atask: asyncio.Task[None] | None = None
+        self._update_activity_atask: asyncio.Task[None] | None = None
         self._activity_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
 
@@ -212,11 +219,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
+        self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
-        self._closing_task: asyncio.Task | None = None
+        self._closing_task: asyncio.Task[None] | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -234,20 +242,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._turn_detection
 
     @property
-    def stt(self) -> stt.STT | None:
-        return self._stt
-
-    @property
-    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
-        return self._llm
-
-    @property
-    def tts(self) -> tts.TTS | None:
-        return self._tts
-
-    @property
-    def vad(self) -> vad.VAD | None:
-        return self._vad
+    def mcp_servers(self) -> list[mcp.MCPServer] | None:
+        return self._mcp_servers
 
     @property
     def input(self) -> io.AgentInput:
@@ -409,7 +405,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _aclose_impl(
         self,
         *,
-        error: llm.LLMError | stt.STTError | tts.TTSError | None = None,
+        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
     ) -> None:
         async with self._lock:
             if not self._started:
@@ -516,7 +512,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions=allow_interruptions,
         )
 
-    def interrupt(self) -> asyncio.Future:
+    def interrupt(self) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
         Returns:
@@ -562,11 +558,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
+        logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
+
         async def drain_and_close() -> None:
             await self.drain()
             await self._aclose_impl(error=error)
 
-        def on_close_done(_: asyncio.Task) -> None:
+        def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
         self._closing_task = asyncio.create_task(drain_and_close())
@@ -627,8 +625,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
-        self._chat_ctx.items.append(message)
+        self._chat_ctx.insert_item(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    # move them to the end to avoid shadowing the same named modules for mypy
+    @property
+    def stt(self) -> stt.STT[Any] | None:
+        return self._stt
+
+    @property
+    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
+        return self._llm
+
+    @property
+    def tts(self) -> tts.TTS[Any] | None:
+        return self._tts
+
+    @property
+    def vad(self) -> vad.VAD | None:
+        return self._vad
 
     # -- User changed input/output streams/sinks --
 

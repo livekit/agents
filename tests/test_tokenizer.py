@@ -19,6 +19,8 @@ TEXT = (
     "f(x) = x * 2.54 + 42. "
     "Hey!\n Hi! Hello! "
     "\n\n"
+    "This is a sentence. 这是一个中文句子。これは日本語の文章です。"
+    "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。"
 )
 
 EXPECTED_MIN_20 = [
@@ -28,7 +30,9 @@ EXPECTED_MIN_20 = [
     "This is a test. Another test.",
     "A short sentence. A longer sentence that is longer than the previous sentence.",
     "f(x) = x * 2.54 + 42.",
-    "Hey! Hi! Hello!",
+    "Hey! Hi! Hello! This is a sentence.",
+    "这是一个中文句子。 これは日本語の文章です。",
+    "你好！ LiveKit是一个直播音频和视频应用程序和服务的平台。",
 ]
 
 EXPECTED_MIN_20_RETAIN_FORMAT = [
@@ -38,11 +42,25 @@ EXPECTED_MIN_20_RETAIN_FORMAT = [
     " \nThis is a test. Another test.",
     " A short sentence.\nA longer sentence that is longer than the previous sentence.",
     " f(x) = x * 2.54 + 42.",
-    " Hey!\n Hi! Hello! \n\n",
+    " Hey!\n Hi! Hello! \n\nThis is a sentence.",
+    " 这是一个中文句子。これは日本語の文章です。",
+    "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
+]
+
+EXPECTED_MIN_20_NLTK = [
+    "Hi! LiveKit is a platform for live audio and video applications and services.",
+    "R.T.C stands for Real-Time Communication... again R.T.C.",
+    "Mr. Theo is testing the sentence tokenizer.",
+    "This is a test. Another test.",
+    "A short sentence. A longer sentence that is longer than the previous sentence.",
+    "f(x) = x * 2.54 + 42.",
+    "Hey! Hi! Hello! This is a sentence.",
+    # nltk does not support character-based languages like CJK
+    "这是一个中文句子。これは日本語の文章です。你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
 ]
 
 SENT_TOKENIZERS = [
-    (nltk.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20),
+    (nltk.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20_NLTK),
     (basic.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20),
     (
         basic.SentenceTokenizer(min_sentence_len=20, retain_format=True),
@@ -54,6 +72,7 @@ SENT_TOKENIZERS = [
 @pytest.mark.parametrize("tokenizer, expected", SENT_TOKENIZERS)
 def test_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, expected: list[str]):
     segmented = tokenizer.tokenize(text=TEXT)
+    print(segmented)
     for i, segment in enumerate(expected):
         assert segment == segmented[i]
 
@@ -133,7 +152,10 @@ async def test_streamed_word_tokenizer(tokenizer: tokenize.WordTokenizer):
         assert ev.token == WORDS_EXPECTED[i]
 
 
-WORDS_PUNCT_TEXT = 'This is <phoneme alphabet="cmu-arpabet" ph="AE K CH UW AH L IY">actually</phoneme> tricky to handle.'  # noqa: E501
+WORDS_PUNCT_TEXT = (
+    'This is <phoneme alphabet="cmu-arpabet" ph="AE K CH UW AH L IY">actually</phoneme> tricky to handle.'  # noqa: E501
+    "这是一个中文句子。 これは日本語の文章です。"
+)
 
 WORDS_PUNCT_EXPECTED = [
     "This",
@@ -150,6 +172,27 @@ WORDS_PUNCT_EXPECTED = [
     "tricky",
     "to",
     "handle.",
+    "这",
+    "是",
+    "一",
+    "个",
+    "中",
+    "文",
+    "句",
+    "子",
+    "。",
+    "こ",
+    "れ",
+    "は",
+    "日",
+    "本",
+    "語",
+    "の",
+    "文",
+    "章",
+    "で",
+    "す",
+    "。",
 ]
 
 WORD_PUNCT_TOKENIZERS = [basic.WordTokenizer(ignore_punctuation=False)]

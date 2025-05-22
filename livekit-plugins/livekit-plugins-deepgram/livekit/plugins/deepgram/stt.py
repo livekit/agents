@@ -22,7 +22,6 @@ import weakref
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
@@ -43,7 +42,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import AudioBuffer, is_given
 
-from ._utils import PeriodicCollector
+from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
@@ -566,10 +565,11 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(recv_task(ws)),
                     asyncio.create_task(keepalive_task(ws)),
                 ]
+                tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        [tasks_group, wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
 
@@ -584,6 +584,7 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await tasks_group
             finally:
                 if ws is not None:
                     await ws.close()
@@ -749,26 +750,6 @@ def prerecorded_transcription_to_speech_event(
             for alt in dg_alts
         ],
     )
-
-
-def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
-    # don't modify the original opts
-    opts = opts.copy()
-    if opts.get("keywords"):
-        # convert keywords to a list of "keyword:intensifier"
-        opts["keywords"] = [
-            f"{keyword}:{intensifier}" for (keyword, intensifier) in opts["keywords"]
-        ]
-
-    # lowercase bools
-    opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
-
-    if websocket and base_url.startswith("http"):
-        base_url = base_url.replace("http", "ws", 1)
-
-    elif not websocket and base_url.startswith("ws"):
-        base_url = base_url.replace("ws", "http", 1)
-    return f"{base_url}?{urlencode(opts, doseq=True)}"
 
 
 def _validate_model(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
+from typing import Any
 
 from .. import utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -14,31 +15,27 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
-class StreamAdapter(STT):
-    def __init__(self, *, stt: STT, vad: VAD) -> None:
+class StreamAdapter(STT[Any]):
+    def __init__(self, *, stt: STT[Any], vad: VAD) -> None:
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=False))
         self._vad = vad
         self._stt = stt
 
         @self._stt.on("metrics_collected")
-        def _forward_metrics(*args, **kwargs):
+        def _forward_metrics(*args: Any, **kwargs: Any) -> None:
             self.emit("metrics_collected", *args, **kwargs)
 
-        @self.on("error")
-        def _forward_error(*args, **kwargs):
-            self._stt.emit("error", *args, **kwargs)
-
     @property
-    def wrapped_stt(self) -> STT:
+    def wrapped_stt(self) -> STT[Any]:
         return self._stt
 
     async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: NotGivenOr[str],
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ):
+    ) -> SpeechEvent:
         return await self._stt.recognize(
             buffer=buffer, language=language, conn_options=conn_options
         )
@@ -46,8 +43,8 @@ class StreamAdapter(STT):
     def stream(
         self,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return StreamAdapterWrapper(
             self,
@@ -61,16 +58,17 @@ class StreamAdapter(STT):
 class StreamAdapterWrapper(RecognizeStream):
     def __init__(
         self,
-        stt: STT,
+        stt: STT[Any],
         *,
         vad: VAD,
-        wrapped_stt: STT,
-        language: NotGivenOr[str | None],
+        wrapped_stt: STT[Any],
+        language: NotGivenOr[str],
         conn_options: APIConnectOptions,
     ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options)
+        super().__init__(stt=stt, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._vad = vad
         self._wrapped_stt = wrapped_stt
+        self._wrapped_stt_conn_options = conn_options
         self._vad_stream = self._vad.stream()
         self._language = language
 
@@ -78,7 +76,7 @@ class StreamAdapterWrapper(RecognizeStream):
         pass  # do nothing
 
     async def _run(self) -> None:
-        async def _forward_input():
+        async def _forward_input() -> None:
             """forward input to vad"""
             async for input in self._input_ch:
                 if isinstance(input, self._FlushSentinel):
@@ -88,7 +86,7 @@ class StreamAdapterWrapper(RecognizeStream):
 
             self._vad_stream.end_input()
 
-        async def _recognize():
+        async def _recognize() -> None:
             """recognize speech from vad"""
             async for event in self._vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:
@@ -104,7 +102,7 @@ class StreamAdapterWrapper(RecognizeStream):
                     t_event = await self._wrapped_stt.recognize(
                         buffer=merged_frames,
                         language=self._language,
-                        conn_options=self._conn_options,
+                        conn_options=self._wrapped_stt_conn_options,
                     )
 
                     if len(t_event.alternatives) == 0:

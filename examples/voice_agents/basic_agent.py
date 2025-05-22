@@ -20,7 +20,6 @@ from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
-# currently supported on Linux and MacOS
 # from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("basic-agent")
@@ -45,11 +44,7 @@ class MyAgent(Agent):
     # agent is active
     @function_tool
     async def lookup_weather(
-        self,
-        context: RunContext,
-        location: str,
-        latitude: str,
-        longitude: str,
+        self, context: RunContext, location: str, latitude: str, longitude: str
     ):
         """Called when the user asks for weather related information.
         Ensure the user's location (city or region) is provided.
@@ -58,8 +53,8 @@ class MyAgent(Agent):
 
         Args:
             location: The location they are asking for
-            latitude: The latitude of the location
-            longitude: The longitude of the location
+            latitude: The latitude of the location, do not ask user for it
+            longitude: The longitude of the location, do not ask user for it
         """
 
         logger.info(f"Looking up weather for {location}")
@@ -76,7 +71,6 @@ async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
-    await ctx.connect()
 
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
@@ -103,9 +97,6 @@ async def entrypoint(ctx: JobContext):
     # shutdown callbacks are triggered when the session is over
     ctx.add_shutdown_callback(log_usage)
 
-    # wait for a participant to join the room
-    await ctx.wait_for_participant()
-
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
@@ -115,6 +106,9 @@ async def entrypoint(ctx: JobContext):
         ),
         room_output_options=RoomOutputOptions(transcription_enabled=True),
     )
+
+    # join the room when agent is ready
+    await ctx.connect()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import time
 from typing import Callable, Generic, Optional, TypeVar
+from urllib.parse import urlencode
 
 T = TypeVar("T")
 
@@ -34,3 +35,23 @@ class PeriodicCollector(Generic[T]):
             self._callback(self._total)
             self._total = None
         self._last_flush_time = time.monotonic()
+
+
+def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
+    # don't modify the original opts
+    opts = opts.copy()
+    if opts.get("keywords"):
+        # convert keywords to a list of "keyword:intensifier"
+        opts["keywords"] = [
+            f"{keyword}:{intensifier}" for (keyword, intensifier) in opts["keywords"]
+        ]
+
+    # lowercase bools
+    opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
+
+    if websocket and base_url.startswith("http"):
+        base_url = base_url.replace("http", "ws", 1)
+
+    elif not websocket and base_url.startswith("ws"):
+        base_url = base_url.replace("ws", "http", 1)
+    return f"{base_url}?{urlencode(opts, doseq=True)}"

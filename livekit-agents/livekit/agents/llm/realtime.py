@@ -9,7 +9,6 @@ from typing import Any, Generic, Literal, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
-from livekit.agents._exceptions import APIError
 
 from ..types import NOT_GIVEN, NotGivenOr
 from .chat_context import ChatContext, FunctionCall
@@ -46,7 +45,7 @@ class RealtimeModelError(BaseModel):
     type: Literal["realtime_model_error"] = "realtime_model_error"
     timestamp: float
     label: str
-    error: APIError = Field(..., exclude=True)
+    error: Exception = Field(..., exclude=True)
     recoverable: bool
 
 
@@ -55,6 +54,7 @@ class RealtimeCapabilities:
     message_truncation: bool
     turn_detection: bool
     user_transcription: bool
+    auto_tool_reply_generation: bool
 
 
 class RealtimeError(Exception):
@@ -72,7 +72,7 @@ class RealtimeModel:
         return self._capabilities
 
     @abstractmethod
-    def session(self) -> RealtimeSession: ...
+    def session(self) -> RealtimeSession[Any]: ...
 
     @abstractmethod
     async def aclose(self) -> None: ...
@@ -83,6 +83,7 @@ EventTypes = Literal[
     "input_speech_stopped",  # serverside VAD
     "input_audio_transcription_completed",
     "generation_created",
+    "metrics_collected",
     "error",
 ]
 
@@ -95,6 +96,7 @@ class InputTranscriptionCompleted:
     """id of the item"""
     transcript: str
     """transcript of the input audio"""
+    is_final: bool
 
 
 class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
