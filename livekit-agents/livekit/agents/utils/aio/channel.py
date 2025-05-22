@@ -61,7 +61,7 @@ class Chan(Generic[T]):
         self._puts: deque[asyncio.Future[T | None]] = deque()
         self._queue: deque[T] = deque()
 
-    def _wakeup_next(self, waiters: deque[asyncio.Future[T | None]]):
+    def _wakeup_next(self, waiters: deque[asyncio.Future[T | None]]) -> None:
         while waiters:
             waiter = waiters.popleft()
             if not waiter.done():

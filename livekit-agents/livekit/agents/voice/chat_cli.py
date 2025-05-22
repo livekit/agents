@@ -4,7 +4,7 @@ import asyncio
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import click
 import numpy as np
@@ -18,7 +18,7 @@ from .agent_session import AgentSession
 from .transcription import TranscriptSynchronizer
 
 if TYPE_CHECKING:
-    import sounddevice as sd
+    import sounddevice as sd  # type: ignore
 
 MAX_AUDIO_BAR = 30
 INPUT_DB_MIN = -70.0
@@ -149,14 +149,14 @@ class _AudioOutput(io.AudioOutput):
 class ChatCLI:
     def __init__(
         self,
-        agent_session: AgentSession,
+        agent_session: AgentSession[Any],
         *,
         sync_transcription: bool = True,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._session = agent_session
-        self._done_fut = asyncio.Future()
+        self._done_fut = asyncio.Future[None]()
         self._micro_db = INPUT_DB_MIN
 
         self._audio_input_ch = aio.Chan[rtc.AudioFrame](loop=self._loop)
@@ -165,17 +165,16 @@ class ChatCLI:
         self._output_stream: sd.OutputStream | None = None
         self._cli_mode: Literal["text", "audio"] = "audio"
 
-        self._text_input_buf = []
+        self._text_input_buf: list[str] = []
 
         self._text_sink = _TextOutput(self)
         self._audio_sink = _AudioOutput(self)
+        self._transcript_syncer: TranscriptSynchronizer | None = None
         if sync_transcription:
             self._transcript_syncer = TranscriptSynchronizer(
                 next_in_chain_audio=self._audio_sink,
                 next_in_chain_text=self._text_sink,
             )
-        else:
-            self._transcript_syncer = None
 
         self._apm = rtc.AudioProcessingModule(
             echo_cancellation=True,
@@ -187,7 +186,7 @@ class ChatCLI:
         self._output_delay = 0.0
         self._input_delay = 0.0
 
-        self._main_atask: asyncio.Task | None = None
+        self._main_atask: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
@@ -221,7 +220,7 @@ class ChatCLI:
             old_settings = termios.tcgetattr(fd)
             tty.setcbreak(fd)
 
-            def on_input():
+            def on_input() -> None:
                 try:
                     ch = sys.stdin.read(1)
                     stdin_ch.send_nowait(ch)
@@ -311,7 +310,7 @@ class ChatCLI:
             self._session.output.transcription = None
             self._text_input_buf = []
 
-    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, *_) -> None:
+    def _sd_output_callback(self, outdata: np.ndarray, frames: int, time, *_) -> None:  # type: ignore
         self._output_delay = time.outputBufferDacTime - time.currentTime
 
         FRAME_SAMPLES = 240
@@ -344,7 +343,7 @@ class ChatCLI:
             )
             self._apm.process_reverse_stream(render_frame_for_aec)
 
-    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:
+    def _sd_input_callback(self, indata: np.ndarray, frame_count: int, time, *_) -> None:  # type: ignore
         self._input_delay = time.currentTime - time.inputBufferAdcTime
         total_delay = self._output_delay + self._input_delay
         self._apm.set_stream_delay_ms(int(total_delay * 1000))
@@ -423,7 +422,7 @@ class ChatCLI:
 
             await asyncio.sleep(max(0, next_frame - time.perf_counter()))
 
-    def _print_audio_mode(self):
+    def _print_audio_mode(self) -> None:
         amplitude_db = _normalize_db(self._micro_db, db_min=INPUT_DB_MIN, db_max=INPUT_DB_MAX)
         nb_bar = round(amplitude_db * MAX_AUDIO_BAR)
 
@@ -434,7 +433,7 @@ class ChatCLI:
         )
         sys.stdout.flush()
 
-    def _print_text_mode(self):
+    def _print_text_mode(self) -> None:
         sys.stdout.write("\r")
         sys.stdout.flush()
         prompt = "Enter your message: "

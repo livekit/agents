@@ -6,6 +6,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import asdict
+from typing import Any
 
 from livekit import rtc
 
@@ -33,7 +34,7 @@ class DataStreamAudioOutput(AudioOutput):
         self._destination_identity = destination_identity
         self._stream_writer: rtc.ByteStreamWriter | None = None
         self._pushed_duration: float = 0.0
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
 
         # playback finished handler
         def _handle_playback_finished(data: rtc.RpcInvocationData) -> str:
@@ -150,7 +151,10 @@ class DataStreamAudioReceiver(AudioReceiver):
         def _handle_stream_received(
             reader: rtc.ByteStreamReader, remote_participant_id: str
         ) -> None:
-            if remote_participant_id != self._remote_participant.identity:
+            if (
+                not self._remote_participant
+                or remote_participant_id != self._remote_participant.identity
+            ):
                 return
 
             self._stream_readers.append(reader)
@@ -158,7 +162,7 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
 
-    async def notify_playback_finished(self, playback_position: int, interrupted: bool) -> None:
+    async def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
         """Notify the sender that playback has finished"""
         assert self._remote_participant is not None
         event = PlaybackFinishedEvent(playback_position=playback_position, interrupted=interrupted)
@@ -187,8 +191,16 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             while self._stream_readers:
                 self._current_reader = self._stream_readers.pop(0)
-                sample_rate = int(self._current_reader.info.attributes["sample_rate"])
-                num_channels = int(self._current_reader.info.attributes["num_channels"])
+
+                if (
+                    not (attrs := self._current_reader.info.attributes)
+                    or "sample_rate" not in attrs
+                    or "num_channels" not in attrs
+                ):
+                    raise ValueError("sample_rate or num_channels not found in byte stream")
+
+                sample_rate = int(attrs["sample_rate"])
+                num_channels = int(attrs["num_channels"])
                 async for data in self._current_reader:
                     if self._current_reader_cleared:
                         # ignore the rest data of the current reader if clear_buffer was called

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Union
 
@@ -69,13 +70,13 @@ class SpeakingRateStream:
         self._step_size_samples = 0
 
     @log_exceptions(logger=logger)
-    async def _main_task(self):
+    async def _main_task(self) -> None:
         _inference_sample_rate = 0
         inference_f32_data = np.empty(0, dtype=np.float32)
 
         pub_timestamp = self._opts.window_duration / 2
-        inference_frames = []
-        resampler = None
+        inference_frames: list[rtc.AudioFrame] = []
+        resampler: rtc.AudioResampler | None = None
 
         async for input_frame in self._input_ch:
             if not isinstance(input_frame, rtc.AudioFrame):
@@ -164,7 +165,9 @@ class SpeakingRateStream:
                         )
                     ]
 
-    def _compute_speaking_rate(self, audio: np.ndarray, sample_rate: int) -> float:
+    def _compute_speaking_rate(
+        self, audio: np.ndarray[tuple[int], np.dtype[np.float32]], sample_rate: int
+    ) -> float:
         """
         Compute the speaking rate of the audio using the selected method
         """
@@ -183,9 +186,14 @@ class SpeakingRateStream:
 
         return self._spectral_flux(audio, sample_rate)
 
-    def _stft(self, audio: np.ndarray, frame_length: int, hop_length: int) -> np.ndarray:
+    def _stft(
+        self,
+        audio: np.ndarray[tuple[int], np.dtype[np.float32]],
+        frame_length: int,
+        hop_length: int,
+    ) -> np.ndarray[tuple[int, int], np.dtype[np.complex128]]:
         num_frames = (len(audio) - frame_length) // hop_length + 1
-        result = np.zeros((frame_length // 2 + 1, num_frames), dtype=complex)
+        result = np.zeros((frame_length // 2 + 1, num_frames), dtype=np.complex128)
 
         window = np.hanning(frame_length)
         scale_factor = 1.0 / np.sqrt(np.sum(window**2))
@@ -201,7 +209,9 @@ class SpeakingRateStream:
 
         return result
 
-    def _spectral_flux(self, audio: np.ndarray, sample_rate: int) -> float:
+    def _spectral_flux(
+        self, audio: np.ndarray[tuple[int], np.dtype[np.float32]], sample_rate: int
+    ) -> float:
         """
         Calculate speaking rate based on spectral flux.
         Higher spectral flux correlates with more rapid speech articulation.
@@ -224,7 +234,7 @@ class SpeakingRateStream:
         if not spectral_flux_values:
             return 0.0
 
-        avg_flux = np.mean(spectral_flux_values)
+        avg_flux = float(np.mean(spectral_flux_values))
         return avg_flux
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
@@ -246,5 +256,5 @@ class SpeakingRateStream:
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
 
-    def __aiter__(self):
+    def __aiter__(self) -> AsyncIterator[SpeakingRateEvent]:
         return self._event_ch

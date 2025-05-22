@@ -168,7 +168,7 @@ async def audio_frames_from_file(
 
     decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
 
-    async def file_reader():
+    async def file_reader() -> None:
         async with aiofiles.open(file_path, mode="rb") as f:
             while True:
                 chunk = await f.read(4096)
