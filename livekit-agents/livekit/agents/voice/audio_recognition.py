@@ -15,6 +15,8 @@ from ..utils import aio
 from . import io
 from .agent import ModelSettings
 
+MIN_LANGUAGE_DETECTION_LENGTH = 5
+
 
 @dataclass
 class _EndOfTurnInfo:
@@ -215,7 +217,13 @@ class AudioRecognition:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
-            self._last_language = ev.alternatives[0].language
+            language = ev.alternatives[0].language
+
+            if not self._last_language or (
+                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
+            ):
+                self._last_language = language
+
             if not transcript:
                 return
 
