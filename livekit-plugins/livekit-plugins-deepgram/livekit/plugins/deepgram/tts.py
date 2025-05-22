@@ -102,7 +102,7 @@ class TTS(tts.TTS):
             "encoding": self._opts.encoding,
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
-            "mip_opt_out": self._opts.mip_opt_out,
+            "mip_opt_out": "true" if self._opts.mip_opt_out else "false",
         }
         return await asyncio.wait_for(
             session.ws_connect(
@@ -212,7 +212,7 @@ class ChunkedStream(tts.ChunkedStream):
                 "encoding": self._opts.encoding,
                 "model": self._opts.model,
                 "sample_rate": self._opts.sample_rate,
-                "mip_opt_out": self._opts.mip_opt_out,
+                "mip_opt_out": "true" if self._opts.mip_opt_out else "false",
             }
             async with self._session.post(
                 _to_deepgram_url(config, self._base_url, websocket=False),
