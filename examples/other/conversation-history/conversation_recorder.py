@@ -22,8 +22,8 @@ SAMPLEWIDTH = 2
 
 def stt_recorder(*, stt, recorder):
     """
-    Wraps Agent's default STT node with stt_node_wrapper.
-    The AudioFrames are caught before transcribing.
+    Wraps Agent's default STT node with stt_node_wrapper. The AudioFrames are caught
+    before transcribing and SpeechEvents are yielded.
     """
 
     async def stt_node_wrapper(
@@ -34,7 +34,8 @@ def stt_recorder(*, stt, recorder):
                 await recorder.queue_audio(frame)
                 yield frame
 
-        return stt(self, record_audio(), model_settings)
+        async for event in stt(self, record_audio, model_settings):
+            yield event
 
     update_wrapper(stt_node_wrapper, stt)
     return stt_node_wrapper
@@ -103,7 +104,7 @@ class SessionRecorder:
                             for flushed_frame in frames:
                                 self._file.writeframes(flushed_frame.data.tobytes())
                     self._audio_resampler = AudioResampler(
-                        input_rate=frame.sample_rate, output_rate=FRAMERATE
+                        input_rate=frame.sample_rate, output_rate=FRAMERATE, quality="very_high"
                     )
                     self._current_input_rate = frame.sample_rate
                     frame = self._audio_resampler.push(frame)
@@ -172,7 +173,7 @@ async def entrypoint(ctx: JobContext):
         userdata=agent_bank,
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
-        tts=deepgram.TTS(),
+        tts=openai.TTS(),
         vad=silero.VAD.load(),
     )
     recorder = SessionRecorder(session=session, file_name="recording.wav")
