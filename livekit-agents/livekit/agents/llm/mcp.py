@@ -10,10 +10,10 @@ from typing import Any
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 try:
-    from mcp import ClientSession, stdio_client  # type: ignore
-    from mcp.client.sse import sse_client  # type: ignore
-    from mcp.client.stdio import StdioServerParameters  # type: ignore
-    from mcp.types import JSONRPCMessage  # type: ignore
+    from mcp import ClientSession, stdio_client
+    from mcp.client.sse import sse_client
+    from mcp.client.stdio import StdioServerParameters
+    from mcp.types import JSONRPCMessage
 except ImportError as e:
     raise ImportError(
         "The 'mcp' package is required to run the MCP server integration but is not installed.\n"
