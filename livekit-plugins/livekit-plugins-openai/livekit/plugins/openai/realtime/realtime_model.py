@@ -1040,6 +1040,7 @@ class RealtimeSession(
             item_generation = self._current_generation.messages[item_id]
 
             # put a dummy audio frame to send playback finished event
+            # TODO: remove this when we have https://linear.app/livekit/issue/AGT-1363/enforce-textaudio-channel-flush-synchronization-on-the-task-activitypy
             data = b"\x00\x00" * int(SAMPLE_RATE * 0.01) * NUM_CHANNELS
             item_generation.audio_ch.send_nowait(
                 rtc.AudioFrame(
