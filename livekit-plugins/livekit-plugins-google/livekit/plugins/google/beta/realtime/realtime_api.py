@@ -86,6 +86,9 @@ class _RealtimeOptions:
     input_audio_transcription: AudioTranscriptionConfig | None
     output_audio_transcription: AudioTranscriptionConfig | None
     image_encode_options: NotGivenOr[images.EncodeOptions]
+    enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
+    proactivity: NotGivenOr[bool] = NOT_GIVEN
+    realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN
 
 
 @dataclass
@@ -131,6 +134,9 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         image_encode_options: NotGivenOr[images.EncodeOptions] = NOT_GIVEN,
+        enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN,
+        proactivity: NotGivenOr[bool] = NOT_GIVEN,
+        realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -161,6 +167,9 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
             output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
             image_encode_options (images.EncodeOptions, optional): The configuration for image encoding. Defaults to DEFAULT_ENCODE_OPTIONS.
+            enable_affective_dialog (bool, optional): Whether to enable affective dialog. Defaults to False.
+            proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
+            realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -232,6 +241,9 @@ class RealtimeModel(llm.RealtimeModel):
             output_audio_transcription=output_audio_transcription,
             language=language,
             image_encode_options=image_encode_options,
+            enable_affective_dialog=enable_affective_dialog,
+            proactivity=proactivity,
+            realtime_input_config=realtime_input_config,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -615,7 +627,9 @@ class RealtimeSession(llm.RealtimeSession):
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
-            realtime_input_config=RealtimeInputConfig(
+            enable_affective_dialog=self._opts.enable_affective_dialog,
+            proactivity={'proactive_audio': self._opts.proactivity},
+            realtime_input_config=self._opts.realtime_input_config if is_given(self._opts.realtime_input_config) else RealtimeInputConfig(
                 automatic_activity_detection=AutomaticActivityDetection(),
             ),
         )
