@@ -62,9 +62,9 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
-    def __init__(self, agent: Agent, sess: AgentSession[Any]) -> None:
+    def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
-        self._rt_session: llm.RealtimeSession[Any] | None = None
+        self._rt_session: llm.RealtimeSession | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
@@ -168,7 +168,7 @@ class AgentActivity(RecognitionHooks):
         return self._draining
 
     @property
-    def session(self) -> AgentSession[Any]:
+    def session(self) -> AgentSession:
         return self._session
 
     @property
@@ -201,7 +201,7 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
-    def realtime_llm_session(self) -> llm.RealtimeSession[Any] | None:
+    def realtime_llm_session(self) -> llm.RealtimeSession | None:
         return self._rt_session
 
     @property
@@ -853,9 +853,9 @@ class AgentActivity(RecognitionHooks):
             UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
         )
 
-    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
-        # IMPORTANT: This method can be cancelled by the AudioRecognition
-        # We explicitly create a new task to avoid cancelling user code.
+    def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+        # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
+        # We explicitly create a new task here
 
         if self.draining:
             logger.warning(
@@ -1671,16 +1671,16 @@ class AgentActivity(RecognitionHooks):
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     @property
-    def stt(self) -> stt.STT[Any] | None:
+    def stt(self) -> stt.STT | None:
         return self._agent.stt if is_given(self._agent.stt) else self._session.stt
 
     @property
-    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
+    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
         return cast(
-            Optional[Union[llm.LLM[Any], llm.RealtimeModel]],
+            Optional[Union[llm.LLM, llm.RealtimeModel]],
             self._agent.llm if is_given(self._agent.llm) else self._session.llm,
         )
 
     @property
-    def tts(self) -> tts.TTS[Any] | None:
+    def tts(self) -> tts.TTS | None:
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts
