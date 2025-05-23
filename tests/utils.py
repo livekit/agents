@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import pathlib
-import tiktoken
 from collections.abc import AsyncGenerator
 
 import jiwer as tr
+import tiktoken
 
 from livekit import rtc
 from livekit.agents import utils

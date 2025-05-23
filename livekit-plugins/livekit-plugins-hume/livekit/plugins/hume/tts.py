@@ -19,7 +19,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import TypedDict, Optional, Any, List, Dict
+from typing import Any, TypedDict
 
 import aiohttp
 
@@ -35,20 +35,20 @@ DEFAULT_BASE_URL = "https://api.hume.ai"
 class PostedUtterance(TypedDict, total=False):
     text: str
     description: str
-    voice: Dict[str, Any]
+    voice: dict[str, Any]
     speed: float
     trailing_silence: float
 
 
 class PostedContext(TypedDict, total=False):
-    utterances: List[PostedUtterance]
+    utterances: list[PostedUtterance]
 
 
 @dataclass
 class _TTSOptions:
     api_key: str
     utterance_options: PostedUtterance
-    context: Optional[PostedContext]
+    context: PostedContext | None
     sample_rate: int
     split_utterances: bool
     instant_mode: bool
@@ -136,7 +136,7 @@ class ChunkedStream(tts.ChunkedStream):
         utterance: PostedUtterance = {"text": self._input_text}
         utterance.update(self._opts.utterance_options)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "utterances": [utterance],
             "split_utterances": self._opts.split_utterances,
             "strip_headers": True,

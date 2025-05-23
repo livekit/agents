@@ -17,7 +17,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal, Union
 
-import asyncio
 import httpx
 
 import openai

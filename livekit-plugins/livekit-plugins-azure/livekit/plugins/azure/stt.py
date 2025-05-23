@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from livekit.agents.types import NOT_GIVEN
-
 """Minimal Azure Speech-to-Text implementation for LiveKit agents.
 
 Relies only on `aiohttp` and core LiveKit utilities. Designed to be compact yet
@@ -16,27 +14,23 @@ For advanced features (language auto-detect, phrase hints, etc.) extend the
 `_build_context` method.
 """
 
+import asyncio
+import datetime
+import datetime as _dt
+import json
 import os
 import uuid
-import json
-import datetime as _dt
-import asyncio
 from urllib.parse import urlencode
 
 import aiohttp
-import datetime
 
 from livekit import rtc  # type: ignore
 from livekit.agents import (
-    stt,
-    utils,
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
+    stt,
+    utils,
 )
-from livekit.agents.utils import AudioBuffer
 
 __all__ = ["AzureSTT"]
 
@@ -73,7 +67,7 @@ class STT(stt.STT):
             raise ValueError("AZURE_SPEECH_KEY and AZURE_SPEECH_REGION env vars are required")
 
         self._session = http_session or utils.http_context.http_session()
-        self._streams: set["SpeechStream"] = set()
+        self._streams: set[SpeechStream] = set()
 
     def _recognize_impl(
         self,
@@ -89,7 +83,7 @@ class STT(stt.STT):
     # ---------------------------------------------------------------------
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "SpeechStream":
+    ) -> SpeechStream:
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -214,7 +208,9 @@ class SpeechStream(stt.SpeechStream):
             samples_per_channel=samples_chunk,
         )
 
-        import asyncio, datetime, struct, uuid
+        import asyncio
+        import struct
+        import uuid
 
         _CRLF = b"\r\n"
 

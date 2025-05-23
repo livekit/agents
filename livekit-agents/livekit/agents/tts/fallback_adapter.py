@@ -23,7 +23,6 @@ from .tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
-from ..types import DEFAULT_API_CONNECT_OPTIONS
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(

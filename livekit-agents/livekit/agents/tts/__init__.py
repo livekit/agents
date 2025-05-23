@@ -7,9 +7,9 @@ from .fallback_adapter import (
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .tts import (
     TTS,
+    AudioEmitter,
     ChunkedStream,
     SynthesizedAudio,
-    AudioEmitter,
     SynthesizeStream,
     TTSCapabilities,
     TTSError,

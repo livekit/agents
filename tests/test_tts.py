@@ -1,24 +1,23 @@
 from __future__ import annotations
 
-import wave
 import asyncio
+import io
 import logging
 import os
 import pathlib
 import ssl
 import time
-import io
-import av
-from av.error import InvalidDataError
-
+import wave
+from collections import defaultdict
 
 import aiohttp
+import av
 import pytest
+from av.error import InvalidDataError
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APITimeoutError
-from livekit.agents import tts, tokenize
+from livekit.agents import APIConnectOptions, APIError, APITimeoutError, tokenize, tts
 from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
@@ -28,19 +27,18 @@ from livekit.plugins import (
     elevenlabs,
     google,
     groq,
+    hume,
     neuphonic,
     openai,
     playai,
     resemble,
     rime,
     speechify,
-    hume,
 )
 
 from .fake_tts import FakeTTS
 from .toxic_proxy import Proxy, Toxiproxy
-from .utils import EventCollector, wer, fake_llm_stream
-from collections import defaultdict
+from .utils import EventCollector, fake_llm_stream, wer
 
 load_dotenv(override=True)
 
