@@ -1,5 +1,5 @@
 ---
-"livekit-plugins-turn-detector": patch
+"livekit-plugins-turn-detector": minor
 ---
 
 multilingual model update (#2219)
