@@ -15,8 +15,8 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
-class StreamAdapter(STT[Any]):
-    def __init__(self, *, stt: STT[Any], vad: VAD) -> None:
+class StreamAdapter(STT):
+    def __init__(self, *, stt: STT, vad: VAD) -> None:
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=False))
         self._vad = vad
         self._stt = stt
@@ -26,7 +26,7 @@ class StreamAdapter(STT[Any]):
             self.emit("metrics_collected", *args, **kwargs)
 
     @property
-    def wrapped_stt(self) -> STT[Any]:
+    def wrapped_stt(self) -> STT:
         return self._stt
 
     async def _recognize_impl(
@@ -58,10 +58,10 @@ class StreamAdapter(STT[Any]):
 class StreamAdapterWrapper(RecognizeStream):
     def __init__(
         self,
-        stt: STT[Any],
+        stt: STT,
         *,
         vad: VAD,
-        wrapped_stt: STT[Any],
+        wrapped_stt: STT,
         language: NotGivenOr[str],
         conn_options: APIConnectOptions,
     ) -> None:

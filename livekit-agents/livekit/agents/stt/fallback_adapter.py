@@ -4,7 +4,7 @@ import asyncio
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from livekit import rtc
 
@@ -24,7 +24,7 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
 
 @dataclass
 class AvailabilityChangedEvent:
-    stt: STT[Any]
+    stt: STT
     available: bool
 
 
@@ -40,7 +40,7 @@ class FallbackAdapter(
 ):
     def __init__(
         self,
-        stt: list[STT[Any]],
+        stt: list[STT],
         *,
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
@@ -81,7 +81,7 @@ class FallbackAdapter(
     async def _try_recognize(
         self,
         *,
-        stt: STT[Any],
+        stt: STT,
         buffer: utils.AudioBuffer,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -140,7 +140,7 @@ class FallbackAdapter(
     def _try_recovery(
         self,
         *,
-        stt: STT[Any],
+        stt: STT,
         buffer: utils.AudioBuffer,
         language: NotGivenOr[str],
         conn_options: APIConnectOptions,
@@ -151,7 +151,7 @@ class FallbackAdapter(
             or stt_status.recovering_synthesize_task.done()
         ):
 
-            async def _recover_stt_task(stt: STT[Any]) -> None:
+            async def _recover_stt_task(stt: STT) -> None:
                 try:
                     await self._try_recognize(
                         stt=stt,
@@ -343,7 +343,7 @@ class FallbackRecognizeStream(RecognizeStream):
             f"all STTs failed ({[stt.label for stt in self._fallback_adapter._stt_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
         )
 
-    def _try_recovery(self, stt: STT[Any]) -> None:
+    def _try_recovery(self, stt: STT) -> None:
         stt_status = self._fallback_adapter._status[
             self._fallback_adapter._stt_instances.index(stt)
         ]

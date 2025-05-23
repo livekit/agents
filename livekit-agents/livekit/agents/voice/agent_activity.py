@@ -62,7 +62,7 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
-    def __init__(self, agent: Agent, sess: AgentSession[Any]) -> None:
+    def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession[Any] | None = None
         self._audio_recognition: AudioRecognition | None = None
@@ -168,7 +168,7 @@ class AgentActivity(RecognitionHooks):
         return self._draining
 
     @property
-    def session(self) -> AgentSession[Any]:
+    def session(self) -> AgentSession:
         return self._session
 
     @property
@@ -1667,16 +1667,16 @@ class AgentActivity(RecognitionHooks):
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     @property
-    def stt(self) -> stt.STT[Any] | None:
+    def stt(self) -> stt.STT | None:
         return self._agent.stt if is_given(self._agent.stt) else self._session.stt
 
     @property
-    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
+    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
         return cast(
-            Optional[Union[llm.LLM[Any], llm.RealtimeModel]],
+            Optional[Union[llm.LLM, llm.RealtimeModel]],
             self._agent.llm if is_given(self._agent.llm) else self._session.llm,
         )
 
     @property
-    def tts(self) -> tts.TTS[Any] | None:
+    def tts(self) -> tts.TTS | None:
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts

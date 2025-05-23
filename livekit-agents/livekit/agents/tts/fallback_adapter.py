@@ -6,7 +6,7 @@ import dataclasses
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Any, Literal, Union
+from typing import Literal, Union
 
 from livekit import rtc
 
@@ -32,7 +32,7 @@ class _TTSStatus:
 
 @dataclass
 class AvailabilityChangedEvent:
-    tts: TTS[Any]
+    tts: TTS
     available: bool
 
 
@@ -45,7 +45,7 @@ class FallbackAdapter(
 
     def __init__(
         self,
-        tts: list[TTS[Any]],
+        tts: list[TTS],
         *,
         attempt_timeout: float = 10.0,
         max_retry_per_tts: int = 1,  # only retry once by default
@@ -150,7 +150,7 @@ class FallbackChunkedStream(ChunkedStream):
         self._fallback_adapter = tts
 
     async def _try_synthesize(
-        self, *, tts: TTS[Any], recovering: bool = False
+        self, *, tts: TTS, recovering: bool = False
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         try:
             audio_duration = 0.0
@@ -219,13 +219,13 @@ class FallbackChunkedStream(ChunkedStream):
             )
             raise
 
-    def _try_recovery(self, tts: TTS[Any]) -> None:
+    def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
         tts_status = self._tts._status[self._tts._tts_instances.index(tts)]
         if tts_status.recovering_task is None or tts_status.recovering_task.done():
 
-            async def _recover_tts_task(tts: TTS[Any]) -> None:
+            async def _recover_tts_task(tts: TTS) -> None:
                 try:
                     async for _ in self._try_synthesize(tts=tts, recovering=True):
                         pass
@@ -323,7 +323,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
     async def _try_synthesize(
         self,
         *,
-        tts: TTS[Any],
+        tts: TTS,
         input_ch: aio.ChanReceiver[str | SynthesizeStream._FlushSentinel],
         conn_options: APIConnectOptions,
         recovering: bool = False,
@@ -555,7 +555,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         finally:
             await utils.aio.cancel_and_wait(input_task)
 
-    def _try_recovery(self, tts: TTS[Any]) -> None:
+    def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
         retry_segments = [self._current_segment_text.copy()]
@@ -565,7 +565,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         tts_status = self._tts._status[self._tts._tts_instances.index(tts)]
         if tts_status.recovering_task is None or tts_status.recovering_task.done():
 
-            async def _recover_tts_task(tts: TTS[Any]) -> None:
+            async def _recover_tts_task(tts: TTS) -> None:
                 try:
                     input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
                     for segment in retry_segments:

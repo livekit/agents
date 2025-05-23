@@ -78,6 +78,10 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 strict = true
 
 [[tool.mypy.overrides]]
+module = "livekit.agents.*"
+disallow_any_generics = false
+
+[[tool.mypy.overrides]]
 module = "mcp.*"
 ignore_missing_imports = true
 

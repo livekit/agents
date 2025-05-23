@@ -33,10 +33,10 @@ class Agent:
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT[Any] | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM[Any] | llm.RealtimeModel | None] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS[Any] | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
@@ -430,7 +430,7 @@ class Agent:
         return self._turn_detection
 
     @property
-    def stt(self) -> NotGivenOr[stt.STT[Any] | None]:
+    def stt(self) -> NotGivenOr[stt.STT | None]:
         """
         Retrieves the Speech-To-Text component for the agent.
 
@@ -443,7 +443,7 @@ class Agent:
         return self._stt
 
     @property
-    def llm(self) -> NotGivenOr[llm.LLM[Any] | llm.RealtimeModel | None]:
+    def llm(self) -> NotGivenOr[llm.LLM | llm.RealtimeModel | None]:
         """
         Retrieves the Language Model or RealtimeModel used for text generation.
 
@@ -456,7 +456,7 @@ class Agent:
         return self._llm
 
     @property
-    def tts(self) -> NotGivenOr[tts.TTS[Any] | None]:
+    def tts(self) -> NotGivenOr[tts.TTS | None]:
         """
         Retrieves the Text-To-Speech component for the agent.
 
@@ -508,7 +508,7 @@ class Agent:
         return self._allow_interruptions
 
     @property
-    def session(self) -> AgentSession[Any]:
+    def session(self) -> AgentSession:
         """
         Retrieve the VoiceAgent associated with the current agent.
 
@@ -530,10 +530,10 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT[Any] | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM[Any] | llm.RealtimeModel | None] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS[Any] | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         super().__init__(
