@@ -13,6 +13,7 @@ livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }
 livekit-plugins-google = { workspace = true }
+livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-rime = { workspace = true }
