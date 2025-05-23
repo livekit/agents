@@ -347,9 +347,9 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns_dict, _ = append_ctx.copy(exclude_function_call=True,).to_provider_format(
-                format="google"
-            )
+            turns_dict, _ = append_ctx.copy(
+                exclude_function_call=True,
+            ).to_provider_format(format="google")
             turns = [Content.model_validate(turn) for turn in turns_dict]
             tool_results = get_tool_results_for_realtime(append_ctx, vertexai=self._opts.vertexai)
             if turns:
