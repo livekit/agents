@@ -5,7 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
+from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
 
 from livekit import rtc
 
@@ -32,12 +32,16 @@ from .events import (
 )
 from .speech_handle import SpeechHandle
 
+if TYPE_CHECKING:
+    from ..llm import mcp
+
 
 @dataclass
 class VoiceOptions:
     allow_interruptions: bool
     discard_audio_if_uninterruptible: bool
     min_interruption_duration: float
+    min_interruption_words: int
     min_endpointing_delay: float
     max_endpointing_delay: float
     max_tool_steps: int
@@ -102,10 +106,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
         discard_audio_if_uninterruptible: bool = True,
         min_interruption_duration: float = 0.5,
+        min_interruption_words: int = 0,
         min_endpointing_delay: float = 0.5,
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
@@ -140,6 +146,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             vad (vad.VAD, optional): Voice-activity detector
             llm (llm.LLM | llm.RealtimeModel, optional): LLM or RealtimeModel
             tts (tts.TTS, optional): Text-to-speech engine.
+            mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
+                providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             allow_interruptions (bool): Whether the user can interrupt the
                 agent mid-utterance. Default ``True``.
@@ -148,6 +156,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 interrupted. Default ``True``.
             min_interruption_duration (float): Minimum speech length (s) to
                 register as an interruption. Default ``0.5`` s.
+            min_interruption_words (int): Minimum number of words to consider
+                an interruption, only used if stt enabled. Default ``0``.
             min_endpointing_delay (float): Minimum time-in-seconds the agent
                 must wait after a potential end-of-utterance signal (from VAD
                 or an EOU model) before it declares the user’s turn complete.
@@ -177,6 +187,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions=allow_interruptions,
             discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
             min_interruption_duration=min_interruption_duration,
+            min_interruption_words=min_interruption_words,
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
@@ -187,6 +198,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+        self._mcp_servers = mcp_servers or None
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -196,8 +208,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._on_text_output_changed,
         )
 
-        self._forward_audio_atask: asyncio.Task | None = None
-        self._update_activity_atask: asyncio.Task | None = None
+        self._forward_audio_atask: asyncio.Task[None] | None = None
+        self._update_activity_atask: asyncio.Task[None] | None = None
         self._activity_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
 
@@ -207,11 +219,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
+        self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
-        self._closing_task: asyncio.Task | None = None
+        self._closing_task: asyncio.Task[None] | None = None
 
     @property
     def userdata(self) -> Userdata_T:
@@ -229,20 +242,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._turn_detection
 
     @property
-    def stt(self) -> stt.STT | None:
-        return self._stt
-
-    @property
-    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
-        return self._llm
-
-    @property
-    def tts(self) -> tts.TTS | None:
-        return self._tts
-
-    @property
-    def vad(self) -> vad.VAD | None:
-        return self._vad
+    def mcp_servers(self) -> list[mcp.MCPServer] | None:
+        return self._mcp_servers
 
     @property
     def input(self) -> io.AgentInput:
@@ -321,24 +322,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await chat_cli.start()
 
             elif is_given(room) and not self._room_io:
-                room_input_options = copy.deepcopy(room_input_options)
-                room_output_options = copy.deepcopy(room_output_options)
+                room_input_options = copy.copy(
+                    room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS
+                )
+                room_output_options = copy.copy(
+                    room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
+                )
 
-                if (
-                    self.input.audio is not None
-                    and is_given(room_input_options)
-                    and room_input_options.audio_enabled
-                ):
+                if self.input.audio is not None and room_input_options.audio_enabled:
                     logger.warning(
                         "RoomIO audio input is enabled but input.audio is already set, ignoring.."
                     )
                     room_input_options.audio_enabled = False
 
-                if (
-                    self.output.audio is not None
-                    and is_given(room_output_options)
-                    and room_output_options.audio_enabled
-                ):
+                if self.output.audio is not None and room_output_options.audio_enabled:
                     logger.warning(
                         "RoomIO audio output is enabled but output.audio is already set, ignoring.."
                     )
@@ -346,7 +343,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if (
                     self.output.transcription is not None
-                    and is_given(room_output_options)
                     and room_output_options.transcription_enabled
                 ):
                     logger.warning(
@@ -357,8 +353,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(
                     room=room,
                     agent_session=self,
-                    input_options=(room_input_options or room_io.DEFAULT_ROOM_INPUT_OPTIONS),
-                    output_options=(room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS),
+                    input_options=room_input_options,
+                    output_options=room_output_options,
                 )
                 await self._room_io.start()
 
@@ -409,7 +405,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _aclose_impl(
         self,
         *,
-        error: llm.LLMError | stt.STTError | tts.TTSError | None = None,
+        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
     ) -> None:
         async with self._lock:
             if not self._started:
@@ -516,7 +512,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             allow_interruptions=allow_interruptions,
         )
 
-    def interrupt(self) -> asyncio.Future:
+    def interrupt(self) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
         Returns:
@@ -562,11 +558,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
+        logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
+
         async def drain_and_close() -> None:
             await self.drain()
             await self._aclose_impl(error=error)
 
-        def on_close_done(_: asyncio.Task) -> None:
+        def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
         self._closing_task = asyncio.create_task(drain_and_close())
@@ -627,8 +625,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
-        self._chat_ctx.items.append(message)
+        self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    # move them to the end to avoid shadowing the same named modules for mypy
+    @property
+    def stt(self) -> stt.STT | None:
+        return self._stt
+
+    @property
+    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
+        return self._llm
+
+    @property
+    def tts(self) -> tts.TTS | None:
+        return self._tts
+
+    @property
+    def vad(self) -> vad.VAD | None:
+        return self._vad
 
     # -- User changed input/output streams/sinks --
 

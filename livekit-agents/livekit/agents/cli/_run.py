@@ -14,16 +14,14 @@ from . import proto
 from .log import setup_logging
 
 
-def run_dev(
-    args: proto.CliArgs,
-):
+def run_dev(args: proto.CliArgs) -> None:
     if args.watch:
         from .watcher import WatchServer
 
         setup_logging(args.log_level, args.devmode, args.console)
         main_file = pathlib.Path(sys.argv[0]).parent
 
-        async def _run_loop():
+        async def _run_loop() -> None:
             server = WatchServer(run_worker, main_file, args, loop=asyncio.get_event_loop())
             await server.run()
 
@@ -59,7 +57,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
     utils.aio.debug.hook_slow_callbacks(2)
 
     @worker.once("worker_started")
-    def _worker_started():
+    def _worker_started() -> None:
         if args.simulate_job and args.reload_count == 0:
             loop.create_task(worker.simulate_job(args.simulate_job))
 
@@ -74,7 +72,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
 
     try:
 
-        def _signal_handler():
+        def _signal_handler() -> None:
             raise KeyboardInterrupt
 
         if threading.current_thread() is threading.main_thread():
@@ -107,7 +105,7 @@ def run_worker(args: proto.CliArgs, *, jupyter: bool = False) -> None:
 
         try:
             if not args.devmode:
-                loop.run_until_complete(worker.drain(timeout=args.drain_timeout))
+                loop.run_until_complete(worker.drain(timeout=args.opts.drain_timeout))
 
             loop.run_until_complete(worker.aclose())
 

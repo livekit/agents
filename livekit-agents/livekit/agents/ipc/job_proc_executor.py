@@ -104,9 +104,7 @@ class ProcJobExecutor(SupervisedProc):
         )
 
         return self._mp_ctx.Process(  # type: ignore
-            target=proc_main,
-            args=(proc_args,),
-            name="job_proc",
+            target=proc_main, args=(proc_args,), name="job_proc"
         )
 
     @log_exceptions(logger=logger)
@@ -167,7 +165,7 @@ class ProcJobExecutor(SupervisedProc):
         start_req.running_job = info
         await channel.asend_message(self._pch, start_req)
 
-    def logging_extra(self):
+    def logging_extra(self) -> dict[str, Any]:
         extra = super().logging_extra()
 
         if self._running_job:

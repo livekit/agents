@@ -39,6 +39,11 @@ from .langs import TTSLangs
 from .log import logger
 from .models import ArcanaVoices, TTSModels
 
+# arcana can take as long as 80% of the total duration of the audio it's synthesizing.
+ARCANA_MODEL_TIMEOUT = 60 * 4
+MISTV2_MODEL_TIMEOUT = 30
+RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"
+
 
 @dataclass
 class _TTSOptions:
@@ -66,9 +71,6 @@ class _Mistv2Options:
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
 
 
-DEFAULT_API_URL = "https://users.rime.ai/v1/rime-tts"
-
-
 NUM_CHANNELS = 1
 
 
@@ -76,6 +78,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
+        base_url: str = RIME_BASE_URL,
         model: TTSModels | str = "arcana",
         speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
         # Arcana options
@@ -133,6 +136,9 @@ class TTS(tts.TTS):
                 phonemize_between_brackets=phonemize_between_brackets,
             )
         self._session = http_session
+        self._base_url = base_url
+
+        self._total_timeout = ARCANA_MODEL_TIMEOUT if model == "arcana" else MISTV2_MODEL_TIMEOUT
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -200,16 +206,14 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(mistv2_opts.phonemize_between_brackets):
                 payload["phonemizeBetweenBrackets"] = mistv2_opts.phonemize_between_brackets
 
-        headers = {
-            "accept": format,
-            "Authorization": f"Bearer {self._tts._api_key}",
-            "content-type": "application/json",
-        }
-
         try:
             async with self._tts._ensure_session().post(
-                DEFAULT_API_URL,
-                headers=headers,
+                self._tts._base_url,
+                headers={
+                    "accept": format,
+                    "Authorization": f"Bearer {self._tts._api_key}",
+                    "content-type": "application/json",
+                },
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:

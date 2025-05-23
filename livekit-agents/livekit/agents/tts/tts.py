@@ -48,7 +48,7 @@ class TTSError(BaseModel):
     type: Literal["tts_error"] = "tts_error"
     timestamp: float
     label: str
-    error: APIError = Field(..., exclude=True)
+    error: Exception = Field(..., exclude=True)
     recoverable: bool
 
 
@@ -227,7 +227,7 @@ class ChunkedStream(ABC):
             finally:
                 await output_emitter.aclose()
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
         self._tts.emit(
             "error",
@@ -284,7 +284,7 @@ class SynthesizeStream(ABC):
 
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
-        self._metrics_task: asyncio.Task | None = None  # started on first push
+        self._metrics_task: asyncio.Task[None] | None = None  # started on first push
         self._current_attempt_has_error = False
         self._started_time: float = 0
 
@@ -336,7 +336,7 @@ class SynthesizeStream(ABC):
             finally:
                 await output_emitter.aclose()
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
         self._tts.emit(
             "error",

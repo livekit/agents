@@ -152,8 +152,7 @@ class TTS(tts.TTS):
 
     async def list_voices(self) -> list[Voice]:
         async with self._ensure_session().get(
-            f"{self._opts.base_url}/voices",
-            headers=_get_headers(self._opts.token),
+            f"{self._opts.base_url}/voices", headers=_get_headers(self._opts.token)
         ) as resp:
             return await resp.json()
 
@@ -222,7 +221,7 @@ class ChunkedStream(tts.ChunkedStream):
                 _synthesize_url(self._opts),
                 headers=_get_headers(self._opts.token, encoding=self._opts.encoding),
                 json=data,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=aiohttp.ClientTimeout(connect=self._conn_options.timeout, total=30),
             ) as resp:
                 resp.raise_for_status()
 
@@ -231,7 +230,10 @@ class ChunkedStream(tts.ChunkedStream):
                     raise APIError(message="Speechify returned non-audio data", body=content)
 
                 output_emitter.initialize(
-                    request_id=utils.shortuuid(), sample_rate=self._opts.sample_rate, num_channels=1
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=1,
+                    mime_type=f"audio/{_audio_format_from_encoding(self._opts.encoding)}",
                 )
 
                 async for data, _ in resp.content.iter_chunks():

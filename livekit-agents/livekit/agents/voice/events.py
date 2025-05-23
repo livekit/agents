@@ -31,7 +31,7 @@ class RunContext(Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        session: AgentSession,
+        session: AgentSession[Userdata_T],
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
     ) -> None:
@@ -107,9 +107,9 @@ class ConversationItemAddedEvent(BaseModel):
 class FunctionToolsExecutedEvent(BaseModel):
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
-    function_call_outputs: list[FunctionCallOutput]
+    function_call_outputs: list[FunctionCallOutput | None]
 
-    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
+    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
         return list(zip(self.function_calls, self.function_call_outputs))
 
     @model_validator(mode="after")

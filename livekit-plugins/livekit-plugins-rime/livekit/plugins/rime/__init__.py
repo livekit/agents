@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Rime plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/tts/rime/ for more information.
+"""
+
 from .tts import TTS, ChunkedStream
 from .version import __version__
 

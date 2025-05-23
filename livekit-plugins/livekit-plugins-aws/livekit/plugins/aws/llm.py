@@ -31,7 +31,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import get_aws_async_session, to_chat_ctx, to_fnc_ctx
+from .utils import to_chat_ctx, to_fnc_ctx
 
 TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
 
@@ -83,10 +83,10 @@ class LLM(llm.LLM):
         """  # noqa: E501
         super().__init__()
 
-        self._session = session or get_aws_async_session(
-            api_key=api_key if is_given(api_key) else None,
-            api_secret=api_secret if is_given(api_secret) else None,
-            region=region if is_given(region) else None,
+        self._session = session or aioboto3.Session(
+            aws_access_key_id=api_key if is_given(api_key) else None,
+            aws_secret_access_key=api_secret if is_given(api_secret) else None,
+            region_name=region if is_given(region) else None,
         )
 
         model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
@@ -161,7 +161,7 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=tools or [],
             session=self._session,
             conn_options=conn_options,
             extra_kwargs=opts,
@@ -176,7 +176,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: ChatContext,
         session: aioboto3.Session,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool] | None,
+        tools: list[FunctionTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)

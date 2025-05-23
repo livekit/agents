@@ -51,7 +51,7 @@ def http_session() -> aiohttp.ClientSession:
     return val()
 
 
-async def _close_http_ctx():
+async def _close_http_ctx() -> None:
     val = _ContextVar.get(None)
     if val is not None:
         logger.debug("http_session(): closing the httpclient ctx")

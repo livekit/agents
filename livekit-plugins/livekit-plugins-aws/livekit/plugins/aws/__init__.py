@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""AWS plugin for LiveKit Agents
+
+Support for AWS AI including Bedrock, Polly, and Transcribe.
+
+See https://docs.livekit.io/agents/integrations/aws/ for more information.
+"""
+
 from .llm import LLM
 from .stt import STT, SpeechStream
 from .tts import TTS, ChunkedStream
@@ -28,3 +35,12 @@ class AWSPlugin(Plugin):
 
 
 Plugin.register_plugin(AWSPlugin())
+
+# Cleanup docs of unexported modules
+_module = dir()
+NOT_IN_ALL = [m for m in _module if m not in __all__]
+
+__pdoc__ = {}
+
+for n in NOT_IN_ALL:
+    __pdoc__[n] = False

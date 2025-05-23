@@ -13,7 +13,7 @@ from livekit.agents.job import get_job_context
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
 
-MAX_HISTORY_TOKENS = 256
+MAX_HISTORY_TOKENS = 128
 MAX_HISTORY_TURNS = 6
 
 
@@ -105,7 +105,7 @@ class _EUORunnerBase(_InferenceRunner):
         )
         # Run inference
         outputs = self._session.run(None, {"input_ids": inputs["input_ids"].astype("int64")})
-        eou_probability = outputs[0][0]
+        eou_probability = outputs[0].flatten()[-1]
         end_time = time.perf_counter()
 
         data = {

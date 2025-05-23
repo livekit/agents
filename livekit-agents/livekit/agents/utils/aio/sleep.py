@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Generator
 from typing import Any
 
 
-def _finish_fut(fut: asyncio.Future[Any]):
+def _finish_fut(fut: asyncio.Future[Any]) -> None:
     if fut.cancelled():
         return
     fut.set_result(None)
@@ -59,7 +60,7 @@ class Sleep:
         finally:
             self._handler.cancel()
 
-    def __await__(self):
+    def __await__(self) -> Generator[Any, Any, None]:
         return self._sleep().__await__()
 
 

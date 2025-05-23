@@ -1,6 +1,8 @@
-# LiveKit Plugins Speechmatics
+# Speechmatics STT plugin for LiveKit Agents
 
-Agent Framework plugin for Speechmatics.
+Support for Speechmatics STT.
+
+See [https://docs.livekit.io/agents/integrations/stt/speechmatics/](https://docs.livekit.io/agents/integrations/stt/speechmatics/) for more information.
 
 ## Installation
 

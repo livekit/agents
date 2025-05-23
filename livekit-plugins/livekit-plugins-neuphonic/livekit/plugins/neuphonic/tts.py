@@ -37,13 +37,13 @@ from .models import TTSLangCodes
 
 API_BASE_URL = "api.neuphonic.com"
 AUTHORIZATION_HEADER = "X-API-KEY"
-NUM_CHANNELS = 1
 
 
 @dataclass
 class _TTSOptions:
     base_url: str
     lang_code: TTSLangCodes | str
+    api_key: str
     sample_rate: int
     speed: float
     voice_id: str | None
@@ -79,21 +79,21 @@ class TTS(tts.TTS):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
+            num_channels=1,
         )
 
-        self._api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
-        if not self._api_key:
+        api_key = api_key or os.environ.get("NEUPHONIC_API_KEY")
+        if not api_key:
             raise ValueError("API key must be provided or set in NEUPHONIC_API_KEY")
 
         self._opts = _TTSOptions(
             voice_id=voice_id,
             lang_code=lang_code,
+            api_key=api_key,
             speed=speed,
             sample_rate=sample_rate,
             base_url=base_url,
         )
-
         self._session = http_session
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -158,9 +158,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._tts._ensure_session().post(
                 f"https://{self._opts.base_url}/sse/speak/{self._opts.lang_code}",
-                headers={
-                    AUTHORIZATION_HEADER: self._tts._api_key,
-                },
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
                 json={
                     "text": self._input_text,
                     "voice_id": self._opts.voice_id,

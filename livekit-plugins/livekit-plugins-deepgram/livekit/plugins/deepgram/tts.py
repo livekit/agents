@@ -25,6 +25,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from ._utils import _to_deepgram_url
 from .log import logger
 
 BASE_URL = "https://api.deepgram.com/v1/speak"
@@ -39,25 +40,27 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer
     base_url: str
     api_key: str
+    mip_opt_out: bool = False
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: str = "aura-asteria-en",
+        model: str = "aura-2-andromeda-en",
         encoding: str = "linear16",
         sample_rate: int = 24000,
         api_key: str | None = None,
         base_url: str = BASE_URL,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        mip_opt_out: bool = False,
     ) -> None:
         """
         Create a new instance of Deepgram TTS.
 
         Args:
-            model (str): TTS model to use. Defaults to "aura-asteria-en".
+            model (str): TTS model to use. Defaults to "aura-2-andromeda-en".
             encoding (str): Audio encoding to use. Defaults to "linear16".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
@@ -86,6 +89,7 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
             base_url=base_url,
             api_key=api_key,
+            mip_opt_out=mip_opt_out,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -103,6 +107,7 @@ class TTS(tts.TTS):
             "encoding": self._opts.encoding,
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
+            "mip_opt_out": self._opts.mip_opt_out,
         }
         return await asyncio.wait_for(
             session.ws_connect(
@@ -170,6 +175,7 @@ class ChunkedStream(tts.ChunkedStream):
                         "encoding": self._opts.encoding,
                         "model": self._opts.model,
                         "sample_rate": self._opts.sample_rate,
+                        "mip_opt_out": self._opts.mip_opt_out,
                     },
                     self._opts.base_url,
                     websocket=False,
@@ -199,10 +205,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
+                message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
             raise APIConnectionError() from e

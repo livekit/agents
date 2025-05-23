@@ -62,7 +62,7 @@ class LLM(llm.LLM):
         *,
         model: ChatModels | str = "gemini-2.0-flash-001",
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        vertexai: NotGivenOr[bool] = False,
+        vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -78,7 +78,7 @@ class LLM(llm.LLM):
         Create a new instance of Google GenAI LLM.
 
         Environment Requirements:
-        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file.
+        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file or use any of the other Google Cloud auth methods.
         The Google Cloud project and location can be set via `project` and `location` arguments or the environment variables
         `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
         and the location defaults to "us-central1".
@@ -87,9 +87,9 @@ class LLM(llm.LLM):
         Args:
             model (ChatModels | str, optional): The model name to use. Defaults to "gemini-2.0-flash-001".
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
-            vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
-            project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
-            location (str, optional): The location to use for VertexAI API requests. Defaults value is "us-central1".
+            vertexai (bool, optional): Whether to use VertexAI. If not provided, it attempts to read from the `GOOGLE_GENAI_USE_VERTEXAI` environment variable. Defaults to False.
+                project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
+                location (str, optional): The location to use for VertexAI API requests. Defaults value is "us-central1".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
@@ -101,15 +101,19 @@ class LLM(llm.LLM):
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
-        gcp_location = location if is_given(location) else os.environ.get("GOOGLE_CLOUD_LOCATION")
+        gcp_location = (
+            location
+            if is_given(location)
+            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+        )
+        use_vertexai = (
+            vertexai
+            if is_given(vertexai)
+            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
+        )
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
-        _gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-        if _gac is None:
-            logger.warning(
-                "`GOOGLE_APPLICATION_CREDENTIALS` environment variable is not set. please set it to the path of the service account key file. Otherwise, use any of the other Google Cloud auth methods."  # noqa: E501
-            )
 
-        if is_given(vertexai) and vertexai:
+        if use_vertexai:
             if not gcp_project:
                 _, gcp_project = default_async(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
@@ -144,7 +148,7 @@ class LLM(llm.LLM):
             model=model,
             temperature=temperature,
             tool_choice=tool_choice,
-            vertexai=vertexai,
+            vertexai=use_vertexai,
             project=project,
             location=location,
             max_output_tokens=max_output_tokens,
@@ -156,7 +160,7 @@ class LLM(llm.LLM):
         )
         self._client = genai.Client(
             api_key=gemini_api_key,
-            vertexai=is_given(vertexai) and vertexai,
+            vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
         )
@@ -241,7 +245,7 @@ class LLM(llm.LLM):
             client=self._client,
             model=self._opts.model,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
         )
@@ -256,7 +260,7 @@ class LLMStream(llm.LLMStream):
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool] | None,
+        tools: list[FunctionTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -270,7 +274,7 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm))
+            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm), generate=True)
             function_declarations = to_fnc_ctx(self._tools)
             if function_declarations:
                 self._extra_kwargs["tools"] = [
@@ -300,11 +304,8 @@ class LLMStream(llm.LLMStream):
                     or not response.candidates[0].content
                     or not response.candidates[0].content.parts
                 ):
-                    raise APIStatusError(
-                        "No candidates in the response",
-                        retryable=True,
-                        request_id=request_id,
-                    )
+                    logger.warning(f"no candidates in the response: {response}")
+                    continue
 
                 if len(response.candidates) > 1:
                     logger.warning(
@@ -325,6 +326,7 @@ class LLMStream(llm.LLMStream):
                             usage=llm.CompletionUsage(
                                 completion_tokens=usage.candidates_token_count or 0,
                                 prompt_tokens=usage.prompt_token_count or 0,
+                                prompt_cached_tokens=usage.cached_content_token_count or 0,
                                 total_tokens=usage.total_token_count or 0,
                             ),
                         )

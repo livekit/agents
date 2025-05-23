@@ -160,6 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=self._tts.num_channels,
+                    mime_type="audio/mp3",
                 )
 
                 async for raw_line in resp.content:

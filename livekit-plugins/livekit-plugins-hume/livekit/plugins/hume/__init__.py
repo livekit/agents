@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Hume AI TTS plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/tts/hume/ for more information.
+"""
+
 from __future__ import annotations
 from .version import __version__
+
 from livekit.agents import Plugin
 
 from .tts import TTS, PostedContext, PostedUtterance

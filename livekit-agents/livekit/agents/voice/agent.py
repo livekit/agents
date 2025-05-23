@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, FunctionTool, ToolError, find_function_tools
+from ..llm import ChatContext, FunctionTool, RawFunctionTool, ToolError, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 
 if TYPE_CHECKING:
+    from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, TurnDetectionMode
 
@@ -30,12 +31,13 @@ class Agent:
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
-        tools: list[llm.FunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
@@ -48,6 +50,11 @@ class Agent:
         self._tts = tts
         self._vad = vad
         self._allow_interruptions = allow_interruptions
+
+        if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
+            mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
+
+        self._mcp_servers = mcp_servers
         self._activity: AgentActivity | None = None
 
     @property
@@ -59,10 +66,11 @@ class Agent:
         return self._instructions
 
     @property
-    def tools(self) -> list[llm.FunctionTool]:
+    def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
         """
         Returns:
-            list[llm.FunctionTool]: A list of function tools available to the agent.
+            list[llm.FunctionTool | llm.RawFunctionTool]:
+                A list of function tools available to the agent.
         """
         return self._tools.copy()
 
@@ -99,7 +107,7 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
-    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         """
         Updates the agent's available function tools.
 
@@ -139,107 +147,6 @@ class Agent:
             return
 
         await self._activity.update_chat_ctx(chat_ctx)
-
-    @property
-    def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:
-        """
-        Retrieves the turn detection mode for identifying conversational turns.
-
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a turn detection,
-        the session's turn detection mode will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[TurnDetectionMode | None]: An optional turn detection mode for managing conversation flow.
-        """  # noqa: E501
-        return self._turn_detection
-
-    @property
-    def stt(self) -> NotGivenOr[stt.STT | None]:
-        """
-        Retrieves the Speech-To-Text component for the agent.
-
-        If this property was not set at Agent creation, but an ``AgentSession`` provides an STT component,
-        the session's STT will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[stt.STT | None]: An optional STT component.
-        """  # noqa: E501
-        return self._stt
-
-    @property
-    def llm(self) -> NotGivenOr[llm.LLM | llm.RealtimeModel | None]:
-        """
-        Retrieves the Language Model or RealtimeModel used for text generation.
-
-        If this property was not set at Agent creation, but an ``AgentSession`` provides an LLM or RealtimeModel,
-        the session's model will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[llm.LLM | llm.RealtimeModel | None]: The language model for text generation.
-        """  # noqa: E501
-        return self._llm
-
-    @property
-    def tts(self) -> NotGivenOr[tts.TTS | None]:
-        """
-        Retrieves the Text-To-Speech component for the agent.
-
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a TTS component,
-        the session's TTS will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
-        """  # noqa: E501
-        return self._tts
-
-    @property
-    def vad(self) -> NotGivenOr[vad.VAD | None]:
-        """
-        Retrieves the Voice Activity Detection component for the agent.
-
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a VAD component,
-        the session's VAD will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[vad.VAD | None]: An optional VAD component for detecting voice activity.
-        """  # noqa: E501
-        return self._vad
-
-    @property
-    def allow_interruptions(self) -> NotGivenOr[bool]:
-        """
-        Indicates whether interruptions (e.g., stopping TTS playback) are allowed.
-
-        If this property was not set at Agent creation, but an ``AgentSession`` provides a value for
-        allowing interruptions, the session's value will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[bool]: Whether interruptions are permitted.
-        """
-        return self._allow_interruptions
-
-    @property
-    def realtime_llm_session(self) -> llm.RealtimeSession:
-        """
-        Retrieve the realtime LLM session associated with the current agent.
-
-        Raises:
-            RuntimeError: If the agent is not running or the realtime LLM session is not available
-        """
-        if (rt_session := self._get_activity_or_raise().realtime_llm_session) is None:
-            raise RuntimeError("no realtime LLM session")
-
-        return rt_session
-
-    @property
-    def session(self) -> AgentSession:
-        """
-        Retrieve the VoiceAgent associated with the current agent.
-
-        Raises:
-            RuntimeError: If the agent is not running
-        """
-        return self._get_activity_or_raise().session
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -292,7 +199,7 @@ class Agent:
     def llm_node(
         self,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         model_settings: ModelSettings,
     ) -> (
         AsyncIterable[llm.ChatChunk | str]
@@ -411,7 +318,7 @@ class Agent:
             async with wrapped_stt.stream() as stream:
 
                 @utils.log_exceptions(logger=logger)
-                async def _forward_input():
+                async def _forward_input() -> None:
                     async for frame in audio:
                         stream.push_frame(frame)
 
@@ -426,7 +333,7 @@ class Agent:
         async def llm_node(
             agent: Agent,
             chat_ctx: llm.ChatContext,
-            tools: list[FunctionTool],
+            tools: list[FunctionTool | RawFunctionTool],
             model_settings: ModelSettings,
         ) -> AsyncGenerator[llm.ChatChunk | str, None]:
             """Default implementation for `Agent.llm_node`"""
@@ -462,7 +369,7 @@ class Agent:
 
             async with wrapped_tts.stream() as stream:
 
-                async def _forward_input():
+                async def _forward_input() -> None:
                     async for chunk in text:
                         stream.push_text(chunk)
 
@@ -496,6 +403,120 @@ class Agent:
             async for frame in audio:
                 yield frame
 
+    @property
+    def realtime_llm_session(self) -> llm.RealtimeSession:
+        """
+        Retrieve the realtime LLM session associated with the current agent.
+
+        Raises:
+            RuntimeError: If the agent is not running or the realtime LLM session is not available
+        """
+        if (rt_session := self._get_activity_or_raise().realtime_llm_session) is None:
+            raise RuntimeError("no realtime LLM session")
+
+        return rt_session
+
+    @property
+    def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:
+        """
+        Retrieves the turn detection mode for identifying conversational turns.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a turn detection,
+        the session's turn detection mode will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[TurnDetectionMode | None]: An optional turn detection mode for managing conversation flow.
+        """  # noqa: E501
+        return self._turn_detection
+
+    @property
+    def stt(self) -> NotGivenOr[stt.STT | None]:
+        """
+        Retrieves the Speech-To-Text component for the agent.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides an STT component,
+        the session's STT will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[stt.STT | None]: An optional STT component.
+        """  # noqa: E501
+        return self._stt
+
+    @property
+    def llm(self) -> NotGivenOr[llm.LLM | llm.RealtimeModel | None]:
+        """
+        Retrieves the Language Model or RealtimeModel used for text generation.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides an LLM or RealtimeModel,
+        the session's model will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[llm.LLM | llm.RealtimeModel | None]: The language model for text generation.
+        """  # noqa: E501
+        return self._llm
+
+    @property
+    def tts(self) -> NotGivenOr[tts.TTS | None]:
+        """
+        Retrieves the Text-To-Speech component for the agent.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a TTS component,
+        the session's TTS will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
+        """  # noqa: E501
+        return self._tts
+
+    @property
+    def mcp_servers(self) -> NotGivenOr[list[mcp.MCPServer] | None]:
+        """
+        Retrieves the list of Model Context Protocol (MCP) servers providing external tools.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides MCP servers,
+        the session's MCP servers will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[list[mcp.MCPServer]]: An optional list of MCP servers.
+        """  # noqa: E501
+        return self._mcp_servers
+
+    @property
+    def vad(self) -> NotGivenOr[vad.VAD | None]:
+        """
+        Retrieves the Voice Activity Detection component for the agent.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a VAD component,
+        the session's VAD will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[vad.VAD | None]: An optional VAD component for detecting voice activity.
+        """  # noqa: E501
+        return self._vad
+
+    @property
+    def allow_interruptions(self) -> NotGivenOr[bool]:
+        """
+        Indicates whether interruptions (e.g., stopping TTS playback) are allowed.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a value for
+        allowing interruptions, the session's value will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[bool]: Whether interruptions are permitted.
+        """
+        return self._allow_interruptions
+
+    @property
+    def session(self) -> AgentSession:
+        """
+        Retrieve the VoiceAgent associated with the current agent.
+
+        Raises:
+            RuntimeError: If the agent is not running
+        """
+        return self._get_activity_or_raise().session
+
 
 TaskResult_T = TypeVar("TaskResult_T")
 
@@ -507,7 +528,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         *,
         instructions: str,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
-        tools: list[llm.FunctionTool] | None = None,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool] | None = None,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -538,7 +559,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         else:
             self.__fut.set_result(result)
 
-    async def __await_impl(self):
+    async def __await_impl(self) -> TaskResult_T:
         if self.__started:
             raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
 
@@ -550,7 +571,7 @@ class InlineTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} should only be awaited inside an async ai_function or the on_enter/on_exit methods of an AgentTask"  # noqa: E501
             )
 
-        def _handle_task_done(_) -> None:
+        def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
                 return
 
@@ -570,10 +591,10 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         task.add_done_callback(_handle_task_done)
 
         # enter task
-        await asyncio.shield(self.__fut)
+        return await asyncio.shield(self.__fut)
         # exit task
 
-    def __await__(self):
+    def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
 
 
@@ -583,14 +604,14 @@ class _InlineTaskInfo:
 
 
 def _authorize_inline_task(
-    task: asyncio.Task, *, function_call: llm.FunctionCall | None = None
+    task: asyncio.Task[Any], *, function_call: llm.FunctionCall | None = None
 ) -> None:
     setattr(task, "__livekit_agents_inline_task", _InlineTaskInfo(function_call=function_call))
 
 
-def _get_inline_task_info(task: asyncio.Task) -> _InlineTaskInfo | None:
+def _get_inline_task_info(task: asyncio.Task[Any]) -> _InlineTaskInfo | None:
     return getattr(task, "__livekit_agents_inline_task", None)
 
 
-def _is_inline_task_authorized(task: asyncio.Task) -> bool:
+def _is_inline_task_authorized(task: asyncio.Task[Any]) -> bool:
     return getattr(task, "__livekit_agents_inline_task", None) is not None

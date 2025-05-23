@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
+from typing import Any
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
@@ -11,7 +12,12 @@ from .tts import (
     SynthesizedAudio,
     SynthesizeStream,
     TTSCapabilities,
-    AudioEmitter,
+    AudioEmitter
+)
+
+# already a retry mechanism in TTS.synthesize, don't retry in stream adapter
+DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
+    max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
 )
 
 
@@ -33,9 +39,8 @@ class StreamAdapter(TTS):
         self._sentence_tokenizer = sentence_tokenizer
 
         @self._wrapped_tts.on("metrics_collected")
-        def _forward_metrics(*args, **kwargs):
+        def _forward_metrics(*args: Any, **kwargs: Any) -> None:
             # TODO(theomonnom): The segment_id needs to be populated!
-            self.emit("metrics_collected", *args, **kwargs)
 
     def synthesize(
         self,
@@ -61,7 +66,6 @@ class StreamAdapterWrapper(SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts = tts
         self._sent_stream = tts._sentence_tokenizer.stream()
-
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         pass  # do nothing
 
@@ -79,6 +83,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
 
         async def _forward_input():
+
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
                     self._sent_stream.flush()
@@ -88,7 +93,7 @@ class StreamAdapterWrapper(SynthesizeStream):
 
             self._sent_stream.end_input()
 
-        async def _synthesize():
+        async def _synthesize() -> None:
             async for ev in self._sent_stream:
                 async with self._tts._wrapped_tts.synthesize(
                     ev.token, conn_options=self._conn_options

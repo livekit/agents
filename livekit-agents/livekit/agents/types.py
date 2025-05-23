@@ -7,6 +7,9 @@ ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
 ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
+"""
+The identity of the agent participant that an avatar worker is publishing on behalf of.
+"""
 ATTRIBUTE_AGENT_STATE = "lk.agent.state"
 """
 The state of the agent, stored in the agent's attributes.
@@ -55,7 +58,7 @@ class APIConnectOptions:
     Timeout for connecting to the API in seconds.
     """
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.max_retry < 0:
             raise ValueError("max_retry must be greater than or equal to 0")
 

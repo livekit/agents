@@ -25,8 +25,10 @@ import av
 import av.container
 
 from livekit import rtc
-from livekit.agents.log import logger
-from livekit.agents.utils import aio
+
+from ...log import logger
+from .. import aio
+from ..audio import AudioByteStream
 
 
 def _mime_to_av_format(mime: str | None) -> str | None:
@@ -65,13 +67,13 @@ class StreamBuffer:
     Allows writing from one thread and reading from another.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._buffer = io.BytesIO()
         self._lock = threading.Lock()
         self._data_available = threading.Condition(self._lock)
         self._eof = False
 
-    def write(self, data: bytes):
+    def write(self, data: bytes) -> None:
         """Write data to the buffer from a writer thread."""
         with self._data_available:
             self._buffer.seek(0, io.SEEK_END)
@@ -103,13 +105,13 @@ class StreamBuffer:
 
                 self._data_available.wait()
 
-    def end_input(self):
+    def end_input(self) -> None:
         """Signal that no more data will be written."""
         with self._data_available:
             self._eof = True
             self._data_available.notify_all()
 
-    def close(self):
+    def close(self) -> None:
         self._buffer.close()
 
 
@@ -149,20 +151,20 @@ class AudioStreamDecoder:
             # each decoder instance will submit jobs to the shared pool
             self.__class__._executor = ThreadPoolExecutor(max_workers=self.__class__._max_workers)
 
-    def push(self, chunk: bytes):
+    def push(self, chunk: bytes) -> None:
         self._input_buf.write(chunk)
         if not self._started:
             self._started = True
             target = self._decode_wav_loop if self._av_format == "wav" else self._decode_loop
             self._loop.run_in_executor(self.__class__._executor, target)
 
-    def end_input(self):
+    def end_input(self) -> None:
         self._input_buf.end_input()
         if not self._started:
             # if no data was pushed, close the output channel
             self._output_ch.close()
 
-    def _decode_loop(self):
+    def _decode_loop(self) -> None:
         container: av.container.InputContainer | None = None
         resampler: av.AudioResampler | None = None
         try:
@@ -226,15 +228,13 @@ class AudioStreamDecoder:
             if container:
                 container.close()
 
-    def _decode_wav_loop(self):
+    def _decode_wav_loop(self) -> None:
         """Decode wav data from the buffer without ffmpeg, parse header and emit PCM frames.
 
         This can be much faster than using ffmpeg, as we are emitting frames as quickly as possible.
         """
 
         try:
-            from livekit.agents.utils.audio import AudioByteStream
-
             # parse RIFF header
             header = b""
             while len(header) < 12:
@@ -243,7 +243,7 @@ class AudioStreamDecoder:
                     raise ValueError("Invalid WAV file: incomplete header")
                 header += chunk
             if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
-                raise ValueError(f"Invalid WAV file: missing RIFF/WAVE: {header}")
+                raise ValueError(f"Invalid WAV file: missing RIFF/WAVE: {header!r}")
 
             # parse fmt chunk
             while True:
@@ -290,7 +290,7 @@ class AudioStreamDecoder:
                 input_rate=wave_rate, output_rate=self._sample_rate, num_channels=wave_channels
             )
 
-            def resample_and_push(frame: rtc.AudioFrame):
+            def resample_and_push(frame: rtc.AudioFrame) -> None:
                 for resampled_frame in resampler.push(frame):
                     self._loop.call_soon_threadsafe(
                         self._output_ch.send_nowait,
@@ -318,7 +318,7 @@ class AudioStreamDecoder:
     async def __anext__(self) -> rtc.AudioFrame:
         return await self._output_ch.__anext__()
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         if self._closed:
             return
 

@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from livekit import rtc
-from livekit.agents.utils.audio import AudioBuffer
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
+from ..utils.audio import AudioBuffer
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 # don't retry when using the fallback adapter
@@ -31,8 +31,8 @@ class AvailabilityChangedEvent:
 @dataclass
 class _STTStatus:
     available: bool
-    recovering_synthesize_task: asyncio.Task | None
-    recovering_stream_task: asyncio.Task | None
+    recovering_synthesize_task: asyncio.Task[None] | None
+    recovering_stream_task: asyncio.Task[None] | None
 
 
 class FallbackAdapter(
@@ -178,7 +178,7 @@ class FallbackAdapter(
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
-    ):
+    ) -> SpeechEvent:
         start_time = time.time()
 
         all_failed = all(not stt_status.available for stt_status in self._status)
@@ -214,7 +214,7 @@ class FallbackAdapter(
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         return await super().recognize(buffer, language=language, conn_options=conn_options)
@@ -222,7 +222,7 @@ class FallbackAdapter(
     def stream(
         self,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
@@ -241,10 +241,10 @@ class FallbackRecognizeStream(RecognizeStream):
         self,
         *,
         stt: FallbackAdapter,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ):
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=None)
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=NOT_GIVEN)
         self._language = language
         self._fallback_adapter = stt
         self._recovering_streams: list[RecognizeStream] = []
@@ -257,7 +257,7 @@ class FallbackRecognizeStream(RecognizeStream):
             logger.error("all STTs are unavailable, retrying..")
 
         main_stream: RecognizeStream | None = None
-        forward_input_task: asyncio.Task | None = None
+        forward_input_task: asyncio.Task[None] | None = None
 
         async def _forward_input_task() -> None:
             async for data in self._input_ch:

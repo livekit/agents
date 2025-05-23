@@ -71,7 +71,7 @@ class APIStatusError(APIError):
         self.status_code = status_code
         self.request_id = request_id
 
-    def __str__(self):
+    def __str__(self) -> str:
         return (
             f"{self.message} "
             f"(status_code={self.status_code}, "
