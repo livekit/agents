@@ -77,12 +77,23 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 [tool.mypy]
 strict = true
 
-[tool.mypy-google.genai]
+[[tool.mypy.overrides]]
+module = "livekit.agents.*"
+disallow_any_generics = false
+
+[[tool.mypy.overrides]]
+module = "mcp.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "google.genai"
 follow_imports = "normal"
 follow_untyped_imports = true
 
-[tool.mypy-aiobotocore]
+[[tool.mypy.overrides]]
+module = "aiobotocore"
 follow_untyped_imports = true
 
-[tool.mypy-boto3]
+[[tool.mypy.overrides]]
+module = "boto3"
 follow_untyped_imports = true

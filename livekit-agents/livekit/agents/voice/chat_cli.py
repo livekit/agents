@@ -4,7 +4,7 @@ import asyncio
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 import click
 import numpy as np
@@ -149,7 +149,7 @@ class _AudioOutput(io.AudioOutput):
 class ChatCLI:
     def __init__(
         self,
-        agent_session: AgentSession[Any],
+        agent_session: AgentSession,
         *,
         sync_transcription: bool = True,
         loop: asyncio.AbstractEventLoop | None = None,

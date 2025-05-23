@@ -18,6 +18,8 @@ from .agent import ModelSettings
 if TYPE_CHECKING:
     from .agent_session import TurnDetectionMode
 
+MIN_LANGUAGE_DETECTION_LENGTH = 5
+
 
 @dataclass
 class _EndOfTurnInfo:
@@ -40,7 +42,7 @@ class RecognitionHooks(Protocol):
     def on_end_of_speech(self, ev: vad.VADEvent) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
-    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
+    def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -219,7 +221,13 @@ class AudioRecognition:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
-            self._last_language = ev.alternatives[0].language
+            language = ev.alternatives[0].language
+
+            if not self._last_language or (
+                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
+            ):
+                self._last_language = language
+
             if not transcript:
                 return
 
@@ -326,7 +334,7 @@ class AudioRecognition:
             await asyncio.sleep(max(extra_sleep, 0))
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
-            committed = await self._hooks.on_end_of_turn(
+            committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     new_transcript=self._audio_transcript,
                     transcription_delay=max(
