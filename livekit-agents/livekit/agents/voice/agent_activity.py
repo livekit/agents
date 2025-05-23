@@ -64,7 +64,7 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
-        self._rt_session: llm.RealtimeSession[Any] | None = None
+        self._rt_session: llm.RealtimeSession | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
@@ -201,7 +201,7 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
-    def realtime_llm_session(self) -> llm.RealtimeSession[Any] | None:
+    def realtime_llm_session(self) -> llm.RealtimeSession | None:
         return self._rt_session
 
     @property

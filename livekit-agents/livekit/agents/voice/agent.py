@@ -404,7 +404,7 @@ class Agent:
                 yield frame
 
     @property
-    def realtime_llm_session(self) -> llm.RealtimeSession[Any]:
+    def realtime_llm_session(self) -> llm.RealtimeSession:
         """
         Retrieve the realtime LLM session associated with the current agent.
 
