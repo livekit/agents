@@ -628,9 +628,10 @@ class RealtimeSession(llm.RealtimeSession):
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
             enable_affective_dialog=self._opts.enable_affective_dialog,
-            proactivity={'proactive_audio': self._opts.proactivity},
+            proactivity={"proactive_audio": self._opts.proactivity},
             realtime_input_config=self._opts.realtime_input_config
-            if is_given(self._opts.realtime_input_config) else RealtimeInputConfig(
+            if is_given(self._opts.realtime_input_config)
+            else RealtimeInputConfig(
                 automatic_activity_detection=AutomaticActivityDetection(),
             ),
         )
