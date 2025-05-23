@@ -217,7 +217,7 @@ class BackgroundAudioPlayer:
         self,
         *,
         room: rtc.Room,
-        agent_session: NotGivenOr[AgentSession[Any]] = NOT_GIVEN,
+        agent_session: NotGivenOr[AgentSession] = NOT_GIVEN,
         track_publish_options: NotGivenOr[rtc.TrackPublishOptions] = NOT_GIVEN,
     ) -> None:
         """

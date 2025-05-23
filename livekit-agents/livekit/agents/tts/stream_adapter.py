@@ -14,11 +14,11 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
-class StreamAdapter(TTS[Any]):
+class StreamAdapter(TTS):
     def __init__(
         self,
         *,
-        tts: TTS[Any],
+        tts: TTS,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(
@@ -63,9 +63,9 @@ class StreamAdapterWrapper(SynthesizeStream):
     def __init__(
         self,
         *,
-        tts: TTS[Any],
+        tts: TTS,
         conn_options: APIConnectOptions,
-        wrapped_tts: TTS[Any],
+        wrapped_tts: TTS,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
