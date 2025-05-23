@@ -16,10 +16,7 @@ class AnthropicFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext,
-    *,
-    cache_control: dict[str, Any] | None = None,
-    requires_first_user_message: bool = True,
+    chat_ctx: llm.ChatContext, *, requires_first_user_message: bool = True
 ) -> tuple[list[dict], AnthropicFormatData]:
     messages: list[dict[str, Any]] = []
     system_messages: list[str] = []
@@ -30,12 +27,11 @@ def to_chat_ctx(
     for group in group_tool_calls(chat_ctx):
         chat_items.extend(group.flatten())
 
-    for i, msg in enumerate(chat_items):
+    for msg in chat_items:
         if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
             system_messages.append(text)
             continue
 
-        cache_ctrl_i = cache_control if (i == len(chat_items) - 1) else None
         if msg.type == "message":
             role = "assistant" if msg.role == "assistant" else "user"
         elif msg.type == "function_call":
@@ -52,9 +48,9 @@ def to_chat_ctx(
         if msg.type == "message":
             for c in msg.content:
                 if c and isinstance(c, str):
-                    content.append({"text": c, "type": "text", "cache_control": cache_ctrl_i})
+                    content.append({"text": c, "type": "text"})
                 elif isinstance(c, llm.ImageContent):
-                    content.append(_to_image_content(c, cache_ctrl=cache_ctrl_i))
+                    content.append(_to_image_content(c))
         elif msg.type == "function_call":
             content.append(
                 {
@@ -62,7 +58,6 @@ def to_chat_ctx(
                     "type": "tool_use",
                     "name": msg.name,
                     "input": json.loads(msg.arguments or "{}"),
-                    "cache_control": cache_ctrl_i,
                 }
             )
         elif msg.type == "function_call_output":
@@ -71,7 +66,6 @@ def to_chat_ctx(
                     "tool_use_id": msg.call_id,
                     "type": "tool_result",
                     "content": msg.output,
-                    "cache_control": cache_ctrl_i,
                     "is_error": msg.is_error,
                 }
             )
@@ -92,7 +86,7 @@ def to_chat_ctx(
     return messages, AnthropicFormatData(system_messages=system_messages)
 
 
-def _to_image_content(image: llm.ImageContent, cache_ctrl: dict[str, Any] | None) -> dict[str, Any]:
+def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
     cache_key = "serialized_image"
     if cache_key not in image._cache:
         image._cache[cache_key] = llm.utils.serialize_image(image)
@@ -102,7 +96,6 @@ def _to_image_content(image: llm.ImageContent, cache_ctrl: dict[str, Any] | None
         return {
             "type": "image",
             "source": {"type": "url", "url": img.external_url},
-            "cache_control": cache_ctrl,
         }
 
     assert img.data_bytes is not None
@@ -114,5 +107,4 @@ def _to_image_content(image: llm.ImageContent, cache_ctrl: dict[str, Any] | None
             "data": f"data:{img.mime_type};base64,{b64_data}",
             "media_type": img.mime_type,
         },
-        "cache_control": cache_ctrl,
     }

@@ -355,7 +355,6 @@ class ChatContext:
         self,
         format: Literal["anthropic"],
         *,
-        cache_control: dict[str, Any] | None = None,
         requires_first_user_message: bool = True,
     ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
 

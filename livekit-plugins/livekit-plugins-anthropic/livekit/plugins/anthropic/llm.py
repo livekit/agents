@@ -166,20 +166,32 @@ class LLM(llm.LLM):
                         anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
                     extra["tool_choice"] = anthropic_tool_choice
 
-        cache_ctrl = CACHE_CONTROL_EPHEMERAL if self._opts.caching == "ephemeral" else None
-        anthropic_ctx, extra_data = chat_ctx.to_provider_format(
-            format="anthropic", cache_control=cache_ctrl
-        )
-
+        anthropic_ctx, extra_data = chat_ctx.to_provider_format(format="anthropic")
         if extra_data.system_messages:
             extra["system"] = [
-                anthropic.types.TextBlockParam(
-                    text=content,
-                    type="text",
-                    cache_control=cache_ctrl if i == len(extra_data.system_messages) - 1 else None,
-                )
-                for i, content in enumerate(extra_data.system_messages)
+                anthropic.types.TextBlockParam(text=content, type="text")
+                for content in extra_data.system_messages
             ]
+
+        # add cache control
+        if self._opts.caching == "ephemeral":
+            if extra.get("system"):
+                extra["system"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
+            seen_assistant = False
+            for msg in reversed(anthropic_ctx):
+                msg: anthropic.types.MessageParam
+                if (
+                    msg["role"] == "assistant"
+                    and (content := msg["content"])
+                    and not seen_assistant
+                ):
+                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+                    seen_assistant = True
+
+                elif msg["role"] == "user" and (content := msg["content"]) and seen_assistant:
+                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+                    break
 
         stream = self._client.messages.create(
             messages=anthropic_ctx,
@@ -238,18 +250,20 @@ class LLMStream(llm.LLMStream):
                         self._event_ch.send_nowait(chat_chunk)
                         retryable = False
 
+                # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
+                prompt_token = (
+                    self._input_tokens + self._cache_creation_tokens + self._cache_read_tokens
+                )
                 self._event_ch.send_nowait(
                     llm.ChatChunk(
                         id=self._request_id,
                         usage=llm.CompletionUsage(
                             completion_tokens=self._output_tokens,
-                            prompt_tokens=self._input_tokens,
-                            total_tokens=self._input_tokens
-                            + self._output_tokens
-                            + self._cache_creation_tokens
-                            + self._cache_read_tokens,
-                            cache_creation_input_tokens=self._cache_creation_tokens,
-                            cache_read_input_tokens=self._cache_read_tokens,
+                            prompt_tokens=prompt_token,
+                            total_tokens=prompt_token + self._output_tokens,
+                            prompt_cached_tokens=self._cache_read_tokens,
+                            cache_creation_tokens=self._cache_creation_tokens,
+                            cache_read_tokens=self._cache_read_tokens,
                         ),
                     )
                 )
