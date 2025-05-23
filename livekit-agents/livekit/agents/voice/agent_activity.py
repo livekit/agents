@@ -384,7 +384,7 @@ class AgentActivity(RecognitionHooks):
                 ),
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
-                manual_turn_detection=self._turn_detection_mode == "manual",
+                turn_detection_mode=self._turn_detection_mode,
             )
             self._audio_recognition.start()
             self._started = True
@@ -794,8 +794,8 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("listening")
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
-        if self._turn_detection_mode not in ("vad", None):
-            # ignore vad inference done event if turn_detection is not set to vad or default
+        if self._turn_detection_mode in ("manual", "realtime_llm"):
+            # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
@@ -1114,8 +1114,8 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(tools)
 
         if new_message is not None:
-            chat_ctx.insert_item(new_message)
-            self._agent._chat_ctx.insert_item(new_message)
+            chat_ctx.insert(new_message)
+            self._agent._chat_ctx.insert(new_message)
             self._session._conversation_item_added(new_message)
 
         if instructions is not None:
@@ -1204,7 +1204,7 @@ class AgentActivity(RecognitionHooks):
             for msg in _tools_messages:
                 # reset the created_at to the reply start time
                 msg.created_at = reply_started_at
-            self._agent._chat_ctx.insert_item(_tools_messages)
+            self._agent._chat_ctx.insert(_tools_messages)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1234,7 +1234,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=True,
                 created_at=reply_started_at,
             )
-            self._agent._chat_ctx.insert_item(msg)
+            self._agent._chat_ctx.insert(msg)
             self._session._update_agent_state("listening")
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
@@ -1250,7 +1250,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=False,
                 created_at=reply_started_at,
             )
-            self._agent._chat_ctx.insert_item(msg)
+            self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
 
@@ -1354,7 +1354,7 @@ class AgentActivity(RecognitionHooks):
                 # add the tool calls and outputs to the chat context even no reply is generated
                 for msg in tool_messages:
                     msg.created_at = reply_started_at
-                self._agent._chat_ctx.insert_item(tool_messages)
+                self._agent._chat_ctx.insert(tool_messages)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
