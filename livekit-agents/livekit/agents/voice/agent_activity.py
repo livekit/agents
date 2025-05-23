@@ -813,7 +813,10 @@ class AgentActivity(RecognitionHooks):
             text = self._audio_recognition.current_transcript
 
             # TODO(long): better word splitting for multi-language
-            if len(split_words(text)) < self._session.options.min_interruption_words:
+            if (
+                len(split_words(text, split_character=True))
+                < self._session.options.min_interruption_words
+            ):
                 return
 
         if (
@@ -873,7 +876,8 @@ class AgentActivity(RecognitionHooks):
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
             and self._session.options.min_interruption_words > 0
-            and len(split_words(info.new_transcript)) < self._session.options.min_interruption_words
+            and len(split_words(info.new_transcript, split_character=True))
+            < self._session.options.min_interruption_words
         ):
             # avoid interruption if the new_transcript is too short
             return False
