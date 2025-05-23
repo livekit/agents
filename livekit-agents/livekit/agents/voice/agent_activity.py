@@ -850,9 +850,9 @@ class AgentActivity(RecognitionHooks):
             UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
         )
 
-    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
-        # IMPORTANT: This method can be cancelled by the AudioRecognition
-        # We explicitly create a new task to avoid cancelling user code.
+    def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+        # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
+        # We explicitly create a new task here
 
         if self.draining:
             logger.warning(
