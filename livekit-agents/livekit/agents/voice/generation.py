@@ -261,7 +261,7 @@ class _ToolOutput:
 
 def perform_tool_executions(
     *,
-    session: AgentSession[Any],
+    session: AgentSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],
@@ -285,7 +285,7 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    session: AgentSession[Any],
+    session: AgentSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],

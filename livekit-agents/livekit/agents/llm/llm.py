@@ -93,7 +93,7 @@ class LLM(
 
     async def aclose(self) -> None: ...
 
-    async def __aenter__(self) -> LLM[Any]:
+    async def __aenter__(self) -> LLM:
         return self
 
     async def __aexit__(
@@ -108,7 +108,7 @@ class LLM(
 class LLMStream(ABC):
     def __init__(
         self,
-        llm: LLM[Any],
+        llm: LLM,
         *,
         chat_ctx: ChatContext,
         tools: list[FunctionTool | RawFunctionTool],

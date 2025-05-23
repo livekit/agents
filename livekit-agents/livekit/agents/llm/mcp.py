@@ -1,3 +1,5 @@
+# mypy: disable-error-code=unused-ignore
+
 from __future__ import annotations
 
 import json
@@ -56,7 +58,7 @@ class MCPServer(ABC):
                     else None,
                 )
             )
-            await self._client.initialize()  # type: ignore
+            await self._client.initialize()  # type: ignore[union-attr]
             self._initialized = True
         except Exception:
             await self.aclose()
@@ -155,7 +157,7 @@ class MCPServerHTTP(MCPServer):
             MemoryObjectSendStream[JSONRPCMessage],
         ]
     ]:
-        return sse_client(  # type: ignore
+        return sse_client(  # type: ignore[no-any-return]
             url=self.url,
             headers=self.headers,
             timeout=self._timeout,
@@ -189,7 +191,7 @@ class MCPServerStdio(MCPServer):
             MemoryObjectSendStream[JSONRPCMessage],
         ]
     ]:
-        return stdio_client(  # type: ignore
+        return stdio_client(  # type: ignore[no-any-return]
             StdioServerParameters(command=self.command, args=self.args, env=self.env, cwd=self.cwd)
         )
 

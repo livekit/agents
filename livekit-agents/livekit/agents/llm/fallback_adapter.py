@@ -27,7 +27,7 @@ class _LLMStatus:
 
 @dataclass
 class AvailabilityChangedEvent:
-    llm: LLM[Any]
+    llm: LLM
     available: bool
 
 
@@ -36,7 +36,7 @@ class FallbackAdapter(
 ):
     def __init__(
         self,
-        llm: list[LLM[Any]],
+        llm: list[LLM],
         *,
         attempt_timeout: float = 10.0,
         max_retry_per_llm: int = 1,
@@ -110,7 +110,7 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.tools
 
     async def _try_generate(
-        self, *, llm: LLM[Any], check_recovery: bool = False
+        self, *, llm: LLM, check_recovery: bool = False
     ) -> AsyncIterable[ChatChunk]:
         """
         Try to generate with the given LLM.
@@ -177,13 +177,13 @@ class FallbackLLMStream(LLMStream):
             )
             raise
 
-    def _try_recovery(self, llm: LLM[Any]) -> None:
+    def _try_recovery(self, llm: LLM) -> None:
         llm_status = self._fallback_adapter._status[
             self._fallback_adapter._llm_instances.index(llm)
         ]
         if llm_status.recovering_task is None or llm_status.recovering_task.done():
 
-            async def _recover_llm_task(llm: LLM[Any]) -> None:
+            async def _recover_llm_task(llm: LLM) -> None:
                 try:
                     async for _ in self._try_generate(llm=llm, check_recovery=True):
                         pass

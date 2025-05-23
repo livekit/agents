@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -108,7 +108,7 @@ class TTS(
 
     async def aclose(self) -> None: ...
 
-    async def __aenter__(self) -> TTS[Any]:
+    async def __aenter__(self) -> TTS:
         return self
 
     async def __aexit__(
@@ -126,7 +126,7 @@ class ChunkedStream(ABC):
     def __init__(
         self,
         *,
-        tts: TTS[Any],
+        tts: TTS,
         input_text: str,
         conn_options: APIConnectOptions | None = None,
     ) -> None:
@@ -280,7 +280,7 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     class _FlushSentinel: ...
 
-    def __init__(self, *, tts: TTS[Any], conn_options: APIConnectOptions | None = None) -> None:
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions | None = None) -> None:
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options or DEFAULT_API_CONNECT_OPTIONS
