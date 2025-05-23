@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from livekit import rtc
 
@@ -14,6 +14,9 @@ from ..log import logger
 from ..utils import aio
 from . import io
 from .agent import ModelSettings
+
+if TYPE_CHECKING:
+    from .agent_session import TurnDetectionMode
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
 
@@ -54,7 +57,7 @@ class AudioRecognition:
         turn_detector: _TurnDetector | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
-        manual_turn_detection: bool,
+        turn_detection_mode: TurnDetectionMode | None,
     ) -> None:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
@@ -67,8 +70,9 @@ class AudioRecognition:
         self._turn_detector = turn_detector
         self._stt = stt
         self._vad = vad
-        self._manual_turn_detection = manual_turn_detection
-        self._user_turn_committed = False
+        self._turn_detection_mode = turn_detection_mode
+        self._vad_base_turn_detection = turn_detection_mode in ("vad", None)
+        self._user_turn_committed = False  # true if user turn ended but EOU task not done
         self._sample_rate: int | None = None
 
         self._speaking = False
@@ -202,7 +206,7 @@ class AudioRecognition:
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         if (
-            self._manual_turn_detection
+            self._turn_detection_mode == "manual"
             and self._user_turn_committed
             and (
                 self._end_of_turn_task is None
@@ -210,8 +214,8 @@ class AudioRecognition:
                 or ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
             )
         ):
-            # ignore stt event if user turn already committed and EOU task is done
-            # or it's an interim transcript
+            # ignore transcript for manual turn detection when user turn already committed
+            # and EOU task is done or this is an interim transcript
             return
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
@@ -254,12 +258,20 @@ class AudioRecognition:
                     # and using that timestamp for _last_speaking_time
                     self._last_speaking_time = time.time()
 
-                if not self._manual_turn_detection or self._user_turn_committed:
+                if self._vad_base_turn_detection or self._user_turn_committed:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                     self._run_eou_detection(chat_ctx)
+
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev)
             self._audio_interim_transcript = ev.alternatives[0].text
+
+        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
+            self._user_turn_committed = True
+            if not self._speaking:
+                # start response after vad fires END_OF_SPEECH to avoid vad interruption
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
 
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
@@ -279,12 +291,14 @@ class AudioRecognition:
             # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
             self._last_speaking_time = time.time() - ev.silence_duration
 
-            if not self._manual_turn_detection:
+            if self._vad_base_turn_detection or (
+                self._turn_detection_mode == "stt" and self._user_turn_committed
+            ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
-        if self._stt and not self._audio_transcript and not self._manual_turn_detection:
+        if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
             # stt enabled but no transcript yet
             return
 
@@ -292,7 +306,7 @@ class AudioRecognition:
         chat_ctx.add_message(role="user", content=self._audio_transcript)
         turn_detector = (
             self._turn_detector
-            if self._audio_transcript and not self._manual_turn_detection
+            if self._audio_transcript and self._turn_detection_mode != "manual"
             else None  # disable EOU model if manual turn detection enabled
         )
 
@@ -332,6 +346,7 @@ class AudioRecognition:
             if committed:
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
+            self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
