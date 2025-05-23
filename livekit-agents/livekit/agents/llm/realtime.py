@@ -83,6 +83,8 @@ EventTypes = Literal[
     "input_speech_stopped",  # serverside VAD
     "input_audio_transcription_completed",
     "generation_created",
+    "session_reconnected",
+    "session_restored",
     "metrics_collected",
     "error",
 ]
@@ -97,6 +99,16 @@ class InputTranscriptionCompleted:
     transcript: str
     """transcript of the input audio"""
     is_final: bool
+
+
+@dataclass
+class RealtimeSessionReconnectedEvent:
+    pass
+
+
+@dataclass
+class RealtimeSessionRestoredEvent:
+    error: Exception | None
 
 
 class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):

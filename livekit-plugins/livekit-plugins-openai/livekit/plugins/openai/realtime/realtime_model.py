@@ -529,15 +529,26 @@ class RealtimeSession(
         while not self._msg_ch.closed:
             restore_task: asyncio.Task | None = None
             if reconnecting:
-                logger.debug("reconnected to OpenAI Realtime API, restoring session")
+                logger.debug("reconnected to OpenAI Realtime API, restoring chat context")
+                self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
                 # update the session options and tools
                 self._initial_session_update()
                 tools = list(self._tools.function_tools.values())
                 if tools:
                     await self.update_tools(tools)
+
                 # restore the chat context
                 restore_task = asyncio.create_task(_restore_chat_context())
+
+                def _on_restored(t: asyncio.Task) -> None:
+                    if not t.exception():
+                        logger.debug("restored chat context")
+                    self.emit(
+                        "session_restored", llm.RealtimeSessionRestoredEvent(error=t.exception())
+                    )
+
+                restore_task.add_done_callback(_on_restored)
 
             try:
                 await self._main_task()
