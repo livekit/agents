@@ -641,7 +641,7 @@ class AudioEmitter:
 
     async def aclose(self) -> None:
         if not self._started:
-            raise RuntimeError("AudioEmitter isn't started")
+            return
 
         await aio.cancel_and_wait(self._main_atask)
 
