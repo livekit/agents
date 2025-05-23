@@ -111,8 +111,7 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
-
-    _text: str = ""
+    audio_transcript: str = ""
 
 
 @dataclass
@@ -489,12 +488,8 @@ class RealtimeSession(
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._instructions: str | None = None
-        self._connected_fut = asyncio.Future[float]()
-        self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
+        self._main_atask = asyncio.create_task(self._run(), name="RealtimeSession._main_task")
         self._initial_session_update()
-        self._reconnect_atask = asyncio.create_task(
-            self._reconnect_task(), name="RealtimeSession._reconnect_task"
-        )
 
         self._response_created_futures: dict[str, _CreateResponseHandle] = {}
         self._text_mode_recovery_atask: asyncio.Task | None = None
@@ -520,56 +515,37 @@ class RealtimeSession(
             self._msg_ch.send_nowait(event)
 
     @utils.log_exceptions(logger=logger)
-    async def _reconnect_task(self) -> None:
-        if not self._realtime_model._opts.session_lifetime:
-            return
-
-        while not self._msg_ch.closed:
-            if self._main_atask.done():
-                break
-
-            # wait session connected
-            start_time = await self._connected_fut
-            sleep_time = self._realtime_model._opts.session_lifetime - (time.time() - start_time)
-            wait_reconnect_task = asyncio.create_task(asyncio.sleep(sleep_time))
-            try:
-                done, _ = await asyncio.wait(
-                    [wait_reconnect_task, self._main_atask], return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in done:
-                    if task != wait_reconnect_task:
-                        task.result()
-                if wait_reconnect_task not in done:
-                    break
-            finally:
-                if not wait_reconnect_task.done():
-                    wait_reconnect_task.cancel()
-
-            if self._current_generation:
-                # wait for the current generation to complete
-                await self._current_generation._closed_fut
-
-            logger.debug("reconnecting realtime session")
-            await utils.aio.cancel_and_wait(self._main_atask)
-
-            self._connected_fut = asyncio.Future[None]()
-            self._main_atask = asyncio.create_task(
-                self._main_task(), name="RealtimeSession._main_task"
-            )
-            self._initial_session_update()
-            tools = list(self._tools.function_tools.values())
-            if tools:
-                await self.update_tools(tools)
-
+    async def _run(self) -> None:
+        @utils.log_exceptions(logger=logger)
+        async def _restore_chat_context() -> None:
             # sync chat messages to the new session
             chat_ctx = self.chat_ctx.copy(
                 exclude_function_call=True, exclude_instructions=True, exclude_empty_message=True
             )
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+            await self.update_chat_ctx(chat_ctx)
+
+        reconnecting = False
+        while not self._msg_ch.closed:
+            restore_task: asyncio.Task | None = None
+            if reconnecting:
+                logger.debug("reconnected to OpenAI Realtime API, restoring session")
+
+                # update the session options and tools
+                self._initial_session_update()
+                tools = list(self._tools.function_tools.values())
+                if tools:
+                    await self.update_tools(tools)
+                # restore the chat context
+                restore_task = asyncio.create_task(_restore_chat_context())
+
             try:
-                await self.update_chat_ctx(chat_ctx)
-            except llm.RealtimeError:
-                logger.exception("failed to update chat ctx")
+                await self._main_task()
+            finally:
+                if restore_task:
+                    await utils.aio.cancel_and_wait(restore_task)
+
+            reconnecting = True
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -598,7 +574,6 @@ class RealtimeSession(
         ws_conn = await self._realtime_model._ensure_http_session().ws_connect(
             url=url, headers=headers
         )
-        self._connected_fut.set_result(time.time())
 
         closing = False
 
@@ -732,8 +707,25 @@ class RealtimeSession(
             asyncio.create_task(_recv_task(), name="_recv_task"),
             asyncio.create_task(_send_task(), name="_send_task"),
         ]
+        wait_reconnect_task = (
+            asyncio.create_task(asyncio.sleep(self._realtime_model._opts.session_lifetime))
+            if self._realtime_model._opts.session_lifetime
+            else None
+        )
+        if wait_reconnect_task:
+            tasks.append(wait_reconnect_task)
         try:
-            await asyncio.gather(*tasks)
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+            # propagate exceptions from completed tasks
+            for task in done:
+                if task != wait_reconnect_task:
+                    task.result()
+
+            if wait_reconnect_task and wait_reconnect_task in done and self._current_generation:
+                # wait for the current generation to complete before reconnecting
+                await self._current_generation._closed_fut
+
         finally:
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
@@ -1005,7 +997,6 @@ class RealtimeSession(
 
     async def aclose(self) -> None:
         self._msg_ch.close()
-        await utils.aio.cancel_and_wait(self._reconnect_atask)
         await self._main_atask
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
@@ -1292,7 +1283,7 @@ class RealtimeSession(
 
         item_generation = self._current_generation.messages[item_id]
         item_generation.text_ch.send_nowait(delta)
-        item_generation._text += delta
+        item_generation.audio_transcript += delta
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -1361,7 +1352,7 @@ class RealtimeSession(
             if (remote_item := self._remote_chat_ctx.get(item_id)) and isinstance(
                 remote_item.item, llm.ChatMessage
             ):
-                remote_item.item.content.append(item_generation._text)
+                remote_item.item.content.append(item_generation.audio_transcript)
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._current_generation._closed_fut.set_result(None)
