@@ -13,7 +13,6 @@ from google import genai
 from google.genai.live import AsyncSession
 from google.genai.types import (
     AudioTranscriptionConfig,
-    AutomaticActivityDetection,
     Blob,
     Content,
     FunctionDeclaration,
@@ -595,7 +594,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        return LiveConnectConfig(
+        conf = LiveConnectConfig(
             response_modalities=self._opts.response_modalities
             if is_given(self._opts.response_modalities)
             else [Modality.AUDIO],
@@ -627,14 +626,17 @@ class RealtimeSession(llm.RealtimeSession):
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
-            enable_affective_dialog=self._opts.enable_affective_dialog,
-            proactivity={"proactive_audio": self._opts.proactivity},
-            realtime_input_config=self._opts.realtime_input_config
-            if is_given(self._opts.realtime_input_config)
-            else RealtimeInputConfig(
-                automatic_activity_detection=AutomaticActivityDetection(),
-            ),
+            realtime_input_config=self._opts.realtime_input_config,
         )
+
+        if is_given(self._opts.proactivity):
+            conf.proactivity = {"proactive_audio": self._opts.proactivity}
+        if is_given(self._opts.enable_affective_dialog):
+            conf.enable_affective_dialog = self._opts.enable_affective_dialog
+        if is_given(self._opts.realtime_input_config):
+            conf.realtime_input_config = self._opts.realtime_input_config
+
+        return conf
 
     def _start_new_generation(self):
         if self._current_generation and not self._current_generation._done:
