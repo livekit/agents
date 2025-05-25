@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+from collections.abc import Callable
 
 try:
     from mcp import ClientSession, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
+    from mcp.client.streamable_http import streamablehttp_client
     from mcp.types import JSONRPCMessage
 except ImportError as e:
     raise ImportError(
@@ -46,9 +48,10 @@ class MCPServer(ABC):
 
     async def initialize(self) -> None:
         try:
-            receive_stream, send_stream = await self._exit_stack.enter_async_context(
+            streams = await self._exit_stack.enter_async_context(
                 self.client_streams()
             )
+            receive_stream, send_stream = streams[0], streams[1]
             self._client = await self._exit_stack.enter_async_context(
                 ClientSession(
                     receive_stream,
@@ -128,6 +131,7 @@ class MCPServer(ABC):
         tuple[
             MemoryObjectReceiveStream[JSONRPCMessage | Exception],
             MemoryObjectSendStream[JSONRPCMessage],
+            ...
         ]
     ]: ...
 
@@ -155,6 +159,7 @@ class MCPServerHTTP(MCPServer):
         tuple[
             MemoryObjectReceiveStream[JSONRPCMessage | Exception],
             MemoryObjectSendStream[JSONRPCMessage],
+            ...
         ]
     ]:
         return sse_client(  # type: ignore[no-any-return]
@@ -166,6 +171,47 @@ class MCPServerHTTP(MCPServer):
 
     def __repr__(self) -> str:
         return f"MCPServerHTTP(url={self.url})"
+
+
+class MCPServerStreamableHTTP(MCPServer):
+    """
+    This simplifies MCP communication
+    by using a single HTTP endpoint for both sending and receiving messages,
+    replacing the need for separate endpoints used in SSE transport.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        headers: dict[str, Any] | None = None,
+        timeout: float = 5,
+        sse_read_timeout: float = 60 * 5,
+        client_session_timeout_seconds: float = 5,
+    ) -> None:
+        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
+        self.url = url
+        self.headers = headers
+        self._timeout = timeout
+        self._sse_read_timeout = sse_read_timeout
+
+    def client_streams(
+        self,
+    ) -> AbstractAsyncContextManager[
+        tuple[
+            MemoryObjectReceiveStream[JSONRPCMessage | Exception],
+            MemoryObjectSendStream[JSONRPCMessage],
+            Callable[[], str | None],
+        ]
+    ]:
+        return streamablehttp_client(  
+            url=self.url,
+            headers=self.headers,
+            timeout=timedelta(seconds=self._timeout),
+            sse_read_timeout=timedelta(seconds=self._sse_read_timeout),
+        )
+
+    def __repr__(self) -> str:
+        return f"MCPServerStreamableHTTP(url={self.url})"
 
 
 class MCPServerStdio(MCPServer):
@@ -189,6 +235,7 @@ class MCPServerStdio(MCPServer):
         tuple[
             MemoryObjectReceiveStream[JSONRPCMessage | Exception],
             MemoryObjectSendStream[JSONRPCMessage],
+            ...
         ]
     ]:
         return stdio_client(  # type: ignore[no-any-return]
