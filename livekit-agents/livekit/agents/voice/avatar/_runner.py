@@ -129,10 +129,10 @@ class AvatarRunner:
                         playback_position=self._playback_position,
                         interrupted=False,
                     )
+                    self._audio_playing = False
+                    self._playback_position = 0.0
                     if asyncio.iscoroutine(notify_task):
                         await notify_task
-                    self._playback_position = 0.0
-                self._audio_playing = False
                 continue
 
             await self._av_sync.push(frame)
@@ -143,25 +143,23 @@ class AvatarRunner:
         """Handle clearing the buffer and notify about interrupted playback"""
 
         @log_exceptions(logger=logger)
-        async def _handle_clear_buffer(audio_playing: bool, playback_position: float) -> None:
+        async def _handle_clear_buffer(audio_playing: bool) -> None:
             clear_task = self._video_gen.clear_buffer()
             if asyncio.iscoroutine(clear_task):
                 await clear_task
 
             if audio_playing:
                 notify_task = self._audio_recv.notify_playback_finished(
-                    playback_position=playback_position,
+                    playback_position=self._playback_position,
                     interrupted=True,
                 )
+                self._playback_position = 0.0
                 if asyncio.iscoroutine(notify_task):
                     await notify_task
 
-        task = asyncio.create_task(
-            _handle_clear_buffer(self._audio_playing, self._playback_position)
-        )
+        task = asyncio.create_task(_handle_clear_buffer(self._audio_playing))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-        self._playback_position = 0.0
         self._audio_playing = False
 
     def _on_reconnected(self) -> None:
