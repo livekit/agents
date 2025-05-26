@@ -819,6 +819,9 @@ class AgentActivity(RecognitionHooks):
             ):
                 return
 
+        if self._rt_session is not None:
+            self._rt_session.start_user_activity()
+
         if (
             self._current_speech is not None
             and not self._current_speech.interrupted
@@ -926,6 +929,7 @@ class AgentActivity(RecognitionHooks):
                 "speech interrupted, new user turn detected",
                 speech_id=self._current_speech.id,
             )
+
             self._current_speech.interrupt()
             if self._rt_session is not None:
                 self._rt_session.interrupt()

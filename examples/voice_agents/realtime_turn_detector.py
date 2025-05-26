@@ -3,8 +3,15 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
-from livekit.plugins import deepgram, openai, silero
-from livekit.plugins.turn_detector.english import EnglishModel
+from livekit.plugins import deepgram, google, openai, silero
+from livekit.plugins.google.beta.realtime import (
+    AutomaticActivityDetection,
+    ContextWindowCompressionConfig,
+    RealtimeInputConfig,
+    SlidingWindow,
+    TurnCoverage,
+)
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("realtime-turn-detector")
 logger.setLevel(logging.INFO)
@@ -22,7 +29,7 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         allow_interruptions=True,
-        turn_detection=EnglishModel(),
+        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
         llm=openai.realtime.RealtimeModel(
@@ -32,6 +39,20 @@ async def entrypoint(ctx: JobContext):
             turn_detection=None,
             input_audio_transcription=None,  # we use Deepgram STT instead
         ),
+        # llm=google.beta.realtime.RealtimeModel(
+        #     # with Gemini Live, we'd need to disable automatic activity detection
+        #     realtime_input_config=RealtimeInputConfig(
+        #         automatic_activity_detection=AutomaticActivityDetection(
+        #             disabled=True,
+        #         ),
+        #         turn_coverage=TurnCoverage.TURN_INCLUDES_ALL_INPUT,
+        #     ),
+        #     input_audio_transcription=None,
+        #     context_window_compression=ContextWindowCompressionConfig(
+        #         sliding_window=SlidingWindow(target_tokens=500),
+        #         trigger_tokens=1000,
+        #     ),
+        # ),
     )
     await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
 

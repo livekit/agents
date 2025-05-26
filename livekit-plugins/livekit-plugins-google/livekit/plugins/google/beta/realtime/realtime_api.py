@@ -12,9 +12,13 @@ from dataclasses import dataclass, field
 from google import genai
 from google.genai.live import AsyncSession
 from google.genai.types import (
+    ActivityEnd,
+    ActivityHandling,
+    ActivityStart,
     AudioTranscriptionConfig,
     Blob,
     Content,
+    ContextWindowCompressionConfig,
     FunctionDeclaration,
     GenerationConfig,
     LiveClientContent,
@@ -88,6 +92,7 @@ class _RealtimeOptions:
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
     realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN
+    context_window_compression: NotGivenOr[ContextWindowCompressionConfig] = NOT_GIVEN
 
 
 @dataclass
@@ -95,10 +100,13 @@ class _ResponseGeneration:
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
 
+    input_id: str
     response_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
+
     input_transcription: str = ""
+    output_text: str = ""
 
     _created_timestamp: float = field(default_factory=time.time)
     """The timestamp when the generation is created"""
@@ -108,6 +116,14 @@ class _ResponseGeneration:
     """The timestamp when the generation is completed"""
     _done: bool = False
     """Whether the generation is done (set when the turn is complete)"""
+
+    def push_text(self, text: str) -> None:
+        if self.output_text:
+            self.output_text += text
+        else:
+            self.output_text = text
+
+        self.text_ch.send_nowait(text)
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -136,6 +152,7 @@ class RealtimeModel(llm.RealtimeModel):
         enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN,
         proactivity: NotGivenOr[bool] = NOT_GIVEN,
         realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN,
+        context_window_compression: NotGivenOr[ContextWindowCompressionConfig] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -178,10 +195,18 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(output_audio_transcription):
             output_audio_transcription = AudioTranscriptionConfig()
 
+        server_turn_detection = True
+        if (
+            is_given(realtime_input_config)
+            and realtime_input_config.automatic_activity_detection
+            and realtime_input_config.automatic_activity_detection.disabled
+        ):
+            server_turn_detection = False
+
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
-                turn_detection=True,
+                turn_detection=server_turn_detection,
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=True,
             )
@@ -243,6 +268,7 @@ class RealtimeModel(llm.RealtimeModel):
             enable_affective_dialog=enable_affective_dialog,
             proactivity=proactivity,
             realtime_input_config=realtime_input_config,
+            context_window_compression=context_window_compression,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -302,7 +328,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
 
         self._session_resumption_handle: str | None = None
-
+        self._in_user_activity = False
         self._session_lock = asyncio.Lock()
 
     async def _close_active_session(self) -> None:
@@ -346,6 +372,11 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed()
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        async with self._session_lock:
+            if not self._active_session:
+                self._chat_ctx = chat_ctx.copy()
+                return
+
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
 
         if diff_ops.to_remove:
@@ -365,6 +396,10 @@ class RealtimeSession(llm.RealtimeSession):
             if tool_results:
                 self._send_client_event(tool_results)
 
+        # since we don't have a view of the history on the server side, we'll assume the current state
+        # is accurate. this isn't perfect because removals aren't done.
+        self._chat_ctx = chat_ctx.copy()
+
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
         new_declarations: list[FunctionDeclaration] = to_fnc_ctx(tools)
         current_tool_names = {f.name for f in self._gemini_declarations}
@@ -382,6 +417,14 @@ class RealtimeSession(llm.RealtimeSession):
     @property
     def tools(self) -> llm.ToolContext:
         return self._tools.copy()
+
+    @property
+    def _manual_activity_detection(self) -> bool:
+        return (
+            self._opts.realtime_input_config
+            and self._opts.realtime_input_config.automatic_activity_detection
+            and self._opts.realtime_input_config.automatic_activity_detection.disabled
+        )
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
@@ -416,6 +459,14 @@ class RealtimeSession(llm.RealtimeSession):
         fut = asyncio.Future()
         self._pending_generation_fut = fut
 
+        if self._in_user_activity:
+            self._send_client_event(
+                LiveClientRealtimeInput(
+                    activity_end=ActivityEnd(),
+                )
+            )
+            self._in_user_activity = False
+
         # Gemini requires the last message to end with user's turn
         # so we need to add a placeholder user turn in order to trigger a new generation
         event = LiveClientContent(turns=[], turn_complete=True)
@@ -439,8 +490,27 @@ class RealtimeSession(llm.RealtimeSession):
 
         return fut
 
+    def start_user_activity(self) -> None:
+        if not self._manual_activity_detection:
+            return
+
+        if not self._in_user_activity:
+            self._in_user_activity = True
+            self._send_client_event(
+                LiveClientRealtimeInput(
+                    activity_start=ActivityStart(),
+                )
+            )
+
     def interrupt(self) -> None:
-        pass
+        # Gemini Live treats activity start as interruption, so we rely on start_user_activity notifications to handle it
+        if (
+            self._opts.realtime_input_config
+            and self._opts.realtime_input_config.activity_handling
+            == ActivityHandling.NO_INTERRUPTION
+        ):
+            return
+        self.start_user_activity()
 
     def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
         logger.warning("truncate is not supported by the Google Realtime API.")
@@ -482,6 +552,11 @@ class RealtimeSession(llm.RealtimeSession):
                 ) as session:
                     async with self._session_lock:
                         self._active_session = session
+                        turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
+                        if turns:
+                            self._send_client_event(
+                                LiveClientContent(turns=turns, turn_complete=False)
+                            )
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -535,8 +610,13 @@ class RealtimeSession(llm.RealtimeSession):
                 elif isinstance(msg, LiveClientToolResponse):
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, LiveClientRealtimeInput):
-                    for media_chunk in msg.media_chunks:
-                        await session.send_realtime_input(media=media_chunk)
+                    if msg.media_chunks:
+                        for media_chunk in msg.media_chunks:
+                            await session.send_realtime_input(media=media_chunk)
+                    elif msg.activity_start:
+                        await session.send_realtime_input(activity_start=msg.activity_start)
+                    elif msg.activity_end:
+                        await session.send_realtime_input(activity_end=msg.activity_end)
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
@@ -635,6 +715,8 @@ class RealtimeSession(llm.RealtimeSession):
             conf.enable_affective_dialog = self._opts.enable_affective_dialog
         if is_given(self._opts.realtime_input_config):
             conf.realtime_input_config = self._opts.realtime_input_config
+        if is_given(self._opts.context_window_compression):
+            conf.context_window_compression = self._opts.context_window_compression
 
         return conf
 
@@ -643,11 +725,12 @@ class RealtimeSession(llm.RealtimeSession):
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
 
-        response_id = utils.shortuuid("gemini-turn-")
+        response_id = utils.shortuuid("GR_")
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
             function_ch=utils.aio.Chan[llm.FunctionCall](),
             response_id=response_id,
+            input_id=utils.shortuuid("GI_"),
             text_ch=utils.aio.Chan[str](),
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
             _created_timestamp=time.time(),
@@ -683,7 +766,7 @@ class RealtimeSession(llm.RealtimeSession):
         if model_turn := server_content.model_turn:
             for part in model_turn.parts:
                 if part.text:
-                    current_gen.text_ch.send_nowait(part.text)
+                    current_gen.push_text(part.text)
                 if part.inline_data:
                     if not current_gen._first_token_timestamp:
                         current_gen._first_token_timestamp = time.time()
@@ -710,7 +793,7 @@ class RealtimeSession(llm.RealtimeSession):
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
-                        item_id=current_gen.response_id,
+                        item_id=current_gen.input_id,
                         transcript=current_gen.input_transcription,
                         is_final=False,
                     ),
@@ -719,7 +802,7 @@ class RealtimeSession(llm.RealtimeSession):
         if output_transcription := server_content.output_transcription:
             text = output_transcription.text
             if text:
-                current_gen.text_ch.send_nowait(text)
+                current_gen.push_text(text)
 
         if server_content.generation_complete:
             # The only way we'd know that the transcription is complete is by when they are
@@ -728,11 +811,27 @@ class RealtimeSession(llm.RealtimeSession):
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
-                        item_id=current_gen.response_id,
+                        item_id=current_gen.input_id,
                         transcript=current_gen.input_transcription,
                         is_final=True,
                     ),
                 )
+
+                # since gemini doesn't give us a view of the chat history on the server side, we would handle it
+                # manually here
+                self._chat_ctx.add_message(
+                    role="user",
+                    content=current_gen.input_transcription,
+                    id=current_gen.input_id,
+                )
+
+            if current_gen.output_text:
+                self._chat_ctx.add_message(
+                    role="assistant",
+                    content=current_gen.output_text,
+                    id=current_gen.response_id,
+                )
+
             current_gen._completed_timestamp = time.time()
 
         if server_content.interrupted:

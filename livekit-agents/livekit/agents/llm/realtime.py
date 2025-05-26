@@ -161,3 +161,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
 
     @abstractmethod
     async def aclose(self) -> None: ...
+
+    def start_user_activity(self) -> None:
+        """notifies the model that user activity has started"""
+        pass
