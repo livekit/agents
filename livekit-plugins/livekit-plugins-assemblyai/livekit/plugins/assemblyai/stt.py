@@ -14,7 +14,6 @@
 
 
 from __future__ import annotations
-from . import __version__
 
 import asyncio
 import dataclasses
@@ -359,7 +358,7 @@ class SpeechStream(stt.SpeechStream):
         headers = {
             "Authorization": self._api_key,
             "Content-Type": "application/json",
-            "User-Agent": f"AssemblyAI/1.0 (integration=Livekit/{__version__})"
+            "User-Agent": f"AssemblyAI/1.0 (integration=Livekit/1.0.22)"
         }
 
         ws_url = "wss://streaming.assemblyai.com/v3/ws"
