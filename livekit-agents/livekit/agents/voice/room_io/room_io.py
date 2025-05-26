@@ -143,6 +143,7 @@ class RoomIO:
         self._close_session_atask: asyncio.Task[None] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
+        self._text_stream_handler_registered = False
 
     async def start(self) -> None:
         # -- create inputs --
@@ -156,6 +157,7 @@ class RoomIO:
         if self._input_options.text_enabled:
             try:
                 self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
+                self._text_stream_handler_registered = True
             except ValueError:
                 logger.warning(
                     f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
@@ -236,6 +238,10 @@ class RoomIO:
         self._room.off("connection_state_changed", self._on_connection_state_changed)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
+
+        if self._text_stream_handler_registered:
+            self._room.unregister_text_stream_handler(TOPIC_CHAT)
+            self._text_stream_handler_registered = False
 
         if self._init_atask:
             await utils.aio.cancel_and_wait(self._init_atask)

@@ -209,6 +209,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         self._forward_audio_atask: asyncio.Task[None] | None = None
+        self._forward_video_atask: asyncio.Task[None] | None = None
         self._update_activity_atask: asyncio.Task[None] | None = None
         self._activity_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
@@ -402,6 +403,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         await self._activity.drain()
 
+    @utils.log_exceptions(logger=logger)
     async def aclose(
         self,
         *,
@@ -424,6 +426,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # wait any uninterruptible speech to finish
                 if self._activity.current_speech:
                     await self._activity.current_speech
+
+                # detach the inputs and outputs
+                self.input.audio = None
+                self.input.video = None
+                self.output.audio = None
+                self.output.transcription = None
 
                 await self._activity.aclose()
                 self._activity = None
