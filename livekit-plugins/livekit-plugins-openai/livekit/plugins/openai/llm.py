@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -484,6 +485,51 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
         )
 
+    @staticmethod
+    def with_letta(
+        *,
+        agent_id: str,
+        base_url: str = "https://api.letta.com/v1/voice-beta",
+        api_key: str | None = None,
+    ) -> LLM:
+        """
+        Create a new Letta-backed LLM instance connected to the specified Letta agent.
+
+        Args:
+            agent_id (str): The Letta agent ID (must be prefixed with 'agent-').
+            base_url (str): The URL of the Letta server (e.g., from ngrok or Letta Cloud).
+            api_key (str | None, optional): Optional API key for authentication, required if
+                                            the Letta server enforces auth.
+
+        Returns:
+            LLM: A configured LLM instance for interacting with the given Letta agent.
+        """
+
+        base_url = f"{base_url}/{agent_id}"
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"Invalid URL scheme: '{parsed.scheme}'. Must be 'http' or 'https'.")
+        if not parsed.netloc:
+            raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
+
+        api_key = api_key or os.environ.get("LETTA_API_KEY")
+        # Might not be necessary if self-hosted Letta instance
+        if base_url.startswith("https://api.letta.com/v1/") and api_key is None:
+            raise ValueError(
+                "Letta API key is required, either as argument or set LETTA_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model="letta-fast",
+            api_key=api_key,
+            base_url=base_url,
+            client=None,
+            user=NOT_GIVEN,
+            temperature=NOT_GIVEN,
+            parallel_tool_calls=NOT_GIVEN,
+            tool_choice=NOT_GIVEN,
+        )
+
     def chat(
         self,
         *,
@@ -509,6 +555,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.max_completion_tokens):
             extra["max_completion_tokens"] = self._opts.max_completion_tokens
+
+        if is_given(self._opts.temperature):
+            extra["temperature"] = self._opts.temperature
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls

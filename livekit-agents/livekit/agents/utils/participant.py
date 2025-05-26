@@ -30,7 +30,7 @@ async def wait_for_participant(
 
         return p.kind == kind
 
-    def _on_participant_connected(p: rtc.RemoteParticipant):
+    def _on_participant_connected(p: rtc.RemoteParticipant) -> None:
         if (identity is None or p.identity == identity) and kind_match(p):
             room.off("participant_connected", _on_participant_connected)
             if not fut.done():

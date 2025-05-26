@@ -1,3 +1,7 @@
+# mypy: disable-error-code=unused-ignore
+
+from __future__ import annotations
+
 import json
 from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
@@ -54,7 +58,7 @@ class MCPServer(ABC):
                     else None,
                 )
             )
-            await self._client.initialize()
+            await self._client.initialize()  # type: ignore[union-attr]
             self._initialized = True
         except Exception:
             await self.aclose()
@@ -78,9 +82,9 @@ class MCPServer(ABC):
         return lk_tools
 
     def _make_function_tool(
-        self, name: str, description: str | None, input_schema: dict
+        self, name: str, description: str | None, input_schema: dict[str, Any]
     ) -> MCPTool:
-        async def _tool_called(raw_arguments: dict) -> Any:
+        async def _tool_called(raw_arguments: dict[str, Any]) -> Any:
             # In case (somehow), the tool is called after the MCPServer aclose.
             if self._client is None:
                 raise ToolError(
@@ -153,7 +157,7 @@ class MCPServerHTTP(MCPServer):
             MemoryObjectSendStream[JSONRPCMessage],
         ]
     ]:
-        return sse_client(
+        return sse_client(  # type: ignore[no-any-return]
             url=self.url,
             headers=self.headers,
             timeout=self._timeout,
@@ -187,7 +191,7 @@ class MCPServerStdio(MCPServer):
             MemoryObjectSendStream[JSONRPCMessage],
         ]
     ]:
-        return stdio_client(
+        return stdio_client(  # type: ignore[no-any-return]
             StdioServerParameters(command=self.command, args=self.args, env=self.env, cwd=self.cwd)
         )
 

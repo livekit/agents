@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from livekit import rtc
 
@@ -126,11 +126,11 @@ class RoomIO:
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
         self._room_connected_fut = asyncio.Future[None]()
 
-        self._init_atask: asyncio.Task | None = None
+        self._init_atask: asyncio.Task[None] | None = None
         self._user_transcript_ch = utils.aio.Chan[UserInputTranscribedEvent]()
-        self._user_transcript_atask: asyncio.Task | None = None
-        self._tasks: set[asyncio.Task] = set()
-        self._update_state_atask: asyncio.Task | None = None
+        self._user_transcript_atask: asyncio.Task[None] | None = None
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._update_state_atask: asyncio.Task[None] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
 
@@ -385,22 +385,21 @@ class RoomIO:
             logger.warning("participant not found, ignoring text input")
             return
 
-        async def _read_text():
+        async def _read_text() -> None:
             text = await reader.read_all()
 
-            if self._input_options.text_input_cb:
-                text_input_result = self._input_options.text_input_cb(
-                    self._agent_session,
-                    TextInputEvent(text=text, info=reader.info, participant=participant),
-                )
-                if asyncio.iscoroutine(text_input_result):
-                    await text_input_result
+            text_input_result = self._input_options.text_input_cb(
+                self._agent_session,
+                TextInputEvent(text=text, info=reader.info, participant=participant),
+            )
+            if asyncio.iscoroutine(text_input_result):
+                await text_input_result
 
         task = asyncio.create_task(_read_text())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    def _on_agent_state_changed(self, ev: AgentStateChangedEvent):
+    def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
         @utils.log_exceptions(logger=logger)
         async def _set_state() -> None:
             if self._room.isconnected():
