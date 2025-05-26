@@ -38,6 +38,12 @@ DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
 ]
 
+DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
+    rtc.DisconnectReason.CLIENT_INITIATED,
+    rtc.DisconnectReason.ROOM_DELETED,
+    rtc.DisconnectReason.USER_REJECTED,
+]
+
 
 @dataclass
 class TextInputEvent:
@@ -75,6 +81,9 @@ class RoomInputOptions:
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
+    close_on_disconnect_reasons: NotGivenOr[list[rtc.DisconnectReason.ValueType] | None] = NOT_GIVEN
+    """Close the AgentSession if the linked participant disconnects with these reasons.
+    If not provided, use `DEFAULT_CLOSE_ON_DISCONNECT_REASONS`, if None, don't close."""
 
 
 @dataclass
@@ -131,6 +140,7 @@ class RoomIO:
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
+        self._close_session_atask: asyncio.Task[None] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
 
@@ -198,6 +208,7 @@ class RoomIO:
         # -- set the room event handlers --
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
+        self._room.on("participant_disconnected", self._on_participant_disconnected)
         if self._room.isconnected():
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
@@ -371,6 +382,39 @@ class RoomIO:
             return
 
         self._participant_available_fut.set_result(participant)
+
+    def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        if not (linked := self.linked_participant) or participant.identity != linked.identity:
+            return
+
+        self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+
+        reasons = (
+            self._input_options.close_on_disconnect_reasons
+            if utils.is_given(self._input_options.close_on_disconnect_reasons)
+            else DEFAULT_CLOSE_ON_DISCONNECT_REASONS
+        )
+        if (
+            reasons is not None
+            and participant.disconnect_reason in reasons
+            and not self._close_session_atask
+        ):
+
+            def _on_closed(_: asyncio.Task[None]) -> None:
+                self._close_session_atask = None
+
+                if self._close_session_atask is not None:
+                    return
+
+            logger.debug(
+                "closing agent session due to participant disconnect",
+                extra={
+                    "participant": participant.identity,
+                    "reason": rtc.DisconnectReason.Name(participant.disconnect_reason),
+                },
+            )
+            self._close_session_atask = asyncio.create_task(self._agent_session.aclose())
+            self._close_session_atask.add_done_callback(_on_closed)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._output_options.transcription_enabled:

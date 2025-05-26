@@ -402,7 +402,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         await self._activity.drain()
 
-    async def _aclose_impl(
+    async def aclose(
         self,
         *,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
@@ -411,19 +411,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
-            self.emit("close", CloseEvent(error=error))
-
             if self._activity is not None:
+                await self.interrupt()
+                await self._activity.drain()
                 await self._activity.aclose()
+                self._activity = None
 
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
             if self._room_io:
                 await self._room_io.aclose()
+                self._room_io = None
 
-    async def aclose(self) -> None:
-        await self._aclose_impl()
+            self._started = False
+            self.emit("close", CloseEvent(error=error))
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         # don't log VAD metrics as they are too verbose
@@ -560,14 +562,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
 
-        async def drain_and_close() -> None:
-            await self.drain()
-            await self._aclose_impl(error=error)
-
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
-        self._closing_task = asyncio.create_task(drain_and_close())
+        self._closing_task = asyncio.create_task(self.aclose(error=error))
         self._closing_task.add_done_callback(on_close_done)
 
     @utils.log_exceptions(logger=logger)
