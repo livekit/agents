@@ -396,8 +396,8 @@ class RealtimeSession(llm.RealtimeSession):
             if tool_results:
                 self._send_client_event(tool_results)
 
-        # since we don't have a view of the history on the server side, we'll assume the current state
-        # is accurate. this isn't perfect because removals aren't done.
+        # since we don't have a view of the history on the server side, we'll assume
+        # the current state is accurate. this isn't perfect because removals aren't done.
         self._chat_ctx = chat_ctx.copy()
 
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
@@ -503,7 +503,8 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     def interrupt(self) -> None:
-        # Gemini Live treats activity start as interruption, so we rely on start_user_activity notifications to handle it
+        # Gemini Live treats activity start as interruption, so we rely on start_user_activity
+        # notifications to handle it
         if (
             self._opts.realtime_input_config
             and self._opts.realtime_input_config.activity_handling
@@ -817,8 +818,8 @@ class RealtimeSession(llm.RealtimeSession):
                     ),
                 )
 
-                # since gemini doesn't give us a view of the chat history on the server side, we would handle it
-                # manually here
+                # since gemini doesn't give us a view of the chat history on the server side,
+                # we would handle it manually here
                 self._chat_ctx.add_message(
                     role="user",
                     content=current_gen.input_transcription,
