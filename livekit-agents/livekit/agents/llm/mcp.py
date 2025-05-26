@@ -137,47 +137,15 @@ class MCPServer(ABC):
 
 
 class MCPServerHTTP(MCPServer):
-    # SSE is going to get replaced soon: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/206
-
-    def __init__(
-        self,
-        url: str,
-        headers: dict[str, Any] | None = None,
-        timeout: float = 5,
-        sse_read_timeout: float = 60 * 5,
-        client_session_timeout_seconds: float = 5,
-    ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
-        self.url = url
-        self.headers = headers
-        self._timeout = timeout
-        self._see_read_timeout = sse_read_timeout
-
-    def client_streams(
-        self,
-    ) -> AbstractAsyncContextManager[
-        tuple[
-            MemoryObjectReceiveStream[JSONRPCMessage | Exception],
-            MemoryObjectSendStream[JSONRPCMessage],
-            ...
-        ]
-    ]:
-        return sse_client(  # type: ignore[no-any-return]
-            url=self.url,
-            headers=self.headers,
-            timeout=self._timeout,
-            sse_read_timeout=self._see_read_timeout,
-        )
-
-    def __repr__(self) -> str:
-        return f"MCPServerHTTP(url={self.url})"
-
-
-class MCPServerStreamableHTTP(MCPServer):
     """
-    This simplifies MCP communication
-    by using a single HTTP endpoint for both sending and receiving messages,
-    replacing the need for separate endpoints used in SSE transport.
+    HTTP-based MCP server to detect transport type based on URL path.
+    
+    - URLs ending with 'sse' use Server-Sent Events (SSE) transport
+    - URLs ending with 'mcp' use streamable HTTP transport
+    - For other URLs, defaults to SSE transport for backward compatibility
+    
+    Note: SSE transport is being deprecated in favor of streamable HTTP transport.
+    See: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/206
     """
 
     def __init__(
@@ -193,6 +161,23 @@ class MCPServerStreamableHTTP(MCPServer):
         self.headers = headers
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
+        self._use_streamable_http = self._should_use_streamable_http(url)
+
+    def _should_use_streamable_http(self, url: str) -> bool:
+        """
+        Determine transport type based on URL path.
+        
+        Returns True for streamable HTTP if URL ends with 'mcp',
+        False for SSE if URL ends with 'sse' or for backward compatibility.
+        """
+        url_lower = url.lower().rstrip('/')
+        if url_lower.endswith('/mcp') or url_lower.endswith('mcp'):
+            return True
+        elif url_lower.endswith('/sse') or url_lower.endswith('sse'):
+            return False
+        else:
+            # Default for backward compatibility
+            return False
 
     def client_streams(
         self,
@@ -200,18 +185,27 @@ class MCPServerStreamableHTTP(MCPServer):
         tuple[
             MemoryObjectReceiveStream[JSONRPCMessage | Exception],
             MemoryObjectSendStream[JSONRPCMessage],
-            Callable[[], str | None],
+            ...
         ]
     ]:
-        return streamablehttp_client(  
-            url=self.url,
-            headers=self.headers,
-            timeout=timedelta(seconds=self._timeout),
-            sse_read_timeout=timedelta(seconds=self._sse_read_timeout),
-        )
+        if self._use_streamable_http:
+            return streamablehttp_client(  
+                url=self.url,
+                headers=self.headers,
+                timeout=timedelta(seconds=self._timeout),
+                sse_read_timeout=timedelta(seconds=self._sse_read_timeout),
+            )
+        else:
+            return sse_client(  # type: ignore[no-any-return]
+                url=self.url,
+                headers=self.headers,
+                timeout=self._timeout,
+                sse_read_timeout=self._sse_read_timeout,
+            )
 
     def __repr__(self) -> str:
-        return f"MCPServerStreamableHTTP(url={self.url})"
+        transport_type = "streamable_http" if self._use_streamable_http else "sse"
+        return f"MCPServerHTTP(url={self.url}, transport={transport_type})"
 
 
 class MCPServerStdio(MCPServer):

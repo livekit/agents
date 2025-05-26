@@ -73,7 +73,7 @@ async def entrypoint(ctx: JobContext):
     mcp_servers = []
     if zapier_mcp_server:
         logger.info(f"Connecting to Zapier MCP server at {zapier_mcp_server}")
-        mcp_servers.append(mcp.MCPServerStreamableHTTP(url=zapier_mcp_server))
+        mcp_servers.append(mcp.MCPServerHTTP(url=zapier_mcp_server))
     else:
         logger.warning("ZAPIER_MCP_SERVER environment variable not set. MCP integration disabled.")
 
@@ -82,6 +82,7 @@ async def entrypoint(ctx: JobContext):
         # minimum delay for endpointing, used when turn detector believes the user is done with their turn
         min_endpointing_delay=0.5,
         # maximum delay for endpointing, used when turn detector does not believe the user is done with their turn
+        #this should be increased more if latency is an issue
         max_endpointing_delay=5.0,
         mcp_servers=mcp_servers,
     )
