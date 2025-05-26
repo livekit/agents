@@ -222,22 +222,30 @@ class ChunkedStream(tts.ChunkedStream):
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
-        request_id = utils.shortuuid()
         decoder = utils.codecs.AudioStreamDecoder(
             sample_rate=OPENAI_TTS_SAMPLE_RATE,
             num_channels=OPENAI_TTS_CHANNELS,
         )
 
+        request_id = None
+        stream_ready = asyncio.Event()
+
         @utils.log_exceptions(logger=logger)
         async def _decode_loop():
             try:
                 async with oai_stream as stream:
+                    nonlocal request_id
+                    request_id = stream.request_id
+                    stream_ready.set()  # Signal that stream is ready
                     async for data in stream.iter_bytes():
                         decoder.push(data)
             finally:
                 decoder.end_input()
 
         decode_task = asyncio.create_task(_decode_loop())
+
+        # Wait for stream to be established before creating emitter
+        await stream_ready.wait()
 
         try:
             emitter = tts.SynthesizedAudioEmitter(
