@@ -37,6 +37,8 @@ class JobExecutor(Protocol):
 
     async def tracing_info(self) -> dict[str, Any]: ...
 
+    def logging_extra(self) -> dict[str, Any]: ...
+
 
 class JobStatus(Enum):
     RUNNING = "running"

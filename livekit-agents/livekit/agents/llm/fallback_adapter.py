@@ -11,8 +11,8 @@ from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext
-from .llm import LLM, ChatChunk, LLMStream, ToolChoice
-from .tool_context import FunctionTool, ToolContext
+from .llm import LLM, ChatChunk, LLMStream
+from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -22,7 +22,7 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
 @dataclass
 class _LLMStatus:
     available: bool
-    recovering_task: asyncio.Task | None
+    recovering_task: asyncio.Task[None] | None
 
 
 @dataclass
@@ -60,7 +60,7 @@ class FallbackAdapter(
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -70,7 +70,7 @@ class FallbackAdapter(
             llm=self,
             conn_options=conn_options,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=tools or [],
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
@@ -83,7 +83,7 @@ class FallbackLLMStream(LLMStream):
         llm: FallbackAdapter,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None,
+        tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -104,7 +104,7 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.chat_ctx
 
     @property
-    def tools(self) -> ToolContext | None:
+    def tools(self) -> list[FunctionTool | RawFunctionTool]:
         if self._current_stream is None:
             return self._tools
         return self._current_stream.tools

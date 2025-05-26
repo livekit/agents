@@ -23,7 +23,7 @@ from ..types import (
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .tool_context import FunctionTool, ToolChoice
+from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
 
 
 class CompletionUsage(BaseModel):
@@ -84,7 +84,7 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -111,7 +111,7 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
@@ -165,7 +165,7 @@ class LLMStream(ABC):
                 self._emit_error(e, recoverable=False)
                 raise
 
-    def _emit_error(self, api_error: Exception, recoverable: bool):
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
         self._llm.emit(
             "error",
@@ -217,7 +217,7 @@ class LLMStream(ABC):
         return self._chat_ctx
 
     @property
-    def tools(self) -> list[FunctionTool]:
+    def tools(self) -> list[FunctionTool | RawFunctionTool]:
         return self._tools
 
     async def aclose(self) -> None:
@@ -255,7 +255,7 @@ class LLMStream(ABC):
         This assumes the stream will not call any tools.
         """
 
-        async def _iterable():
+        async def _iterable() -> AsyncIterable[str]:
             async with self:
                 async for chunk in self:
                     if chunk.delta and chunk.delta.content:

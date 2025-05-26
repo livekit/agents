@@ -304,11 +304,8 @@ class LLMStream(llm.LLMStream):
                     or not response.candidates[0].content
                     or not response.candidates[0].content.parts
                 ):
-                    raise APIStatusError(
-                        "No candidates in the response",
-                        retryable=True,
-                        request_id=request_id,
-                    )
+                    logger.warning(f"no candidates in the response: {response}")
+                    continue
 
                 if len(response.candidates) > 1:
                     logger.warning(

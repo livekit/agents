@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from livekit import rtc
 
@@ -44,7 +45,7 @@ class AvatarRunner:
         self._audio_recv = audio_recv
         self._playback_position = 0.0
         self._audio_playing = False
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
 
         self._lock = asyncio.Lock()
         self._audio_publication: rtc.LocalTrackPublication | None = None
@@ -77,13 +78,7 @@ class AvatarRunner:
 
         # start audio receiver
         await self._audio_recv.start()
-
-        def _on_clear_buffer():
-            task = asyncio.create_task(self._handle_clear_buffer())
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-
-        self._audio_recv.on("clear_buffer", _on_clear_buffer)
+        self._audio_recv.on("clear_buffer", self._on_clear_buffer)
 
         if not self._lazy_publish:
             await self._publish_track()
@@ -134,35 +129,38 @@ class AvatarRunner:
                         playback_position=self._playback_position,
                         interrupted=False,
                     )
+                    self._audio_playing = False
+                    self._playback_position = 0.0
                     if asyncio.iscoroutine(notify_task):
                         await notify_task
-                    self._playback_position = 0.0
-                self._audio_playing = False
                 continue
 
             await self._av_sync.push(frame)
             if isinstance(frame, rtc.AudioFrame):
                 self._playback_position += frame.duration
 
-    @log_exceptions(logger=logger)
-    async def _handle_clear_buffer(self) -> None:
+    def _on_clear_buffer(self) -> None:
         """Handle clearing the buffer and notify about interrupted playback"""
-        tasks = []
-        clear_result = self._video_gen.clear_buffer()
-        if asyncio.iscoroutine(clear_result):
-            tasks.append(clear_result)
 
-        if self._audio_playing:
-            notify_task = self._audio_recv.notify_playback_finished(
-                playback_position=self._playback_position,
-                interrupted=True,
-            )
-            if asyncio.iscoroutine(notify_task):
-                tasks.append(notify_task)
-            self._playback_position = 0.0
-            self._audio_playing = False
+        @log_exceptions(logger=logger)
+        async def _handle_clear_buffer(audio_playing: bool) -> None:
+            clear_task = self._video_gen.clear_buffer()
+            if asyncio.iscoroutine(clear_task):
+                await clear_task
 
-        await asyncio.gather(*tasks)
+            if audio_playing:
+                notify_task = self._audio_recv.notify_playback_finished(
+                    playback_position=self._playback_position,
+                    interrupted=True,
+                )
+                self._playback_position = 0.0
+                if asyncio.iscoroutine(notify_task):
+                    await notify_task
+
+        task = asyncio.create_task(_handle_clear_buffer(self._audio_playing))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        self._audio_playing = False
 
     def _on_reconnected(self) -> None:
         if self._lazy_publish and not self._video_publication:

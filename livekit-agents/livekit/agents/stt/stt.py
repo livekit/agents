@@ -108,7 +108,7 @@ class STT(
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         for i in range(conn_options.max_retry + 1):
@@ -159,7 +159,7 @@ class STT(
 
         raise RuntimeError("unreachable")
 
-    def _emit_error(self, api_error: Exception, recoverable: bool):
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self.emit(
             "error",
             STTError(
@@ -173,7 +173,7 @@ class STT(
     def stream(
         self,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         raise NotImplementedError(
@@ -274,7 +274,7 @@ class RecognizeStream(ABC):
                 self._emit_error(e, recoverable=False)
                 raise
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt.emit(
             "error",
             STTError(

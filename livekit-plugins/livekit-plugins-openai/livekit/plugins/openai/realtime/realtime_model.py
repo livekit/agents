@@ -57,7 +57,11 @@ from openai.types.beta.realtime import (
     session_update_event,
 )
 from openai.types.beta.realtime.response_create_event import Response
-from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
+from openai.types.beta.realtime.session import (
+    InputAudioNoiseReduction,
+    InputAudioTranscription,
+    TurnDetection,
+)
 
 from ..log import logger
 
@@ -89,7 +93,9 @@ class _RealtimeOptions:
     temperature: float
     tool_choice: llm.ToolChoice | None
     input_audio_transcription: InputAudioTranscription | None
+    input_audio_noise_reduction: InputAudioNoiseReduction | None
     turn_detection: TurnDetection | None
+    max_response_output_tokens: int | Literal["inf"] | None
     api_key: str
     base_url: str
     is_azure: bool
@@ -152,6 +158,7 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
     model="gpt-4o-mini-transcribe",
 )
 DEFAULT_TOOL_CHOICE = "auto"
+DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS = "inf"
 
 AZURE_DEFAULT_TURN_DETECTION = TurnDetection(
     type="server_vad",
@@ -174,6 +181,7 @@ class RealtimeModel(llm.RealtimeModel):
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
@@ -193,6 +201,7 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: str | None = None,
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
@@ -208,6 +217,7 @@ class RealtimeModel(llm.RealtimeModel):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -257,6 +267,7 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription=input_audio_transcription
             if is_given(input_audio_transcription)
             else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
+            input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection if is_given(turn_detection) else DEFAULT_TURN_DETECTION,
             api_key=api_key,
             base_url=base_url_val,
@@ -264,6 +275,7 @@ class RealtimeModel(llm.RealtimeModel):
             azure_deployment=azure_deployment,
             entra_token=entra_token,
             api_version=api_version,
+            max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
         )
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -280,6 +292,7 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: str | None = None,
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: float = 0.8,
         http_session: aiohttp.ClientSession | None = None,
@@ -296,6 +309,7 @@ class RealtimeModel(llm.RealtimeModel):
             base_url (str or None, optional): Base URL for the API endpoint. If None, constructed from the azure_endpoint.
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "alloy".
             input_audio_transcription (InputTranscriptionOptions, optional): Options for transcribing input audio. Defaults to DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+            input_audio_noise_reduction (InputAudioNoiseReduction or None, optional): Options for input audio noise reduction. `near_field` is for close-talking microphones such as headphones, `far_field` is for far-field microphones such as laptop or conference room microphones. Defaults to None.
             turn_detection (ServerVadOptions, optional): Options for server-based voice activity detection (VAD). Defaults to DEFAULT_SERVER_VAD_OPTIONS.
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
             max_response_output_tokens (int or Literal["inf"], optional): Maximum number of tokens in the response. Defaults to "inf".
@@ -342,6 +356,7 @@ class RealtimeModel(llm.RealtimeModel):
         return cls(
             voice=voice,
             input_audio_transcription=input_audio_transcription,
+            input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection,
             temperature=temperature,
             api_key=api_key,
@@ -359,6 +374,9 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
+        max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
@@ -372,12 +390,23 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
 
+        if is_given(input_audio_transcription):
+            self._opts.input_audio_transcription = input_audio_transcription
+
+        if is_given(input_audio_noise_reduction):
+            self._opts.input_audio_noise_reduction = input_audio_noise_reduction
+
+        if is_given(max_response_output_tokens):
+            self._opts.max_response_output_tokens = max_response_output_tokens
+
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
                 temperature=temperature,
                 turn_detection=turn_detection,
                 tool_choice=tool_choice,
+                input_audio_transcription=input_audio_transcription,
+                max_response_output_tokens=max_response_output_tokens,
             )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -683,6 +712,9 @@ class RealtimeSession(
                     modalities=["text", "audio"],
                     turn_detection=turn_detection,
                     input_audio_transcription=input_audio_transcription,
+                    input_audio_noise_reduction=(
+                        self._realtime_model._opts.input_audio_noise_reduction
+                    ),
                     temperature=self._realtime_model._opts.temperature,
                     tool_choice=_to_oai_tool_choice(self._realtime_model._opts.tool_choice),
                 ),
@@ -705,6 +737,9 @@ class RealtimeSession(
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
+        input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
     ) -> None:
         kwargs = {}
 
@@ -723,6 +758,18 @@ class RealtimeSession(
         if is_given(turn_detection):
             self._realtime_model._opts.turn_detection = turn_detection
             kwargs["turn_detection"] = turn_detection
+
+        if is_given(max_response_output_tokens):
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
+            kwargs["max_response_output_tokens"] = max_response_output_tokens
+
+        if is_given(input_audio_transcription):
+            self._realtime_model._opts.input_audio_transcription = input_audio_transcription
+            kwargs["input_audio_transcription"] = input_audio_transcription
+
+        if is_given(input_audio_noise_reduction):
+            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
+            kwargs["input_audio_noise_reduction"] = input_audio_noise_reduction
 
         if kwargs:
             self.send_event(

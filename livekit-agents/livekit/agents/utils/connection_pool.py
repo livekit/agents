@@ -43,7 +43,7 @@ class ConnectionPool(Generic[T]):
         # store connections to be reaped (closed) later.
         self._to_close: set[T] = set()
 
-        self._prewarm_task: Optional[weakref.ref[asyncio.Task]] = None
+        self._prewarm_task: Optional[weakref.ref[asyncio.Task[None]]] = None
 
     async def _connect(self) -> T:
         """Create a new connection.
@@ -159,7 +159,7 @@ class ConnectionPool(Generic[T]):
         if self._prewarm_task is not None or self._connections:
             return
 
-        async def _prewarm_impl():
+        async def _prewarm_impl() -> None:
             if not self._connections:
                 conn = await self._connect()
                 self._available.add(conn)
@@ -167,7 +167,7 @@ class ConnectionPool(Generic[T]):
         task = asyncio.create_task(_prewarm_impl())
         self._prewarm_task = weakref.ref(task)
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         """Close all connections, draining any pending connection closures."""
         if self._prewarm_task is not None:
             task = self._prewarm_task()
