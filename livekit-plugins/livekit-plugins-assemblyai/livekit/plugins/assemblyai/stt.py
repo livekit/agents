@@ -14,6 +14,7 @@
 
 
 from __future__ import annotations
+from . import __version__
 
 import asyncio
 import dataclasses
@@ -44,6 +45,12 @@ from .log import logger
 
 ENGLISH = "en"
 DEFAULT_ENCODING = "pcm_s16le"
+DEFAULT_WORD_FINALIZATION_MAX_WAIT_TIME = 240
+DEFAULT_END_OF_TURN_CONFIDENCE_THRESHOLD = 0.5
+DEFAULT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT = 0
+DEFAULT_MAX_TURN_SILENCE = 400
+DEFAULT_TOKEN_MODE = False  # Added token_mode default
+
 
 # Define bytes per frame for different encoding types
 bytes_per_frame = {
@@ -51,17 +58,17 @@ bytes_per_frame = {
     "pcm_mulaw": 1,
 }
 
-
 @dataclass
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float
     word_boost: NotGivenOr[list[str]] = NOT_GIVEN
     encoding: NotGivenOr[Literal["pcm_s16le", "pcm_mulaw"]] = NOT_GIVEN
-    disable_partial_transcripts: bool = False
-    enable_extra_session_information: bool = False
-    end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN
-    # Buffer to collect frames to send to AssemblyAI
+    word_finalization_max_wait_time: NotGivenOr[int] = NOT_GIVEN
+    end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
+    min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
+    max_turn_silence: NotGivenOr[int] = NOT_GIVEN
+    token_mode: NotGivenOr[bool] = NOT_GIVEN  # Added token_mode
 
     def __post_init__(self):
         if self.encoding not in (NOT_GIVEN, "pcm_s16le", "pcm_mulaw"):
@@ -76,9 +83,11 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
         encoding: NotGivenOr[Literal["pcm_s16le", "pcm_mulaw"]] = NOT_GIVEN,
-        disable_partial_transcripts: bool = False,
-        enable_extra_session_information: bool = False,
-        end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
+        word_finalization_max_wait_time: NotGivenOr[int] = NOT_GIVEN,
+        end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
+        token_mode: NotGivenOr[bool] = NOT_GIVEN,  # Added token_mode
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
     ):
@@ -98,12 +107,14 @@ class STT(stt.STT):
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
+            buffer_size_seconds=buffer_size_seconds,
             word_boost=word_boost,
             encoding=encoding,
-            disable_partial_transcripts=disable_partial_transcripts,
-            enable_extra_session_information=enable_extra_session_information,
-            buffer_size_seconds=buffer_size_seconds,
-            end_utterance_silence_threshold=end_utterance_silence_threshold,
+            word_finalization_max_wait_time=word_finalization_max_wait_time,
+            end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
+            min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
+            max_turn_silence=max_turn_silence,
+            token_mode=token_mode,  # Ensure token_mode is passed
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -143,30 +154,34 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        disable_partial_transcripts: NotGivenOr[bool] = NOT_GIVEN,
         word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
-        end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
-        enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
+        word_finalization_max_wait_time: NotGivenOr[int] = NOT_GIVEN,
+        end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
     ):
-        if is_given(disable_partial_transcripts):
-            self._opts.disable_partial_transcripts = disable_partial_transcripts
         if is_given(word_boost):
             self._opts.word_boost = word_boost
-        if is_given(end_utterance_silence_threshold):
-            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
-        if is_given(enable_extra_session_information):
-            self._opts.enable_extra_session_information = enable_extra_session_information
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
+        if is_given(word_finalization_max_wait_time):
+            self._opts.word_finalization_max_wait_time = word_finalization_max_wait_time
+        if is_given(end_of_turn_confidence_threshold):
+            self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
+        if is_given(min_end_of_turn_silence_when_confident):
+            self._opts.min_end_of_turn_silence_when_confident = min_end_of_turn_silence_when_confident
+        if is_given(max_turn_silence):
+            self._opts.max_turn_silence = max_turn_silence
 
         for stream in self._streams:
             stream.update_options(
-                disable_partial_transcripts=disable_partial_transcripts,
                 word_boost=word_boost,
-                end_utterance_silence_threshold=end_utterance_silence_threshold,
-                enable_extra_session_information=enable_extra_session_information,
                 buffer_size_seconds=buffer_size_seconds,
+                word_finalization_max_wait_time=word_finalization_max_wait_time,
+                end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
+                min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
+                max_turn_silence=max_turn_silence,
             )
 
 
@@ -189,30 +204,35 @@ class SpeechStream(stt.SpeechStream):
         self._api_key = api_key
         self._session = http_session
         self._speech_duration: float = 0
+        self._utterance_mapping = {}
 
         # keep a list of final transcripts to combine them inside the END_OF_SPEECH event
         self._final_events: list[SpeechEvent] = []
+        self._last_seen_words: dict[str, str] = {}  # For token_mode
         self._reconnect_event = asyncio.Event()
 
     def update_options(
         self,
         *,
-        disable_partial_transcripts: NotGivenOr[bool] = NOT_GIVEN,
         word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
-        end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
-        enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
+        word_finalization_max_wait_time: NotGivenOr[int] = NOT_GIVEN,
+        end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
     ):
-        if is_given(disable_partial_transcripts):
-            self._opts.disable_partial_transcripts = disable_partial_transcripts
         if is_given(word_boost):
             self._opts.word_boost = word_boost
-        if is_given(end_utterance_silence_threshold):
-            self._opts.end_utterance_silence_threshold = end_utterance_silence_threshold
-        if is_given(enable_extra_session_information):
-            self._opts.enable_extra_session_information = enable_extra_session_information
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
+        if is_given(word_finalization_max_wait_time):
+            self._opts.word_finalization_max_wait_time = word_finalization_max_wait_time
+        if is_given(end_of_turn_confidence_threshold):
+            self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
+        if is_given(min_end_of_turn_silence_when_confident):
+            self._opts.min_end_of_turn_silence_when_confident = min_end_of_turn_silence_when_confident
+        if is_given(max_turn_silence):
+            self._opts.max_turn_silence = max_turn_silence
 
         self._reconnect_event.set()
 
@@ -226,15 +246,6 @@ class SpeechStream(stt.SpeechStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
-
-            if is_given(self._opts.end_utterance_silence_threshold):
-                await ws.send_str(
-                    json.dumps(
-                        {
-                            "end_utterance_silence_threshold": self._opts.end_utterance_silence_threshold  # noqa: E501
-                        }
-                    )
-                )
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
             audio_bstream = utils.audio.AudioByteStream(
@@ -301,12 +312,11 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                 ]
-                tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
+                        [asyncio.gather(*tasks), wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )  # type: ignore
                     for task in done:
@@ -319,28 +329,40 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    await tasks_group
             finally:
                 if ws is not None:
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        self._last_seen_words.clear()  # Reset for new connection
         live_config = {
             "sample_rate": self._opts.sample_rate,
             "word_boost": json.dumps(self._opts.word_boost)
             if is_given(self._opts.word_boost)
             else None,
             "encoding": self._opts.encoding if is_given(self._opts.encoding) else DEFAULT_ENCODING,
-            "disable_partial_transcripts": self._opts.disable_partial_transcripts,
-            "enable_extra_session_information": self._opts.enable_extra_session_information,
+            "word_finalization_max_wait_time": self._opts.word_finalization_max_wait_time
+            if is_given(self._opts.word_finalization_max_wait_time)
+            else DEFAULT_WORD_FINALIZATION_MAX_WAIT_TIME,
+            "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
+            if is_given(self._opts.end_of_turn_confidence_threshold)
+            else DEFAULT_END_OF_TURN_CONFIDENCE_THRESHOLD,
+            "min_end_of_turn_silence_when_confident": self._opts.min_end_of_turn_silence_when_confident
+            if is_given(self._opts.min_end_of_turn_silence_when_confident)
+            else DEFAULT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT,
+            "max_turn_silence": self._opts.max_turn_silence
+            if is_given(self._opts.max_turn_silence)
+            else DEFAULT_MAX_TURN_SILENCE,
+            "token_mode": self._opts.token_mode if is_given(self._opts.token_mode) else DEFAULT_TOKEN_MODE,  # Added token_mode
         }
 
         headers = {
             "Authorization": self._api_key,
             "Content-Type": "application/json",
+            "User-Agent": f"AssemblyAI/1.0 (integration=Livekit/{__version__})"
         }
 
-        ws_url = "wss://api.assemblyai.com/v2/realtime/ws"
+        ws_url = "wss://streaming.assemblyai.com/v3/ws"
         filtered_config = {k: v for k, v in live_config.items() if v is not None}
         url = f"{ws_url}?{urlencode(filtered_config).lower()}"
         ws = await self._session.ws_connect(url, headers=headers)
@@ -354,56 +376,106 @@ class SpeechStream(stt.SpeechStream):
             logger.error("Received error from AssemblyAI: %s", data["error"])
             return
 
-        message_type = data.get("message_type")
+        message_type = data.get("type")
 
-        if message_type == "SessionBegins":
-            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_ch.send_nowait(start_event)
+        if message_type == "Begin":
+            logger.debug("AssemblyAI session started: %s", str(data))
 
-        elif message_type == "PartialTranscript":
+        elif message_type == "Turn":
+            logger.debug("AssemblyAI turn received: %s", str(data))
             alts = live_transcription_to_speech_data(ENGLISH, data)
-            if len(alts) > 0 and alts[0].text:
-                interim_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=alts,
-                )
-                self._event_ch.send_nowait(interim_event)
 
-        elif message_type == "FinalTranscript":
-            alts = live_transcription_to_speech_data(ENGLISH, data)
-            if len(alts) > 0 and alts[0].text:
-                final_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=alts,
-                )
-                self._final_events.append(final_event)
-                self._event_ch.send_nowait(final_event)
+            if self._opts.token_mode:
+                # Get all words from the message
+                all_words = data.get("words", [])
+                end_of_turn = data.get("end_of_turn")
+            
+                if end_of_turn == True: 
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)) 
+                
+                for i, word in enumerate(all_words):
+                    word_id = f"{data.get('turn_order', 0)}_{i}"  # Create a unique ID for this word position
+                    word_text = word.get("text", "")
+                
+                # Check if this is a new or updated word
+                if word_id in self._last_seen_words:
+                    # This position has been seen before - check if the word has changed/expanded
+                    last_text = self._last_seen_words[word_id]
+                    
+                    if word_text != last_text and word_text.startswith(last_text):
+                        # The word has expanded (e.g., "medi" -> "medicine")
+                        # Emit just the new part as a final transcript
+                        new_part = word_text[len(last_text):]
+                        
+                        # Only emit if there's actually new content
+                        if new_part:
+                            delta_speech_data = stt.SpeechData(
+                                language="en-US",  # TODO: Revert to self._opts.language once STTOptions issue is resolved
+                                text=new_part,
+                                start_time=word.get("start", 0) / 1000.0,
+                                end_time=word.get("end", 0) / 1000.0,
+                                confidence=word.get("confidence", 0.0)
+                            )
+                            final_event = stt.SpeechEvent(
+                                type=stt.SpeechEventType.FINAL_TRANSCRIPT, 
+                                alternatives=[delta_speech_data]
+                            )
+                            self._event_ch.send_nowait(final_event)                    
+                    # Note: We don't handle complete word changes/corrections since AssemblyAI
+                    # only emits immutable transcripts where words only grow and don't get replaced
+                
+                else:
+                    # This is a completely new word - emit it as a final transcript
+                    delta_speech_data = stt.SpeechData(
+                        language="en-US",  
+                        text=word_text,
+                        start_time=word.get("start", 0) / 1000.0,
+                        end_time=word.get("end", 0) / 1000.0,
+                        confidence=word.get("confidence", 0.0)
+                    )
+                    final_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT, 
+                        alternatives=[delta_speech_data]
+                    )
+                    self._event_ch.send_nowait(final_event)
+                
+                # Update our tracking dictionary with this word's current text
+                self._last_seen_words[word_id] = word_text
+                
+            else:
+                end_of_turn = data.get("end_of_turn")
+            
+                if end_of_turn == True:  
+                    final_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        alternatives=alts,
+                    )
+                    self._final_events.append(final_event)
+                    self._event_ch.send_nowait(final_event)
 
-            # log metrics
-            if self._speech_duration > 0:
-                usage_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    alternatives=[],
-                    recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
-                )
-                self._event_ch.send_nowait(usage_event)
-                self._speech_duration = 0
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                    return
+                
+                if self._speech_duration > 0:
+                    usage_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.RECOGNITION_USAGE,
+                        alternatives=[],
+                        recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
+                    )
+                    self._event_ch.send_nowait(usage_event)
+                    self._speech_duration = 0
 
-        elif message_type == "SessionTerminated":
+        elif message_type == "Termination":
             if closing_ws:
                 pass
             else:
                 raise Exception("AssemblyAI connection closed unexpectedly")
-
-        elif message_type == "SessionInformation":
-            logger.debug("AssemblyAI Session Information: %s", str(data))
 
         else:
             logger.warning(
                 "Received unexpected message type from AssemblyAI: %s",
                 message_type or "No message_type field",
             )
-
 
 def live_transcription_to_speech_data(
     language: str,
@@ -414,7 +486,7 @@ def live_transcription_to_speech_data(
             language=language,
             start_time=data["words"][0]["start"] / 1000 if data["words"] else 0,
             end_time=data["words"][-1]["end"] / 1000 if data["words"] else 0,
-            confidence=data["confidence"],
-            text=data["text"],
+            confidence=sum(word["confidence"] for word in data["words"]) / len(data["words"]),
+            text=data["transcript"],
         ),
     ]
