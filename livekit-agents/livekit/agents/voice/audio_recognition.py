@@ -42,6 +42,7 @@ class RecognitionHooks(Protocol):
     def on_end_of_speech(self, ev: vad.VADEvent) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
+    def on_end_of_speech(self, ev: stt.SpeechEvent) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
@@ -261,6 +262,7 @@ class AudioRecognition:
                 if self._vad_base_turn_detection or self._user_turn_committed:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                     self._run_eou_detection(chat_ctx)
+                    logger.warning("Final transcript run eou detection")
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev)
@@ -272,11 +274,13 @@ class AudioRecognition:
                 # start response after vad fires END_OF_SPEECH to avoid vad interruption
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
+                logger.warning("STT END_OF_SPEECH run eou detection")
 
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             self._hooks.on_start_of_speech(ev)
             self._speaking = True
+            logger.warning("VAD START_OF_SPEECH")
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -294,6 +298,7 @@ class AudioRecognition:
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
             ):
+                logger.warning("VAD END_OF_SPEECH run eou detection")
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
