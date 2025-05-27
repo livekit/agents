@@ -273,7 +273,6 @@ class AudioRecognition:
                 # start response after vad fires END_OF_SPEECH to avoid vad interruption
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
-                logger.warning("STT END_OF_SPEECH run eou detection")
 
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
