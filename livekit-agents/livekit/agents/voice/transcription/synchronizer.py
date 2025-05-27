@@ -374,7 +374,7 @@ class TranscriptSynchronizer:
         speed: float = 1.0,
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
         split_words: Callable[[str], list[tuple[str, int, int]]] = functools.partial(
-            tokenize.basic.split_words, ignore_punctuation=False
+            tokenize.basic.split_words, ignore_punctuation=False, split_character=True
         ),
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:

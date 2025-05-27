@@ -13,7 +13,6 @@ from google import genai
 from google.genai.live import AsyncSession
 from google.genai.types import (
     AudioTranscriptionConfig,
-    AutomaticActivityDetection,
     Blob,
     Content,
     FunctionDeclaration,
@@ -86,6 +85,9 @@ class _RealtimeOptions:
     input_audio_transcription: AudioTranscriptionConfig | None
     output_audio_transcription: AudioTranscriptionConfig | None
     image_encode_options: NotGivenOr[images.EncodeOptions]
+    enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
+    proactivity: NotGivenOr[bool] = NOT_GIVEN
+    realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN
 
 
 @dataclass
@@ -131,6 +133,9 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         image_encode_options: NotGivenOr[images.EncodeOptions] = NOT_GIVEN,
+        enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN,
+        proactivity: NotGivenOr[bool] = NOT_GIVEN,
+        realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -161,6 +166,9 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
             output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
             image_encode_options (images.EncodeOptions, optional): The configuration for image encoding. Defaults to DEFAULT_ENCODE_OPTIONS.
+            enable_affective_dialog (bool, optional): Whether to enable affective dialog. Defaults to False.
+            proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
+            realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -232,6 +240,9 @@ class RealtimeModel(llm.RealtimeModel):
             output_audio_transcription=output_audio_transcription,
             language=language,
             image_encode_options=image_encode_options,
+            enable_affective_dialog=enable_affective_dialog,
+            proactivity=proactivity,
+            realtime_input_config=realtime_input_config,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -586,7 +597,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        return LiveConnectConfig(
+        conf = LiveConnectConfig(
             response_modalities=self._opts.response_modalities
             if is_given(self._opts.response_modalities)
             else [Modality.AUDIO],
@@ -618,10 +629,17 @@ class RealtimeSession(llm.RealtimeSession):
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
-            realtime_input_config=RealtimeInputConfig(
-                automatic_activity_detection=AutomaticActivityDetection(),
-            ),
+            realtime_input_config=self._opts.realtime_input_config,
         )
+
+        if is_given(self._opts.proactivity):
+            conf.proactivity = {"proactive_audio": self._opts.proactivity}
+        if is_given(self._opts.enable_affective_dialog):
+            conf.enable_affective_dialog = self._opts.enable_affective_dialog
+        if is_given(self._opts.realtime_input_config):
+            conf.realtime_input_config = self._opts.realtime_input_config
+
+        return conf
 
     def _start_new_generation(self):
         if self._current_generation and not self._current_generation._done:

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import aiohttp
 
@@ -147,22 +147,9 @@ class TTS(tts.TTS):
         return self._session
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        segment_id: NotGivenOr[str] = NOT_GIVEN,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-            opts=self._opts,
-            session=self._ensure_session(),
-            segment_id=segment_id if is_given(segment_id) else None,
-            api_key=self._api_key,
-            total_timout=self._total_timeout,
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def update_options(
         self,
@@ -179,34 +166,21 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
-    def __init__(
-        self,
-        tts: TTS,
-        input_text: str,
-        opts: _TTSOptions,
-        api_key: str,
-        session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions,
-        segment_id: NotGivenOr[str] = NOT_GIVEN,
-        total_timout: int = MISTV2_MODEL_TIMEOUT,
-    ) -> None:
+    def __init__(self, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts = opts
-        self._session = session
-        self._segment_id = segment_id if is_given(segment_id) else utils.shortuuid()
-        self._api_key = api_key
-        self._total_timeout = total_timout
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-        payload = {
+    async def _run(self, output_emitter: tts.AudioEmitter):
+        payload: dict = {
             "speaker": self._opts.speaker,
             "text": self._input_text,
             "modelId": self._opts.model,
         }
-        format = "mp3"
+        format = "audio/mp3"
         if self._opts.model == "arcana":
             arcana_opts = self._opts.arcana_options
+            assert arcana_opts is not None
             if is_given(arcana_opts.repetition_penalty):
                 payload["repetition_penalty"] = arcana_opts.repetition_penalty
             if is_given(arcana_opts.temperature):
@@ -215,9 +189,10 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["top_p"] = arcana_opts.top_p
             if is_given(arcana_opts.max_tokens):
                 payload["max_tokens"] = arcana_opts.max_tokens
-            format = "wav"
+            format = "audio/wav"
         elif self._opts.model == "mistv2":
             mistv2_opts = self._opts.mistv2_options
+            assert mistv2_opts is not None
             if is_given(mistv2_opts.lang):
                 payload["lang"] = mistv2_opts.lang
             if is_given(mistv2_opts.sample_rate):
@@ -231,63 +206,39 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(mistv2_opts.phonemize_between_brackets):
                 payload["phonemizeBetweenBrackets"] = mistv2_opts.phonemize_between_brackets
 
-        headers = {
-            "accept": f"audio/{format}",
-            "Authorization": f"Bearer {self._api_key}",
-            "content-type": "application/json",
-        }
-        decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=self._tts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            format=format,
-        )
-
-        decode_task: asyncio.Task | None = None
         try:
-            async with self._session.post(
+            async with self._tts._ensure_session().post(
                 self._tts._base_url,
-                headers=headers,
+                headers={
+                    "accept": format,
+                    "Authorization": f"Bearer {self._tts._api_key}",
+                    "content-type": "application/json",
+                },
                 json=payload,
-                timeout=aiohttp.ClientTimeout(
-                    connect=self._conn_options.timeout,
-                    total=self._total_timeout,
-                ),
-            ) as response:
-                if not response.content_type.startswith("audio"):
-                    content = await response.text()
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+            ) as resp:
+                resp.raise_for_status()
+
+                if not resp.content_type.startswith("audio"):
+                    content = await resp.text()
                     logger.error("Rime returned non-audio data: %s", content)
                     return
 
-                async def _decode_loop():
-                    try:
-                        async for bytes_data, _ in response.content.iter_chunks():
-                            decoder.push(bytes_data)
-                    finally:
-                        decoder.end_input()
-
-                decode_task = asyncio.create_task(_decode_loop())
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
-                    segment_id=self._segment_id,
+                output_emitter.initialize(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._tts.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                    mime_type=format,
                 )
 
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
 
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
-            ) from e
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            if decode_task:
-                await utils.aio.gracefully_cancel(decode_task)
-            await decoder.aclose()

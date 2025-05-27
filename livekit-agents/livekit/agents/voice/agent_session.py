@@ -45,6 +45,7 @@ class VoiceOptions:
     min_endpointing_delay: float
     max_endpointing_delay: float
     max_tool_steps: int
+    user_away_timeout: float | None
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -116,6 +117,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_endpointing_delay: float = 6.0,
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
+        user_away_timeout: float | None = 15.0,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -170,6 +172,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
                 when silent by default.
+            user_away_timeout (float, optional): If set, set the user state as
+                "away" after this amount of time after user and agent are silent.
+                Default ``15.0`` s, set to ``None`` to disable.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
         """
@@ -191,6 +196,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             min_endpointing_delay=min_endpointing_delay,
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
+            user_away_timeout=user_away_timeout,
         )
         self._started = False
         self._turn_detection = turn_detection or None
@@ -222,6 +228,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
+        self._user_away_timer: asyncio.TimerHandle | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -606,9 +613,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._activity.push_video(frame)
 
+    def _set_user_away_timer(self) -> None:
+        self._cancel_user_away_timer()
+        if self._opts.user_away_timeout is None:
+            return
+
+        self._user_away_timer = self._loop.call_later(
+            self._opts.user_away_timeout, self._update_user_state, "away"
+        )
+
+    def _cancel_user_away_timer(self) -> None:
+        if self._user_away_timer is not None:
+            self._user_away_timer.cancel()
+            self._user_away_timer = None
+
     def _update_agent_state(self, state: AgentState) -> None:
         if self._agent_state == state:
             return
+
+        if state == "listening" and self._user_state == "listening":
+            self._set_user_away_timer()
+        else:
+            self._cancel_user_away_timer()
 
         old_state = self._agent_state
         self._agent_state = state
@@ -619,6 +645,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_user_state(self, state: UserState) -> None:
         if self._user_state == state:
             return
+
+        if state == "listening" and self._agent_state == "listening":
+            self._set_user_away_timer()
+        else:
+            self._cancel_user_away_timer()
 
         old_state = self._user_state
         self._user_state = state
