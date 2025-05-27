@@ -267,12 +267,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         streaming_config = texttospeech.StreamingSynthesizeConfig(
             voice=self._opts.voice,
             streaming_audio_config=texttospeech.StreamingAudioConfig(
-                audio_encoding=encoding,
-                sample_rate_hertz=self._opts.sample_rate,
+                audio_encoding=encoding, sample_rate_hertz=self._opts.sample_rate
             ),
         )
 
-        @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
             input_stream = None
             async for input in self._input_ch:
@@ -288,7 +286,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._segments_ch.close()
 
-        @utils.log_exceptions(logger=logger)
         async def _run_segments():
             async for input_stream in self._segments_ch:
                 await self._run_stream(input_stream, output_emitter, streaming_config)
@@ -297,7 +294,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             asyncio.create_task(_tokenize_input()),
             asyncio.create_task(_run_segments()),
         ]
-        await asyncio.gather(*tasks)
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
 
     async def _run_stream(
         self,
