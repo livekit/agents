@@ -295,7 +295,6 @@ class AudioRecognition:
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
             ):
-                logger.warning("VAD END_OF_SPEECH run eou detection")
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
