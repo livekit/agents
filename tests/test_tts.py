@@ -468,7 +468,8 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 
             if isinstance(tts_v, tts.StreamAdapter):
                 # We can't guarantee bigger chunks for the StreamAdapter
-                # The reason is that we flush after every request, and one segment can have multiple requests.
+                # The reason is that we flush after every request, and one segment can have multiple
+                # requests.
                 # So we may have smaller frames between requests that aren't final
                 assert all(0.00 < e.frame.duration < 0.25 for e in non_final), (
                     "expected non-final frames to be 0-250 ms"
@@ -511,7 +512,8 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
             timeout=30,
         )
 
-        # the metrics could not be emitted if the _mark_started() method was never called in streaming mode
+        # the metrics could not be emitted if the _mark_started() method was never
+        # called in streaming mode
 
         if isinstance(tts_v, tts.StreamAdapter):
             assert metrics_collected_events.count >= 1, (
