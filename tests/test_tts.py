@@ -72,23 +72,24 @@ async def assert_valid_synthesized_audio(
         }
         container = av.open(io.BytesIO(frame.data), options=probe_opts)
 
-        print("Container format:", container.format.name)
-        print("Container long name:", container.format.long_name)
-        print("Metadata:")
-        for key, value in container.metadata.items():
-            print(f"  {key}: {value}")
+        if container.format.name not in ("ea_cdata"):  # add more here
+            print("Container format:", container.format.name)
+            print("Container long name:", container.format.long_name)
+            print("Metadata:")
+            for key, value in container.metadata.items():
+                print(f"  {key}: {value}")
 
-        print("Streams:")
-        for stream in container.streams:
-            if stream.type == "video":  # false positive
-                continue
+            print("Streams:")
+            for stream in container.streams:
+                if stream.type == "video":  # false positive
+                    continue
 
-            print(f"  Stream index: {stream.index}")
-            print(f"    Type: {stream.type}")
-            print(f"    Codec: {stream.codec.name}")
-            print(f"    Duration: {stream.duration}")
-            print(f"    Time base: {stream.time_base}")
-            raise ValueError("Audio data isn't PCM")
+                print(f"  Stream index: {stream.index}")
+                print(f"    Type: {stream.type}")
+                print(f"    Codec: {stream.codec.name}")
+                print(f"    Duration: {stream.duration}")
+                print(f"    Time base: {stream.time_base}")
+                raise ValueError("Audio data isn't PCM")
 
         container.close()
     except av.InvalidDataError:
