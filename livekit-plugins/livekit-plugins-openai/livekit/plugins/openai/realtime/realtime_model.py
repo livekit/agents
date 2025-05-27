@@ -492,7 +492,7 @@ class RealtimeSession(
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._instructions: str | None = None
-        self._main_atask = asyncio.create_task(self._run(), name="RealtimeSession._main_task")
+        self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
         self._initial_session_update()
 
         self._response_created_futures: dict[str, _CreateResponseHandle] = {}
@@ -519,7 +519,7 @@ class RealtimeSession(
             self._msg_ch.send_nowait(event)
 
     @utils.log_exceptions(logger=logger)
-    async def _run(self) -> None:
+    async def _main_task(self) -> None:
         reconnecting = False
         while not self._msg_ch.closed:
             ws_conn = await self._create_ws_conn()
