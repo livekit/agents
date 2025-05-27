@@ -262,7 +262,6 @@ class AudioRecognition:
                 if self._vad_base_turn_detection or self._user_turn_committed:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                     self._run_eou_detection(chat_ctx)
-                    logger.warning("Final transcript run eou detection")
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev)
