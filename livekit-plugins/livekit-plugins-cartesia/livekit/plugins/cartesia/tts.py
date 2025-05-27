@@ -24,6 +24,7 @@ from typing import Any
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -51,10 +52,56 @@ from .models import (
 
 API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
-API_VERSION = "2024-06-10"
+API_VERSION = "2025-04-16"
 
 NUM_CHANNELS = 1
 BUFFERED_WORDS_COUNT = 10
+
+
+@dataclass
+class WordTimestamps:
+    """Word-level timestamps from Cartesia TTS"""
+
+    words: list[str]
+    """List of words"""
+    start: list[float]
+    """Start times for each word in seconds"""
+    end: list[float]
+    """End times for each word in seconds"""
+
+
+@dataclass
+class PhonemeTimestamps:
+    """Phoneme-level timestamps from Cartesia TTS"""
+
+    phonemes: list[str]
+    """List of phoneme strings"""
+    start: list[float]
+    """Start times for each phoneme in seconds"""
+    end: list[float]
+    """End times for each phoneme in seconds"""
+
+
+@dataclass
+class TimestampEvent:
+    """A timestamp event that occurred at a specific time"""
+
+    timestamp: float
+    """When this event occurs in the audio stream (seconds)"""
+    word_timestamps: WordTimestamps | None = None
+    """Word timestamps if available"""
+    phoneme_timestamps: PhonemeTimestamps | None = None
+    """Phoneme timestamps if available"""
+
+
+@dataclass
+class CartesiaSynthesizedAudio(tts.SynthesizedAudio):
+    """Extended SynthesizedAudio with timestamp support"""
+
+    word_timestamps: WordTimestamps | None = None
+    """Word-level timestamps that occur during this frame"""
+    phoneme_timestamps: PhonemeTimestamps | None = None
+    """Phoneme-level timestamps that occur during this frame"""
 
 
 @dataclass
@@ -68,6 +115,8 @@ class _TTSOptions:
     api_key: str
     language: str
     base_url: str
+    add_timestamps: bool
+    add_phoneme_timestamps: bool
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -90,6 +139,8 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
+        add_timestamps: bool = False,
+        add_phoneme_timestamps: bool = False,
     ) -> None:
         """
         Create a new instance of Cartesia TTS.
@@ -107,6 +158,8 @@ class TTS(tts.TTS):
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
+            add_timestamps (bool, optional): Whether to request word-level timestamps. Defaults to False.
+            add_phoneme_timestamps (bool, optional): Whether to request phoneme-level timestamps. Defaults to False.
         """  # noqa: E501
 
         super().__init__(
@@ -128,6 +181,8 @@ class TTS(tts.TTS):
             emotion=emotion,
             api_key=cartesia_api_key,
             base_url=base_url,
+            add_timestamps=add_timestamps,
+            add_phoneme_timestamps=add_phoneme_timestamps,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -165,12 +220,15 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str | list[float]] = NOT_GIVEN,
         speed: NotGivenOr[TTSVoiceSpeed | float] = NOT_GIVEN,
         emotion: NotGivenOr[list[TTSVoiceEmotion | str]] = NOT_GIVEN,
+        add_timestamps: NotGivenOr[bool] = NOT_GIVEN,
+        add_phoneme_timestamps: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
 
         This method allows updating the TTS settings, including model type, language, voice, speed,
-        and emotion. If any parameter is not provided, the existing value will be retained.
+        emotion, and timestamps.
+        If any parameter is not provided, the existing value will be retained.
 
         Args:
             model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-2".
@@ -178,6 +236,8 @@ class TTS(tts.TTS):
             voice (str | list[float], optional): The voice ID or embedding array.
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
+            add_timestamps (bool, optional): Whether to request word-level timestamps.
+            add_phoneme_timestamps (bool, optional): Whether to request phoneme-level timestamps.
         """
         if is_given(model):
             self._opts.model = model
@@ -189,6 +249,10 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if is_given(emotion):
             self._opts.emotion = emotion
+        if is_given(add_timestamps):
+            self._opts.add_timestamps = add_timestamps
+        if is_given(add_phoneme_timestamps):
+            self._opts.add_phoneme_timestamps = add_phoneme_timestamps
 
     def synthesize(
         self,
@@ -261,9 +325,10 @@ class ChunkedStream(tts.ChunkedStream):
                 ),
             ) as resp:
                 resp.raise_for_status()
-                emitter = tts.SynthesizedAudioEmitter(
+                emitter = CartesiaSynthesizedAudioEmitter(
                     event_ch=self._event_ch,
                     request_id=request_id,
+                    sample_rate=self._opts.sample_rate,
                 )
                 async for data, _ in resp.content.iter_chunks():
                     for frame in bstream.write(data):
@@ -331,9 +396,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
             )
-            emitter = tts.SynthesizedAudioEmitter(
+            emitter = CartesiaSynthesizedAudioEmitter(
                 event_ch=self._event_ch,
                 request_id=request_id,
+                sample_rate=self._opts.sample_rate,
             )
 
             while True:
@@ -360,6 +426,24 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["data"])
                     for frame in audio_bstream.write(b64data):
                         emitter.push(frame)
+                elif data.get("word_timestamps") and self._opts.add_timestamps:
+                    word_timestamps: dict[str, Any] = data["word_timestamps"]
+                    if word_timestamps and isinstance(emitter, CartesiaSynthesizedAudioEmitter):
+                        word_timestamps = WordTimestamps(
+                            words=word_timestamps["words"],
+                            start=word_timestamps["start"],
+                            end=word_timestamps["end"],
+                        )
+                        emitter.add_word_timestamps(word_timestamps)
+                elif data.get("phoneme_timestamps") and self._opts.add_phoneme_timestamps:
+                    phoneme_timestamps: dict[str, Any] = data["phoneme_timestamps"]
+                    if phoneme_timestamps and isinstance(emitter, CartesiaSynthesizedAudioEmitter):
+                        phoneme_timestamps = PhonemeTimestamps(
+                            phonemes=phoneme_timestamps["phonemes"],
+                            start=phoneme_timestamps["start"],
+                            end=phoneme_timestamps["end"],
+                        )
+                        emitter.add_phoneme_timestamps(phoneme_timestamps)
                 elif data.get("done"):
                     for frame in audio_bstream.flush():
                         emitter.push(frame)
@@ -381,6 +465,171 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
+
+
+class CartesiaSynthesizedAudioEmitter:
+    """Utility for buffering and emitting audio frames with timestamp tracking.
+
+    This is a Cartesia-specific version of SynthesizedAudioEmitter that properly
+    handles timing-based association of word and phoneme timestamps with audio frames.
+    """
+
+    def __init__(
+        self,
+        *,
+        event_ch: utils.aio.Chan[CartesiaSynthesizedAudio],
+        request_id: str,
+        segment_id: str = "",
+        sample_rate: int,
+    ) -> None:
+        self._event_ch = event_ch
+        self._frame: rtc.AudioFrame | None = None
+        self._request_id = request_id
+        self._segment_id = segment_id
+        self._sample_rate = sample_rate
+        self._current_time = 0.0
+        self._timestamp_events: list[TimestampEvent] = []
+        self._has_emitted_text = False
+
+    def push(self, frame: rtc.AudioFrame | None):
+        """Emits any buffered frame and stores the new frame for later emission.
+
+        The buffered frame is emitted as not final.
+        """
+        self._emit_frame(is_final=False)
+        self._frame = frame
+
+    def add_word_timestamps(self, word_timestamps: WordTimestamps):
+        """Add word timestamp events."""
+        for i, word in enumerate(word_timestamps.words):
+            if i < len(word_timestamps.start):
+                # Create a timestamp event for each word's start time
+                event = TimestampEvent(
+                    timestamp=word_timestamps.start[i],
+                    word_timestamps=WordTimestamps(
+                        words=[word],
+                        start=[word_timestamps.start[i]],
+                        end=(
+                            [word_timestamps.end[i]]
+                            if i < len(word_timestamps.end)
+                            else [word_timestamps.start[i]]
+                        ),
+                    ),
+                )
+                self._timestamp_events.append(event)
+
+        # Sort events by timestamp
+        self._timestamp_events.sort(key=lambda x: x.timestamp)
+
+    def add_phoneme_timestamps(self, phoneme_timestamps: PhonemeTimestamps):
+        """Add phoneme timestamp events."""
+        for i, phoneme in enumerate(phoneme_timestamps.phonemes):
+            if i < len(phoneme_timestamps.start):
+                # Create a timestamp event for each phoneme's start time
+                event = TimestampEvent(
+                    timestamp=phoneme_timestamps.start[i],
+                    phoneme_timestamps=PhonemeTimestamps(
+                        phonemes=[phoneme],
+                        start=[phoneme_timestamps.start[i]],
+                        end=(
+                            [phoneme_timestamps.end[i]]
+                            if i < len(phoneme_timestamps.end)
+                            else [phoneme_timestamps.start[i]]
+                        ),
+                    ),
+                )
+                self._timestamp_events.append(event)
+
+        # Sort events by timestamp
+        self._timestamp_events.sort(key=lambda x: x.timestamp)
+
+    def _get_frame_timestamps(
+        self, frame_duration: float
+    ) -> tuple[WordTimestamps | None, PhonemeTimestamps | None]:
+        """Get timestamps that should be emitted up to the current playback position."""
+        playback_end = self._current_time + frame_duration
+        frame_word_events = []
+        frame_phoneme_events = []
+        remaining_events = []
+
+        # Include all events that start before or at the current playback position
+        for event in self._timestamp_events:
+            if event.timestamp <= playback_end:
+                if event.word_timestamps:
+                    frame_word_events.append(event.word_timestamps)
+                if event.phoneme_timestamps:
+                    frame_phoneme_events.append(event.phoneme_timestamps)
+            else:
+                remaining_events.append(event)
+
+        self._timestamp_events = remaining_events
+
+        word_timestamps = None
+        if frame_word_events:
+            all_words = []
+            all_starts = []
+            all_ends = []
+            for word_ts in frame_word_events:
+                all_words.extend(word_ts.words)
+                all_starts.extend(word_ts.start)
+                all_ends.extend(word_ts.end)
+            word_timestamps = WordTimestamps(words=all_words, start=all_starts, end=all_ends)
+
+        phoneme_timestamps = None
+        if frame_phoneme_events:
+            all_phonemes = []
+            all_starts = []
+            all_ends = []
+            for phoneme_ts in frame_phoneme_events:
+                all_phonemes.extend(phoneme_ts.phonemes)
+                all_starts.extend(phoneme_ts.start)
+                all_ends.extend(phoneme_ts.end)
+            phoneme_timestamps = PhonemeTimestamps(
+                phonemes=all_phonemes, start=all_starts, end=all_ends
+            )
+
+        return word_timestamps, phoneme_timestamps
+
+    def _emit_frame(self, is_final: bool = False):
+        """Sends the buffered frame to the event channel if one exists."""
+        if self._frame is None:
+            return
+
+        frame_duration = self._frame.duration
+        word_timestamps, phoneme_timestamps = self._get_frame_timestamps(frame_duration)
+
+        # Generate delta_text from word timestamps if available
+        delta_text = ""
+        if word_timestamps and word_timestamps.words:
+            joined_words = " ".join(word_timestamps.words)
+            # Add leading space if this is not the first text emission
+            if self._has_emitted_text and joined_words:
+                delta_text = " " + joined_words
+            else:
+                delta_text = joined_words
+
+            # Mark that we've emitted text
+            if joined_words:
+                self._has_emitted_text = True
+
+        self._event_ch.send_nowait(
+            CartesiaSynthesizedAudio(
+                frame=self._frame,
+                request_id=self._request_id,
+                segment_id=self._segment_id,
+                is_final=is_final,
+                delta_text=delta_text,
+                word_timestamps=word_timestamps,
+                phoneme_timestamps=phoneme_timestamps,
+            )
+        )
+
+        self._current_time += frame_duration
+        self._frame = None
+
+    def flush(self):
+        """Emits any buffered frame as final."""
+        self._emit_frame(is_final=True)
 
 
 def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
@@ -411,4 +660,6 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
             "sample_rate": opts.sample_rate,
         },
         "language": opts.language,
+        "add_timestamps": opts.add_timestamps,
+        "add_phoneme_timestamps": opts.add_phoneme_timestamps,
     }
