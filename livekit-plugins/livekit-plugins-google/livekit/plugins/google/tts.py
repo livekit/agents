@@ -229,7 +229,7 @@ class ChunkedStream(tts.ChunkedStream):
                 request_id=utils.shortuuid(),
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
-                mime_type="audio/pcm",
+                mime_type=_encoding_to_mimetype(self._opts.encoding),
             )
 
             output_emitter.push(response.audio_content)
@@ -252,7 +252,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             request_id=utils.shortuuid(),
             sample_rate=self._opts.sample_rate,
             num_channels=1,
-            mime_type="audio/pcm",
+            mime_type=_encoding_to_mimetype(self._opts.encoding),
         )
 
         @utils.log_exceptions(logger=logger)
