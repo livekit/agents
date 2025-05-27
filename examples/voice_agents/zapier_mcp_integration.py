@@ -2,28 +2,27 @@ import logging
 import os
 
 from dotenv import load_dotenv
+
 from livekit.agents import (
     Agent,
     AgentSession,
     AutoSubscribe,
     JobContext,
     JobProcess,
+    RoomInputOptions,
     WorkerOptions,
     cli,
-    metrics,
     mcp,
-    RoomInputOptions,
+    metrics,
 )
 from livekit.plugins import (
     cartesia,
-    openai,
     deepgram,
+    groq,
     noise_cancellation,
     silero,
-    groq,
 )
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
 
 load_dotenv(dotenv_path=".env.local")
 logger = logging.getLogger("voice-agent")
@@ -32,10 +31,10 @@ logger = logging.getLogger("voice-agent")
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are a voice assistant created by LiveKit with Zapier integration via MCP. Your interface with users will be voice. "
-            "You can help users with Zapier automations and workflows through the MCP server connection. "
-            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation. "
-            "You were created as a demo to showcase the capabilities of LiveKit's agents framework with MCP integration.",
+            instructions="You are a voice assistant created by LiveKit with Zapier integration via MCP. Your interface with users will be voice. "  # noqa: E501
+            "You can help users with Zapier automations and workflows through the MCP server connection. "  # noqa: E501
+            "You should use short and concise responses, and avoiding usage of unpronouncable punctuation. "  # noqa: E501
+            "You were created as a demo to showcase the capabilities of LiveKit's agents framework with MCP integration.",  # noqa: E501
             stt=deepgram.STT(),
             llm=groq.LLM(),
             tts=cartesia.TTS(),
@@ -79,10 +78,10 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        # minimum delay for endpointing, used when turn detector believes the user is done with their turn
+        # minimum delay for endpointing, used when turn detector believes the user is done with their turn  # noqa: E501
         min_endpointing_delay=0.5,
-        # maximum delay for endpointing, used when turn detector does not believe the user is done with their turn
-        #this should be increased more if latency is an issue
+        # maximum delay for endpointing, used when turn detector does not believe the user is done with their turn  # noqa: E501
+        # this should be increased more if latency is an issue
         max_endpointing_delay=5.0,
         mcp_servers=mcp_servers,
     )

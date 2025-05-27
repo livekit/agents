@@ -85,7 +85,7 @@ class TTS(tts.TTS):
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
             tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
-        """
+        """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
@@ -239,7 +239,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         if encoding not in (texttospeech.AudioEncoding.OGG_OPUS, texttospeech.AudioEncoding.PCM):
             enc_name = texttospeech.AudioEncoding._member_names_[encoding]
             logger.warning(
-                f"encoding {enc_name} isn't supported by the streaming_synthesize, fallbacking to PCM"
+                f"encoding {enc_name} isn't supported by the streaming_synthesize, "
+                "fallbacking to PCM"
             )
             encoding = texttospeech.AudioEncoding.PCM
 
@@ -319,7 +320,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_segment()
 
         except DeadlineExceeded:
-            raise APITimeoutError()
+            raise APITimeoutError() from None
         except GoogleAPICallError as e:
             raise APIStatusError(e.message, status_code=e.code or -1) from e
         finally:

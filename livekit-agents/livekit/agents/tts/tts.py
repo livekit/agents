@@ -17,7 +17,7 @@ from livekit import rtc
 from .._exceptions import APIError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import aio, audio, codecs, log_exceptions
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))

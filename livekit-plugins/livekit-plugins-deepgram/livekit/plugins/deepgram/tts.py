@@ -5,7 +5,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from urllib.parse import urlencode
 
 import aiohttp
 
