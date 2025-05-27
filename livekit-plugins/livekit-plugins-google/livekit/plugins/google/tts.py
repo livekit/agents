@@ -319,9 +319,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             except Exception:
                 logger.exception("an error occurred while streaming input to google TTS")
 
+        input_gen = input_generator()
         try:
             stream = await self._tts._ensure_client().streaming_synthesize(
-                input_generator(), timeout=self._conn_options.timeout
+                input_gen, timeout=self._conn_options.timeout
             )
             async for resp in stream:
                 output_emitter.push(resp.audio_content)
@@ -330,6 +331,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APITimeoutError()
         except GoogleAPICallError as e:
             raise APIStatusError(e.message, status_code=e.code or -1) from e
+        finally:
+            await input_gen.aclose()
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:
