@@ -453,19 +453,21 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        if (
+        drop_audio = (
             self._current_speech
             and not self._current_speech.allow_interruptions
             and self._session.options.discard_audio_if_uninterruptible
-        ):
-            # discard the audio if the current speech is not interruptable
-            return
+        )
 
-        if self._rt_session is not None:
-            self._rt_session.push_audio(frame)
-
+        # always feed VAD so we continue observing user_state
         if self._audio_recognition is not None:
-            self._audio_recognition.push_audio(frame)
+            self._audio_recognition.push_vad_audio(frame)
+
+        if not drop_audio:
+            if self._rt_session is not None:
+                self._rt_session.push_audio(frame)
+            if self._audio_recognition is not None:
+                self._audio_recognition.push_stt_audio(frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
