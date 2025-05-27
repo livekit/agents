@@ -25,6 +25,7 @@ from .events import (
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
     UserState,
@@ -378,7 +379,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 try:
                     job_ctx = get_job_context()
                     job_ctx.add_tracing_callback(self._trace_chat_ctx)
-                    job_ctx.add_shutdown_callback(self.aclose)
+                    job_ctx.add_shutdown_callback(
+                        lambda: self._aclose_impl(reason=CloseReason.WORKER_SHUTDOWN)
+                    )
                     self._job_context_cb_registered = True
                 except RuntimeError:
                     pass  # ignore
@@ -419,6 +422,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _aclose_impl(
         self,
         *,
+        reason: CloseReason,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
     ) -> None:
         async with self._lock:
@@ -456,10 +460,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = None
 
             self._started = False
-            self.emit("close", CloseEvent(error=error))
+            self.emit("close", CloseEvent(error=error, reason=reason))
 
     async def aclose(self) -> None:
-        await self._aclose_impl()
+        await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         # don't log VAD metrics as they are too verbose
@@ -599,7 +603,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
-        self._closing_task = asyncio.create_task(self._aclose_impl(error=error))
+        self._closing_task = asyncio.create_task(
+            self._aclose_impl(error=error, reason=CloseReason.ERROR)
+        )
         self._closing_task.add_done_callback(on_close_done)
 
     @utils.log_exceptions(logger=logger)

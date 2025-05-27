@@ -48,9 +48,10 @@ async def entrypoint(ctx: JobContext):
     await session.start(agent=MyAgent(), room=ctx.room)
 
     @session.on("close")
-    def on_close(_: CloseEvent):
-        print("Agent Session closed, Chat History:")
+    def on_close(ev: CloseEvent):
+        print(f"Agent Session closed, reason: {ev.reason}")
         print("=" * 20)
+        print("Chat History:")
         for item in session.history.items:
             if item.type == "message":
                 text = f"{item.role}: {item.text_content.replace('\n', '\\n')}"

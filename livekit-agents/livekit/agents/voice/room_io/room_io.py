@@ -16,7 +16,7 @@ from ...types import (
     TOPIC_CHAT,
     NotGivenOr,
 )
-from ..events import AgentStateChangedEvent, UserInputTranscribedEvent
+from ..events import AgentStateChangedEvent, CloseReason, UserInputTranscribedEvent
 from ..io import AudioInput, AudioOutput, TextOutput, VideoInput
 from ..transcription import TranscriptSynchronizer
 from ._pre_connect_audio import PreConnectAudioHandler
@@ -414,7 +414,9 @@ class RoomIO:
                     "reason": rtc.DisconnectReason.Name(participant.disconnect_reason),
                 },
             )
-            self._close_session_atask = asyncio.create_task(self._agent_session.aclose())
+            self._close_session_atask = asyncio.create_task(
+                self._agent_session._aclose_impl(reason=CloseReason.PARTICIPANT_DISCONNECTED)
+            )
             self._close_session_atask.add_done_callback(_on_closed)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
