@@ -63,9 +63,6 @@ async def entrypoint(ctx: JobContext):
         # this will stop the worker immediately
         ctx.delete_room()
 
-    # close the session when the worker is shutting down
-    ctx.add_shutdown_callback(session.aclose)
-
     await ctx.connect()
 
 
