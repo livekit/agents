@@ -17,7 +17,7 @@ from livekit import rtc
 from .._exceptions import APIError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..types import APIConnectOptions
+from ..types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 from ..utils import aio, audio, codecs, log_exceptions
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
@@ -90,9 +90,13 @@ class TTS(
         return self._num_channels
 
     @abstractmethod
-    def synthesize(self, text: str, *, conn_options: APIConnectOptions) -> ChunkedStream: ...
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream: ...
 
-    def stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
         raise NotImplementedError(
             "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"  # noqa: E501
         )
@@ -130,7 +134,8 @@ class ChunkedStream(ABC):
         self._conn_options = conn_options
         self._event_ch = aio.Chan[SynthesizedAudio]()
 
-        self._event_aiter, monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, monitor_aiter = self._tee
         self._current_attempt_has_error = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
@@ -244,6 +249,7 @@ class ChunkedStream(ABC):
         await aio.cancel_and_wait(self._synthesize_task)
         self._event_ch.close()
         await self._metrics_task
+        await self._tee.aclose()
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
@@ -280,7 +286,8 @@ class SynthesizeStream(ABC):
         self._conn_options = conn_options
         self._input_ch = aio.Chan[Union[str, SynthesizeStream._FlushSentinel]]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
-        self._event_aiter, self._monitor_aiter = aio.itertools.tee(self._event_ch, 2)
+        self._tee = aio.itertools.tee(self._event_ch, 2)
+        self._event_aiter, self._monitor_aiter = self._tee
 
         self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -355,6 +362,7 @@ class SynthesizeStream(ABC):
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
+        print("STARTED")
         audio_duration = 0.0
         ttfb = -1.0
         request_id = ""
@@ -441,9 +449,12 @@ class SynthesizeStream(ABC):
     async def aclose(self) -> None:
         """Close ths stream immediately"""
         await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
 
         if self._metrics_task is not None:
             await self._metrics_task
+
+        await self._tee.aclose()
 
     def _check_not_closed(self) -> None:
         if self._event_ch.closed:

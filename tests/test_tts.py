@@ -400,8 +400,12 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 
         async def _push_text() -> None:
             for text in segments:
-                async for token in fake_llm_stream(text, tokens_per_second=30.0):
-                    tts_stream.push_text(token)
+                fake_stream = fake_llm_stream(text, tokens_per_second=30.0)
+                try:
+                    async for token in fake_stream:
+                        tts_stream.push_text(token)
+                finally:
+                    await fake_stream.aclose()
 
                 tts_stream.flush()
                 flush_times.append(time.time())
@@ -461,9 +465,18 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
             )
 
             assert 0 < final.frame.duration < 0.25, "expected final frame to be non-empty (<250 ms)"
-            assert all(0.05 < e.frame.duration < 0.25 for e in non_final), (
-                "expected non-final frames to be 50-250 ms"
-            )
+
+            if isinstance(tts_v, tts.StreamAdapter):
+                # We can't guarantee bigger chunks for the StreamAdapter
+                # The reason is that we flush after every request, and one segment can have multiple requests.
+                # So we may have smaller frames between requests that aren't final
+                assert all(0.00 < e.frame.duration < 0.25 for e in non_final), (
+                    "expected non-final frames to be 0-250 ms"
+                )
+            else:
+                assert all(0.05 < e.frame.duration < 0.25 for e in non_final), (
+                    "expected non-final frames to be 50-250 ms"
+                )
 
             frames = [e.frame for e in segment_events]
             await assert_valid_synthesized_audio(
@@ -539,7 +552,7 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
 
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
-async def test_tts__stream_timeout(tts_factory, toxiproxy: Toxiproxy):
+async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
     setup_oai_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
@@ -584,7 +597,12 @@ async def test_tts__stream_timeout(tts_factory, toxiproxy: Toxiproxy):
         end_time = time.time()
         elapsed_time = end_time - start_time
 
-        assert error_events.count == 4, f"expected 4 errors, got {error_events.count}"
+        if isinstance(tts_v, tts.StreamAdapter):
+            # TODO(theomonnom): should the StreamAdapter forward errors?
+            assert error_events.count == 1, f"expected 1 errors, got {error_events.count}"
+        else:
+            assert error_events.count == 4, f"expected 4 errors, got {error_events.count}"
+
         assert 1 <= elapsed_time <= 3, (
             f"expected total timeout around 2 seconds, got {elapsed_time:.2f}s"
         )

@@ -64,8 +64,9 @@ class StreamAdapter(TTS):
 
 class StreamAdapterWrapper(SynthesizeStream):
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
+        super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._tts = tts
+        self._wrapped_tts_conn_options = conn_options
         self._sent_stream = tts._sentence_tokenizer.stream()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
@@ -97,7 +98,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         async def _synthesize() -> None:
             async for ev in self._sent_stream:
                 async with self._tts._wrapped_tts.synthesize(
-                    ev.token, conn_options=self._conn_options
+                    ev.token, conn_options=self._wrapped_tts_conn_options
                 ) as tts_stream:
                     async for audio in tts_stream:
                         output_emitter.push(audio.frame.data.tobytes())
