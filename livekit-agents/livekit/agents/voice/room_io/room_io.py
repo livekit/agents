@@ -11,6 +11,8 @@ from ... import utils
 from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
+    ATTRIBUTE_AGENT_INPUTS,
+    ATTRIBUTE_AGENT_OUTPUTS,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     NOT_GIVEN,
     TOPIC_CHAT,
@@ -413,7 +415,7 @@ class RoomIO:
 
             attrs = {}
 
-            attrs[ATTRIBUTE_AGENT_STATE] = self._agent_session.state
+            attrs[ATTRIBUTE_AGENT_STATE] = self._agent_session._agent_state
 
             inputs = []
             if self._input_options.audio_enabled:
@@ -422,14 +424,14 @@ class RoomIO:
                 inputs.append("video")
             if self._input_options.text_enabled:
                 inputs.append("text")
-            attrs["lk.agent_inputs"] = ",".join(inputs)
+            attrs[ATTRIBUTE_AGENT_INPUTS] = ",".join(inputs)
 
             outputs = []
             if self._output_options.audio_enabled:
                 outputs.append("audio")
             if self._output_options.transcription_enabled:
                 outputs.append("transcription")
-            attrs["lk.agent_outputs"] = ",".join(outputs)
+            attrs[ATTRIBUTE_AGENT_OUTPUTS] = ",".join(outputs)
 
             if attrs:
                 await self._room.local_participant.set_attributes(attrs)
