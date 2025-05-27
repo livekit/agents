@@ -1,13 +1,13 @@
 from __future__ import annotations  # noqa: I001
 
-
 import click
 
 from .. import utils
 from ..log import logger
 from ..plugin import Plugin
 from ..types import NOT_GIVEN, NotGivenOr
-from ..worker import JobExecutorType, WorkerOptions, SimulateJobInfo
+from ..worker import WorkerOptions, SimulateJobInfo
+from ..job import JobExecutorType
 from . import proto, _run
 from .log import setup_logging
 
@@ -47,13 +47,19 @@ def run_app(
     )
     @click.option(
         "--drain-timeout",
-        default=60,
+        type=int,
+        default=None,
         help="Time in seconds to wait for jobs to finish before shutting down",
     )
-    def start(log_level: str, url: str, api_key: str, api_secret: str, drain_timeout: int) -> None:
+    def start(
+        log_level: str, url: str, api_key: str, api_secret: str, drain_timeout: int | None = None
+    ) -> None:
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
+        # backwards compatibility
+        if drain_timeout is not None:
+            opts.drain_timeout = drain_timeout
         args = proto.CliArgs(
             opts=opts,
             log_level=log_level,
@@ -61,7 +67,6 @@ def run_app(
             asyncio_debug=False,
             register=True,
             watch=False,
-            drain_timeout=drain_timeout,
         )
         global CLI_ARGUMENTS
         CLI_ARGUMENTS = args
@@ -110,13 +115,13 @@ def run_app(
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
+        opts.drain_timeout = 0
         args = proto.CliArgs(
             opts=opts,
             log_level=log_level,
             devmode=True,
             asyncio_debug=asyncio_debug,
             watch=watch,
-            drain_timeout=0,
             register=True,
         )
         global CLI_ARGUMENTS
@@ -149,7 +154,7 @@ def run_app(
         opts.ws_url = url or opts.ws_url or "ws://localhost:7881/fake_console_url"
         opts.api_key = api_key or opts.api_key or "fake_console_key"
         opts.api_secret = api_secret or opts.api_secret or "fake_console_secret"
-
+        opts.drain_timeout = 0
         args = proto.CliArgs(
             opts=opts,
             log_level="DEBUG",
@@ -157,7 +162,6 @@ def run_app(
             asyncio_debug=False,
             watch=False,
             console=True,
-            drain_timeout=0,
             register=False,
             simulate_job=SimulateJobInfo(room="mock-console"),
         )
@@ -212,6 +216,7 @@ def run_app(
         opts.ws_url = url or opts.ws_url
         opts.api_key = api_key or opts.api_key
         opts.api_secret = api_secret or opts.api_secret
+        opts.drain_timeout = 0
         args = proto.CliArgs(
             opts=opts,
             log_level=log_level,
@@ -219,7 +224,6 @@ def run_app(
             register=False,
             asyncio_debug=asyncio_debug,
             watch=watch,
-            drain_timeout=0,
             simulate_job=SimulateJobInfo(room=room, participant_identity=participant_identity),
         )
         global CLI_ARGUMENTS

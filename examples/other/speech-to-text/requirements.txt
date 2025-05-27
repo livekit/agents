@@ -1,3 +1,0 @@
-livekit-agents>=0.12.18
-livekit-plugins-deepgram>=0.7.2
-python-dotenv~=1.0

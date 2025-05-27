@@ -23,9 +23,9 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
-    APIError,
     tts,
     utils,
 )
@@ -36,7 +36,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import TTSModels, TTSVoices
 
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
@@ -138,7 +137,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         api_url = f"{self._opts.base_url}/audio/speech"
         try:
             async with self._tts._ensure_session().post(
@@ -161,8 +160,11 @@ class ChunkedStream(tts.ChunkedStream):
                     content = await resp.text()
                     raise APIError(message="Groq returned non-audio data", body=content)
 
-                output_emitter.start(
-                    request_id=utils.shortuuid(), sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS
+                output_emitter.initialize(
+                    request_id=utils.shortuuid(),
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    mime_type="audio/wav",
                 )
 
                 async for data, _ in resp.content.iter_chunks():

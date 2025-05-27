@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import weakref
 from dataclasses import dataclass
 
 from google.api_core.client_options import ClientOptions
@@ -25,6 +27,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -35,13 +38,21 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
 from .models import Gender, SpeechLanguages
+
+BUFFERED_WORDS_COUNT = 8
+NUM_CHANNELS = 1
+DEFAULT_VOICE_NAME = "en-US-Chirp3-HD-Charon"
+DEFAULT_LANGUAGE = "en-US"
+DEFAULT_GENDER = "neutral"
 
 
 @dataclass
 class _TTSOptions:
     voice: texttospeech.VoiceSelectionParams
     audio_config: texttospeech.AudioConfig
+    tokenizer: tokenize.SentenceTokenizer
 
 
 class TTS(tts.TTS):
@@ -56,8 +67,11 @@ class TTS(tts.TTS):
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
         location: str = "global",
+        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        use_streaming: bool = True,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -77,10 +91,11 @@ class TTS(tts.TTS):
             speaking_rate (float, optional): Speed of speech. Default is 1.0.
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
-        """  # noqa: E501
-
+            tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
+            use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
+        """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -90,26 +105,30 @@ class TTS(tts.TTS):
         self._credentials_file = credentials_file
         self._location = location
 
-        lang = language if is_given(language) else "en-US"
-        ssml_gender = _gender_from_str("neutral" if not is_given(gender) else gender)
-        name = "" if not is_given(voice_name) else voice_name
+        lang = language if is_given(language) else DEFAULT_LANGUAGE
+        ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
+        name = DEFAULT_VOICE_NAME if not is_given(voice_name) else voice_name
 
         voice_params = texttospeech.VoiceSelectionParams(
             name=name,
             language_code=lang,
             ssml_gender=ssml_gender,
         )
+        if not is_given(tokenizer):
+            tokenizer = tokenize.basic.SentenceTokenizer(min_sentence_len=BUFFERED_WORDS_COUNT)
 
         self._opts = _TTSOptions(
             voice=voice_params,
             audio_config=texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.PCM,
+                audio_encoding=audio_encoding,
                 sample_rate_hertz=sample_rate,
                 pitch=pitch,
                 effects_profile_id=effects_profile_id,
                 speaking_rate=speaking_rate,
             ),
+            tokenizer=tokenizer,
         )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     def update_options(
         self,
@@ -130,11 +149,11 @@ class TTS(tts.TTS):
         """  # noqa: E501
         params = {}
         if is_given(language):
-            params["language"] = language
+            params["language_code"] = str(language)
         if is_given(gender):
-            params["gender"] = gender
+            params["ssml_gender"] = _gender_from_str(str(gender))
         if is_given(voice_name):
-            params["voice_name"] = voice_name
+            params["name"] = voice_name
 
         if params:
             self._opts.voice = texttospeech.VoiceSelectionParams(**params)
@@ -165,6 +184,18 @@ class TTS(tts.TTS):
         assert self._client is not None
         return self._client
 
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        stream = SynthesizeStream(
+            tts=self,
+            opts=self._opts,
+            client=self._ensure_client(),
+            conn_options=conn_options,
+        )
+        self._streams.add(stream)
+        return stream
+
     def synthesize(
         self,
         text: str,
@@ -178,6 +209,12 @@ class TTS(tts.TTS):
             opts=self._opts,
             client=self._ensure_client(),
         )
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -193,7 +230,7 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         try:
             response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
                 input=texttospeech.SynthesisInput(text=self._input_text),
@@ -202,11 +239,11 @@ class ChunkedStream(tts.ChunkedStream):
                 timeout=self._conn_options.timeout,
             )
 
-            output_emitter.start(
+            output_emitter.initialize(
                 request_id=utils.shortuuid(),
                 sample_rate=self._opts.audio_config.sample_rate_hertz,
                 num_channels=1,
-                is_raw_pcm=True,
+                mime_type="audio/pcm",
             )
 
             output_emitter.push(response.audio_content)
@@ -215,8 +252,105 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
             raise APIStatusError(
-                e.message, status_code=e.code or -1, request_id=None, body=None
-            ) from None
+                f"{e.message} {e.details}", status_code=e.code or -1, request_id=None, body=None
+            ) from e
+        except Exception as e:
+            raise APIConnectionError() from e
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        client: texttospeech.TextToSpeechAsyncClient,
+        conn_options: APIConnectOptions,
+    ):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._opts, self._client = opts, client
+        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+
+    async def _run(self) -> None:
+        request_id = utils.shortuuid()
+
+        @utils.log_exceptions(logger=logger)
+        async def _tokenize_input():
+            input_stream = None
+            async for input in self._input_ch:
+                if isinstance(input, str):
+                    if input_stream is None:
+                        input_stream = self._opts.tokenizer.stream()
+                        self._segments_ch.send_nowait(input_stream)
+                    input_stream.push_text(input)
+                elif isinstance(input, self._FlushSentinel):
+                    if input_stream:
+                        input_stream.end_input()
+                    input_stream = None
+            self._segments_ch.close()
+
+        @utils.log_exceptions(logger=logger)
+        async def _run_segments():
+            async for input_stream in self._segments_ch:
+                await self._run_stream(input_stream, request_id)
+
+        tasks = [
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_run_segments()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            raise APIConnectionError() from e
+
+    async def _run_stream(self, input_stream, request_id):
+        streaming_config = texttospeech.StreamingSynthesizeConfig(
+            voice=self._opts.voice,
+            streaming_audio_config=texttospeech.StreamingAudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.PCM
+            ),
+        )
+        emitter = tts.SynthesizedAudioEmitter(event_ch=self._event_ch, request_id=request_id)
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.audio_config.sample_rate_hertz,
+            num_channels=NUM_CHANNELS,
+        )
+
+        @utils.log_exceptions(logger=logger)
+        async def input_generator():
+            try:
+                yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
+                async for input in input_stream:
+                    self._mark_started()
+                    yield texttospeech.StreamingSynthesizeRequest(
+                        input=texttospeech.StreamingSynthesisInput(text=input.token)
+                    )
+
+            except Exception:
+                logger.exception("an error occurred while streaming input to google TTS")
+
+        try:
+            stream = await self._client.streaming_synthesize(
+                input_generator(),
+                timeout=self._conn_options.timeout,
+            )
+            async for resp in stream:
+                for frame in audio_bstream.write(resp.audio_content):
+                    emitter.push(frame)
+
+            for frame in audio_bstream.flush():
+                emitter.push(frame)
+            emitter.flush()
+        except DeadlineExceeded as e:
+            logger.debug(f"google tts deadline exceeded: {e}")
+            pass
+        except GoogleAPICallError as e:
+            raise APIStatusError(
+                f"{e.message} {e.details}",
+                status_code=e.code or -1,
+                request_id=request_id,
+                body=None,
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e
 

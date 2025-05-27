@@ -25,6 +25,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from ._utils import _to_deepgram_url
 from .log import logger
 
 BASE_URL = "https://api.deepgram.com/v1/speak"
@@ -39,25 +40,27 @@ class _TTSOptions:
     word_tokenizer: tokenize.WordTokenizer
     base_url: str
     api_key: str
+    mip_opt_out: bool = False
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: str = "aura-asteria-en",
+        model: str = "aura-2-andromeda-en",
         encoding: str = "linear16",
         sample_rate: int = 24000,
         api_key: str | None = None,
         base_url: str = BASE_URL,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        mip_opt_out: bool = False,
     ) -> None:
         """
         Create a new instance of Deepgram TTS.
 
         Args:
-            model (str): TTS model to use. Defaults to "aura-asteria-en".
+            model (str): TTS model to use. Defaults to "aura-2-andromeda-en".
             encoding (str): Audio encoding to use. Defaults to "linear16".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
@@ -86,6 +89,7 @@ class TTS(tts.TTS):
             word_tokenizer=word_tokenizer,
             base_url=base_url,
             api_key=api_key,
+            mip_opt_out=mip_opt_out,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -97,19 +101,20 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=False,
         )
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         config = {
             "encoding": self._opts.encoding,
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
+            "mip_opt_out": self._opts.mip_opt_out,
         }
         return await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
                 headers={"Authorization": f"Token {self._opts.api_key}"},
             ),
-            self._conn_options.timeout,
+            timeout,
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
@@ -124,22 +129,13 @@ class TTS(tts.TTS):
         self,
         *,
         model: NotGivenOr[str] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
-        args:
+        Args:
             model (str): TTS model to use.
-            sample_rate (int): Sample rate of audio.
         """
         if is_given(model):
             self._opts.model = model
-        if is_given(sample_rate):
-            self._opts.sample_rate = sample_rate
-        for stream in self._streams:
-            stream.update_options(
-                model=model,
-                sample_rate=sample_rate,
-            )
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -149,14 +145,7 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            base_url=self._base_url,
-            api_key=self._api_key,
-            opts=self._opts,
-            session=self._ensure_session(),
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -178,14 +167,16 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         try:
             async with self._tts._ensure_session().post(
                 _to_deepgram_url(
                     {
                         "encoding": self._opts.encoding,
+                        "container": "none",
                         "model": self._opts.model,
                         "sample_rate": self._opts.sample_rate,
+                        "mip_opt_out": self._opts.mip_opt_out,
                     },
                     self._opts.base_url,
                     websocket=False,
@@ -199,11 +190,11 @@ class ChunkedStream(tts.ChunkedStream):
             ) as resp:
                 resp.raise_for_status()
 
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    is_raw_pcm=True,
+                    mime_type="audio/pcm",
                 )
 
                 async for data, _ in resp.content.iter_chunks():
@@ -215,57 +206,29 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
+                message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        base_url: str,
-        api_key: str,
-        opts: _TTSOptions,
-        session: aiohttp.ClientSession,
-        conn_options: APIConnectOptions,
-    ):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._opts = opts
-        self._session = session
-        self._base_url = base_url
-        self._api_key = api_key
+        self._tts = tts
+        self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
-        self._reconnect_event = asyncio.Event()
 
-    def update_options(
-        self,
-        *,
-        model: NotGivenOr[str] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
-    ) -> None:
-        if is_given(model):
-            self._opts.model = model
-        if is_given(sample_rate):
-            self._opts.sample_rate = sample_rate
-
-        self._reconnect_event.set()
-
-    async def _run(self) -> None:
-        closing_ws = False
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
-        segment_id = utils.shortuuid()
-        audio_bstream = utils.audio.AudioByteStream(
+        output_emitter.initialize(
+            request_id=request_id,
             sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
         )
 
-        @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
             # Converts incoming text into WordStreams and sends them into _segments_ch
             word_stream = None
@@ -279,33 +242,45 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
+
             self._segments_ch.close()
 
-        @utils.log_exceptions(logger=logger)
-        async def _run_segments(ws: aiohttp.ClientWebSocketResponse):
-            nonlocal closing_ws
+        async def _run_segments():
             async for word_stream in self._segments_ch:
-                async for word in word_stream:
-                    speak_msg = {"type": "Speak", "text": f"{word.token} "}
-                    self._mark_started()
-                    await ws.send_str(json.dumps(speak_msg))
+                await self._run_ws(word_stream, output_emitter)
 
-                # Always flush after a segment
-                flush_msg = {"type": "Flush"}
-                await ws.send_str(json.dumps(flush_msg))
+        tasks = [
+            asyncio.create_task(_tokenize_input()),
+            asyncio.create_task(_run_segments()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=request_id, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError() from e
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
 
-            # after all segments, close
-            close_msg = {"type": "Close"}
-            closing_ws = True
-            await ws.send_str(json.dumps(close_msg))
+    async def _run_ws(self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter):
+        segment_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=segment_id)
+
+        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+            async for word in word_stream:
+                speak_msg = {"type": "Speak", "text": f"{word.token} "}
+                self._mark_started()
+                await ws.send_str(json.dumps(speak_msg))
+
+            # Always flush after a segment
+            flush_msg = {"type": "Flush"}
+            await ws.send_str(json.dumps(flush_msg))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
-            emitter = tts.SynthesizedAudioEmitter(
-                event_ch=self._event_ch,
-                request_id=request_id,
-                segment_id=segment_id,
-            )
-
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -313,24 +288,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not closing_ws:
-                        raise APIStatusError(
-                            "Deepgram websocket connection closed unexpectedly",
-                            request_id=request_id,
-                        )
-                    return
+                    raise APIStatusError("Deepgram websocket connection closed unexpectedly")
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    data = msg.data
-                    for frame in audio_bstream.write(data):
-                        emitter.push(frame)
+                    output_emitter.push(msg.data)
                 elif msg.type == aiohttp.WSMsgType.TEXT:
                     resp = json.loads(msg.data)
                     mtype = resp.get("type")
                     if mtype == "Flushed":
-                        for frame in audio_bstream.flush():
-                            emitter.push(frame)
-                        emitter.flush()
+                        output_emitter.flush()
                         break
                     elif mtype == "Warning":
                         logger.warning("Deepgram warning: %s", resp.get("warn_msg"))
@@ -339,80 +305,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.debug("Unknown message type: %s", resp)
 
-        async def _connection_timeout():
-            # Deepgram has a 60-minute timeout period for websocket connections
-            await asyncio.sleep(3300)
-            logger.warning("Deepgram TTS maximum connection time reached. Reconnecting...")
-            self._reconnect_event.set()
+        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
-        while True:
             try:
-                config = {
-                    "encoding": self._opts.encoding,
-                    "model": self._opts.model,
-                    "sample_rate": self._opts.sample_rate,
-                }
-                ws = await asyncio.wait_for(
-                    self._session.ws_connect(
-                        _to_deepgram_url(config, self._base_url, websocket=True),
-                        headers={"Authorization": f"Token {self._api_key}"},
-                    ),
-                    self._conn_options.timeout,
-                )
-                closing_ws = False
-
-                tasks = [
-                    asyncio.create_task(_tokenize_input()),
-                    asyncio.create_task(_run_segments(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                connection_timeout_task = asyncio.create_task(_connection_timeout())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        [
-                            asyncio.gather(*tasks),
-                            wait_reconnect_task,
-                            connection_timeout_task,
-                        ],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
-                    if wait_reconnect_task not in done:
-                        break
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(
-                        *tasks, wait_reconnect_task, connection_timeout_task
-                    )
-
-            except asyncio.TimeoutError as e:
-                raise APITimeoutError() from e
-            except aiohttp.ClientResponseError as e:
-                raise APIStatusError(
-                    message=e.message,
-                    status_code=e.status,
-                    request_id=request_id,
-                    body=None,
-                ) from e
-            except Exception as e:
-                raise APIConnectionError() from e
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None and not ws.closed:
-                    await ws.close()
-
-
-def _to_deepgram_url(
-    opts: dict,
-    base_url: str,
-    *,
-    websocket: bool,
-) -> str:
-    if websocket and base_url.startswith("http"):
-        base_url = base_url.replace("http", "ws", 1)
-
-    elif not websocket and base_url.startswith("ws"):
-        base_url = base_url.replace("ws", "http", 1)
-
-    return f"{base_url}?{urlencode(opts, doseq=True)}"
+                await utils.aio.gracefully_cancel(*tasks)

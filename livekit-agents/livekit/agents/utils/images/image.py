@@ -15,7 +15,7 @@
 import io
 from dataclasses import dataclass
 from importlib import import_module
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 from livekit import rtc
 
@@ -63,7 +63,7 @@ class ResizeOptions:
     """  # noqa: E501
 
 
-def import_pil():
+def import_pil() -> None:
     try:
         if "Image" not in globals():
             globals()["Image"] = import_module("PIL.Image")
@@ -90,18 +90,16 @@ def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
     return buffer.read()
 
 
-def _image_from_frame(frame: rtc.VideoFrame):
+def _image_from_frame(frame: rtc.VideoFrame) -> "Image.Image":
     converted = frame
     if frame.type != rtc.VideoBufferType.RGBA:
         converted = frame.convert(rtc.VideoBufferType.RGBA)
 
-    rgb_image = Image.frombytes(  # type: ignore
-        "RGBA", (frame.width, frame.height), converted.data
-    ).convert("RGB")
+    rgb_image = Image.frombytes("RGBA", (frame.width, frame.height), converted.data).convert("RGB")
     return rgb_image
 
 
-def _resize_image(image: Any, options: EncodeOptions):
+def _resize_image(image: "Image.Image", options: EncodeOptions) -> "Image.Image":
     if options.resize_options is None:
         return image
 
@@ -153,7 +151,7 @@ def _resize_image(image: Any, options: EncodeOptions):
             ),
         )
         return result
-    elif resize_opts.strategy == "scale_aspect_fill":
+    elif resize_opts.strategy == "scale_aspect_cover":
         # Start with assuming width is the limiting dimension
         new_width = resize_opts.width
         new_height = int(image.height * (resize_opts.width / image.width))

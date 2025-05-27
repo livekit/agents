@@ -3,42 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import aioboto3
-import boto3
-from botocore.exceptions import NoCredentialsError
-
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, FunctionTool, ImageContent, utils
 
-__all__ = ["to_fnc_ctx", "to_chat_ctx", "get_aws_async_session"]
+__all__ = ["to_fnc_ctx", "to_chat_ctx"]
 DEFAULT_REGION = "us-east-1"
-
-
-def get_aws_async_session(
-    region: str | None = None,
-    api_key: str | None = None,
-    api_secret: str | None = None,
-) -> aioboto3.Session:
-    _validate_aws_credentials(api_key, api_secret)
-    session = aioboto3.Session(
-        aws_access_key_id=api_key,
-        aws_secret_access_key=api_secret,
-        region_name=region or DEFAULT_REGION,
-    )
-    return session
-
-
-def _validate_aws_credentials(
-    api_key: str | None = None,
-    api_secret: str | None = None,
-) -> None:
-    try:
-        session = boto3.Session(aws_access_key_id=api_key, aws_secret_access_key=api_secret)
-        creds = session.get_credentials()
-        if not creds:
-            raise ValueError("No credentials found")
-    except (NoCredentialsError, Exception) as e:
-        raise ValueError(f"Unable to locate valid AWS credentials: {str(e)}") from e
 
 
 def to_fnc_ctx(fncs: list[FunctionTool]) -> list[dict]:

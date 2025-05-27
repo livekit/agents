@@ -12,23 +12,18 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, replace
 
-
-from aiobotocore.config import AioConfig
-import botocore
 import aioboto3
-import aiohttp
-
+import botocore
 import botocore.exceptions
+from aiobotocore.config import AioConfig
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     APITimeoutError,
     tts,
-    utils,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -38,9 +33,8 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import TTSLanguages, TTSSpeechEngine
-from .utils import _strip_nones, get_aws_async_session
+from .utils import _strip_nones
 
-NUM_CHANNELS: int = 1
 DEFAULT_SPEECH_ENGINE: TTSSpeechEngine = "generative"
 DEFAULT_VOICE = "Ruth"
 
@@ -91,11 +85,14 @@ class TTS(tts.TTS):
                 streaming=False,
             ),
             sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
+            num_channels=1,
         )
-        self._session = session or get_aws_async_session(
-            api_key=api_key or None, api_secret=api_secret or None, region=region or None
+        self._session = session or aioboto3.Session(
+            aws_access_key_id=api_key if is_given(api_key) else None,
+            aws_secret_access_key=api_secret if is_given(api_secret) else None,
+            region_name=region if is_given(region) else None,
         )
+
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
@@ -118,7 +115,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         try:
             config = AioConfig(
                 connect_timeout=self._conn_options.timeout,
@@ -141,10 +138,11 @@ class ChunkedStream(tts.ChunkedStream):
                 )
 
                 if "AudioStream" in response:
-                    output_emitter.start(
+                    output_emitter.initialize(
                         request_id=response["ResponseMetadata"]["RequestId"],
                         sample_rate=self._opts.sample_rate,
-                        num_channels=NUM_CHANNELS,
+                        num_channels=1,
+                        mime_type="audio/mp3",
                     )
 
                     async with response["AudioStream"] as resp:

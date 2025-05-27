@@ -26,7 +26,6 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     tts,
-    utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -82,7 +81,7 @@ class TTS(tts.TTS):
             voice=voice,
             speed=speed,
             instructions=instructions if is_given(instructions) else None,
-            response_format=response_format if is_given(response_format) else "opus",
+            response_format=response_format if is_given(response_format) else "mp3",
         )
 
         self._client = client or openai.AsyncClient(
@@ -184,7 +183,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         oai_stream = self._tts._client.audio.speech.with_streaming_response.create(
             input=self.input_text,
             model=self._opts.model,
@@ -197,11 +196,11 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with oai_stream as stream:
-                output_emitter.start(
+                output_emitter.initialize(
                     request_id=stream.request_id or "",
                     sample_rate=SAMPLE_RATE,
                     num_channels=NUM_CHANNELS,
-                    is_raw_pcm=self._opts.response_format == "pcm",
+                    mime_type=f"audio/{self._opts.response_format}",
                 )
 
                 async for data in stream.iter_bytes():

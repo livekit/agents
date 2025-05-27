@@ -39,6 +39,7 @@ class AvatarSession:
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         api_token: NotGivenOr[str] = NOT_GIVEN,
+        runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
     ) -> None:
         self._api_url = api_url or os.getenv("BITHUMAN_API_URL")
         self._api_secret = api_secret or os.getenv("BITHUMAN_API_SECRET")
@@ -51,20 +52,25 @@ class AvatarSession:
             raise BitHumanException("BITHUMAN_MODEL_PATH must be set")
 
         self._avatar_runner: AvatarRunner | None = None
+        self._runtime = runtime
 
     async def start(self, agent_session: AgentSession, room: rtc.Room) -> None:
-        kwargs = {
-            "model_path": self._model_path,
-        }
-        if self._api_secret:
-            kwargs["api_secret"] = self._api_secret
-        if self._api_token:
-            kwargs["token"] = self._api_token
-        if self._api_url:
-            kwargs["api_url"] = self._api_url
+        if self._runtime:
+            runtime = self._runtime
+        else:
+            kwargs = {
+                "model_path": self._model_path,
+            }
+            if self._api_secret:
+                kwargs["api_secret"] = self._api_secret
+            if self._api_token:
+                kwargs["token"] = self._api_token
+            if self._api_url:
+                kwargs["api_url"] = self._api_url
 
-        runtime = await AsyncBithuman.create(**kwargs)
-        await runtime.start()
+            runtime = await AsyncBithuman.create(**kwargs)
+            await runtime.start()
+
         video_generator = BithumanGenerator(runtime)
 
         output_width, output_height = video_generator.video_resolution

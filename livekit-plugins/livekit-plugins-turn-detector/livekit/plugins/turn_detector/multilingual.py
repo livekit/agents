@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from livekit.agents.inference_runner import _InferenceRunner
 
 from .base import EOUModelBase, _EUORunnerBase

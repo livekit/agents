@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from multiprocessing import current_process
+from types import TracebackType
 
 if current_process().name == "inference_proc":
     import signal
@@ -8,7 +11,9 @@ if current_process().name == "inference_proc":
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-    def _no_traceback_excepthook(exc_type, exc_val, traceback):
+    def _no_traceback_excepthook(
+        exc_type: type[BaseException], exc_val: BaseException, traceback: TracebackType | None
+    ) -> None:
         if isinstance(exc_val, KeyboardInterrupt):
             return
         sys.__excepthook__(exc_type, exc_val, traceback)
@@ -18,6 +23,7 @@ if current_process().name == "inference_proc":
 
 import asyncio
 import socket
+import time
 from dataclasses import dataclass
 
 from ..inference_runner import _RunnersDict
@@ -48,12 +54,10 @@ def proc_main(args: ProcStartArgs) -> None:
     )
 
     client.initialize_logger()
-
-    pid = current_process().pid
-    logger.info("initializing inference process", extra={"pid": pid})
-    client.initialize()
-    logger.info("inference process initialized", extra={"pid": pid})
-
+    try:
+        client.initialize()
+    except Exception:
+        return  # initialization failed, exit (initialize will send an error to the worker)
     client.run()
 
 
@@ -66,11 +70,25 @@ class _InferenceProc:
         self._client = client
 
         for runner in self._runners.values():
-            logger.debug(
-                "initializing inference runner",
-                extra={"runner": runner.__class__.INFERENCE_METHOD},
-            )
-            runner.initialize()
+            try:
+                logger.debug(
+                    "initializing inference runner",
+                    extra={"runner": runner.__class__.INFERENCE_METHOD},
+                )
+                start_time = time.perf_counter()
+                runner.initialize()
+                logger.debug(
+                    "inference runner initialized",
+                    extra={
+                        "runner": runner.__class__.INFERENCE_METHOD,
+                        "elapsed_time": time.perf_counter() - start_time,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "error initializing inference runner",
+                    extra={"runner": runner.__class__.INFERENCE_METHOD},
+                )
 
     @log_exceptions(logger=logger)
     async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:

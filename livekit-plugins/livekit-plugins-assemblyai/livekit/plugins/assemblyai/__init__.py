@@ -10,6 +10,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""AssemblyAI plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/stt/assemblyai/ for more information.
+"""
+
 from .log import logger
 from .stt import STT, SpeechStream
 from .version import __version__
@@ -30,3 +35,12 @@ class AssemblyAIPlugin(Plugin):
 
 
 Plugin.register_plugin(AssemblyAIPlugin())
+
+# Cleanup docs of unexported modules
+_module = dir()
+NOT_IN_ALL = [m for m in _module if m not in __all__]
+
+__pdoc__ = {}
+
+for n in NOT_IN_ALL:
+    __pdoc__[n] = False

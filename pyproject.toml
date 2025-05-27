@@ -27,6 +27,8 @@ livekit-plugins-resemble = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
+livekit-plugins-tavus = { workspace = true }
+livekit-plugins-hume = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
@@ -41,6 +43,7 @@ dev = [
     "pytest-asyncio>=0.25.3",
     "jiwer>=3.1.0",
     "scipy>=1.13.1",
+    "tiktoken>=0.9.0",
 ]
 
 [tool.ruff]
@@ -76,12 +79,23 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 [tool.mypy]
 strict = true
 
-[tool.mypy-google.genai]
+[[tool.mypy.overrides]]
+module = "livekit.agents.*"
+disallow_any_generics = false
+
+[[tool.mypy.overrides]]
+module = "mcp.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "google.genai"
 follow_imports = "normal"
 follow_untyped_imports = true
 
-[tool.mypy-aiobotocore]
+[[tool.mypy.overrides]]
+module = "aiobotocore"
 follow_untyped_imports = true
 
-[tool.mypy-boto3]
+[[tool.mypy.overrides]]
+module = "boto3"
 follow_untyped_imports = true

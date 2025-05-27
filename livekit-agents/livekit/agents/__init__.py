@@ -12,7 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad  # noqa: F401
+"""LiveKit Agents for Python
+
+See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quickstarts,
+documentation, and examples.
+"""
+
+import typing
+
+from . import cli, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice  # noqa: F401
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -61,11 +69,31 @@ from .voice import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    avatar,
     io,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
-from .worker import SimulateJobInfo, Worker, WorkerOptions, WorkerPermissions, WorkerType
+from .worker import (
+    SimulateJobInfo,
+    Worker,
+    WorkerOptions,
+    WorkerPermissions,
+    WorkerType,
+)
+
+if typing.TYPE_CHECKING:
+    from .llm import mcp  # noqa: F401
+
+
+def __getattr__(name: str) -> typing.Any:
+    if name == "mcp":
+        from .llm import mcp
+
+        return mcp
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "__version__",
@@ -97,7 +125,6 @@ __all__ = [
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
     "MetricsCollectedEvent",
-    "io",
     "FunctionCall",
     "FunctionCallOutput",
     "StopResponse",
@@ -122,6 +149,18 @@ __all__ = [
     "BuiltinAudioClip",
     "AudioConfig",
     "SimulateJobInfo",
+    "io",
+    "avatar",
+    "cli",
+    "ipc",
+    "llm",
+    "metrics",
+    "stt",
+    "tokenize",
+    "tts",
+    "utils",
+    "vad",
+    "voice",
 ]
 
 # Cleanup docs of unexported modules

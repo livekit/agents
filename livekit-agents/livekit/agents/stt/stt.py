@@ -70,7 +70,7 @@ class STTError(BaseModel):
     type: Literal["stt_error"] = "stt_error"
     timestamp: float
     label: str
-    error: APIError = Field(..., exclude=True)
+    error: Exception = Field(..., exclude=True)
     recoverable: bool
 
 
@@ -108,7 +108,7 @@ class STT(
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
         for i in range(conn_options.max_retry + 1):
@@ -132,12 +132,15 @@ class STT(
             except APIError as e:
                 retry_interval = conn_options._interval_for_retry(i)
                 if conn_options.max_retry == 0:
+                    self._emit_error(e, recoverable=False)
                     raise
                 elif i == conn_options.max_retry:
+                    self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
                         f"failed to recognize speech after {conn_options.max_retry + 1} attempts",
                     ) from e
                 else:
+                    self._emit_error(e, recoverable=True)
                     logger.warning(
                         f"failed to recognize speech, retrying in {retry_interval}s",
                         exc_info=e,
@@ -150,12 +153,27 @@ class STT(
 
                 await asyncio.sleep(retry_interval)
 
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
         raise RuntimeError("unreachable")
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self.emit(
+            "error",
+            STTError(
+                timestamp=time.time(),
+                label=self._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
 
     def stream(
         self,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         raise NotImplementedError(
@@ -209,6 +227,7 @@ class RecognizeStream(ABC):
             self._metrics_monitor_task(monitor_aiter), name="STT._metrics_task"
         )
 
+        self._num_retries = 0
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -221,38 +240,41 @@ class RecognizeStream(ABC):
 
     async def _main_task(self) -> None:
         max_retries = self._conn_options.max_retry
-        num_retries = 0
 
-        while num_retries <= max_retries:
+        while self._num_retries <= max_retries:
             try:
                 return await self._run()
             except APIError as e:
                 if max_retries == 0:
                     self._emit_error(e, recoverable=False)
                     raise
-                elif num_retries == max_retries:
+                elif self._num_retries == max_retries:
                     self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
-                        f"failed to recognize speech after {num_retries} attempts",
+                        f"failed to recognize speech after {self._num_retries} attempts",
                     ) from e
                 else:
                     self._emit_error(e, recoverable=True)
 
-                    retry_interval = self._conn_options._interval_for_retry(num_retries)
+                    retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
                         f"failed to recognize speech, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={
                             "tts": self._stt._label,
-                            "attempt": num_retries,
+                            "attempt": self._num_retries,
                             "streamed": True,
                         },
                     )
                     await asyncio.sleep(retry_interval)
 
-                num_retries += 1
+                self._num_retries += 1
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt.emit(
             "error",
             STTError(
@@ -282,6 +304,9 @@ class RecognizeStream(ABC):
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)
+            elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
+                # reset the retry count after a successful recognition
+                self._num_retries = 0
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""

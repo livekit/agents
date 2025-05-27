@@ -46,8 +46,8 @@ services:
       - ASSEMBLYAI_API_KEY
       - FAL_KEY
       - PLAYHT_API_KEY
-      - GOOGLE_API_KEY
       - PLAYHT_USER_ID
+      - GOOGLE_API_KEY
       - RIME_API_KEY
       - SPEECHMATICS_API_KEY
       - GOOGLE_APPLICATION_CREDENTIALS
@@ -56,6 +56,7 @@ services:
       - NEUPHONIC_API_KEY
       - RESEMBLE_API_KEY
       - SPEECHIFY_API_KEY
+      - HUME_API_KEY
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"
@@ -70,7 +71,9 @@ services:
       - "api.openai.com:172.30.0.10"
       - "api.play.ht:172.30.0.10"
       - "f.cluster.resemble.ai:172.30.0.10"
+      - "websocket.cluster.resemble.ai:172.30.0.10"
       - "users.rime.ai:172.30.0.10"
+      - "api.hume.ai:172.30.0.10"
     networks:
       - toxinet
 

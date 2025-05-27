@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from livekit import rtc
 
@@ -14,6 +14,11 @@ from ..log import logger
 from ..utils import aio
 from . import io
 from .agent import ModelSettings
+
+if TYPE_CHECKING:
+    from .agent_session import TurnDetectionMode
+
+MIN_LANGUAGE_DETECTION_LENGTH = 5
 
 
 @dataclass
@@ -37,7 +42,7 @@ class RecognitionHooks(Protocol):
     def on_end_of_speech(self, ev: vad.VADEvent) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
-    async def on_end_of_turn(self, info: _EndOfTurnInfo) -> None: ...
+    def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -52,10 +57,11 @@ class AudioRecognition:
         turn_detector: _TurnDetector | None,
         min_endpointing_delay: float,
         max_endpointing_delay: float,
-        manual_turn_detection: bool,
+        turn_detection_mode: TurnDetectionMode | None,
     ) -> None:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
+        self._commit_user_turn_atask: asyncio.Task[None] | None = None
         self._stt_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
@@ -64,7 +70,10 @@ class AudioRecognition:
         self._turn_detector = turn_detector
         self._stt = stt
         self._vad = vad
-        self._manual_turn_detection = manual_turn_detection
+        self._turn_detection_mode = turn_detection_mode
+        self._vad_base_turn_detection = turn_detection_mode in ("vad", None)
+        self._user_turn_committed = False  # true if user turn ended but EOU task not done
+        self._sample_rate: int | None = None
 
         self._speaking = False
         self._last_speaking_time: float = 0
@@ -83,7 +92,7 @@ class AudioRecognition:
 
         self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
 
     def start(self) -> None:
         self.update_stt(self._stt)
@@ -94,6 +103,7 @@ class AudioRecognition:
         self.update_vad(None)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        self._sample_rate = frame.sample_rate
         if self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
 
@@ -102,6 +112,8 @@ class AudioRecognition:
 
     async def aclose(self) -> None:
         await aio.cancel_and_wait(*self._tasks)
+        if self._commit_user_turn_atask is not None:
+            await aio.cancel_and_wait(self._commit_user_turn_atask)
 
         if self._stt_atask is not None:
             await aio.cancel_and_wait(self._stt_atask)
@@ -143,27 +155,79 @@ class AudioRecognition:
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        self._user_turn_committed = False
 
         # reset stt to clear the buffer from previous user turn
         stt = self._stt
         self.update_stt(None)
         self.update_stt(stt)
 
-    def commit_user_turn(self) -> None:
+    def commit_user_turn(self, *, audio_detached: bool) -> None:
+        async def _commit_user_turn(delay: float = 0.5) -> None:
+            if time.time() - self._last_final_transcript_time > delay:
+                # flush the stt by pushing silence
+                if audio_detached and self._sample_rate:
+                    num_samples = int(self._sample_rate * 0.5)
+                    self.push_audio(
+                        rtc.AudioFrame(
+                            b"\x00\x00" * num_samples,
+                            sample_rate=self._sample_rate,
+                            num_channels=1,
+                            samples_per_channel=num_samples,
+                        )
+                    )
+
+                # wait for the final transcript to be available
+                await asyncio.sleep(delay)
+
+            if self._audio_interim_transcript:
+                # append interim transcript in case the final transcript is not ready
+                self._audio_transcript = (
+                    f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
+                )
+            self._audio_interim_transcript = ""
+            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+            self._run_eou_detection(chat_ctx)
+            self._user_turn_committed = True
+
+        if self._commit_user_turn_atask is not None:
+            self._commit_user_turn_atask.cancel()
+
+        self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
+
+    @property
+    def current_transcript(self) -> str:
+        """
+        Transcript for this turn, including interim transcript if available.
+        """
         if self._audio_interim_transcript:
-            # append interim transcript in case the final transcript is not ready
-            self._audio_transcript = (
-                f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
-            )
-        self._audio_interim_transcript = ""
-        chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-        self._run_eou_detection(chat_ctx)
+            return self._audio_transcript + " " + self._audio_interim_transcript
+        return self._audio_transcript
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
+        if (
+            self._turn_detection_mode == "manual"
+            and self._user_turn_committed
+            and (
+                self._end_of_turn_task is None
+                or self._end_of_turn_task.done()
+                or ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+            )
+        ):
+            # ignore transcript for manual turn detection when user turn already committed
+            # and EOU task is done or this is an interim transcript
+            return
+
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
-            self._last_language = ev.alternatives[0].language
+            language = ev.alternatives[0].language
+
+            if not self._last_language or (
+                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
+            ):
+                self._last_language = language
+
             if not transcript:
                 return
 
@@ -194,12 +258,20 @@ class AudioRecognition:
                     # and using that timestamp for _last_speaking_time
                     self._last_speaking_time = time.time()
 
-                if not self._manual_turn_detection:
+                if self._vad_base_turn_detection or self._user_turn_committed:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                     self._run_eou_detection(chat_ctx)
+
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev)
             self._audio_interim_transcript = ev.alternatives[0].text
+
+        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
+            self._user_turn_committed = True
+            if not self._speaking:
+                # start response after vad fires END_OF_SPEECH to avoid vad interruption
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
 
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
@@ -219,12 +291,14 @@ class AudioRecognition:
             # when VAD fires END_OF_SPEECH, it already waited for the silence_duration
             self._last_speaking_time = time.time() - ev.silence_duration
 
-            if not self._manual_turn_detection:
+            if self._vad_base_turn_detection or (
+                self._turn_detection_mode == "stt" and self._user_turn_committed
+            ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx)
 
     def _run_eou_detection(self, chat_ctx: llm.ChatContext) -> None:
-        if self._stt and not self._audio_transcript and not self._manual_turn_detection:
+        if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
             # stt enabled but no transcript yet
             return
 
@@ -232,7 +306,7 @@ class AudioRecognition:
         chat_ctx.add_message(role="user", content=self._audio_transcript)
         turn_detector = (
             self._turn_detector
-            if self._audio_transcript and not self._manual_turn_detection
+            if self._audio_transcript and self._turn_detection_mode != "manual"
             else None  # disable EOU model if manual turn detection enabled
         )
 
@@ -260,7 +334,7 @@ class AudioRecognition:
             await asyncio.sleep(max(extra_sleep, 0))
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
-            await self._hooks.on_end_of_turn(
+            committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     new_transcript=self._audio_transcript,
                     transcription_delay=max(
@@ -269,7 +343,10 @@ class AudioRecognition:
                     end_of_utterance_delay=time.time() - last_speaking_time,
                 )
             )
-            self._audio_transcript = ""
+            if committed:
+                # clear the transcript if the user turn was committed
+                self._audio_transcript = ""
+            self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
@@ -282,7 +359,7 @@ class AudioRecognition:
     async def _stt_task(
         self,
         stt_node: io.STTNode,
-        audio_input: io.AudioInput,
+        audio_input: AsyncIterable[rtc.AudioFrame],
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
@@ -302,7 +379,10 @@ class AudioRecognition:
 
     @utils.log_exceptions(logger=logger)
     async def _vad_task(
-        self, vad: vad.VAD, audio_input: io.AudioInput, task: asyncio.Task[None] | None
+        self,
+        vad: vad.VAD,
+        audio_input: AsyncIterable[rtc.AudioFrame],
+        task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
             await aio.cancel_and_wait(task)

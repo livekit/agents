@@ -14,20 +14,22 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
 
 from livekit import rtc
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.misc import is_given
 
 from .. import utils
 from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils.misc import is_given
 
 if TYPE_CHECKING:
-    from ..llm import FunctionTool
+    from ..llm import FunctionTool, RawFunctionTool
 
 
 class ImageContent(BaseModel):
@@ -109,6 +111,7 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     hash: bytes | None = None
+    created_at: float = Field(default_factory=time.time)
 
     @property
     def text_content(self) -> str | None:
@@ -132,6 +135,7 @@ class FunctionCall(BaseModel):
     call_id: str
     arguments: str
     name: str
+    created_at: float = Field(default_factory=time.time)
 
 
 class FunctionCallOutput(BaseModel):
@@ -141,6 +145,7 @@ class FunctionCallOutput(BaseModel):
     call_id: str
     output: str
     is_error: bool
+    created_at: float = Field(default_factory=time.time)
 
 
 ChatItem = Annotated[
@@ -161,7 +166,7 @@ class ChatContext:
         return self._items
 
     @items.setter
-    def items(self, items: list[ChatItem]):
+    def items(self, items: list[ChatItem]) -> None:
         self._items = items
 
     def add_message(
@@ -171,20 +176,35 @@ class ChatContext:
         content: list[ChatContent] | str,
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
+        created_at: NotGivenOr[float] = NOT_GIVEN,
     ) -> ChatMessage:
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if is_given(id):
             kwargs["id"] = id
         if is_given(interrupted):
             kwargs["interrupted"] = interrupted
+        if is_given(created_at):
+            kwargs["created_at"] = created_at
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
         else:
             message = ChatMessage(role=role, content=content, **kwargs)
 
-        self._items.append(message)
+        if is_given(created_at):
+            idx = self.find_insertion_index(created_at=created_at)
+            self._items.insert(idx, message)
+        else:
+            self._items.append(message)
         return message
+
+    def insert(self, item: ChatItem | Sequence[ChatItem]) -> None:
+        """Insert an item or list of items into the chat context by creation time."""
+        items = item if isinstance(item, list) else [item]
+
+        for _item in items:
+            idx = self.find_insertion_index(created_at=_item.created_at)
+            self._items.insert(idx, _item)
 
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
@@ -197,17 +217,27 @@ class ChatContext:
         *,
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
-        tools: NotGivenOr[list[FunctionTool]] = NOT_GIVEN,
+        tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
-        from .tool_context import get_function_info
+        from .tool_context import (
+            get_function_info,
+            get_raw_function_info,
+            is_function_tool,
+            is_raw_function_tool,
+        )
 
-        valid_tools = set()
+        valid_tools = set[str]()
         if is_given(tools):
-            valid_tools = {
-                tool if isinstance(tool, str) else get_function_info(tool).name for tool in tools
-            }
+            for tool in tools:
+                if isinstance(tool, str):
+                    valid_tools.add(tool)
+                elif is_function_tool(tool):
+                    valid_tools.add(get_function_info(tool).name)
+                elif is_raw_function_tool(tool):
+                    valid_tools.add(get_raw_function_info(tool).name)
+                # TODO(theomonnom): other tools
 
         for item in self.items:
             if exclude_function_call and item.type in [
@@ -225,7 +255,7 @@ class ChatContext:
 
             if (
                 is_given(tools)
-                and item.type in ["function_call", "function_call_output"]
+                and (item.type == "function_call" or item.type == "function_call_output")
                 and item.name not in valid_tools
             ):
                 continue
@@ -264,9 +294,10 @@ class ChatContext:
         *,
         exclude_image: bool = True,
         exclude_audio: bool = True,
+        exclude_timestamp: bool = True,
         exclude_function_call: bool = False,
-    ) -> dict:
-        items = []
+    ) -> dict[str, Any]:
+        items: list[ChatItem] = []
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -283,12 +314,37 @@ class ChatContext:
 
             items.append(item)
 
+        exclude_fields = set()
+        if exclude_timestamp:
+            exclude_fields.add("created_at")
+
         return {
-            "items": [item.model_dump(mode="json", exclude_none=True) for item in items],
+            "items": [
+                item.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=False,
+                    exclude=exclude_fields,
+                )
+                for item in items
+            ],
         }
 
+    def find_insertion_index(self, *, created_at: float) -> int:
+        """
+        Returns the index to insert an item by creation time.
+
+        Iterates in reverse, assuming items are sorted by `created_at`.
+        Finds the position after the last item with `created_at <=` the given timestamp.
+        """
+        for i in reversed(range(len(self._items))):
+            if self._items[i].created_at <= created_at:
+                return i + 1
+
+        return 0
+
     @classmethod
-    def from_dict(cls, data: dict) -> ChatContext:
+    def from_dict(cls, data: dict[str, Any]) -> ChatContext:
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)
@@ -306,8 +362,8 @@ class _ReadOnlyChatContext(ChatContext):
         "please use .copy() and agent.update_chat_ctx() to modify the chat context"
     )
 
-    class _ImmutableList(list):
-        def _raise_error(self, *args, **kwargs):
+    class _ImmutableList(list[ChatItem]):
+        def _raise_error(self, *args: Any, **kwargs: Any) -> None:
             logger.error(_ReadOnlyChatContext.error_msg)
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
@@ -315,7 +371,7 @@ class _ReadOnlyChatContext(ChatContext):
         append = extend = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
         __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error  # type: ignore
 
-        def copy(self):
+        def copy(self) -> list[ChatItem]:
             return list(self)
 
     def __init__(self, items: list[ChatItem]):

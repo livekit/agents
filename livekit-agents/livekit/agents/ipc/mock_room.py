@@ -4,8 +4,9 @@ from livekit import rtc
 
 MockRoom = create_autospec(rtc.Room, instance=True)
 MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)
-MockRoom._info = create_autospec(rtc.room.proto_room.RoomInfo, instance=True)
+MockRoom._info = create_autospec(rtc.room.proto_room.RoomInfo, instance=True)  # type: ignore
 MockRoom.isconnected.return_value = True
+MockRoom.name = "fake_room"
 
 mock_remote_participant = create_autospec(rtc.RemoteParticipant, instance=True)
 mock_remote_participant.identity = "fake_human"

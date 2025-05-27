@@ -48,18 +48,9 @@ export LIVEKIT_API_SECRET="..."
 export LIVEKIT_URL="..."
 ```
 
-* Install required dependencies:
-
-```bash
-# Make sure you are inside a virtual environment first
-pip install -r examples/avatar_agents/bey/requirements.txt
-```
-
 * Start the agent worker:
 
 ```bash
-python examples/avatar_agents/bey/agent_worker.py dev
-
 # You can specify a different avatar if you want
 # export BEY_AVATAR_ID=your-avatar-id
 python examples/avatar_agents/bey/agent_worker.py dev

@@ -52,6 +52,7 @@ from .job import (
     RunningJobInfo,
 )
 from .log import DEV_LEVEL, logger
+from .plugin import Plugin
 from .types import NOT_GIVEN, NotGivenOr
 from .utils import is_given
 from .utils.hw import get_cpu_monitor
@@ -173,7 +174,8 @@ class WorkerOptions:
     Defaults to 0 (disabled).
     """  # noqa: E501
 
-    """Number of idle processes to keep warm."""
+    drain_timeout: int = 1800
+    """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | _WorkerEnvOption[int] = _WorkerEnvOption(
         dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
     )
@@ -202,6 +204,10 @@ class WorkerOptions:
     """API secret to authenticate with LiveKit.
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
+
+    _worker_token: str | None = None
+    """Internal token."""
+
     host: str = ""  # default to all interfaces
     port: int | _WorkerEnvOption[int] = _WorkerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
@@ -214,8 +220,15 @@ class WorkerOptions:
 
     By default it uses ``HTTP_PROXY`` or ``HTTPS_PROXY`` from environment
     """
+    multiprocessing_context: Literal["spawn", "forkserver"] = (
+        "spawn" if not sys.platform.startswith("linux") else "forkserver"
+    )
+    """The multiprocessing context to use.
 
-    def validate_config(self, devmode: bool):
+    By default it uses "spawn" on all platforms, but "forkserver" on Linux.
+    """
+
+    def validate_config(self, devmode: bool) -> None:
         load_threshold = _WorkerEnvOption.getvalue(self.load_threshold, devmode)
         if load_threshold > 1 and not devmode:
             logger.warning(
@@ -244,6 +257,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         opts.ws_url = opts.ws_url or os.environ.get("LIVEKIT_URL") or ""
         opts.api_key = opts.api_key or os.environ.get("LIVEKIT_API_KEY") or ""
         opts.api_secret = opts.api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
+        opts._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or None
 
         if not opts.ws_url:
             raise ValueError("ws_url is required, or add LIVEKIT_URL in your environment")
@@ -277,9 +291,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._devmode = devmode
         self._register = register
 
-        # using spawn context for all platforms. We may have further optimizations for
-        # Linux with forkserver, but for now, this is the safest option
-        mp_ctx = mp.get_context("spawn")
+        self._mp_ctx = mp.get_context(self._opts.multiprocessing_context)
 
         self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = None
         if len(_InferenceRunner.registered_runners) > 0:
@@ -292,7 +304,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 ping_interval=5,
                 ping_timeout=60,
                 high_ping_threshold=2.5,
-                mp_ctx=mp_ctx,
+                mp_ctx=self._mp_ctx,
                 loop=self._loop,
                 http_proxy=opts.http_proxy or None,
             )
@@ -304,7 +316,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             loop=self._loop,
             job_executor_type=opts.job_executor_type,
             inference_executor=self._inference_executor,
-            mp_ctx=mp_ctx,
+            mp_ctx=self._mp_ctx,
             initialize_timeout=opts.initialize_process_timeout,
             close_timeout=opts.shutdown_process_timeout,
             memory_warn_mb=opts.job_memory_warn_mb,
@@ -322,10 +334,10 @@ class Worker(utils.EventEmitter[EventTypes]):
             loop=self._loop,
         )
 
-        async def health_check(_: Any):
+        async def health_check(_: Any) -> web.Response:
             return web.Response(text="OK")
 
-        async def worker(_: Any):
+        async def worker(_: Any) -> web.Response:
             body = json.dumps(
                 {
                     "agent_name": self._opts.agent_name,
@@ -377,7 +389,7 @@ class Worker(utils.EventEmitter[EventTypes]):
     def worker_info(self) -> WorkerInfo:
         return WorkerInfo(http_port=self._http_server.port)
 
-    async def run(self):
+    async def run(self) -> None:
         if not self._closed:
             raise Exception("worker is already running")
 
@@ -385,6 +397,11 @@ class Worker(utils.EventEmitter[EventTypes]):
             "starting worker",
             extra={"version": __version__, "rtc-version": rtc.__version__},
         )
+
+        if self._opts.multiprocessing_context == "forkserver":
+            plugin_packages = [p.package for p in Plugin.registered_plugins]
+            logger.info("preloading plugins", extra={"packages": plugin_packages})
+            self._mp_ctx.set_forkserver_preload(plugin_packages)
 
         if self._inference_executor is not None:
             logger.info("starting inference executor")
@@ -412,13 +429,13 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._close_future = asyncio.Future(loop=self._loop)
 
         @utils.log_exceptions(logger=logger)
-        async def _load_task():
+        async def _load_task() -> None:
             """periodically check load"""
             interval = utils.aio.interval(UPDATE_LOAD_INTERVAL)
             while True:
                 await interval.tick()
 
-                def load_fnc():
+                def load_fnc() -> float:
                     signature = inspect.signature(self._opts.load_fnc)
                     parameters = list(signature.parameters.values())
                     if len(parameters) == 0:
@@ -486,7 +503,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._draining = True
         await self._update_worker_status()
 
-        async def _join_jobs():
+        async def _join_jobs() -> None:
             for proc in self._proc_pool.processes:
                 if proc.running_job:
                     await proc.join()
@@ -586,7 +603,7 @@ class Worker(utils.EventEmitter[EventTypes]):
 
         await self._http_session.close()
         await self._http_server.aclose()
-        await self._api.aclose()
+        await self._api.aclose()  # type: ignore
 
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
@@ -630,8 +647,16 @@ class Worker(utils.EventEmitter[EventTypes]):
                 path_parts = [f"{scheme}://{parse.netloc}", parse.path, "/agent"]
                 agent_url = reduce(urljoin, path_parts)
 
+                params = {}
+                if self._opts._worker_token:
+                    params["worker_token"] = self._opts._worker_token
+
                 ws = await self._http_session.ws_connect(
-                    agent_url, headers=headers, autoping=True, proxy=self._opts.http_proxy or None
+                    agent_url,
+                    headers=headers,
+                    params=params,
+                    autoping=True,
+                    proxy=self._opts.http_proxy or None,
                 )
 
                 retry_count = 0
@@ -686,17 +711,17 @@ class Worker(utils.EventEmitter[EventTypes]):
                 if ws is not None:
                     await ws.close()
 
-    async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse):
+    async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         closing_ws = False
 
-        async def _load_task():
+        async def _load_task() -> None:
             """periodically update worker status"""
             interval = utils.aio.interval(UPDATE_STATUS_INTERVAL)
             while True:
                 await interval.tick()
                 await self._update_worker_status()
 
-        async def _send_task():
+        async def _send_task() -> None:
             nonlocal closing_ws
             while True:
                 try:
@@ -706,7 +731,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                     closing_ws = True
                     return
 
-        async def _recv_task():
+        async def _recv_task() -> None:
             nonlocal closing_ws
             while True:
                 msg = await ws.receive()
@@ -725,16 +750,16 @@ class Worker(utils.EventEmitter[EventTypes]):
                     continue
 
                 data = msg.data
-                msg = agent.ServerMessage()
-                msg.ParseFromString(data)
-                which = msg.WhichOneof("message")
+                server_msg = agent.ServerMessage()
+                server_msg.ParseFromString(data)
+                which = server_msg.WhichOneof("message")
                 if which == "availability":
-                    self._handle_availability(msg.availability)
+                    self._handle_availability(server_msg.availability)
                 elif which == "assignment":
-                    self._handle_assignment(msg.assignment)
+                    self._handle_assignment(server_msg.assignment)
                 elif which == "termination":
                     user_task = self._loop.create_task(
-                        self._handle_termination(msg.termination),
+                        self._handle_termination(server_msg.termination),
                         name="agent_job_termination",
                     )
                     self._tasks.add(user_task)
@@ -775,7 +800,7 @@ class Worker(utils.EventEmitter[EventTypes]):
             )
             await self._proc_pool.launch_job(running_info)
 
-    def _handle_register(self, reg: agent.RegisterWorkerResponse):
+    def _handle_register(self, reg: agent.RegisterWorkerResponse) -> None:
         self._id = reg.worker_id
         logger.info(
             "registered worker",
@@ -788,12 +813,12 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
         self.emit("worker_registered", reg.worker_id, reg.server_info)
 
-    def _handle_availability(self, msg: agent.AvailabilityRequest):
+    def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
         task = self._loop.create_task(self._answer_availability(msg))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _answer_availability(self, msg: agent.AvailabilityRequest):
+    async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
@@ -860,7 +885,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         )
 
         @utils.log_exceptions(logger=logger)
-        async def _job_request_task():
+        async def _job_request_task() -> None:
             try:
                 await self._opts.request_fnc(job_req)
             except Exception:
@@ -880,7 +905,7 @@ class Worker(utils.EventEmitter[EventTypes]):
         self._tasks.add(user_task)
         user_task.add_done_callback(self._tasks.discard)
 
-    def _handle_assignment(self, assignment: agent.JobAssignment):
+    def _handle_assignment(self, assignment: agent.JobAssignment) -> None:
         if assignment.job.id in self._pending_assignments:
             with contextlib.suppress(asyncio.InvalidStateError):
                 fut = self._pending_assignments.pop(assignment.job.id)
@@ -891,14 +916,14 @@ class Worker(utils.EventEmitter[EventTypes]):
                 extra={"job": assignment.job, "agent_name": self._opts.agent_name},
             )
 
-    async def _handle_termination(self, msg: agent.JobTermination):
+    async def _handle_termination(self, msg: agent.JobTermination) -> None:
         proc = self._proc_pool.get_by_job_id(msg.job_id)
         if not proc:
             # safe to ignore
             return
         await proc.aclose()
 
-    async def _update_worker_status(self):
+    async def _update_worker_status(self) -> None:
         job_cnt = len(self.active_jobs)
         if self._draining:
             update = agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL, job_count=job_cnt)

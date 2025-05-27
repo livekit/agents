@@ -45,6 +45,7 @@ class TTSMetrics(BaseModel):
     cancelled: bool
     characters_count: int
     streamed: bool
+    segment_id: str | None = None
     speech_id: str | None = None
 
 
@@ -72,10 +73,54 @@ class EOUMetrics(BaseModel):
     speech_id: str | None = None
 
 
+class RealtimeModelMetrics(BaseModel):
+    class CachedTokenDetails(BaseModel):
+        audio_tokens: int
+        text_tokens: int
+        image_tokens: int
+
+    class InputTokenDetails(BaseModel):
+        audio_tokens: int
+        text_tokens: int
+        image_tokens: int
+        cached_tokens: int
+        cached_tokens_details: RealtimeModelMetrics.CachedTokenDetails | None
+
+    class OutputTokenDetails(BaseModel):
+        text_tokens: int
+        audio_tokens: int
+        image_tokens: int
+
+    type: Literal["realtime_model_metrics"] = "realtime_model_metrics"
+    label: str
+    request_id: str
+    timestamp: float
+    """The timestamp of the response creation."""
+    duration: float
+    """The duration of the response from created to done in seconds."""
+    ttft: float
+    """Time to first audio token in seconds. -1 if no audio token was sent."""
+    cancelled: bool
+    """Whether the request was cancelled."""
+    input_tokens: int
+    """The number of input tokens used in the Response, including text and audio tokens."""
+    output_tokens: int
+    """The number of output tokens sent in the Response, including text and audio tokens."""
+    total_tokens: int
+    """The total number of tokens in the Response."""
+    tokens_per_second: float
+    """The number of tokens per second."""
+    input_token_details: InputTokenDetails
+    """Details about the input tokens used in the Response."""
+    output_token_details: OutputTokenDetails
+    """Details about the output tokens used in the Response."""
+
+
 AgentMetrics = Union[
     STTMetrics,
     LLMMetrics,
     TTSMetrics,
     VADMetrics,
     EOUMetrics,
+    RealtimeModelMetrics,
 ]

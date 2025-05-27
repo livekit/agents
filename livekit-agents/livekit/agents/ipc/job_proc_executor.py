@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import multiprocessing as mp
 import socket
 from collections.abc import Awaitable
@@ -103,9 +104,7 @@ class ProcJobExecutor(SupervisedProc):
         )
 
         return self._mp_ctx.Process(  # type: ignore
-            target=proc_main,
-            args=(proc_args,),
-            name="job_proc",
+            target=proc_main, args=(proc_args,), name="job_proc"
         )
 
     @log_exceptions(logger=logger)
@@ -114,6 +113,10 @@ class ProcJobExecutor(SupervisedProc):
             async for msg in ipc_ch:
                 if isinstance(msg, proto.InferenceRequest):
                     self._inference_tasks.append(asyncio.create_task(self._do_inference_task(msg)))
+                elif isinstance(msg, proto.TracingResponse):
+                    fut = self._tracing_requests.pop(msg.request_id)
+                    with contextlib.suppress(asyncio.InvalidStateError):
+                        fut.set_result(msg)
         finally:
             await aio.cancel_and_wait(*self._inference_tasks)
 
@@ -162,7 +165,7 @@ class ProcJobExecutor(SupervisedProc):
         start_req.running_job = info
         await channel.asend_message(self._pch, start_req)
 
-    def logging_extra(self):
+    def logging_extra(self) -> dict[str, Any]:
         extra = super().logging_extra()
 
         if self._running_job:

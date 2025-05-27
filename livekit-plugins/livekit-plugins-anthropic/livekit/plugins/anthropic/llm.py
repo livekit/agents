@@ -182,7 +182,7 @@ class LLM(llm.LLM):
             self,
             anthropic_stream=stream,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=tools or [],
             conn_options=conn_options,
         )
 
@@ -194,7 +194,7 @@ class LLMStream(llm.LLMStream):
         *,
         anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool] | None,
+        tools: list[FunctionTool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
