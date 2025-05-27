@@ -71,7 +71,7 @@ class TTS(tts.TTS):
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
-        use_streaming: NotGivenOr[bool] = NOT_GIVEN,
+        use_streaming: bool = True,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -93,10 +93,7 @@ class TTS(tts.TTS):
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
             tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
-        """  # noqa: E501
-        if not is_given(use_streaming):
-            use_streaming = True
-
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
@@ -233,9 +230,7 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._opts, self._client = opts, client
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-
+    async def _run(self, output_emitter: tts.AudioEmitter):
         try:
             response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
                 input=texttospeech.SynthesisInput(text=self._input_text),
@@ -244,25 +239,15 @@ class ChunkedStream(tts.ChunkedStream):
                 timeout=self._conn_options.timeout,
             )
 
-            # Create AudioStreamDecoder for OGG format
-            decoder = utils.codecs.AudioStreamDecoder(
+            output_emitter.initialize(
+                request_id=utils.shortuuid(),
                 sample_rate=self._opts.audio_config.sample_rate_hertz,
                 num_channels=1,
+                mime_type="audio/pcm",
             )
 
-            try:
-                decoder.push(response.audio_content)
-                decoder.end_input()
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
-                )
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
-            finally:
-                await decoder.aclose()
-
+            output_emitter.push(response.audio_content)
+            output_emitter.flush()
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:

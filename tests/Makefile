@@ -1,4 +1,5 @@
 PLUGIN ?=
+PYTEST_ARGS ?=
 
 .PHONY: test up down
 
@@ -25,5 +26,5 @@ test: up
 	echo 'Toxiproxy is ready'
 
 	docker compose exec app uv sync --all-extras --dev
-	docker compose exec -e PLUGIN="$(PLUGIN)" app uv run pytest -s --color=yes --tb=short tests/test_tts.py --show-capture=all
+	docker compose exec -e PLUGIN="$(PLUGIN)" app uv run pytest -s --color=yes --tb=short --log-cli-level=DEBUG tests/test_tts.py --show-capture=all $(PYTEST_ARGS)
 	$(MAKE) down
