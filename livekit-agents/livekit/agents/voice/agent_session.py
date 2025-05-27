@@ -416,7 +416,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         await self._activity.drain()
 
     @utils.log_exceptions(logger=logger)
-    async def aclose(
+    async def _aclose_impl(
         self,
         *,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
@@ -457,6 +457,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = False
             self.emit("close", CloseEvent(error=error))
+
+    async def aclose(self) -> None:
+        await self._aclose_impl()
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         # don't log VAD metrics as they are too verbose
@@ -596,7 +599,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
-        self._closing_task = asyncio.create_task(self.aclose(error=error))
+        self._closing_task = asyncio.create_task(self._aclose_impl(error=error))
         self._closing_task.add_done_callback(on_close_done)
 
     @utils.log_exceptions(logger=logger)
