@@ -17,7 +17,7 @@ class GoogleFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, requires_last_user_message: bool = True
+    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], GoogleFormatData]:
     turns: list[dict] = []
     system_messages: list[str] = []
@@ -77,7 +77,7 @@ def to_chat_ctx(
         turns.append({"role": current_role, "parts": parts})
 
     # Gemini requires the last message to end with user's turn before they can generate
-    if requires_last_user_message and current_role != "user":
+    if inject_dummy_user_message and current_role != "user":
         turns.append({"role": "user", "parts": [{"text": "."}]})
 
     return turns, GoogleFormatData(system_messages=system_messages)

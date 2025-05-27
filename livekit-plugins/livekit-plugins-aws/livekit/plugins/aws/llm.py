@@ -33,7 +33,7 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .utils import to_fnc_ctx
 
-TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v2:0"]
+TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v1:0"]
 
 
 @dataclass

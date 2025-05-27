@@ -8,7 +8,9 @@ from livekit.agents import llm
 from .utils import group_tool_calls
 
 
-def to_chat_ctx(chat_ctx: llm.ChatContext) -> tuple[list[dict], Literal[None]]:
+def to_chat_ctx(
+    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+) -> tuple[list[dict], Literal[None]]:
     item_groups = group_tool_calls(chat_ctx)
     messages = []
     for group in item_groups:

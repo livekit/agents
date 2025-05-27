@@ -332,38 +332,45 @@ class ChatContext:
         }
 
     @overload
-    def to_provider_format(self, format: Literal["openai"]) -> tuple[list[dict], Literal[None]]: ...
+    def to_provider_format(
+        self, format: Literal["openai"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
     def to_provider_format(
-        self,
-        format: Literal["google"],
-        *,
-        requires_last_user_message: bool = True,
+        self, format: Literal["google"], *, inject_dummy_user_message: bool = True
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload
     def to_provider_format(
-        self,
-        format: Literal["aws"],
-        *,
-        requires_first_user_message: bool = True,
+        self, format: Literal["aws"], *, inject_dummy_user_message: bool = True
     ) -> tuple[list[dict], _provider_format.aws.BedrockFormatData]: ...
 
     @overload
     def to_provider_format(
-        self,
-        format: Literal["anthropic"],
-        *,
-        requires_first_user_message: bool = True,
+        self, format: Literal["anthropic"], *, inject_dummy_user_message: bool = True
     ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
 
     @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
 
     def to_provider_format(
-        self, format: Literal["openai", "google", "aws", "anthropic"] | str, **kwargs: Any
+        self,
+        format: Literal["openai", "google", "aws", "anthropic"] | str,
+        *,
+        inject_dummy_user_message: bool = True,
+        **kwargs: Any,
     ) -> tuple[list[dict], Any]:
+        """Convert the chat context to a provider-specific format.
+
+        If ``inject_dummy_user_message`` is ``True``, a dummy user message will be added
+        to the beginning or end of the chat context depending on the provider.
+
+        This is necessary because some providers expect a user message to be present for
+        generating a response.
+        """
+        kwargs["inject_dummy_user_message"] = inject_dummy_user_message
+
         if format == "openai":
             return _provider_format.openai.to_chat_ctx(self, **kwargs)
         elif format == "google":

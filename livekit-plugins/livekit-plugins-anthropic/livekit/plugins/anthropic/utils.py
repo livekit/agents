@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 
 import anthropic
 from livekit.agents import llm
@@ -16,7 +16,7 @@ __all__ = ["to_fnc_ctx", "CACHE_CONTROL_EPHEMERAL"]
 
 
 def to_fnc_ctx(
-    fncs: list[FunctionTool], caching: Literal["ephemeral"] | None
+    fncs: list[FunctionTool], caching: Optional[Literal["ephemeral"]]
 ) -> list[anthropic.types.ToolParam]:
     tools: list[anthropic.types.ToolParam] = []
     for fnc in fncs:

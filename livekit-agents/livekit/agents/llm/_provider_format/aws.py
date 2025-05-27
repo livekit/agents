@@ -15,7 +15,7 @@ class BedrockFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, requires_first_user_message: bool = True
+    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], BedrockFormatData]:
     messages: list[dict] = []
     system_messages: list[str] = []
@@ -77,7 +77,7 @@ def to_chat_ctx(
         messages.append({"role": current_role, "content": current_content})
 
     # Ensure the message list starts with a "user" message
-    if requires_first_user_message and (not messages or messages[0]["role"] != "user"):
+    if inject_dummy_user_message and (not messages or messages[0]["role"] != "user"):
         messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
 
     return messages, BedrockFormatData(system_messages=system_messages)
