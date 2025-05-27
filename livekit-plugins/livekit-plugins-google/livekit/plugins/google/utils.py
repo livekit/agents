@@ -19,6 +19,7 @@ from livekit.agents.llm.tool_context import (
 )
 
 from .log import logger
+from .tools import LLMTool
 
 __all__ = ["to_chat_ctx", "to_fnc_ctx"]
 
@@ -32,6 +33,42 @@ def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.Functio
 
         elif is_function_tool(fnc):
             tools.append(_build_gemini_fnc(fnc))
+
+    return tools
+
+
+def create_tools_config(
+    *,
+    function_tools: list[types.FunctionDeclaration] | None = None,
+    gemini_tools: list[LLMTool] | None = None,
+) -> list[types.Tool]:
+    tools: list[types.Tool] = []
+
+    if function_tools:
+        tools.append(types.Tool(function_declarations=function_tools))
+
+    if gemini_tools:
+        for tool in gemini_tools:
+            if isinstance(tool, types.GoogleSearchRetrieval):
+                tools.append(types.Tool(google_search_retrieval=tool))
+            elif isinstance(tool, types.ToolCodeExecution):
+                tools.append(types.Tool(code_execution=tool))
+            elif isinstance(tool, types.GoogleSearch):
+                tools.append(types.Tool(google_search=tool))
+            elif isinstance(tool, types.UrlContext):
+                tools.append(types.Tool(url_context=tool))
+            elif isinstance(tool, types.GoogleMaps):
+                tools.append(types.Tool(google_maps=tool))
+            else:
+                logger.warning(f"Warning: Received unhandled tool type: {type(tool)}")
+                continue
+
+    if len(tools) > 1:
+        # https://github.com/google/adk-python/issues/53#issuecomment-2799538041
+        logger.warning(
+            "Multiple kinds of tools are not supported in Gemini. Only the first tool will be used."
+        )
+        tools = tools[:1]
 
     return tools
 

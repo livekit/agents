@@ -10,41 +10,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from google import genai
+from google.genai import types
 from google.genai.live import AsyncSession
-from google.genai.types import (
-    ActivityEnd,
-    ActivityHandling,
-    ActivityStart,
-    AudioTranscriptionConfig,
-    Blob,
-    Content,
-    ContextWindowCompressionConfig,
-    FunctionDeclaration,
-    GenerationConfig,
-    GoogleMaps,
-    GoogleSearch,
-    GoogleSearchRetrieval,
-    LiveClientContent,
-    LiveClientRealtimeInput,
-    LiveClientToolResponse,
-    LiveConnectConfig,
-    LiveServerContent,
-    LiveServerGoAway,
-    LiveServerToolCall,
-    LiveServerToolCallCancellation,
-    Modality,
-    ModalityTokenCount,
-    Part,
-    PrebuiltVoiceConfig,
-    RealtimeInputConfig,
-    SessionResumptionConfig,
-    SpeechConfig,
-    Tool,
-    ToolCodeExecution,
-    UrlContext,
-    UsageMetadata,
-    VoiceConfig,
-)
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
@@ -54,7 +21,7 @@ from livekit.plugins.google.beta.realtime.api_proto import ClientEvents, LiveAPI
 
 from ...log import logger
 from ...tools import LLMTool
-from ...utils import get_tool_results_for_realtime, to_chat_ctx, to_fnc_ctx
+from ...utils import create_tools_config, get_tool_results_for_realtime, to_chat_ctx, to_fnc_ctx
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
@@ -80,7 +47,7 @@ class _RealtimeOptions:
     api_key: str | None
     voice: Voice | str
     language: NotGivenOr[str]
-    response_modalities: NotGivenOr[list[Modality]]
+    response_modalities: NotGivenOr[list[types.Modality]]
     vertexai: bool
     project: str | None
     location: str | None
@@ -92,14 +59,14 @@ class _RealtimeOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     instructions: NotGivenOr[str]
-    input_audio_transcription: AudioTranscriptionConfig | None
-    output_audio_transcription: AudioTranscriptionConfig | None
+    input_audio_transcription: types.AudioTranscriptionConfig | None
+    output_audio_transcription: types.AudioTranscriptionConfig | None
     image_encode_options: NotGivenOr[images.EncodeOptions]
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
-    realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN
-    context_window_compression: NotGivenOr[ContextWindowCompressionConfig] = NOT_GIVEN
-    tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN
+    realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
+    context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN
+    gemini_tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN
 
 
 @dataclass
@@ -142,7 +109,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: Voice | str = "Puck",
         language: NotGivenOr[str] = NOT_GIVEN,
-        modalities: NotGivenOr[list[Modality]] = NOT_GIVEN,
+        modalities: NotGivenOr[list[types.Modality]] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
@@ -153,14 +120,14 @@ class RealtimeModel(llm.RealtimeModel):
         top_k: NotGivenOr[int] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
-        output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[types.AudioTranscriptionConfig | None] = NOT_GIVEN,
+        output_audio_transcription: NotGivenOr[types.AudioTranscriptionConfig | None] = NOT_GIVEN,
         image_encode_options: NotGivenOr[images.EncodeOptions] = NOT_GIVEN,
         enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN,
         proactivity: NotGivenOr[bool] = NOT_GIVEN,
-        realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN,
-        context_window_compression: NotGivenOr[ContextWindowCompressionConfig] = NOT_GIVEN,
-        tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
+        realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN,
+        context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN,
+        gemini_tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -195,15 +162,15 @@ class RealtimeModel(llm.RealtimeModel):
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
-            tools (list[LLMTool], optional): Gemini-specific tools to use for the session. Defaults to None.
+            gemini_tools (list[LLMTool], optional): Gemini-specific tools to use for the session. Defaults to None.
 
         Raises:
             ValueError: If the API key is required but not found.
         """  # noqa: E501
         if not is_given(input_audio_transcription):
-            input_audio_transcription = AudioTranscriptionConfig()
+            input_audio_transcription = types.AudioTranscriptionConfig()
         if not is_given(output_audio_transcription):
-            output_audio_transcription = AudioTranscriptionConfig()
+            output_audio_transcription = types.AudioTranscriptionConfig()
 
         server_turn_detection = True
         if (
@@ -279,7 +246,7 @@ class RealtimeModel(llm.RealtimeModel):
             proactivity=proactivity,
             realtime_input_config=realtime_input_config,
             context_window_compression=context_window_compression,
-            tools=tools,
+            gemini_tools=gemini_tools,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -294,7 +261,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
+        gemini_tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the RealtimeModel.
@@ -310,14 +277,14 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(temperature):
             self._opts.temperature = temperature
 
-        if is_given(tools):
-            self._opts.tools = tools
+        if is_given(gemini_tools):
+            self._opts.gemini_tools = gemini_tools
 
         for sess in self._sessions:
             sess.update_options(
                 voice=self._opts.voice,
                 temperature=self._opts.temperature,
-                tools=self._opts.tools,
+                gemini_tools=self._opts.gemini_tools,
             )
 
     async def aclose(self) -> None:
@@ -329,7 +296,7 @@ class RealtimeSession(llm.RealtimeSession):
         super().__init__(realtime_model)
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
-        self._gemini_declarations: list[FunctionDeclaration] = []
+        self._gemini_declarations: list[types.FunctionDeclaration] = []
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -383,7 +350,7 @@ class RealtimeSession(llm.RealtimeSession):
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
+        gemini_tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
     ) -> None:
         should_restart = False
         if is_given(voice) and self._opts.voice != voice:
@@ -394,8 +361,8 @@ class RealtimeSession(llm.RealtimeSession):
             self._opts.temperature = temperature if is_given(temperature) else NOT_GIVEN
             should_restart = True
 
-        if is_given(tools) and self._opts.tools != tools:
-            self._opts.tools = tools
+        if is_given(gemini_tools) and set(self._opts.gemini_tools) != set(gemini_tools):
+            self._opts.gemini_tools = gemini_tools
             should_restart = True
 
         if should_restart:
@@ -427,7 +394,7 @@ class RealtimeSession(llm.RealtimeSession):
             turns, _ = to_chat_ctx(append_ctx, id(self), ignore_functions=True)
             tool_results = get_tool_results_for_realtime(append_ctx, vertexai=self._opts.vertexai)
             if turns:
-                self._send_client_event(LiveClientContent(turns=turns, turn_complete=False))
+                self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=False))
             if tool_results:
                 self._send_client_event(tool_results)
 
@@ -436,7 +403,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._chat_ctx = chat_ctx.copy()
 
     async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
-        new_declarations: list[FunctionDeclaration] = to_fnc_ctx(tools)
+        new_declarations: list[types.FunctionDeclaration] = to_fnc_ctx(tools)
         current_tool_names = {f.name for f in self._gemini_declarations}
         new_tool_names = {f.name for f in new_declarations}
 
@@ -464,8 +431,8 @@ class RealtimeSession(llm.RealtimeSession):
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
-                realtime_input = LiveClientRealtimeInput(
-                    media_chunks=[Blob(data=nf.data.tobytes(), mime_type="audio/pcm")]
+                realtime_input = types.LiveClientRealtimeInput(
+                    media_chunks=[types.Blob(data=nf.data.tobytes(), mime_type="audio/pcm")]
                 )
                 self._send_client_event(realtime_input)
 
@@ -473,8 +440,8 @@ class RealtimeSession(llm.RealtimeSession):
         encoded_data = images.encode(
             frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
         )
-        realtime_input = LiveClientRealtimeInput(
-            media_chunks=[Blob(data=encoded_data, mime_type="image/jpeg")]
+        realtime_input = types.LiveClientRealtimeInput(
+            media_chunks=[types.Blob(data=encoded_data, mime_type="image/jpeg")]
         )
         self._send_client_event(realtime_input)
 
@@ -496,18 +463,18 @@ class RealtimeSession(llm.RealtimeSession):
 
         if self._in_user_activity:
             self._send_client_event(
-                LiveClientRealtimeInput(
-                    activity_end=ActivityEnd(),
+                types.LiveClientRealtimeInput(
+                    activity_end=types.ActivityEnd(),
                 )
             )
             self._in_user_activity = False
 
         # Gemini requires the last message to end with user's turn
         # so we need to add a placeholder user turn in order to trigger a new generation
-        event = LiveClientContent(turns=[], turn_complete=True)
+        event = types.LiveClientContent(turns=[], turn_complete=True)
         if is_given(instructions):
-            event.turns.append(Content(parts=[Part(text=instructions)], role="model"))
-        event.turns.append(Content(parts=[Part(text=".")], role="user"))
+            event.turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+        event.turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
         self._send_client_event(event)
 
         def _on_timeout() -> None:
@@ -532,8 +499,8 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._in_user_activity:
             self._in_user_activity = True
             self._send_client_event(
-                LiveClientRealtimeInput(
-                    activity_start=ActivityStart(),
+                types.LiveClientRealtimeInput(
+                    activity_start=types.ActivityStart(),
                 )
             )
 
@@ -543,7 +510,7 @@ class RealtimeSession(llm.RealtimeSession):
         if (
             self._opts.realtime_input_config
             and self._opts.realtime_input_config.activity_handling
-            == ActivityHandling.NO_INTERRUPTION
+            == types.ActivityHandling.NO_INTERRUPTION
         ):
             return
         self.start_user_activity()
@@ -591,7 +558,7 @@ class RealtimeSession(llm.RealtimeSession):
                         turns, _ = to_chat_ctx(self._chat_ctx, id(self), ignore_functions=True)
                         if turns:
                             self._send_client_event(
-                                LiveClientContent(turns=turns, turn_complete=False)
+                                types.LiveClientContent(turns=turns, turn_complete=False)
                             )
 
                     # queue up existing chat context
@@ -639,13 +606,13 @@ class RealtimeSession(llm.RealtimeSession):
                         not self._active_session or self._active_session != session
                     ):
                         break
-                if isinstance(msg, LiveClientContent):
+                if isinstance(msg, types.LiveClientContent):
                     await session.send_client_content(
                         turns=msg.turns, turn_complete=msg.turn_complete
                     )
-                elif isinstance(msg, LiveClientToolResponse):
+                elif isinstance(msg, types.LiveClientToolResponse):
                     await session.send_tool_response(function_responses=msg.function_responses)
-                elif isinstance(msg, LiveClientRealtimeInput):
+                elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.media_chunks:
                         for media_chunk in msg.media_chunks:
                             await session.send_realtime_input(media=media_chunk)
@@ -707,30 +674,18 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             self._mark_current_generation_done()
 
-    def _build_connect_config(self) -> LiveConnectConfig:
+    def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tool_config = Tool(function_declarations=self._gemini_declarations)
-        if is_given(self._opts.tools):
-            for tool in self._opts.tools:
-                if isinstance(tool, GoogleSearchRetrieval):
-                    tool_config.google_search_retrieval = tool
-                elif isinstance(tool, ToolCodeExecution):
-                    tool_config.code_execution = tool
-                elif isinstance(tool, GoogleSearch):
-                    tool_config.google_search = tool
-                elif isinstance(tool, UrlContext):
-                    tool_config.url_context = tool
-                elif isinstance(tool, GoogleMaps):
-                    tool_config.google_maps = tool
-                else:
-                    logger.warning(f"Warning: Received unhandled tool type: {type(tool)}")
-
-        conf = LiveConnectConfig(
+        tools_config = create_tools_config(
+            function_tools=self._gemini_declarations,
+            gemini_tools=self._opts.gemini_tools,
+        )
+        conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities
             if is_given(self._opts.response_modalities)
-            else [Modality.AUDIO],
-            generation_config=GenerationConfig(
+            else [types.Modality.AUDIO],
+            generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,
                 max_output_tokens=self._opts.max_output_tokens
@@ -745,19 +700,21 @@ class RealtimeSession(llm.RealtimeSession):
                 if is_given(self._opts.frequency_penalty)
                 else None,
             ),
-            system_instruction=Content(parts=[Part(text=self._opts.instructions)])
+            system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])
             if is_given(self._opts.instructions)
             else None,
-            speech_config=SpeechConfig(
-                voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=self._opts.voice)
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self._opts.voice)
                 ),
                 language_code=self._opts.language if is_given(self._opts.language) else None,
             ),
-            tools=[tool_config],
+            tools=tools_config,
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
-            session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
+            session_resumption=types.SessionResumptionConfig(
+                handle=self._session_resumption_handle
+            ),
             realtime_input_config=self._opts.realtime_input_config,
         )
 
@@ -809,7 +766,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         self.emit("generation_created", generation_event)
 
-    def _handle_server_content(self, server_content: LiveServerContent):
+    def _handle_server_content(self, server_content: types.LiveServerContent):
         current_gen = self._current_generation
         if not current_gen:
             logger.warning("received server content but no active generation.")
@@ -856,34 +813,7 @@ class RealtimeSession(llm.RealtimeSession):
             if text:
                 current_gen.push_text(text)
 
-        if server_content.generation_complete:
-            # The only way we'd know that the transcription is complete is by when they are
-            # done with generation
-            if current_gen.input_transcription:
-                self.emit(
-                    "input_audio_transcription_completed",
-                    llm.InputTranscriptionCompleted(
-                        item_id=current_gen.input_id,
-                        transcript=current_gen.input_transcription,
-                        is_final=True,
-                    ),
-                )
-
-                # since gemini doesn't give us a view of the chat history on the server side,
-                # we would handle it manually here
-                self._chat_ctx.add_message(
-                    role="user",
-                    content=current_gen.input_transcription,
-                    id=current_gen.input_id,
-                )
-
-            if current_gen.output_text:
-                self._chat_ctx.add_message(
-                    role="assistant",
-                    content=current_gen.output_text,
-                    id=current_gen.response_id,
-                )
-
+        if server_content.generation_complete or server_content.turn_complete:
             current_gen._completed_timestamp = time.time()
 
         if server_content.interrupted:
@@ -897,6 +827,34 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         gen = self._current_generation
+
+        # The only way we'd know that the transcription is complete is by when they are
+        # done with generation
+        if gen.input_transcription:
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=gen.input_id,
+                    transcript=gen.input_transcription,
+                    is_final=True,
+                ),
+            )
+
+            # since gemini doesn't give us a view of the chat history on the server side,
+            # we would handle it manually here
+            self._chat_ctx.add_message(
+                role="user",
+                content=gen.input_transcription,
+                id=gen.input_id,
+            )
+
+        if gen.output_text:
+            self._chat_ctx.add_message(
+                role="assistant",
+                content=gen.output_text,
+                id=gen.response_id,
+            )
+
         if not gen.text_ch.closed:
             gen.text_ch.close()
         if not gen.audio_ch.closed:
@@ -909,7 +867,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _handle_input_speech_started(self):
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
-    def _handle_tool_calls(self, tool_call: LiveServerToolCall):
+    def _handle_tool_calls(self, tool_call: types.LiveServerToolCall):
         if not self._current_generation:
             logger.warning("received tool call but no active generation.")
             return
@@ -928,14 +886,14 @@ class RealtimeSession(llm.RealtimeSession):
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(
-        self, tool_call_cancellation: LiveServerToolCallCancellation
+        self, tool_call_cancellation: types.LiveServerToolCallCancellation
     ):
         logger.warning(
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
         )
 
-    def _handle_usage_metadata(self, usage_metadata: UsageMetadata):
+    def _handle_usage_metadata(self, usage_metadata: types.UsageMetadata):
         current_gen = self._current_generation
         if not current_gen:
             logger.warning("no active generation to report metrics for")
@@ -951,8 +909,8 @@ class RealtimeSession(llm.RealtimeSession):
         ) - current_gen._created_timestamp
 
         def _token_details_map(
-            token_details: list[ModalityTokenCount] | None,
-        ) -> dict[Modality, int]:
+            token_details: list[types.ModalityTokenCount] | None,
+        ) -> dict[types.Modality, int]:
             token_details_map = {"audio_tokens": 0, "text_tokens": 0, "image_tokens": 0}
             if not token_details:
                 return token_details_map
@@ -961,11 +919,11 @@ class RealtimeSession(llm.RealtimeSession):
                 if not token_detail.token_count:
                     continue
 
-                if token_detail.modality == Modality.AUDIO:
+                if token_detail.modality == types.Modality.AUDIO:
                     token_details_map["audio_tokens"] += token_detail.token_count
-                elif token_detail.modality == Modality.TEXT:
+                elif token_detail.modality == types.Modality.TEXT:
                     token_details_map["text_tokens"] += token_detail.token_count
-                elif token_detail.modality == Modality.IMAGE:
+                elif token_detail.modality == types.Modality.IMAGE:
                     token_details_map["image_tokens"] += token_detail.token_count
             return token_details_map
 
@@ -996,7 +954,7 @@ class RealtimeSession(llm.RealtimeSession):
         )
         self.emit("metrics_collected", metrics)
 
-    def _handle_go_away(self, go_away: LiveServerGoAway):
+    def _handle_go_away(self, go_away: types.LiveServerGoAway):
         logger.warning(
             f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}"
         )
