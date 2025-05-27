@@ -1,3 +1,5 @@
+from typing import Union
+
 from google.genai.types import (
     GoogleMaps,
     GoogleSearch,
@@ -6,4 +8,4 @@ from google.genai.types import (
     UrlContext,
 )
 
-LLMTool = GoogleSearchRetrieval | ToolCodeExecution | GoogleSearch | UrlContext | GoogleMaps
+LLMTool = Union[GoogleSearchRetrieval, ToolCodeExecution, GoogleSearch, UrlContext, GoogleMaps]
