@@ -202,7 +202,6 @@ class TTS(tts.TTS):
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-        await super().aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -281,10 +280,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             asyncio.create_task(_tokenize_input()),
             asyncio.create_task(_run_segments()),
         ]
-        try:
-            await asyncio.gather(*tasks)
-        except Exception as e:
-            raise APIConnectionError() from e
+        await asyncio.gather(*tasks)
 
     async def _run_stream(self, input_stream, output_emitter: tts.AudioEmitter):
         streaming_config = texttospeech.StreamingSynthesizeConfig(
@@ -333,8 +329,10 @@ def _gender_from_str(gender: str) -> SsmlVoiceGender:
 
 
 def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding):
-    if encoding in (texttospeech.AudioEncoding.PCM, texttospeech.AudioEncoding.LINEAR16):
+    if encoding == texttospeech.AudioEncoding.PCM:
         return "audio/pcm"
+    elif encoding == texttospeech.AudioEncoding.LINEAR16:
+        return "audio/wav"
     elif encoding == texttospeech.AudioEncoding.MP3:
         return "audio/mp3"
     elif encoding == texttospeech.AudioEncoding.OGG_OPUS:
