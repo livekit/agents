@@ -81,9 +81,9 @@ class RoomInputOptions:
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
-    close_on_disconnect_reasons: NotGivenOr[list[rtc.DisconnectReason.ValueType] | None] = NOT_GIVEN
-    """Close the AgentSession if the linked participant disconnects with these reasons.
-    If not provided, use `DEFAULT_CLOSE_ON_DISCONNECT_REASONS`, if None, don't close."""
+    close_on_disconnect: bool = True
+    """Close the AgentSession if the linked participant disconnects with reasons in
+    CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
 
 
 @dataclass
@@ -395,14 +395,9 @@ class RoomIO:
 
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
 
-        reasons = (
-            self._input_options.close_on_disconnect_reasons
-            if utils.is_given(self._input_options.close_on_disconnect_reasons)
-            else DEFAULT_CLOSE_ON_DISCONNECT_REASONS
-        )
         if (
-            reasons is not None
-            and participant.disconnect_reason in reasons
+            self._input_options.close_on_disconnect
+            and participant.disconnect_reason in DEFAULT_CLOSE_ON_DISCONNECT_REASONS
             and not self._close_session_atask
         ):
 

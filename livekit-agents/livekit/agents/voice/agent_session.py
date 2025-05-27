@@ -226,6 +226,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
+        self._job_context_cb_registered: bool = False
 
     @property
     def userdata(self) -> Userdata_T:
@@ -365,11 +366,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
 
-            try:
-                job_ctx = get_job_context()
-                job_ctx.add_tracing_callback(self._trace_chat_ctx)
-            except RuntimeError:
-                pass  # ignore
+            if not self._job_context_cb_registered:
+                # session can be restarted, register the callbacks only once
+                try:
+                    job_ctx = get_job_context()
+                    job_ctx.add_tracing_callback(self._trace_chat_ctx)
+                    job_ctx.add_shutdown_callback(self.aclose)
+                    self._job_context_cb_registered = True
+                except RuntimeError:
+                    pass  # ignore
 
             # it is ok to await it directly, there is no previous task to drain
             await self._update_activity_task(self._agent)
