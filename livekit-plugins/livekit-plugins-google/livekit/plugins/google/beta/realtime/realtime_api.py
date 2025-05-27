@@ -132,7 +132,7 @@ class RealtimeModel(llm.RealtimeModel):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
         output_audio_transcription: NotGivenOr[AudioTranscriptionConfig | None] = NOT_GIVEN,
-        auto_tool_reply_generation: NotGivenOr[bool] = NOT_GIVEN,
+        auto_tool_reply_generation: NotGivenOr[bool] = True,
         image_encode_options: NotGivenOr[images.EncodeOptions] = NOT_GIVEN,
         enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN,
         proactivity: NotGivenOr[bool] = NOT_GIVEN,
