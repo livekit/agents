@@ -19,25 +19,12 @@ See https://docs.livekit.io/agents/integrations/tts/hume/ for more information.
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
-
-# make imports available
-from hume.tts import (
-    Format,
-    PostedContext,
-    PostedUtteranceVoice,
-)
 from livekit.agents import Plugin
 
-from .tts import TTS
+from .tts import TTS, PostedContext, PostedUtterance
+from .version import __version__
 
-# all exports
-__all__ = [
-    "TTS",
-    "Format",
-    "PostedContext",
-    "PostedUtteranceVoice",
-]
+__all__ = ["TTS", "PostedContext", "PostedUtterance"]
 
 
 class HumeAIPlugin(Plugin):
@@ -46,15 +33,6 @@ class HumeAIPlugin(Plugin):
 
 
 Plugin.register_plugin(HumeAIPlugin())
-
-# Cleanup docs of unexported modules
-_module = dir()
-NOT_IN_ALL = [m for m in _module if m not in __all__]
-
-__pdoc__ = {}
-
-for n in NOT_IN_ALL:
-    __pdoc__[n] = False
 
 # Cleanup docs of unexported modules
 _module = dir()
