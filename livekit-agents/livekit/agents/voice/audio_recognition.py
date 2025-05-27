@@ -278,7 +278,6 @@ class AudioRecognition:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             self._hooks.on_start_of_speech(ev)
             self._speaking = True
-            logger.warning("VAD START_OF_SPEECH")
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
