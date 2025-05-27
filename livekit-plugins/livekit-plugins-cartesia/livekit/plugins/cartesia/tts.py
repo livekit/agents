@@ -350,7 +350,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 finally:
                     await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError:
-            raise APITimeoutError()
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
