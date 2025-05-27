@@ -37,7 +37,7 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .utils import to_chat_ctx, to_fnc_ctx, to_response_format
+from .utils import to_fnc_ctx, to_response_format
 
 
 @dataclass
@@ -274,14 +274,19 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm), generate=True)
+            turns_dict, extra_data = self._chat_ctx.to_provider_format(format="google")
+            turns = [types.Content.model_validate(turn) for turn in turns_dict]
             function_declarations = to_fnc_ctx(self._tools)
             if function_declarations:
                 self._extra_kwargs["tools"] = [
                     types.Tool(function_declarations=function_declarations)
                 ]
             config = types.GenerateContentConfig(
-                system_instruction=system_instruction,
+                system_instruction=(
+                    [types.Part(text=content) for content in extra_data.system_messages]
+                    if extra_data.system_messages
+                    else None
+                ),
                 **self._extra_kwargs,
             )
 

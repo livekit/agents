@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, NotGivenOr, utils
+from livekit.agents import NOT_GIVEN, NotGivenOr, tts, utils
 from livekit.agents.tts import (
     TTS,
     ChunkedStream,
@@ -62,10 +62,7 @@ class FakeTTS(TTS):
         return self._stream_ch
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> FakeChunkedStream:
         stream = FakeChunkedStream(tts=self, input_text=text, conn_options=conn_options)
         self._synthesize_ch.send_nowait(stream)
@@ -91,12 +88,17 @@ class FakeChunkedStream(ChunkedStream):
     def attempt(self) -> int:
         return self._attempt
 
-    async def _run(self) -> None:
+    async def _run(self, output_emitter: tts.AudioEmitter):
         self._attempt += 1
 
         assert isinstance(self._tts, FakeTTS)
 
-        request_id = utils.shortuuid("fake_tts_")
+        output_emitter.initialize(
+            request_id=utils.shortuuid("fake_tts_"),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type="audio/pcm",
+        )
 
         if self._tts._fake_timeout is not None:
             await asyncio.sleep(self._tts._fake_timeout)
@@ -109,21 +111,13 @@ class FakeChunkedStream(ChunkedStream):
             )
             while pushed_samples < max_samples:
                 num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
-                self._event_ch.send_nowait(
-                    SynthesizedAudio(
-                        request_id=request_id,
-                        frame=rtc.AudioFrame(
-                            data=b"\x00\x00" * num_samples,
-                            samples_per_channel=num_samples // self._tts.num_channels,
-                            sample_rate=self._tts.sample_rate,
-                            num_channels=self._tts.num_channels,
-                        ),
-                    )
-                )
+                output_emitter.push(b"\x00\x00" * num_samples)
                 pushed_samples += num_samples
 
         if self._tts._fake_exception is not None:
             raise self._tts._fake_exception
+
+        output_emitter.flush()
 
 
 class FakeSynthesizeStream(SynthesizeStream):
