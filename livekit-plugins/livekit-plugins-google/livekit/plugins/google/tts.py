@@ -237,8 +237,9 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter):
         encoding = self._opts.encoding
         if encoding not in (texttospeech.AudioEncoding.OGG_OPUS, texttospeech.AudioEncoding.PCM):
+            enc_name = texttospeech.AudioEncoding._member_names_[encoding]
             logger.warning(
-                f"encoding {encoding} isn't supported by the streaming_synthesize, fallbacking to PCM"
+                f"encoding {enc_name} isn't supported by the streaming_synthesize, fallbacking to PCM"
             )
             encoding = texttospeech.AudioEncoding.PCM
 
