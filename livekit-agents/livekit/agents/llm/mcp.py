@@ -171,13 +171,7 @@ class MCPServerHTTP(MCPServer):
         False for SSE if URL ends with 'sse' or for backward compatibility.
         """
         url_lower = url.lower().rstrip('/')
-        if url_lower.endswith('/mcp') or url_lower.endswith('mcp'):
-            return True
-        elif url_lower.endswith('/sse') or url_lower.endswith('sse'):
-            return False
-        else:
-            # Default for backward compatibility
-            return False
+        return url_lower.endswith('mcp'):
 
     def client_streams(
         self,
