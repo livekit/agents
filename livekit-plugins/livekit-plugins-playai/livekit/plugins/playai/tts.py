@@ -58,15 +58,17 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
-        self._api_key = api_key or os.environ.get("PLAYHT_API_KEY")
-        self._user_id = user_id or os.environ.get("PLAYHT_USER_ID")
+        api_key = api_key or os.environ.get("PLAYHT_API_KEY")
+        user_id = user_id or os.environ.get("PLAYHT_USER_ID")
 
-        if not self._api_key or not self._user_id:
+        if not api_key or not user_id:
             raise ValueError(
                 "PlayHT API key and user ID are required. Set environment variables PLAYHT_API_KEY "
                 "and PLAYHT_USER_ID or pass them explicitly."
             )
 
+        self._api_key = api_key
+        self._user_id = user_id
         self._opts = _TTSOptions(
             voice=voice, model=model, sample_rate=sample_rate, language=language
         )
