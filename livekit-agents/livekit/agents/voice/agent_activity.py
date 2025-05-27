@@ -62,9 +62,9 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
-    def __init__(self, agent: Agent, sess: AgentSession[Any]) -> None:
+    def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
-        self._rt_session: llm.RealtimeSession[Any] | None = None
+        self._rt_session: llm.RealtimeSession | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
@@ -168,7 +168,7 @@ class AgentActivity(RecognitionHooks):
         return self._draining
 
     @property
-    def session(self) -> AgentSession[Any]:
+    def session(self) -> AgentSession:
         return self._session
 
     @property
@@ -201,7 +201,7 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
-    def realtime_llm_session(self) -> llm.RealtimeSession[Any] | None:
+    def realtime_llm_session(self) -> llm.RealtimeSession | None:
         return self._rt_session
 
     @property
@@ -384,7 +384,7 @@ class AgentActivity(RecognitionHooks):
                 ),
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
-                manual_turn_detection=self._turn_detection_mode == "manual",
+                turn_detection_mode=self._turn_detection_mode,
             )
             self._audio_recognition.start()
             self._started = True
@@ -794,8 +794,8 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("listening")
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
-        if self._turn_detection_mode not in ("vad", None):
-            # ignore vad inference done event if turn_detection is not set to vad or default
+        if self._turn_detection_mode in ("manual", "realtime_llm"):
+            # ignore vad inference done event if turn_detection is manual or realtime_llm
             return
 
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
@@ -813,7 +813,10 @@ class AgentActivity(RecognitionHooks):
             text = self._audio_recognition.current_transcript
 
             # TODO(long): better word splitting for multi-language
-            if len(split_words(text)) < self._session.options.min_interruption_words:
+            if (
+                len(split_words(text, split_character=True))
+                < self._session.options.min_interruption_words
+            ):
                 return
 
         if (
@@ -873,7 +876,8 @@ class AgentActivity(RecognitionHooks):
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
             and self._session.options.min_interruption_words > 0
-            and len(split_words(info.new_transcript)) < self._session.options.min_interruption_words
+            and len(split_words(info.new_transcript, split_character=True))
+            < self._session.options.min_interruption_words
         ):
             # avoid interruption if the new_transcript is too short
             return False
@@ -1114,8 +1118,8 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(tools)
 
         if new_message is not None:
-            chat_ctx.insert_item(new_message)
-            self._agent._chat_ctx.insert_item(new_message)
+            chat_ctx.insert(new_message)
+            self._agent._chat_ctx.insert(new_message)
             self._session._conversation_item_added(new_message)
 
         if instructions is not None:
@@ -1204,7 +1208,7 @@ class AgentActivity(RecognitionHooks):
             for msg in _tools_messages:
                 # reset the created_at to the reply start time
                 msg.created_at = reply_started_at
-            self._agent._chat_ctx.insert_item(_tools_messages)
+            self._agent._chat_ctx.insert(_tools_messages)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1234,7 +1238,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=True,
                 created_at=reply_started_at,
             )
-            self._agent._chat_ctx.insert_item(msg)
+            self._agent._chat_ctx.insert(msg)
             self._session._update_agent_state("listening")
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
@@ -1250,7 +1254,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=False,
                 created_at=reply_started_at,
             )
-            self._agent._chat_ctx.insert_item(msg)
+            self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
 
@@ -1354,7 +1358,7 @@ class AgentActivity(RecognitionHooks):
                 # add the tool calls and outputs to the chat context even no reply is generated
                 for msg in tool_messages:
                     msg.created_at = reply_started_at
-                self._agent._chat_ctx.insert_item(tool_messages)
+                self._agent._chat_ctx.insert(tool_messages)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -1667,16 +1671,16 @@ class AgentActivity(RecognitionHooks):
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     @property
-    def stt(self) -> stt.STT[Any] | None:
+    def stt(self) -> stt.STT | None:
         return self._agent.stt if is_given(self._agent.stt) else self._session.stt
 
     @property
-    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
+    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
         return cast(
-            Optional[Union[llm.LLM[Any], llm.RealtimeModel]],
+            Optional[Union[llm.LLM, llm.RealtimeModel]],
             self._agent.llm if is_given(self._agent.llm) else self._session.llm,
         )
 
     @property
-    def tts(self) -> tts.TTS[Any] | None:
+    def tts(self) -> tts.TTS | None:
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts

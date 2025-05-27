@@ -5,7 +5,7 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
+from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar, Union, runtime_checkable
 
 from livekit import rtc
 
@@ -67,7 +67,7 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 
 @runtime_checkable
 class _VideoSampler(Protocol):
-    def __call__(self, frame: rtc.VideoFrame, session: AgentSession[Any]) -> bool: ...
+    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool: ...
 
 
 # TODO(theomonnom): Should this be moved to another file?
@@ -80,7 +80,7 @@ class VoiceActivityVideoSampler:
         self.silent_fps = silent_fps
         self._last_sampled_time: float | None = None
 
-    def __call__(self, frame: rtc.VideoFrame, session: AgentSession[Any]) -> bool:
+    def __call__(self, frame: rtc.VideoFrame, session: AgentSession) -> bool:
         now = time.time()
         is_speaking = session.user_state == "speaking"
         target_fps = self.speaking_fps if is_speaking else self.silent_fps
@@ -102,10 +102,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         turn_detection: NotGivenOr[TurnDetectionMode] = NOT_GIVEN,
-        stt: NotGivenOr[stt.STT[Any]] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM[Any] | llm.RealtimeModel] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS[Any]] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         allow_interruptions: bool = True,
@@ -625,20 +625,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("user_state_changed", UserStateChangedEvent(old_state=old_state, new_state=state))
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
-        self._chat_ctx.insert_item(message)
+        self._chat_ctx.insert(message)
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
-    def stt(self) -> stt.STT[Any] | None:
+    def stt(self) -> stt.STT | None:
         return self._stt
 
     @property
-    def llm(self) -> llm.LLM[Any] | llm.RealtimeModel | None:
+    def llm(self) -> llm.LLM | llm.RealtimeModel | None:
         return self._llm
 
     @property
-    def tts(self) -> tts.TTS[Any] | None:
+    def tts(self) -> tts.TTS | None:
         return self._tts
 
     @property

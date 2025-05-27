@@ -47,11 +47,11 @@ class TextInputEvent:
 
 
 TextInputCallback = Callable[
-    ["AgentSession[Any]", TextInputEvent], Optional[Coroutine[None, None, None]]
+    ["AgentSession", TextInputEvent], Optional[Coroutine[None, None, None]]
 ]
 
 
-def _default_text_input_cb(sess: AgentSession[Any], ev: TextInputEvent) -> None:
+def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
     sess.interrupt()
     sess.generate_reply(user_input=ev.text)
 
@@ -98,7 +98,7 @@ DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
 class RoomIO:
     def __init__(
         self,
-        agent_session: AgentSession[Any],
+        agent_session: AgentSession,
         room: rtc.Room,
         *,
         participant: rtc.RemoteParticipant | str | None = None,

@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar, Union
+from typing import Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -184,7 +184,7 @@ class STT(
         """Close the STT, and every stream/requests associated with it"""
         ...
 
-    async def __aenter__(self) -> STT[Any]:
+    async def __aenter__(self) -> STT:
         return self
 
     async def __aexit__(
@@ -205,7 +205,7 @@ class RecognizeStream(ABC):
     def __init__(
         self,
         *,
-        stt: STT[Any],
+        stt: STT,
         conn_options: APIConnectOptions,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
     ):

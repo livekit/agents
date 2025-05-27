@@ -198,7 +198,7 @@ class ChatContext:
             self._items.append(message)
         return message
 
-    def insert_item(self, item: ChatItem | Sequence[ChatItem]) -> None:
+    def insert(self, item: ChatItem | Sequence[ChatItem]) -> None:
         """Insert an item or list of items into the chat context by creation time."""
         items = item if isinstance(item, list) else [item]
 
