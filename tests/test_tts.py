@@ -65,8 +65,23 @@ async def assert_valid_synthesized_audio(
 
     # Make sure the data is PCM and can't be another container.
     # OpenAI STT seems to probe the input so the test could still pass even if the data isn't PCM.
-    with pytest.raises(InvalidDataError):
+    with pytest.raises(av.InvalidDataError):
         container = av.open(io.BytesIO(frame.data))
+
+        print("Container format:", container.format.name)
+        print("Container long name:", container.format.long_name)
+        print("Metadata:")
+        for key, value in container.metadata.items():
+            print(f"  {key}: {value}")
+
+        print("Streams:")
+        for stream in container.streams:
+            print(f"  Stream index: {stream.index}")
+            print(f"    Type: {stream.type}")
+            print(f"    Codec: {stream.codec.name}")
+            print(f"    Duration: {stream.duration}")
+            print(f"    Time base: {stream.time_base}")
+
         container.close()
 
     assert len(frame.data) >= frame.samples_per_channel
