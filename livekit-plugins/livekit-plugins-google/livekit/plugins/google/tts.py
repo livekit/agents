@@ -71,7 +71,7 @@ class TTS(tts.TTS):
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
         location: str = "global",
-        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,
+        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.LINEAR16,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,

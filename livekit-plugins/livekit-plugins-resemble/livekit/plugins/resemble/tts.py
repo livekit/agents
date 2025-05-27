@@ -337,7 +337,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "audio_end":
                     index = data["request_id"]
                     if index == last_index and input_ended:
-                        output_emitter.flush()
                         break
                 else:
                     logger.error("Unexpected Resemble message %s", data)
