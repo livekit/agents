@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
@@ -51,7 +51,11 @@ DEFAULT_GENDER = "neutral"
 @dataclass
 class _TTSOptions:
     voice: texttospeech.VoiceSelectionParams
-    audio_config: texttospeech.AudioConfig
+    encoding: texttospeech.AudioEncoding
+    sample_rate: int
+    pitch: float
+    effects_profile_id: str
+    speaking_rate: float
     tokenizer: tokenize.SentenceTokenizer
 
 
@@ -119,13 +123,11 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             voice=voice_params,
-            audio_config=texttospeech.AudioConfig(
-                audio_encoding=audio_encoding,
-                sample_rate_hertz=sample_rate,
-                pitch=pitch,
-                effects_profile_id=effects_profile_id,
-                speaking_rate=speaking_rate,
-            ),
+            encoding=audio_encoding,
+            sample_rate=sample_rate,
+            pitch=pitch,
+            effects_profile_id=effects_profile_id,
+            speaking_rate=speaking_rate,
             tokenizer=tokenizer,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -159,7 +161,7 @@ class TTS(tts.TTS):
             self._opts.voice = texttospeech.VoiceSelectionParams(**params)
 
         if is_given(speaking_rate):
-            self._opts.audio_config.speaking_rate = speaking_rate
+            self._opts.speaking_rate = speaking_rate
 
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
         api_endpoint = "texttospeech.googleapis.com"
@@ -187,28 +189,14 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            opts=self._opts,
-            client=self._ensure_client(),
-            conn_options=conn_options,
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-            opts=self._opts,
-            client=self._ensure_client(),
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
@@ -218,30 +206,29 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        opts: _TTSOptions,
-        client: texttospeech.TextToSpeechAsyncClient,
-        conn_options: APIConnectOptions,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts, self._client = opts, client
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter):
         try:
-            response: SynthesizeSpeechResponse = await self._client.synthesize_speech(
+            response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
                 input=texttospeech.SynthesisInput(text=self._input_text),
                 voice=self._opts.voice,
-                audio_config=self._opts.audio_config,
+                audio_config=texttospeech.AudioConfig(
+                    audio_encoding=self._opts.encoding,
+                    sample_rate_hertz=self._opts.sample_rate,
+                    pitch=self._opts.pitch,
+                    effects_profile_id=self._opts.effects_profile_id,
+                    speaking_rate=self._opts.speaking_rate,
+                ),
                 timeout=self._conn_options.timeout,
             )
 
             output_emitter.initialize(
                 request_id=utils.shortuuid(),
-                sample_rate=self._opts.audio_config.sample_rate_hertz,
+                sample_rate=self._opts.sample_rate,
                 num_channels=1,
                 mime_type="audio/pcm",
             )
@@ -251,28 +238,23 @@ class ChunkedStream(tts.ChunkedStream):
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(
-                f"{e.message} {e.details}", status_code=e.code or -1, request_id=None, body=None
-            ) from e
-        except Exception as e:
-            raise APIConnectionError() from e
+            raise APIStatusError(e.message, status_code=e.code or -1) from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        client: texttospeech.TextToSpeechAsyncClient,
-        conn_options: APIConnectOptions,
-    ):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._opts, self._client = opts, client
+        self._tts = tts
+        self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
+    async def _run(self, output_emitter: tts.AudioEmitter):
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            mime_type="audio/pcm",
+        )
 
         @utils.log_exceptions(logger=logger)
         async def _tokenize_input():
@@ -287,12 +269,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if input_stream:
                         input_stream.end_input()
                     input_stream = None
+
             self._segments_ch.close()
 
         @utils.log_exceptions(logger=logger)
         async def _run_segments():
             async for input_stream in self._segments_ch:
-                await self._run_stream(input_stream, request_id)
+                await self._run_stream(input_stream, output_emitter)
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -303,23 +286,20 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
 
-    async def _run_stream(self, input_stream, request_id):
+    async def _run_stream(self, input_stream, output_emitter: tts.AudioEmitter):
         streaming_config = texttospeech.StreamingSynthesizeConfig(
             voice=self._opts.voice,
             streaming_audio_config=texttospeech.StreamingAudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.PCM
+                audio_encoding=self._opts.encoding,
+                sample_rate_hertz=self._opts.sample_rate,
             ),
-        )
-        emitter = tts.SynthesizedAudioEmitter(event_ch=self._event_ch, request_id=request_id)
-        audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._opts.audio_config.sample_rate_hertz,
-            num_channels=NUM_CHANNELS,
         )
 
         @utils.log_exceptions(logger=logger)
         async def input_generator():
             try:
                 yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
+
                 async for input in input_stream:
                     self._mark_started()
                     yield texttospeech.StreamingSynthesizeRequest(
@@ -330,29 +310,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                 logger.exception("an error occurred while streaming input to google TTS")
 
         try:
-            stream = await self._client.streaming_synthesize(
-                input_generator(),
-                timeout=self._conn_options.timeout,
+            stream = await self._tts._ensure_client().streaming_synthesize(
+                input_generator(), timeout=self._conn_options.timeout
             )
             async for resp in stream:
-                for frame in audio_bstream.write(resp.audio_content):
-                    emitter.push(frame)
+                output_emitter.push(resp.audio_content)
 
-            for frame in audio_bstream.flush():
-                emitter.push(frame)
-            emitter.flush()
-        except DeadlineExceeded as e:
-            logger.debug(f"google tts deadline exceeded: {e}")
-            pass
+        except DeadlineExceeded:
+            raise APITimeoutError()
         except GoogleAPICallError as e:
-            raise APIStatusError(
-                f"{e.message} {e.details}",
-                status_code=e.code or -1,
-                request_id=request_id,
-                body=None,
-            ) from e
-        except Exception as e:
-            raise APIConnectionError() from e
+            raise APIStatusError(e.message, status_code=e.code or -1) from e
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:
@@ -363,3 +330,14 @@ def _gender_from_str(gender: str) -> SsmlVoiceGender:
         ssml_gender = SsmlVoiceGender.FEMALE
 
     return ssml_gender  # type: ignore
+
+
+def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding):
+    if encoding in (texttospeech.AudioEncoding.PCM, texttospeech.AudioEncoding.LINEAR16):
+        return "audio/pcm"
+    elif encoding == texttospeech.AudioEncoding.MP3:
+        return "audio/mp3"
+    elif encoding == texttospeech.AudioEncoding.OGG_OPUS:
+        return "audio/opus"
+    else:
+        raise RuntimeError(f"encoding {encoding} isn't supported")
