@@ -76,7 +76,6 @@ class RoomInputOptions:
     pre_connect_audio_timeout: float = 3.0
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
 
-
 @dataclass
 class RoomOutputOptions:
     transcription_enabled: bool = True
@@ -89,7 +88,6 @@ class RoomOutputOptions:
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
     Otherwise, transcription is emitted as quickly as available."""
-
 
 DEFAULT_ROOM_INPUT_OPTIONS = RoomInputOptions()
 DEFAULT_ROOM_OUTPUT_OPTIONS = RoomOutputOptions()
@@ -130,7 +128,7 @@ class RoomIO:
         self._user_transcript_ch = utils.aio.Chan[UserInputTranscribedEvent]()
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
-        self._update_state_atask: asyncio.Task[None] | None = None
+        self._update_attributes_atask: asyncio.Task[None] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
 
@@ -233,8 +231,8 @@ class RoomIO:
         if self._user_transcript_atask:
             await utils.aio.cancel_and_wait(self._user_transcript_atask)
 
-        if self._update_state_atask:
-            await utils.aio.cancel_and_wait(self._update_state_atask)
+        if self._update_attributes_atask:
+            await utils.aio.cancel_and_wait(self._update_attributes_atask)
 
         if self._pre_connect_audio_handler:
             await self._pre_connect_audio_handler.aclose()
@@ -310,6 +308,9 @@ class RoomIO:
 
         self._update_transcription_output(self._user_tr_output, participant_identity)
 
+        # Update both state and capabilities when participant changes
+        self._update_attributes()
+
     def unset_participant(self) -> None:
         self._participant_identity = None
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
@@ -350,6 +351,8 @@ class RoomIO:
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
+            # Update both state and capabilities when connected
+            self._update_attributes()
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
@@ -400,17 +403,41 @@ class RoomIO:
         task.add_done_callback(self._tasks.discard)
 
     def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
+        self._update_attributes()
+
+    def _update_attributes(self) -> None:
         @utils.log_exceptions(logger=logger)
-        async def _set_state() -> None:
-            if self._room.isconnected():
-                await self._room.local_participant.set_attributes(
-                    {ATTRIBUTE_AGENT_STATE: ev.new_state}
-                )
+        async def _update() -> None:
+            if not self._room.isconnected():
+                return
 
-        if self._update_state_atask is not None:
-            self._update_state_atask.cancel()
+            attrs = {}
 
-        self._update_state_atask = asyncio.create_task(_set_state())
+            attrs[ATTRIBUTE_AGENT_STATE] = self._agent_session.state
+
+            inputs = []
+            if self._input_options.audio_enabled:
+                inputs.append("audio")
+            if self._input_options.video_enabled:
+                inputs.append("video")
+            if self._input_options.text_enabled:
+                inputs.append("text")
+            attrs["lk.agent_inputs"] = ",".join(inputs)
+
+            outputs = []
+            if self._output_options.audio_enabled:
+                outputs.append("audio")
+            if self._output_options.transcription_enabled:
+                outputs.append("transcription")
+            attrs["lk.agent_outputs"] = ",".join(outputs)
+
+            if attrs:
+                await self._room.local_participant.set_attributes(attrs)
+
+        if self._update_attributes_atask is not None:
+            self._update_attributes_atask.cancel()
+
+        self._update_attributes_atask = asyncio.create_task(_update())
 
     def _create_transcription_output(
         self, is_delta_stream: bool, participant: rtc.Participant | str | None = None
@@ -438,3 +465,21 @@ class RoomIO:
                 sink, (_ParticipantLegacyTranscriptionOutput, _ParticipantTranscriptionOutput)
             ):
                 sink.set_participant(participant_identity)
+
+    @property
+    def input_options(self) -> RoomInputOptions:
+        return self._input_options
+
+    @input_options.setter
+    def input_options(self, options: RoomInputOptions) -> None:
+        self._input_options = options
+        self._update_attributes()
+
+    @property
+    def output_options(self) -> RoomOutputOptions:
+        return self._output_options
+
+    @output_options.setter
+    def output_options(self, options: RoomOutputOptions) -> None:
+        self._output_options = options
+        self._update_attributes()
