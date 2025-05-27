@@ -282,7 +282,6 @@ class RealtimeSession(
             "Content-Type": "application/json",
         }
 
-        # Step 1: Create a call to get the WebSocket URL
         create_call_url = f"{self._realtime_model._opts.base_url.rstrip('/')}/calls"
         payload = {
             "systemPrompt": self._realtime_model._opts.system_prompt,
@@ -295,20 +294,17 @@ class RealtimeSession(
                     "clientBufferSizeMs": self._realtime_model._opts.client_buffer_size_ms,
                 }
             },
+            # TODO: add tools
         }
 
         try:
             http_session = self._realtime_model._ensure_http_session()
-
             async with http_session.post(create_call_url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
-
                 response_json = await resp.json()
                 join_url = response_json.get("joinUrl")
                 if not join_url:
                     raise APIConnectionError("Ultravox call created, but no joinUrl received.")
-
-            logger.info(f"Got Ultravox joinUrl: {join_url}")
 
             ws_conn = await http_session.ws_connect(join_url)
             self._ws = ws_conn
@@ -356,6 +352,7 @@ class RealtimeSession(
             if should_ignore_first_message:
                 should_ignore_first_message = False
                 continue
+
             try:
                 if isinstance(msg, dict):
                     msg_dict = msg
@@ -422,56 +419,50 @@ class RealtimeSession(
                 self.emit(
                     "input_audio_transcription_completed",
                     llm.InputTranscriptionCompleted(
-                        item_id=str(event.ordinal),
+                        item_id=f"msg_{event.ordinal}",
                         transcript=event.text or event.delta or "",
                         is_final=True,
                     ),
                 )
         elif event.role == "agent":
-            # Agent message
             text = event.text or event.delta or ""
-            if text:
-                # Create or get message generation
-                message_id = f"msg_{event.ordinal}"
+            if not text:
+                return
 
-                # Ensure we have a current generation
-                if self._current_generation is None:
-                    self._start_new_generation()
+            message_id = f"msg_{event.ordinal}"
+            if self._current_generation is None:
+                self._start_new_generation()
 
-                assert self._current_generation is not None  # For type checker
+            if message_id not in self._current_generation.messages:
+                msg_gen = _MessageGeneration(
+                    message_id=message_id,
+                    text_ch=utils.aio.Chan(),
+                    audio_ch=utils.aio.Chan(),
+                )
+                self._current_generation.messages[message_id] = msg_gen
+                lk_msg_gen = llm.MessageGeneration(
+                    message_id=message_id,
+                    text_stream=msg_gen.text_ch,
+                    audio_stream=msg_gen.audio_ch,
+                )
+                self.emit(
+                    "generation_created",
+                    llm.GenerationCreatedEvent(
+                        message_stream=self._current_generation.message_ch,
+                        function_stream=self._current_generation.function_ch,
+                        user_initiated=False,
+                    ),
+                )
+                self._current_generation.message_ch.send_nowait(lk_msg_gen)
+                self._current_message_id = message_id
 
-                if message_id not in self._current_generation.messages:
-                    msg_gen = _MessageGeneration(
-                        message_id=message_id,
-                        text_ch=utils.aio.Chan(),
-                        audio_ch=utils.aio.Chan(),
-                    )
-                    self._current_generation.messages[message_id] = msg_gen
+            msg_gen = self._current_generation.messages[message_id]
+            msg_gen.text_ch.send_nowait(text)
 
-                    # Emit message generation
-                    lk_msg_gen = llm.MessageGeneration(
-                        message_id=message_id,
-                        text_stream=msg_gen.text_ch,
-                        audio_stream=msg_gen.audio_ch,
-                    )
-                    self.emit(
-                        "generation_created",
-                        llm.GenerationCreatedEvent(
-                            message_stream=self._current_generation.message_ch,
-                            function_stream=self._current_generation.function_ch,
-                            user_initiated=False,
-                        ),
-                    )
-                    self._current_generation.message_ch.send_nowait(lk_msg_gen)
-                    self._current_message_id = message_id
-
-                msg_gen = self._current_generation.messages[message_id]
-                msg_gen.text_ch.send_nowait(text)
-
-                if event.final:
-                    msg_gen.text_ch.close()
-                    msg_gen.audio_ch.close()
-                    self._handle_response_done()
+            if event.final:
+                msg_gen.text_ch.close()
+                msg_gen.audio_ch.close()
+                self._handle_response_done()
 
     def _handle_response_done(self) -> None:
         if self._current_generation is None:
@@ -481,7 +472,6 @@ class RealtimeSession(
         first_token_timestamp = self._current_generation._first_token_timestamp
 
         for generation in self._current_generation.messages.values():
-            # close all messages that haven't been closed yet
             if not generation.text_ch.closed:
                 generation.text_ch.close()
             if not generation.audio_ch.closed:
@@ -491,7 +481,6 @@ class RealtimeSession(
         self._current_generation.message_ch.close()
         self._current_generation = None
 
-        # calculate metrics
         ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
         duration = time.time() - created_timestamp
         metrics = RealtimeModelMetrics(
@@ -573,7 +562,10 @@ class RealtimeSession(
                 num_channels=NUM_CHANNELS,
                 samples_per_channel=len(audio_data) // (2 * NUM_CHANNELS),
             )
-
+            # ! Ultravox sends audio (bytes) and transcripts (json) independently
+            # ! so I don't really know how we can deterministically correlate them
+            # ! this heuristic assumes new audio and the corresponding transcript will
+            # ! share the same ordinal id which is +2 from the previous one
             target_generation = self._current_generation.messages[self._current_message_id]
             if target_generation.audio_ch.closed:
                 logger.debug("Audio is sent before the transcript, creating a new message")
@@ -587,7 +579,6 @@ class RealtimeSession(
                 self._current_generation.messages[new_message_id] = msg_gen
                 self._current_generation._first_token_timestamp = time.time()
 
-                # Emit message generation
                 lk_msg_gen = llm.MessageGeneration(
                     message_id=new_message_id,
                     text_stream=msg_gen.text_ch,
