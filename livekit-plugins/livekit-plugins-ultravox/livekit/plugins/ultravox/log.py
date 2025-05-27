@@ -1,3 +1,3 @@
 import logging
 
-logger = logging.getLogger("livekit.plugins.openai")
+logger = logging.getLogger("livekit.plugins.ultravox")
