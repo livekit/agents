@@ -32,7 +32,6 @@ from .realtime import (
     RealtimeModelError,
     RealtimeSession,
     RealtimeSessionReconnectedEvent,
-    RealtimeSessionRestoredEvent,
 )
 from .tool_context import (
     FunctionTool,

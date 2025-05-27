@@ -84,7 +84,6 @@ EventTypes = Literal[
     "input_audio_transcription_completed",
     "generation_created",
     "session_reconnected",
-    "session_restored",
     "metrics_collected",
     "error",
 ]
@@ -104,11 +103,6 @@ class InputTranscriptionCompleted:
 @dataclass
 class RealtimeSessionReconnectedEvent:
     pass
-
-
-@dataclass
-class RealtimeSessionRestoredEvent:
-    error: Exception | None
 
 
 class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[TEvent]):
