@@ -5,7 +5,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
-# distributed under the License on an "AS IS" BASIS,
+# distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
@@ -254,7 +254,7 @@ class ChunkedStream(tts.ChunkedStream):
         ssml += "</voice></speak>"
         return ssml
 
-    async def _run(self, output_emitter: tts.SynthesizedAudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter):
         headers = {
             "Content-Type": "application/ssml+xml",
             "X-Microsoft-OutputFormat": SUPPORTED_OUTPUT_FORMATS[self._opts.sample_rate],
@@ -266,16 +266,15 @@ class ChunkedStream(tts.ChunkedStream):
         elif self._opts.subscription_key:
             headers["Ocp-Apim-Subscription-Key"] = self._opts.subscription_key
 
-        output_emitter.start(
+        output_emitter.initialize(
             request_id=utils.shortuuid(),
             sample_rate=self._opts.sample_rate,
             num_channels=1,
-            is_raw_pcm=True,
+            mime_type="audio/pcm",
         )
 
         try:
-            session = self._tts._ensure_session()
-            async with session.post(
+            async with self._tts._ensure_session().post(
                 url=self._opts.get_endpoint_url(),
                 headers=headers,
                 data=self._build_ssml(),
@@ -285,7 +284,6 @@ class ChunkedStream(tts.ChunkedStream):
                 async for data, _ in resp.content.iter_chunks():
                     output_emitter.push(data)
 
-            output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
