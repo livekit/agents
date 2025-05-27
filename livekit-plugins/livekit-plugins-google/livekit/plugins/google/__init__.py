@@ -22,10 +22,11 @@ See https://docs.livekit.io/agents/integrations/stt/google/ for more information
 from . import beta
 from .llm import LLM
 from .stt import STT, SpeechStream
+from .tools import LLMTool
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "TTS", "SpeechStream", "__version__", "beta", "LLM"]
+__all__ = ["STT", "TTS", "SpeechStream", "__version__", "beta", "LLM", "LLMTool"]
 from livekit.agents import Plugin
 
 from .log import logger

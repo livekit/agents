@@ -21,6 +21,9 @@ from google.genai.types import (
     ContextWindowCompressionConfig,
     FunctionDeclaration,
     GenerationConfig,
+    GoogleMaps,
+    GoogleSearch,
+    GoogleSearchRetrieval,
     LiveClientContent,
     LiveClientRealtimeInput,
     LiveClientToolResponse,
@@ -37,6 +40,8 @@ from google.genai.types import (
     SessionResumptionConfig,
     SpeechConfig,
     Tool,
+    ToolCodeExecution,
+    UrlContext,
     UsageMetadata,
     VoiceConfig,
 )
@@ -48,6 +53,7 @@ from livekit.agents.utils import audio as audio_utils, images, is_given
 from livekit.plugins.google.beta.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ...log import logger
+from ...tools import LLMTool
 from ...utils import get_tool_results_for_realtime, to_chat_ctx, to_fnc_ctx
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
@@ -93,6 +99,7 @@ class _RealtimeOptions:
     proactivity: NotGivenOr[bool] = NOT_GIVEN
     realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN
     context_window_compression: NotGivenOr[ContextWindowCompressionConfig] = NOT_GIVEN
+    tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN
 
 
 @dataclass
@@ -153,6 +160,7 @@ class RealtimeModel(llm.RealtimeModel):
         proactivity: NotGivenOr[bool] = NOT_GIVEN,
         realtime_input_config: NotGivenOr[RealtimeInputConfig] = NOT_GIVEN,
         context_window_compression: NotGivenOr[ContextWindowCompressionConfig] = NOT_GIVEN,
+        tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -186,6 +194,8 @@ class RealtimeModel(llm.RealtimeModel):
             enable_affective_dialog (bool, optional): Whether to enable affective dialog. Defaults to False.
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
+            context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
+            tools (list[LLMTool], optional): Gemini-specific tools to use for the session. Defaults to None.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -269,6 +279,7 @@ class RealtimeModel(llm.RealtimeModel):
             proactivity=proactivity,
             realtime_input_config=realtime_input_config,
             context_window_compression=context_window_compression,
+            tools=tools,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -279,16 +290,35 @@ class RealtimeModel(llm.RealtimeModel):
         return sess
 
     def update_options(
-        self, *, voice: NotGivenOr[str] = NOT_GIVEN, temperature: NotGivenOr[float] = NOT_GIVEN
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
     ) -> None:
+        """
+        Update the options for the RealtimeModel.
+
+        Args:
+            voice (str, optional): The voice to use for the session.
+            temperature (float, optional): The temperature to use for the session.
+            tools (list[LLMTool], optional): The tools to use for the session.
+        """
         if is_given(voice):
             self._opts.voice = voice
 
         if is_given(temperature):
             self._opts.temperature = temperature
 
+        if is_given(tools):
+            self._opts.tools = tools
+
         for sess in self._sessions:
-            sess.update_options(voice=self._opts.voice, temperature=self._opts.temperature)
+            sess.update_options(
+                voice=self._opts.voice,
+                temperature=self._opts.temperature,
+                tools=self._opts.tools,
+            )
 
     async def aclose(self) -> None:
         pass
@@ -353,6 +383,7 @@ class RealtimeSession(llm.RealtimeSession):
         voice: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        tools: NotGivenOr[list[LLMTool]] = NOT_GIVEN,
     ) -> None:
         should_restart = False
         if is_given(voice) and self._opts.voice != voice:
@@ -361,6 +392,10 @@ class RealtimeSession(llm.RealtimeSession):
 
         if is_given(temperature) and self._opts.temperature != temperature:
             self._opts.temperature = temperature if is_given(temperature) else NOT_GIVEN
+            should_restart = True
+
+        if is_given(tools) and self._opts.tools != tools:
+            self._opts.tools = tools
             should_restart = True
 
         if should_restart:
@@ -675,6 +710,22 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
+        tool_config = Tool(function_declarations=self._gemini_declarations)
+        if is_given(self._opts.tools):
+            for tool in self._opts.tools:
+                if isinstance(tool, GoogleSearchRetrieval):
+                    tool_config.google_search_retrieval = tool
+                elif isinstance(tool, ToolCodeExecution):
+                    tool_config.code_execution = tool
+                elif isinstance(tool, GoogleSearch):
+                    tool_config.google_search = tool
+                elif isinstance(tool, UrlContext):
+                    tool_config.url_context = tool
+                elif isinstance(tool, GoogleMaps):
+                    tool_config.google_maps = tool
+                else:
+                    logger.warning(f"Warning: Received unhandled tool type: {type(tool)}")
+
         conf = LiveConnectConfig(
             response_modalities=self._opts.response_modalities
             if is_given(self._opts.response_modalities)
@@ -703,7 +754,7 @@ class RealtimeSession(llm.RealtimeSession):
                 ),
                 language_code=self._opts.language if is_given(self._opts.language) else None,
             ),
-            tools=[Tool(function_declarations=self._gemini_declarations)],
+            tools=[tool_config],
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
