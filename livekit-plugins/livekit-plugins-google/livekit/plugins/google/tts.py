@@ -22,20 +22,8 @@ from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
 from google.cloud.texttospeech_v1.types import SsmlVoiceGender, SynthesizeSpeechResponse
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APIStatusError,
-    APITimeoutError,
-    tokenize,
-    tts,
-    utils,
-)
-from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    NotGivenOr,
-)
+from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, tokenize, tts, utils
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -262,8 +250,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        output_emitter.start_segment(segment_id=utils.shortuuid())
-
         streaming_config = texttospeech.StreamingSynthesizeConfig(
             voice=self._opts.voice,
             streaming_audio_config=texttospeech.StreamingAudioConfig(
@@ -324,8 +310,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream = await self._tts._ensure_client().streaming_synthesize(
                 input_gen, timeout=self._conn_options.timeout
             )
+            output_emitter.start_segment(segment_id=utils.shortuuid())
+
             async for resp in stream:
                 output_emitter.push(resp.audio_content)
+
+            output_emitter.end_segment()
 
         except DeadlineExceeded:
             raise APITimeoutError()
