@@ -25,8 +25,8 @@ classifiers = [
 dependencies = ["livekit-agents[codecs]>=1.0.22"]
 
 
-[project.optional-dependencies]
-vertex = ["google-auth>=2.0.0"]
+[tool.mypy]
+plugins = ["pydantic.mypy"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

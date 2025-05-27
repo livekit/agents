@@ -1,17 +1,13 @@
-# OpenAI plugin for LiveKit Agents
+# Ultravox plugin for LiveKit Agents
 
-Support for OpenAI Realtime API, LLM, TTS, and STT APIs.
-
-Also includes support for a large number of OpenAI-compatible APIs including [Azure OpenAI](https://docs.livekit.io/agents/integrations/llm/azure-openai/), [Cerebras](https://docs.livekit.io/agents/integrations/cerebras/), [Fireworks](https://docs.livekit.io/agents/integrations/llm/fireworks/), [Perplexity](https://docs.livekit.io/agents/integrations/llm/perplexity/), [Telnyx](https://docs.livekit.io/agents/integrations/llm/telnyx/), [xAI](https://docs.livekit.io/agents/integrations/llm/xai/), [Ollama](https://docs.livekit.io/agents/integrations/llm/ollama/), and [DeepSeek](https://docs.livekit.io/agents/integrations/llm/deepseek/).
-
-See [https://docs.livekit.io/agents/integrations/openai/](https://docs.livekit.io/agents/integrations/openai/) for more information.
+Support for Ultravox Realtime API.
 
 ## Installation
 
 ```bash
-pip install livekit-plugins-openai
+pip install livekit-plugins-ultravox
 ```
 
 ## Pre-requisites
 
-You'll need an API key from OpenAI. It can be set as an environment variable: `OPENAI_API_KEY`
+You'll need an API key from Ultravox. It can be set as an environment variable: `ULTRAVOX_API_KEY`

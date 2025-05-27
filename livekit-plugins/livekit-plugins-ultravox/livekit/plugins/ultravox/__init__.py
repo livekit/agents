@@ -25,24 +25,16 @@ https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
 from . import realtime
-from .embeddings import EmbeddingData, create_embeddings
-from .llm import LLM, LLMStream
-from .models import STTModels, TTSModels, TTSVoices
-from .stt import STT
-from .tts import TTS
+from .models import Models, Voices
+from .realtime.realtime_model import RealtimeModel, RealtimeSession
 from .version import __version__
 
 __all__ = [
-    "STT",
-    "TTS",
-    "LLM",
-    "LLMStream",
-    "STTModels",
-    "TTSModels",
-    "TTSVoices",
-    "create_embeddings",
-    "EmbeddingData",
+    "Voices",
+    "Models",
     "realtime",
+    "RealtimeModel",
+    "RealtimeSession",
     "__version__",
 ]
 
@@ -51,12 +43,12 @@ from livekit.agents import Plugin
 from .log import logger
 
 
-class OpenAIPlugin(Plugin):
+class UltravoxPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(OpenAIPlugin())
+Plugin.register_plugin(UltravoxPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
@@ -66,40 +58,3 @@ __pdoc__ = {}
 
 for n in NOT_IN_ALL:
     __pdoc__[n] = False
-
-from .events import (
-    ClientToolInvocationEvent,
-    ClientToolResultEvent,
-    DebugEvent,
-    InputTextMessageEvent,
-    PingEvent,
-    PlaybackClearBufferEvent,
-    PongEvent,
-    SetOutputMediumEvent,
-    StateEvent,
-    TranscriptEvent,
-    UltravoxEvent,
-    UltravoxEventType,
-    parse_ultravox_event,
-    serialize_ultravox_event,
-)
-from .realtime_model import RealtimeModel, RealtimeSession
-
-__all__ = [
-    "RealtimeModel",
-    "RealtimeSession",
-    "UltravoxEvent",
-    "UltravoxEventType",
-    "PingEvent",
-    "InputTextMessageEvent",
-    "SetOutputMediumEvent",
-    "ClientToolResultEvent",
-    "PongEvent",
-    "StateEvent",
-    "TranscriptEvent",
-    "ClientToolInvocationEvent",
-    "DebugEvent",
-    "PlaybackClearBufferEvent",
-    "parse_ultravox_event",
-    "serialize_ultravox_event",
-]

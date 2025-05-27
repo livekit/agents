@@ -8,9 +8,9 @@ Reference: https://docs.ultravox.ai/datamessages
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 
 class UltravoxEvent(BaseModel):
@@ -34,7 +34,7 @@ class InputTextMessageEvent(UltravoxEvent):
 
     type: Literal["input_text_message"] = "input_text_message"
     text: str = Field(..., description="The content of the user message")
-    defer_response: Optional[bool] = Field(
+    defer_response: bool | None = Field(
         None,
         alias="deferResponse",
         description="If true, allows adding text without inducing immediate response",
@@ -55,17 +55,17 @@ class ClientToolResultEvent(UltravoxEvent):
     invocation_id: str = Field(
         ..., alias="invocationId", description="Matches corresponding invocation"
     )
-    result: Optional[str] = Field(None, description="Tool execution result, often JSON string")
-    agent_reaction: Optional[Literal["speaks", "listens", "speaks-once"]] = Field(
+    result: str | None = Field(None, description="Tool execution result, often JSON string")
+    agent_reaction: Literal["speaks", "listens", "speaks-once"] | None = Field(
         "speaks", alias="agentReaction", description="How the agent should react to the tool result"
     )
     response_type: str = Field(
         "tool-response", alias="responseType", description="Type of response"
     )
-    error_type: Optional[Literal["undefined", "implementation-error"]] = Field(
+    error_type: Literal["undefined", "implementation-error"] | None = Field(
         None, alias="errorType", description="Error type if tool execution failed"
     )
-    error_message: Optional[str] = Field(
+    error_message: str | None = Field(
         None, alias="errorMessage", description="Error details if failed"
     )
 
@@ -95,8 +95,8 @@ class TranscriptEvent(UltravoxEvent):
     medium: Literal["text", "voice"] = Field(
         ..., description="Medium through which utterance was emitted"
     )
-    text: Optional[str] = Field(None, description="Full transcript text (exclusive with delta)")
-    delta: Optional[str] = Field(
+    text: str | None = Field(None, description="Full transcript text (exclusive with delta)")
+    delta: str | None = Field(
         None, description="Incremental transcript update (exclusive with text)"
     )
     final: bool = Field(..., description="Whether more updates are expected for this utterance")
@@ -109,7 +109,7 @@ class ClientToolInvocationEvent(UltravoxEvent):
     type: Literal["client_tool_invocation"] = "client_tool_invocation"
     tool_name: str = Field(..., alias="toolName", description="Tool to invoke")
     invocation_id: str = Field(..., alias="invocationId", description="Unique invocation ID")
-    parameters: Dict[str, Any] = Field(..., description="Tool parameters")
+    parameters: dict[str, Any] = Field(..., description="Tool parameters")
 
 
 class DebugEvent(UltravoxEvent):
@@ -126,23 +126,22 @@ class PlaybackClearBufferEvent(UltravoxEvent):
 
 
 # Union type for all possible events
-UltravoxEventType = Union[
-    # Client events
-    PingEvent,
-    InputTextMessageEvent,
-    SetOutputMediumEvent,
-    ClientToolResultEvent,
-    # Server events
-    PongEvent,
-    StateEvent,
-    TranscriptEvent,
-    ClientToolInvocationEvent,
-    DebugEvent,
-    PlaybackClearBufferEvent,
-]
+UltravoxEventType = (
+    PingEvent
+    | InputTextMessageEvent
+    | SetOutputMediumEvent
+    | ClientToolResultEvent
+    | PongEvent
+    | StateEvent
+    | TranscriptEvent
+    | ClientToolInvocationEvent
+    | DebugEvent
+    | PlaybackClearBufferEvent
+)
+UltravoxEvent = TypeAdapter(UltravoxEventType)
 
 
-def parse_ultravox_event(data: Dict[str, Any]) -> UltravoxEventType:
+def parse_ultravox_event(data: dict[str, Any]) -> UltravoxEventType:
     """Parse a raw WebSocket message into an Ultravox event object.
 
     Parameters
@@ -160,33 +159,10 @@ def parse_ultravox_event(data: Dict[str, Any]) -> UltravoxEventType:
     ValueError
         If the event type is unknown or data is invalid
     """
-    event_type = data.get("type")
-
-    if event_type == "ping":
-        return PingEvent(**data)
-    elif event_type == "input_text_message":
-        return InputTextMessageEvent(**data)
-    elif event_type == "set_output_medium":
-        return SetOutputMediumEvent(**data)
-    elif event_type == "client_tool_result":
-        return ClientToolResultEvent(**data)
-    elif event_type == "pong":
-        return PongEvent(**data)
-    elif event_type == "state":
-        return StateEvent(**data)
-    elif event_type == "transcript":
-        return TranscriptEvent(**data)
-    elif event_type == "client_tool_invocation":
-        return ClientToolInvocationEvent(**data)
-    elif event_type == "debug":
-        return DebugEvent(**data)
-    elif event_type == "playback_clear_buffer":
-        return PlaybackClearBufferEvent(**data)
-    else:
-        raise ValueError(f"Unknown Ultravox event type: {event_type}")
+    return UltravoxEvent.validate_python(data)
 
 
-def serialize_ultravox_event(event: UltravoxEventType) -> Dict[str, Any]:
+def serialize_ultravox_event(event: UltravoxEventType) -> dict[str, Any]:
     """Serialize an Ultravox event object to JSON-compatible dict.
 
     Parameters
@@ -199,4 +175,4 @@ def serialize_ultravox_event(event: UltravoxEventType) -> Dict[str, Any]:
     Dict[str, Any]
         JSON-compatible dictionary
     """
-    return event.model_dump(by_alias=True, exclude_none=True)
+    return event.model_dump(by_alias=True, exclude_none=True)  # type: ignore[no-any-return]
