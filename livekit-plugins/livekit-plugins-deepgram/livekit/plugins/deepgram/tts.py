@@ -173,6 +173,7 @@ class ChunkedStream(tts.ChunkedStream):
                 _to_deepgram_url(
                     {
                         "encoding": self._opts.encoding,
+                        "container": "none",
                         "model": self._opts.model,
                         "sample_rate": self._opts.sample_rate,
                         "mip_opt_out": self._opts.mip_opt_out,

@@ -13,7 +13,6 @@ from collections import defaultdict
 import aiohttp
 import av
 import pytest
-from av.error import InvalidDataError
 from dotenv import load_dotenv
 
 from livekit import rtc
