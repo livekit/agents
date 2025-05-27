@@ -12,17 +12,18 @@
 
 from __future__ import annotations
 
-import aiohttp
 import asyncio
 import os
 from dataclasses import dataclass, replace
-from typing import Literal, Optional
+from typing import Literal
+
+import aiohttp
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, tts, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
     NOT_GIVEN,
+    APIConnectOptions,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
@@ -69,7 +70,7 @@ class ProsodyConfig:
                 "x-loud",
             ]:
                 raise ValueError(
-                    "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"
+                    "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"  # noqa: E501
                 )
         if self.pitch and self.pitch not in [
             "x-low",
@@ -102,15 +103,15 @@ class StyleConfig:
 @dataclass
 class _TTSOptions:
     sample_rate: int
-    subscription_key: Optional[str]
-    region: Optional[str]
+    subscription_key: str | None
+    region: str | None
     voice: str
-    language: Optional[str]
-    speech_endpoint: Optional[str]
-    deployment_id: Optional[str]
+    language: str | None
+    speech_endpoint: str | None
+    deployment_id: str | None
     prosody: NotGivenOr[ProsodyConfig]
     style: NotGivenOr[StyleConfig]
-    auth_token: Optional[str] = None
+    auth_token: str | None = None
 
     def get_endpoint_url(self) -> str:
         base = (
@@ -127,15 +128,15 @@ class TTS(tts.TTS):
         self,
         *,
         voice: str = "en-US-JennyNeural",
-        language: Optional[str] = None,
+        language: str | None = None,
         sample_rate: int = 24000,
         prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
         style: NotGivenOr[StyleConfig] = NOT_GIVEN,
-        speech_key: Optional[str] = None,
-        speech_region: Optional[str] = None,
-        speech_endpoint: Optional[str] = None,
-        deployment_id: Optional[str] = None,
-        speech_auth_token: Optional[str] = None,
+        speech_key: str | None = None,
+        speech_region: str | None = None,
+        speech_endpoint: str | None = None,
+        deployment_id: str | None = None,
+        speech_auth_token: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
@@ -145,7 +146,7 @@ class TTS(tts.TTS):
         )
         if sample_rate not in SUPPORTED_OUTPUT_FORMATS:
             raise ValueError(
-                f"Unsupported sample rate {sample_rate}. Supported: {list(SUPPORTED_OUTPUT_FORMATS)}"
+                f"Unsupported sample rate {sample_rate}. Supported: {list(SUPPORTED_OUTPUT_FORMATS)}"  # noqa: E501
             )
 
         if not speech_key:
