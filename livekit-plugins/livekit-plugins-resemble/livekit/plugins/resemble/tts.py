@@ -244,6 +244,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             sample_rate=self._opts.sample_rate,
             num_channels=1,
             stream=True,
+            mime_type="audio/mp3",
         )
 
         async def _tokenize_input():

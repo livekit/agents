@@ -314,18 +314,3 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
-
-
-def _to_deepgram_url(
-    opts: dict,
-    base_url: str,
-    *,
-    websocket: bool,
-) -> str:
-    if websocket and base_url.startswith("http"):
-        base_url = base_url.replace("http", "ws", 1)
-
-    elif not websocket and base_url.startswith("ws"):
-        base_url = base_url.replace("ws", "http", 1)
-
-    return f"{base_url}?{urlencode(opts, doseq=True)}"

@@ -329,7 +329,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["data"])
                     output_emitter.push(b64data)
                 elif data.get("done"):
-                    output_emitter.flush()
                     current_segment_id = None
 
                     if input_ended and segment_id == last_segment_id:  # last segment
