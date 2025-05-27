@@ -204,7 +204,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
-                    mime_type="audio/pcm",
+                    mime_type="audio/wav",
                 )
 
                 audio_b64 = response_json["audio_content"]
