@@ -28,11 +28,17 @@ from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
 
 class CompletionUsage(BaseModel):
     completion_tokens: int
+    """The number of tokens in the completion."""
     prompt_tokens: int
+    """The number of input tokens used (includes cached tokens)."""
     prompt_cached_tokens: int = 0
+    """The number of cached input tokens used."""
     cache_creation_tokens: int = 0
+    """The number of tokens used to create the cache."""
     cache_read_tokens: int = 0
+    """The number of tokens read from the cache."""
     total_tokens: int
+    """The total number of tokens used (completion + prompt tokens)."""
 
 
 class FunctionToolCall(BaseModel):
