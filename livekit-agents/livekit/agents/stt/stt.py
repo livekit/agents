@@ -44,7 +44,7 @@ class SpeechData:
     start_time: float = 0.0
     end_time: float = 0.0
     confidence: float = 0.0  # [0, 1]
-    speaker: str | None = None
+    speaker_id: str | None = None
 
 
 @dataclass
