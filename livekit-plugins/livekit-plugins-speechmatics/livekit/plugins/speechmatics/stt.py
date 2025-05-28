@@ -330,7 +330,7 @@ def live_transcription_to_speech_data(data: dict) -> list[stt.SpeechData]:
             else:
                 sd = stt.SpeechData(language, content, start_time, end_time, confidence)
                 if speaker is not None:
-                    sd.speaker = speaker
+                    sd.speaker_id = speaker
                 speech_data.append(sd)
 
     return speech_data
