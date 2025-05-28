@@ -295,7 +295,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     resp = json.loads(msg.data)
                     mtype = resp.get("type")
                     if mtype == "Flushed":
-                        output_emitter.flush()
+                        output_emitter.end_segment()
                         break
                     elif mtype == "Warning":
                         logger.warning("Deepgram warning: %s", resp.get("warn_msg"))

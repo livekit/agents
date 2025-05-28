@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import contextvars
-from typing import Callable
+from typing import Callable, Optional
 
 import aiohttp
 
 from ..log import logger
 
 _ClientFactory = Callable[[], aiohttp.ClientSession]
-_ContextVar = contextvars.ContextVar("agent_http_session")
+_ContextVar = contextvars.ContextVar[Optional[_ClientFactory]]("agent_http_session")
 
 
 def _new_session_ctx() -> _ClientFactory:

@@ -267,15 +267,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        last_segment_id: str | None = None
-        input_ended = False
-
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse):
-            nonlocal last_segment_id, input_ended
-
             context_id = utils.shortuuid()
-            last_segment_id = context_id  # no multi-segment support yet
-
             base_pkt = _to_cartesia_options(self._opts)
             async for ev in self._sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
@@ -289,7 +282,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt["context_id"] = context_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
-            input_ended = True
             await ws.send_str(json.dumps(end_pkt))
 
         async def _input_task():
@@ -324,16 +316,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if current_segment_id is None:
                     current_segment_id = segment_id
                     output_emitter.start_segment(segment_id=segment_id)
-
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
                     output_emitter.push(b64data)
                 elif data.get("done"):
-                    current_segment_id = None
-
-                    if input_ended and segment_id == last_segment_id:  # last segment
-                        output_emitter.end_input()
-                        break
+                    output_emitter.end_input()
+                    break
                 else:
                     logger.warning("unexpected message %s", data)
 
