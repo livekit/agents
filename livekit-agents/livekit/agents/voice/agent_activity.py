@@ -858,7 +858,7 @@ class AgentActivity(RecognitionHooks):
             UserInputTranscribedEvent(
                 transcript=ev.alternatives[0].text,
                 is_final=False,
-                speaker=ev.alternatives[0].speaker,
+                speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
 
@@ -872,7 +872,7 @@ class AgentActivity(RecognitionHooks):
             UserInputTranscribedEvent(
                 transcript=ev.alternatives[0].text,
                 is_final=True,
-                speaker=ev.alternatives[0].speaker,
+                speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
 
