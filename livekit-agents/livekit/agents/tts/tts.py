@@ -430,8 +430,11 @@ class SynthesizeStream(ABC):
         if not self._mtc_text:
             if self._num_segments >= 1:
                 logger.warning(
-                    "Using SynthesizeStream to generate multiple segments isn't supported anymore"
+                    "SynthesizeStream: handling multiple segments in a single instance is deprecated. "
+                    "Please create a new SynthesizeStream instance for each segment. "
+                    "Most TTS plugins now use pooled WebSocket connections via ConnectionPool."
                 )
+                return
 
             self._num_segments += 1
 
