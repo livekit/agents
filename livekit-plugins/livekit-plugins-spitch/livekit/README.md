@@ -2,8 +2,6 @@
 
 Support for speech-to-text with [spitch.app](https://spitch.app/).
 
-See [https://docs.livekit.io/agents/integrations/stt/fal/](https://docs.livekit.io/agents/integrations/stt/fal/) for more information.
-
 ## Installation
 
 ```bash

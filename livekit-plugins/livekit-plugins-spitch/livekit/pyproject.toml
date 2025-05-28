@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "livekit-plugins-fal"
+name = "livekit-plugins-spitch"
 dynamic = ["version"]
-description = "fal plugin template for LiveKit Agents"
+description = "spitch plugin template for LiveKit Agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
