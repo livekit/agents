@@ -143,7 +143,7 @@ class ErrorEvent(BaseModel):
 @unique
 class CloseReason(str, Enum):
     ERROR = "error"
-    WORKER_SHUTDOWN = "worker_shutdown"
+    JOB_SHUTDOWN = "job_shutdown"
     PARTICIPANT_DISCONNECTED = "participant_disconnected"
     USER_INITIATED = "user_initiated"
 

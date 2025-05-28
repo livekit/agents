@@ -380,7 +380,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     job_ctx = get_job_context()
                     job_ctx.add_tracing_callback(self._trace_chat_ctx)
                     job_ctx.add_shutdown_callback(
-                        lambda: self._aclose_impl(reason=CloseReason.WORKER_SHUTDOWN)
+                        lambda: self._aclose_impl(reason=CloseReason.JOB_SHUTDOWN)
                     )
                     self._job_context_cb_registered = True
                 except RuntimeError:
