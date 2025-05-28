@@ -318,7 +318,7 @@ class SynthesizeStream(ABC):
                 if self._pushed_text.strip():
                     if output_emitter.pushed_duration(idx=-1) <= 0.0:
                         raise APIError(
-                            f"no audio frames were pushed on all segments for text: {self._pushed_text}"
+                            f"no audio frames were pushed on all segments for text: {self._pushed_text}"  # noqa: E501
                         )
 
                     if self._num_segments != output_emitter.num_segments:

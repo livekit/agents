@@ -302,7 +302,7 @@ class STT(stt.STT):
             if is_given(language):
                 stream.update_options(language=language)
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         prompt = self._opts.prompt if is_given(self._opts.prompt) else ""
         realtime_config: dict[str, Any] = {
             "type": "transcription_session.update",
@@ -338,14 +338,11 @@ class STT(stt.STT):
             url = url.replace("http", "ws", 1)
 
         session = self._ensure_session()
-        ws = await asyncio.wait_for(
-            session.ws_connect(url, headers=headers),
-            DEFAULT_API_CONNECT_OPTIONS.timeout,
-        )
+        ws = await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
         await ws.send_json(realtime_config)
         return ws
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -423,7 +420,7 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         language: str,
-    ):
+    ) -> None:
         self._language = language
         self._pool.invalidate()
         self._reconnect_event.set()
@@ -433,7 +430,7 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
             # forward audio to OAI in chunks of 50ms
@@ -460,7 +457,7 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             current_text = ""
             last_interim_at: float = 0
@@ -530,7 +527,7 @@ class SpeechStream(stt.SpeechStream):
                     logger.exception("failed to process OpenAI message")
 
         while True:
-            async with self._pool.connection() as ws:
+            async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -546,7 +543,7 @@ class SpeechStream(stt.SpeechStream):
                     # propagate exceptions from completed tasks
                     for task in done:
                         if task != wait_reconnect_task:
-                            task.result()
+                            task.result()  # type: ignore
 
                     if wait_reconnect_task not in done:
                         break
