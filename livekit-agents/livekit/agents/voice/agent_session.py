@@ -25,6 +25,7 @@ from .events import (
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
     UserState,
@@ -215,6 +216,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         self._forward_audio_atask: asyncio.Task[None] | None = None
+        self._forward_video_atask: asyncio.Task[None] | None = None
         self._update_activity_atask: asyncio.Task[None] | None = None
         self._activity_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
@@ -232,6 +234,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
+        self._job_context_cb_registered: bool = False
 
     @property
     def userdata(self) -> Userdata_T:
@@ -371,11 +374,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
 
-            try:
-                job_ctx = get_job_context()
-                job_ctx.add_tracing_callback(self._trace_chat_ctx)
-            except RuntimeError:
-                pass  # ignore
+            if not self._job_context_cb_registered:
+                # session can be restarted, register the callbacks only once
+                try:
+                    job_ctx = get_job_context()
+                    job_ctx.add_tracing_callback(self._trace_chat_ctx)
+                    job_ctx.add_shutdown_callback(
+                        lambda: self._aclose_impl(reason=CloseReason.JOB_SHUTDOWN)
+                    )
+                    self._job_context_cb_registered = True
+                except RuntimeError:
+                    pass  # ignore
 
             # it is ok to await it directly, there is no previous task to drain
             await self._update_activity_task(self._agent)
@@ -409,28 +418,52 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         await self._activity.drain()
 
+    @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
         self,
         *,
+        reason: CloseReason,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
     ) -> None:
         async with self._lock:
             if not self._started:
                 return
 
-            self.emit("close", CloseEvent(error=error))
-
             if self._activity is not None:
+                try:
+                    await self._activity.interrupt()
+                except RuntimeError:
+                    # uninterruptible speech
+                    # TODO(long): force interrupt or wait for it to finish?
+                    # it might be an audio played from the error callback
+                    pass
+                await self._activity.drain()
+
+                # wait any uninterruptible speech to finish
+                if self._activity.current_speech:
+                    await self._activity.current_speech
+
+                # detach the inputs and outputs
+                self.input.audio = None
+                self.input.video = None
+                self.output.audio = None
+                self.output.transcription = None
+
                 await self._activity.aclose()
+                self._activity = None
 
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
             if self._room_io:
                 await self._room_io.aclose()
+                self._room_io = None
+
+            self._started = False
+            self.emit("close", CloseEvent(error=error, reason=reason))
 
     async def aclose(self) -> None:
-        await self._aclose_impl()
+        await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 
     def emit(self, event: EventTypes, ev: AgentEvent) -> None:  # type: ignore
         # don't log VAD metrics as they are too verbose
@@ -567,14 +600,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
 
-        async def drain_and_close() -> None:
-            await self.drain()
-            await self._aclose_impl(error=error)
-
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
-        self._closing_task = asyncio.create_task(drain_and_close())
+        self._closing_task = asyncio.create_task(
+            self._aclose_impl(error=error, reason=CloseReason.ERROR)
+        )
         self._closing_task.add_done_callback(on_close_done)
 
     @utils.log_exceptions(logger=logger)

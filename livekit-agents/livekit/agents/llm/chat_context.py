@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
@@ -27,6 +27,7 @@ from .. import utils
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
+from . import _provider_format
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool, RawFunctionTool
@@ -92,7 +93,7 @@ class ImageContent(BaseModel):
     """
     MIME type of the image
     """
-    _cache: dict[int, Any] = PrivateAttr(default_factory=dict)
+    _cache: dict[Any, Any] = PrivateAttr(default_factory=dict)
 
 
 class AudioContent(BaseModel):
@@ -333,6 +334,57 @@ class ChatContext:
                 for item in items
             ],
         }
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["openai"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], Literal[None]]: ...
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["google"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["aws"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], _provider_format.aws.BedrockFormatData]: ...
+
+    @overload
+    def to_provider_format(
+        self, format: Literal["anthropic"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
+
+    @overload
+    def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
+
+    def to_provider_format(
+        self,
+        format: Literal["openai", "google", "aws", "anthropic"] | str,
+        *,
+        inject_dummy_user_message: bool = True,
+        **kwargs: Any,
+    ) -> tuple[list[dict], Any]:
+        """Convert the chat context to a provider-specific format.
+
+        If ``inject_dummy_user_message`` is ``True``, a dummy user message will be added
+        to the beginning or end of the chat context depending on the provider.
+
+        This is necessary because some providers expect a user message to be present for
+        generating a response.
+        """
+        kwargs["inject_dummy_user_message"] = inject_dummy_user_message
+
+        if format == "openai":
+            return _provider_format.openai.to_chat_ctx(self, **kwargs)
+        elif format == "google":
+            return _provider_format.google.to_chat_ctx(self, **kwargs)
+        elif format == "aws":
+            return _provider_format.aws.to_chat_ctx(self, **kwargs)
+        elif format == "anthropic":
+            return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
+        else:
+            raise ValueError(f"Unsupported provider format: {format}")
 
     def find_insertion_index(self, *, created_at: float) -> int:
         """

@@ -16,7 +16,7 @@ try:
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
     from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
-    from mcp.types import JSONRPCMessage
+    from mcp.shared.message import SessionMessage
 except ImportError as e:
     raise ImportError(
         "The 'mcp' package is required to run the MCP server integration but is not installed.\n"
@@ -126,8 +126,12 @@ class MCPServer(ABC):
         self,
     ) -> AbstractAsyncContextManager[
         tuple[
-            MemoryObjectReceiveStream[JSONRPCMessage | Exception],
-            MemoryObjectSendStream[JSONRPCMessage],
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+        ]
+        | tuple[
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
             GetSessionIdCallback,
         ]
     ]: ...
@@ -174,13 +178,17 @@ class MCPServerHTTP(MCPServer):
         self,
     ) -> AbstractAsyncContextManager[
         tuple[
-            MemoryObjectReceiveStream[JSONRPCMessage | Exception],
-            MemoryObjectSendStream[JSONRPCMessage],
-            ...,
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+        ]
+        | tuple[
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+            GetSessionIdCallback,
         ]
     ]:
         if self._use_streamable_http:
-            return streamablehttp_client(
+            return streamablehttp_client(  # type: ignore[no-any-return]
                 url=self.url,
                 headers=self.headers,
                 timeout=timedelta(seconds=self._timeout),
@@ -218,9 +226,8 @@ class MCPServerStdio(MCPServer):
         self,
     ) -> AbstractAsyncContextManager[
         tuple[
-            MemoryObjectReceiveStream[JSONRPCMessage | Exception],
-            MemoryObjectSendStream[JSONRPCMessage],
-            ...,
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
         ]
     ]:
         return stdio_client(  # type: ignore[no-any-return]
