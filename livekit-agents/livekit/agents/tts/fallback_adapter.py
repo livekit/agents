@@ -266,13 +266,14 @@ class FallbackChunkedStream(ChunkedStream):
                     resampler = tts_status.resampler
                     async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
                         audio_duration += synthesized_audio.frame.duration
-                        request_id = synthesized_audio.request_id
-                        output_emitter.initialize(
-                            request_id=request_id,
-                            sample_rate=self._tts.sample_rate,
-                            num_channels=self._tts.num_channels,
-                            mime_type="audio/pcm",
-                        )
+                        if request_id is None:
+                            output_emitter.initialize(
+                                request_id=synthesized_audio.request_id,
+                                sample_rate=self._tts.sample_rate,
+                                num_channels=self._tts.num_channels,
+                                mime_type="audio/pcm",
+                            )
+                            request_id = synthesized_audio.request_id
 
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
