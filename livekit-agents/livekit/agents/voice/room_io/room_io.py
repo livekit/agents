@@ -11,6 +11,8 @@ from ... import utils
 from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
+    ATTRIBUTE_AGENT_INPUTS,
+    ATTRIBUTE_AGENT_OUTPUTS,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     NOT_GIVEN,
     TOPIC_CHAT,
@@ -350,6 +352,27 @@ class RoomIO:
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
+            asyncio.create_task(self._set_capabilities())
+
+    async def _set_capabilities(self) -> None:
+        inputs = []
+        if self._input_options.audio_enabled:
+            inputs.append("audio")
+        if self._input_options.video_enabled:
+            inputs.append("video")
+        if self._input_options.text_enabled:
+            inputs.append("text")
+
+        outputs = []
+        if self._output_options.audio_enabled:
+            outputs.append("audio")
+        if self._output_options.transcription_enabled:
+            outputs.append("transcription")
+
+        await self._room.local_participant.set_attributes({
+            ATTRIBUTE_AGENT_INPUTS: ",".join(inputs),
+            ATTRIBUTE_AGENT_OUTPUTS: ",".join(outputs),
+        })
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
