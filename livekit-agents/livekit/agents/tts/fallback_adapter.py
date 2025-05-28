@@ -15,7 +15,14 @@ from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import aio
-from .tts import TTS, ChunkedStream, SynthesizedAudio, SynthesizeStream, TTSCapabilities
+from .tts import (
+    TTS,
+    AudioEmitter,
+    ChunkedStream,
+    SynthesizedAudio,
+    SynthesizeStream,
+    TTSCapabilities,
+)
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -144,7 +151,7 @@ class FallbackChunkedStream(ChunkedStream):
         *,
         tts: FallbackAdapter,
         input_text: str,
-        conn_options: APIConnectOptions | None,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._fallback_adapter = tts
@@ -241,7 +248,7 @@ class FallbackChunkedStream(ChunkedStream):
 
             tts_status.recovering_task = asyncio.create_task(_recover_tts_task(tts))
 
-    async def _run(self) -> None:
+    async def _run(self, output_emitter: AudioEmitter) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
         start_time = time.time()
@@ -260,28 +267,26 @@ class FallbackChunkedStream(ChunkedStream):
                     async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
                         audio_duration += synthesized_audio.frame.duration
                         request_id = synthesized_audio.request_id
+                        output_emitter.initialize(
+                            request_id=request_id,
+                            sample_rate=self._tts.sample_rate,
+                            num_channels=self._tts.num_channels,
+                            mime_type="audio/pcm",
+                        )
 
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
-                                self._event_ch.send_nowait(
-                                    SynthesizedAudio(
-                                        frame=rf,
-                                        request_id=synthesized_audio.request_id,
-                                    )
-                                )
+                                output_emitter.push(rf.data.tobytes())
 
                             continue
 
-                        self._event_ch.send_nowait(synthesized_audio)
+                        output_emitter.push(synthesized_audio.frame.data.tobytes())
 
-                    if resampler is not None and request_id is not None:
-                        for rf in resampler.flush():
-                            self._event_ch.send_nowait(
-                                SynthesizedAudio(
-                                    frame=rf,
-                                    request_id=request_id,
-                                )
-                            )
+                    if request_id is not None:
+                        if resampler is not None:
+                            for rf in resampler.flush():
+                                output_emitter.push(rf.data.tobytes())
+                        output_emitter.flush()
 
                     return
                 except Exception:  # exceptions already logged inside _try_synthesize
@@ -432,7 +437,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
             await utils.aio.cancel_and_wait(input_task)
 
-    async def _run(self) -> None:
+    async def _run(self, output_emitter: AudioEmitter) -> None:
         start_time = time.time()
 
         all_failed = all(not tts_status.available for tts_status in self._fallback_adapter._status)
@@ -440,6 +445,14 @@ class FallbackSynthesizeStream(SynthesizeStream):
             logger.error("all TTSs are unavailable, retrying..")
 
         new_input_ch: aio.Chan[str | SynthesizeStream._FlushSentinel] | None = None
+        request_id = utils.shortuuid()
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=self._fallback_adapter.sample_rate,
+            num_channels=self._fallback_adapter.num_channels,
+            mime_type="audio/pcm",
+            stream=True,
+        )
 
         async def _forward_input_task() -> None:
             nonlocal new_input_ch
@@ -481,7 +494,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         if input_task.done():
                             new_input_ch.close()
 
-                        last_segment_id: str | None = None
+                        current_segment_id: str | None = None
                         resampler = tts_status.resampler
 
                         async for synthesized_audio in self._try_synthesize(
@@ -495,37 +508,30 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             ),
                             recovering=False,
                         ):
+                            if current_segment_id is None:
+                                current_segment_id = synthesized_audio.segment_id
+                                output_emitter.start_segment(segment_id=current_segment_id)
+
                             audio_duration += synthesized_audio.frame.duration
 
                             if resampler is not None:
                                 for resampled_frame in resampler.push(synthesized_audio.frame):
-                                    self._event_ch.send_nowait(
-                                        dataclasses.replace(
-                                            synthesized_audio, frame=resampled_frame
-                                        )
-                                    )
+                                    output_emitter.push(resampled_frame.data.tobytes())
 
                                 if synthesized_audio.is_final:
                                     for resampled_frame in resampler.flush():
-                                        self._event_ch.send_nowait(
-                                            dataclasses.replace(
-                                                synthesized_audio, frame=resampled_frame
-                                            )
-                                        )
+                                        output_emitter.push(resampled_frame.data.tobytes())
                             else:
-                                self._event_ch.send_nowait(synthesized_audio)
+                                output_emitter.push(synthesized_audio.frame.data.tobytes())
 
-                            if (
-                                synthesized_audio.is_final
-                                or (
-                                    last_segment_id is not None
-                                    and synthesized_audio.segment_id != last_segment_id
-                                )
-                            ) and self._pending_segments_chunks:
+                            if synthesized_audio.is_final or (
+                                current_segment_id is not None
+                                and synthesized_audio.segment_id != current_segment_id
+                            ):
+                                current_segment_id = None
                                 audio_duration = 0.0
-                                self._pending_segments_chunks.pop(0)
-
-                            last_segment_id = synthesized_audio.segment_id
+                                if self._pending_segments_chunks:
+                                    self._pending_segments_chunks.pop(0)
 
                         return
                     except Exception:

@@ -368,7 +368,7 @@ class SynthesizeStream(ABC):
         request_id = ""
         segment_id = ""
 
-        def _emit_metrics():
+        def _emit_metrics() -> None:
             nonlocal audio_duration, ttfb, request_id, segment_id
 
             if not self._started_time or self._current_attempt_has_error:

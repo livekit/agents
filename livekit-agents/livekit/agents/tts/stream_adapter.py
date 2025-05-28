@@ -65,7 +65,7 @@ class StreamAdapter(TTS):
 class StreamAdapterWrapper(SynthesizeStream):
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
-        self._tts = tts
+        self._tts: StreamAdapter = tts
         self._wrapped_tts_conn_options = conn_options
         self._sent_stream = tts._sentence_tokenizer.stream()
 
@@ -85,7 +85,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        async def _forward_input():
+        async def _forward_input() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
                     self._sent_stream.flush()
