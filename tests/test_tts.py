@@ -33,6 +33,7 @@ from livekit.plugins import (
     resemble,
     rime,
     speechify,
+    spitch,
 )
 
 from .fake_tts import FakeTTS
@@ -233,6 +234,13 @@ SYNTHESIZE_TTS = [
         },
         id="hume",
     ),
+    pytest.param(
+        lambda: {
+            "tts": spitch.TTS(),
+            "proxy-upstream": "api.spi-tch.com:443",
+        },
+        id="spitch",
+    )
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
