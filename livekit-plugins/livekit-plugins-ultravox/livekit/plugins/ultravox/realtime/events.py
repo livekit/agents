@@ -1,16 +1,34 @@
 """Ultravox WebSocket event definitions based on the Ultravox data message protocol.
 
 This module defines all the event types that can be sent and received through
-Ultravox's WebSocket API for real-time voice AI communication.
+Ultravox's WebSocket API for real-time voice AI communication. Please note that
+audio data is not included in these events.
 
 Reference: https://docs.ultravox.ai/datamessages
+
+As of 2025-05-28, the following events are supported:
+
+| Message              | Sender | Description                                            |
+|----------------------|--------|--------------------------------------------------------|
+| Ping                 | Client | Measures round-trip data latency.                      |
+| Pong                 | Server | Server reply to a ping message.                        |
+| State                | Server | Indicates the server’s current state.                  |
+| Transcript           | Server | Contains text for an utterance made during the call.   |
+| InputTextMessage     | Client | Used to send a user message to the agent via text.     |
+| SetOutputMedium      | Client | Sets server’s output medium to text or voice.          |
+| ClientToolInvocation | Server | Asks the client to invoke a client tool.               |
+| ClientToolResult     | Client | Contains the result of a client tool invocation.       |
+| Debug                | Server | Useful for application debugging. Excluded by default. |
+| CallStarted          | Server | Notifies that a call has started.                      |
+| PlaybackClearBuffer  | Server | Used to clear buffered output audio. WebSocket only.   |
+
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 
 class UltravoxEvent(BaseModel):
@@ -73,6 +91,13 @@ class ClientToolResultEvent(UltravoxEvent):
 # Server-to-Client Events
 
 
+class CallStartedEvent(UltravoxEvent):
+    """Server message indicating that a call has started. Undocumented."""
+
+    type: Literal["call_started"] = "call_started"
+    call_id: str = Field(..., alias="callId", description="Unique call ID")
+
+
 class PongEvent(UltravoxEvent):
     """Server reply to a ping message."""
 
@@ -131,6 +156,7 @@ UltravoxEventType = (
     | InputTextMessageEvent
     | SetOutputMediumEvent
     | ClientToolResultEvent
+    | CallStartedEvent
     | PongEvent
     | StateEvent
     | TranscriptEvent
@@ -159,7 +185,10 @@ def parse_ultravox_event(data: dict[str, Any]) -> UltravoxEventType:
     ValueError
         If the event type is unknown or data is invalid
     """
-    return UltravoxEvent.validate_python(data)
+    try:
+        return UltravoxEvent.validate_python(data)
+    except ValidationError as e:
+        raise ValueError(f"Invalid event data: {data}\n{e}") from e
 
 
 def serialize_ultravox_event(event: UltravoxEventType) -> dict[str, Any]:
@@ -175,4 +204,4 @@ def serialize_ultravox_event(event: UltravoxEventType) -> dict[str, Any]:
     Dict[str, Any]
         JSON-compatible dictionary
     """
-    return event.model_dump(by_alias=True, exclude_none=True)  # type: ignore[no-any-return]
+    return event.model_dump(by_alias=True, exclude_none=True, mode="json")  # type: ignore[no-any-return]
