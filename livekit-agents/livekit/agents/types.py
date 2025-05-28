@@ -36,7 +36,7 @@ The supported outputs of the agent, stored in the agent's attributes.
 
 This is a comma-separated list. Supported values are:
 - `audio`
-- `transcription`
+- `transcriptions`
 """
 
 TOPIC_CHAT = "lk.chat"

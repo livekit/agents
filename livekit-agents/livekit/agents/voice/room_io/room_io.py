@@ -375,7 +375,7 @@ class RoomIO:
             if self._output_options.audio_enabled:
                 outputs.append("audio")
             if self._output_options.transcription_enabled:
-                outputs.append("transcription")
+                outputs.append("transcriptions")
 
             await self._room.local_participant.set_attributes({
                 ATTRIBUTE_AGENT_INPUTS: ",".join(inputs),
