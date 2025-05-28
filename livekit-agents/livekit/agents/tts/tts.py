@@ -294,6 +294,7 @@ class SynthesizeStream(ABC):
         self._metrics_task: asyncio.Task[None] | None = None  # started on first push
         self._current_attempt_has_error = False
         self._started_time: float = 0
+        self._pushed_text: str = ""
 
         # used to track metrics
         self._mtc_pending_texts: list[str] = []
@@ -314,8 +315,10 @@ class SynthesizeStream(ABC):
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
-                if output_emitter.pushed_duration(idx=-1) <= 0.0:
-                    raise APIError("no audio frames were pushed on all segments")
+                if self._pushed_text.strip() and output_emitter.pushed_duration(idx=-1) <= 0.0:
+                    raise APIError(
+                        f"no audio frames were pushed on all segments for text: {self._pushed_text}"
+                    )
 
                 if self._num_segments != output_emitter.num_segments:
                     raise APIError(
@@ -362,7 +365,6 @@ class SynthesizeStream(ABC):
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
-        print("STARTED")
         audio_duration = 0.0
         ttfb = -1.0
         request_id = ""
@@ -417,6 +419,8 @@ class SynthesizeStream(ABC):
         """Push some text to be synthesized"""
         if not token:
             return
+
+        self._pushed_text += token
 
         if self._metrics_task is None:
             self._metrics_task = asyncio.create_task(

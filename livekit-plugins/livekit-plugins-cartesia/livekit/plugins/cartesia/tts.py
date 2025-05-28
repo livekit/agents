@@ -330,6 +330,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.push(b64data)
                 elif data.get("done"):
                     current_segment_id = None
+                    # TODO(long): when input not ended, it will raise
+                    # "start_segment() called before the previous segment was ended"
+                    # since current_segment_id is reset to None while `end_input` is not called?
 
                     if input_ended and segment_id == last_segment_id:  # last segment
                         output_emitter.end_input()
