@@ -34,7 +34,7 @@ def stt_recorder(*, stt, recorder):
                 await recorder.queue_audio(frame)
                 yield frame
 
-        async for event in stt(self, record_audio, model_settings):
+        async for event in stt(self, record_audio(), model_settings):
             yield event
 
     update_wrapper(stt_node_wrapper, stt)
