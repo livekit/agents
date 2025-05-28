@@ -428,6 +428,11 @@ class SynthesizeStream(ABC):
             )
 
         if not self._mtc_text:
+            if self._num_segments >= 1:
+                logger.warning(
+                    "Using SynthesizeStream to generate multiple segments isn't supported anymore"
+                )
+
             self._num_segments += 1
 
         self._mtc_text += token
