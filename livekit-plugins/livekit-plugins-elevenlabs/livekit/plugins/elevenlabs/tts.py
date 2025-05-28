@@ -430,7 +430,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("isFinal"):
-                    output_emitter.flush()
+                    output_emitter.end_input()
                     return  # 11labs only allow one segment per connection
                 elif data.get("error"):
                     raise APIError(message=data["error"])
