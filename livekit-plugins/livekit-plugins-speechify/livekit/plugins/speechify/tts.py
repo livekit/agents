@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import aiohttp
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tts,
@@ -35,7 +36,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import Gender, TTSEncoding, TTSModels, VoiceType
 
 _DefaultEncoding: TTSEncoding = "ogg_24000"
@@ -71,7 +71,7 @@ class Voice:
 @dataclass
 class _TTSOptions:
     base_url: NotGivenOr[str]
-    token: NotGivenOr[str]
+    token: str
     voice_id: str
     encoding: TTSEncoding
     language: NotGivenOr[str]
@@ -152,8 +152,7 @@ class TTS(tts.TTS):
 
     async def list_voices(self) -> list[Voice]:
         async with self._ensure_session().get(
-            f"{self._opts.base_url}/voices",
-            headers=_get_headers(self._opts.token),
+            f"{self._opts.base_url}/voices", headers=_get_headers(self._opts.token)
         ) as resp:
             return await resp.json()
 
@@ -189,32 +188,18 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-            opts=self._opts,
-            session=self._ensure_session(),
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        opts: _TTSOptions,
-        conn_options: APIConnectOptions,
-        session: aiohttp.ClientSession,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts, self._session = opts, session
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
+    async def _run(self, output_emitter: tts.AudioEmitter):
         data = {
             "input": self._input_text,
             "voice_id": self._opts.voice_id,
@@ -231,55 +216,42 @@ class ChunkedStream(tts.ChunkedStream):
             },
         }
 
-        decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-        )
-
-        decode_task: asyncio.Task | None = None
         try:
-            async with self._session.post(
+            async with self._tts._ensure_session().post(
                 _synthesize_url(self._opts),
                 headers=_get_headers(self._opts.token, encoding=self._opts.encoding),
                 json=data,
-                timeout=self._conn_options.timeout,
+                timeout=aiohttp.ClientTimeout(connect=self._conn_options.timeout, total=30),
             ) as resp:
+                resp.raise_for_status()
+
                 if not resp.content_type.startswith("audio/"):
                     content = await resp.text()
-                    logger.error("speechify returned non-audio data: %s", content)
-                    return
+                    raise APIError(message="Speechify returned non-audio data", body=content)
 
-                async def _decode_loop():
-                    try:
-                        async for bytes_data, _ in resp.content.iter_chunks():
-                            decoder.push(bytes_data)
-                    finally:
-                        decoder.end_input()
-
-                decode_task = asyncio.create_task(_decode_loop())
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
+                output_emitter.initialize(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=1,
+                    mime_type=f"audio/{_audio_format_from_encoding(self._opts.encoding)}",
                 )
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
-                await decode_task
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
+
+                output_emitter.flush()
+
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
                 request_id=None,
                 body=None,
-            ) from e
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            if decode_task:
-                await utils.aio.gracefully_cancel(decode_task)
-            await decoder.aclose()
 
 
 def _synthesize_url(opts: _TTSOptions) -> str:

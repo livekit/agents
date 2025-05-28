@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -40,6 +41,7 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion_chunk import Choice
 
+from .log import logger
 from .models import (
     CerebrasChatModels,
     ChatModels,
@@ -50,7 +52,9 @@ from .models import (
     TogetherChatModels,
     XAIChatModels,
 )
-from .utils import AsyncAzureADTokenProvider, to_chat_ctx, to_fnc_ctx
+from .utils import AsyncAzureADTokenProvider, to_fnc_ctx
+
+lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 @dataclass
@@ -62,6 +66,7 @@ class _LLMOptions:
     tool_choice: NotGivenOr[ToolChoice]
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
+    max_completion_tokens: NotGivenOr[int]
 
 
 class LLM(llm.LLM):
@@ -78,7 +83,9 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
+        _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -95,7 +102,9 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
             store=store,
             metadata=metadata,
+            max_completion_tokens=max_completion_tokens,
         )
+        self._provider_fmt = _provider_fmt or "openai"
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -272,6 +281,7 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
+            # TODO(long): add provider fmt for grok
         )
 
     @staticmethod
@@ -478,6 +488,51 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
         )
 
+    @staticmethod
+    def with_letta(
+        *,
+        agent_id: str,
+        base_url: str = "https://api.letta.com/v1/voice-beta",
+        api_key: str | None = None,
+    ) -> LLM:
+        """
+        Create a new Letta-backed LLM instance connected to the specified Letta agent.
+
+        Args:
+            agent_id (str): The Letta agent ID (must be prefixed with 'agent-').
+            base_url (str): The URL of the Letta server (e.g., from ngrok or Letta Cloud).
+            api_key (str | None, optional): Optional API key for authentication, required if
+                                            the Letta server enforces auth.
+
+        Returns:
+            LLM: A configured LLM instance for interacting with the given Letta agent.
+        """
+
+        base_url = f"{base_url}/{agent_id}"
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"Invalid URL scheme: '{parsed.scheme}'. Must be 'http' or 'https'.")
+        if not parsed.netloc:
+            raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
+
+        api_key = api_key or os.environ.get("LETTA_API_KEY")
+        # Might not be necessary if self-hosted Letta instance
+        if base_url.startswith("https://api.letta.com/v1/") and api_key is None:
+            raise ValueError(
+                "Letta API key is required, either as argument or set LETTA_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model="letta-fast",
+            api_key=api_key,
+            base_url=base_url,
+            client=None,
+            user=NOT_GIVEN,
+            temperature=NOT_GIVEN,
+            parallel_tool_calls=NOT_GIVEN,
+            tool_choice=NOT_GIVEN,
+        )
+
     def chat(
         self,
         *,
@@ -500,6 +555,12 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.user):
             extra["user"] = self._opts.user
+
+        if is_given(self._opts.max_completion_tokens):
+            extra["max_completion_tokens"] = self._opts.max_completion_tokens
+
+        if is_given(self._opts.temperature):
+            extra["temperature"] = self._opts.temperature
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
@@ -526,6 +587,7 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
+            provider_fmt=self._provider_fmt,
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
@@ -540,6 +602,7 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         model: str | ChatModels,
+        provider_fmt: str,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool],
@@ -548,6 +611,7 @@ class LLMStream(llm.LLMStream):
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
+        self._provider_fmt = provider_fmt
         self._client = client
         self._llm = llm
         self._extra_kwargs = extra_kwargs
@@ -563,9 +627,22 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
+            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            fnc_ctx = to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN
+            if lk_oai_debug:
+                tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
+                logger.debug(
+                    "chat.completions.create",
+                    extra={
+                        "fnc_ctx": fnc_ctx,
+                        "tool_choice": tool_choice,
+                        "chat_ctx": chat_ctx,
+                    },
+                )
+
             self._oai_stream = stream = await self._client.chat.completions.create(
-                messages=to_chat_ctx(self._chat_ctx, id(self._llm)),
-                tools=to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN,
+                messages=chat_ctx,
+                tools=fnc_ctx,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,

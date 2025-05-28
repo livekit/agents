@@ -23,16 +23,22 @@ from ..types import (
 )
 from ..utils import aio
 from .chat_context import ChatContext, ChatRole
-from .tool_context import FunctionTool, ToolChoice
+from .tool_context import FunctionTool, RawFunctionTool, ToolChoice
 
 
 class CompletionUsage(BaseModel):
     completion_tokens: int
+    """The number of tokens in the completion."""
     prompt_tokens: int
+    """The number of input tokens used (includes cached tokens)."""
     prompt_cached_tokens: int = 0
+    """The number of cached input tokens used."""
     cache_creation_tokens: int = 0
+    """The number of tokens used to create the cache."""
     cache_read_tokens: int = 0
+    """The number of tokens read from the cache."""
     total_tokens: int
+    """The total number of tokens used (completion + prompt tokens)."""
 
 
 class FunctionToolCall(BaseModel):
@@ -59,7 +65,7 @@ class LLMError(BaseModel):
     type: Literal["llm_error"] = "llm_error"
     timestamp: float
     label: str
-    error: APIError = Field(..., exclude=True)
+    error: Exception = Field(..., exclude=True)
     recoverable: bool
 
 
@@ -84,7 +90,7 @@ class LLM(
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -111,7 +117,7 @@ class LLMStream(ABC):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
     ) -> None:
         self._llm = llm
@@ -161,7 +167,11 @@ class LLMStream(ABC):
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
 
-    def _emit_error(self, api_error: APIError, recoverable: bool):
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
         self._llm.emit(
             "error",
@@ -213,7 +223,7 @@ class LLMStream(ABC):
         return self._chat_ctx
 
     @property
-    def tools(self) -> list[FunctionTool]:
+    def tools(self) -> list[FunctionTool | RawFunctionTool]:
         return self._tools
 
     async def aclose(self) -> None:
@@ -251,7 +261,7 @@ class LLMStream(ABC):
         This assumes the stream will not call any tools.
         """
 
-        async def _iterable():
+        async def _iterable() -> AsyncIterable[str]:
             async with self:
                 async for chunk in self:
                     if chunk.delta and chunk.delta.content:

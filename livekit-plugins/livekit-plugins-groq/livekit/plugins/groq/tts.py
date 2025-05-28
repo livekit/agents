@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import aiohttp
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tts,
@@ -35,7 +36,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import TTSModels, TTSVoices
 
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
@@ -74,9 +74,7 @@ class TTS(tts.TTS):
         """
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=False,
-            ),
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=SAMPLE_RATE,
             num_channels=1,
         )
@@ -104,10 +102,7 @@ class TTS(tts.TTS):
         return self._session
 
     def update_options(
-        self,
-        *,
-        model: NotGivenOr[TTSModels] = NOT_GIVEN,
-        voice: NotGivenOr[TTSVoices] = NOT_GIVEN,
+        self, *, model: NotGivenOr[TTSModels] = NOT_GIVEN, voice: NotGivenOr[TTSVoices] = NOT_GIVEN
     ) -> None:
         """
         Update the TTS options.
@@ -126,16 +121,8 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        segment_id: NotGivenOr[str] = NOT_GIVEN,
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-            opts=self._opts,
-            session=self._ensure_session(),
-            segment_id=segment_id,
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -145,71 +132,50 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         conn_options: APIConnectOptions,
-        opts: _TTSOptions,
-        session: aiohttp.ClientSession,
-        segment_id: NotGivenOr[str],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts = opts
-        self._session = session
-        self._segment_id = segment_id if is_given(segment_id) else None
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
-        headers = {
-            "Authorization": f"Bearer {self._opts.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._opts.model,
-            "voice": self._opts.voice,
-            "input": self._input_text,
-            "response_format": "wav",
-        }
-
-        decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-        )
-
-        decode_task: asyncio.Task | None = None
+    async def _run(self, output_emitter: tts.AudioEmitter):
         api_url = f"{self._opts.base_url}/audio/speech"
         try:
-            async with self._session.post(api_url, headers=headers, json=payload) as response:
-                if not response.content_type.startswith("audio"):
-                    content = await response.text()
-                    logger.error("Groq returned non-audio data: %s", content)
-                    return
+            async with self._tts._ensure_session().post(
+                api_url,
+                headers={
+                    "Authorization": f"Bearer {self._opts.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self._opts.model,
+                    "voice": self._opts.voice,
+                    "input": self._input_text,
+                    "response_format": "wav",
+                },
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+            ) as resp:
+                resp.raise_for_status()
 
-                async def _decode_loop():
-                    try:
-                        async for bytes_data, _ in response.content.iter_chunks():
-                            decoder.push(bytes_data)
-                    finally:
-                        decoder.end_input()
+                if not resp.content_type.startswith("audio"):
+                    content = await resp.text()
+                    raise APIError(message="Groq returned non-audio data", body=content)
 
-                decode_task = asyncio.create_task(_decode_loop())
-                emitter = tts.SynthesizedAudioEmitter(
-                    event_ch=self._event_ch,
-                    request_id=request_id,
-                    segment_id=self._segment_id,
+                output_emitter.initialize(
+                    request_id=utils.shortuuid(),
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    mime_type="audio/wav",
                 )
-                async for frame in decoder:
-                    emitter.push(frame)
-                emitter.flush()
 
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
+
+                output_emitter.flush()
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
-            ) from e
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            if decode_task:
-                await utils.aio.gracefully_cancel(decode_task)
-            await decoder.aclose()

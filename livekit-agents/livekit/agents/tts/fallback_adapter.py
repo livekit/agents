@@ -13,16 +13,9 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import aio
-from .tts import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    TTS,
-    APIConnectOptions,
-    ChunkedStream,
-    SynthesizedAudio,
-    SynthesizeStream,
-    TTSCapabilities,
-)
+from .tts import TTS, ChunkedStream, SynthesizedAudio, SynthesizeStream, TTSCapabilities
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -33,7 +26,7 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
 @dataclass
 class _TTSStatus:
     available: bool
-    recovering_task: asyncio.Task | None
+    recovering_task: asyncio.Task[None] | None
     resampler: rtc.AudioResampler | None
 
 
@@ -448,7 +441,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
         new_input_ch: aio.Chan[str | SynthesizeStream._FlushSentinel] | None = None
 
-        async def _forward_input_task():
+        async def _forward_input_task() -> None:
             nonlocal new_input_ch
 
             async for data in self._input_ch:
