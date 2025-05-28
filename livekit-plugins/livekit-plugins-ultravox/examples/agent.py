@@ -14,7 +14,6 @@ from livekit.agents import (
     function_tool,
 )
 from livekit.agents.voice.events import (
-    AgentStateChangedEvent,
     ConversationItemAddedEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,

@@ -92,7 +92,7 @@ class ClientToolResultEvent(UltravoxEvent):
 
 
 class CallStartedEvent(UltravoxEvent):
-    """Server message indicating that a call has started. Undocumented."""
+    """Server message indicating that a call has started."""
 
     type: Literal["call_started"] = "call_started"
     call_id: str = Field(..., alias="callId", description="Unique call ID")
