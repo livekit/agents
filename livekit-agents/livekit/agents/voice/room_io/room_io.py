@@ -133,7 +133,7 @@ class RoomIO:
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
-        self._update_capabilities_atask: asyncio.Task[None] | None = None
+        self._advertise_capabilities_atask: asyncio.Task[None] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
 
@@ -239,8 +239,8 @@ class RoomIO:
         if self._update_state_atask:
             await utils.aio.cancel_and_wait(self._update_state_atask)
 
-        if self._update_capabilities_atask:
-            await utils.aio.cancel_and_wait(self._update_capabilities_atask)
+        if self._advertise_capabilities_atask:
+            await utils.aio.cancel_and_wait(self._advertise_capabilities_atask)
 
         if self._pre_connect_audio_handler:
             await self._pre_connect_audio_handler.aclose()
@@ -356,11 +356,11 @@ class RoomIO:
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
-            self._update_capabilities()
+            self._advertise_capabilities()
 
-    def _update_capabilities(self) -> None:
-        if self._update_capabilities_atask is not None:
-            self._update_capabilities_atask.cancel()
+    def _advertise_capabilities(self) -> None:
+        if self._advertise_capabilities_atask is not None:
+            self._advertise_capabilities_atask.cancel()
 
         async def _set_capabilities() -> None:
             inputs = []
@@ -382,7 +382,7 @@ class RoomIO:
                 ATTRIBUTE_AGENT_OUTPUTS: ",".join(outputs),
             })
 
-        self._update_capabilities_atask = asyncio.create_task(_set_capabilities())
+        self._advertise_capabilities_atask = asyncio.create_task(_set_capabilities())
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
