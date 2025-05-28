@@ -536,14 +536,14 @@ class SpeechStream(stt.SpeechStream):
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 try:
                     done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
+                        (tasks_group, wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
+                    )
 
                     # propagate exceptions from completed tasks
                     for task in done:
                         if task != wait_reconnect_task:
-                            task.result()  # type: ignore
+                            task.result()
 
                     if wait_reconnect_task not in done:
                         break

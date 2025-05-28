@@ -9,7 +9,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal, Union, cast, overload
+from typing import Any, Literal, Optional, Union, cast, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -392,7 +392,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.turn_detection = turn_detection
 
         if is_given(tool_choice):
-            self._opts.tool_choice = cast(llm.ToolChoice | None, tool_choice)
+            self._opts.tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
@@ -401,9 +401,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(max_response_output_tokens):
-            self._opts.max_response_output_tokens = cast(
-                int | Literal["inf"] | None, max_response_output_tokens
-            )
+            self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
 
         for sess in self._sessions:
             sess.update_options(
@@ -750,7 +748,7 @@ class RealtimeSession(
         kwargs: dict[str, Any] = {}
 
         if is_given(tool_choice):
-            tool_choice = cast(llm.ToolChoice | None, tool_choice)
+            tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
             kwargs["tool_choice"] = _to_oai_tool_choice(tool_choice)
 
@@ -767,9 +765,7 @@ class RealtimeSession(
             kwargs["turn_detection"] = turn_detection
 
         if is_given(max_response_output_tokens):
-            self._realtime_model._opts.max_response_output_tokens = cast(
-                int | Literal["inf"] | None, max_response_output_tokens
-            )
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
             kwargs["max_response_output_tokens"] = max_response_output_tokens
 
         if is_given(input_audio_transcription):
