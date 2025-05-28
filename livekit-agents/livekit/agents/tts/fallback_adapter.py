@@ -401,8 +401,8 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         conn_options=dataclasses.replace(
                             self._conn_options,
                             max_retry=0,
-                            timeout=self._fallback_adapter._attempt_timeout,
-                            retry_interval=self._fallback_adapter._retry_interval,
+                            timeout=self._conn_options.timeout,
+                            retry_interval=self._conn_options.retry_interval,
                         ),
                     ):
                         pass
