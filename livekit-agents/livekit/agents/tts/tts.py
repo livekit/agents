@@ -315,16 +315,17 @@ class SynthesizeStream(ABC):
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
-                if self._pushed_text.strip() and output_emitter.pushed_duration(idx=-1) <= 0.0:
-                    raise APIError(
-                        f"no audio frames were pushed on all segments for text: {self._pushed_text}"
-                    )
+                if self._pushed_text.strip():
+                    if output_emitter.pushed_duration(idx=-1) <= 0.0:
+                        raise APIError(
+                            f"no audio frames were pushed on all segments for text: {self._pushed_text}"
+                        )
 
-                if self._num_segments != output_emitter.num_segments:
-                    raise APIError(
-                        f"number of segments mismatch: expected {self._num_segments}, "
-                        f"but got {output_emitter.num_segments}"
-                    )
+                    if self._num_segments != output_emitter.num_segments:
+                        raise APIError(
+                            f"number of segments mismatch: expected {self._num_segments}, "
+                            f"but got {output_emitter.num_segments}"
+                        )
 
                 return
             except APIError as e:
