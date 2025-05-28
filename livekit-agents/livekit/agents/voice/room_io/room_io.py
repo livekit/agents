@@ -143,11 +143,8 @@ class RoomIO:
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
-<<<<<<< HEAD
         self._advertise_capabilities_atask: asyncio.Task[None] | None = None
-=======
         self._close_session_atask: asyncio.Task[None] | None = None
->>>>>>> origin/main
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
         self._text_stream_handler_registered = False
