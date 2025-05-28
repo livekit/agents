@@ -321,6 +321,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.push(b64data)
                 elif data.get("done"):
                     output_emitter.end_input()
+                    break
                 else:
                     logger.warning("unexpected message %s", data)
 
