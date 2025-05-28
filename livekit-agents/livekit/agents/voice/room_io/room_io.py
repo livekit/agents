@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -378,8 +379,8 @@ class RoomIO:
                 outputs.append("transcription")
 
             await self._room.local_participant.set_attributes({
-                ATTRIBUTE_AGENT_INPUTS: ",".join(inputs),
-                ATTRIBUTE_AGENT_OUTPUTS: ",".join(outputs),
+                ATTRIBUTE_AGENT_INPUTS: json.dumps(inputs),
+                ATTRIBUTE_AGENT_OUTPUTS: json.dumps(outputs),
             })
 
         self._advertise_capabilities_atask = asyncio.create_task(_set_capabilities())

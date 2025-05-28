@@ -25,18 +25,18 @@ ATTRIBUTE_AGENT_INPUTS = "lk.agent.inputs"
 """
 The supported inputs of the agent, stored in the agent's attributes.
 
-This is a comma-separated list. Supported values are:
-- `audio`
-- `video`
-- `text`
+This is a JSON array of strings. Supported values are:
+- `"audio"`
+- `"video"`
+- `"text"`
 """
 ATTRIBUTE_AGENT_OUTPUTS = "lk.agent.outputs"
 """
 The supported outputs of the agent, stored in the agent's attributes.
 
-This is a comma-separated list. Supported values are:
-- `audio`
-- `transcription`
+This is a JSON array of strings. Supported values are:
+- `"audio"`
+- `"transcription"`
 """
 
 TOPIC_CHAT = "lk.chat"
