@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import time
 from collections.abc import AsyncGenerator
@@ -260,8 +259,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     elif isinstance(data, self._FlushSentinel):
                         stream.flush()
             finally:
-                with contextlib.suppress(RuntimeError):
-                    stream.end_input()
+                stream.end_input()
 
         input_task = asyncio.create_task(_forward_input_task())
 

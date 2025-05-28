@@ -317,9 +317,7 @@ class SynthesizeStream(ABC):
 
                 if self._pushed_text.strip():
                     if output_emitter.pushed_duration(idx=-1) <= 0.0:
-                        raise APIError(
-                            f"no audio frames were pushed on all segments for text: {self._pushed_text}"
-                        )
+                        raise APIError(f"no audio frames were pushed for text: {self._pushed_text}")
 
                     if self._num_segments != output_emitter.num_segments:
                         raise APIError(
@@ -418,7 +416,7 @@ class SynthesizeStream(ABC):
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
-        if not token:
+        if not token or self._input_ch.closed:
             return
 
         self._pushed_text += token
@@ -440,18 +438,17 @@ class SynthesizeStream(ABC):
             self._num_segments += 1
 
         self._mtc_text += token
-        self._check_input_not_ended()
-        self._check_not_closed()
         self._input_ch.send_nowait(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
+        if self._input_ch.closed:
+            return
+
         if self._mtc_text:
             self._mtc_pending_texts.append(self._mtc_text)
             self._mtc_text = ""
 
-        self._check_input_not_ended()
-        self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
@@ -463,21 +460,12 @@ class SynthesizeStream(ABC):
         """Close ths stream immediately"""
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
+        self._input_ch.close()
 
         if self._metrics_task is not None:
             await self._metrics_task
 
         await self._tee.aclose()
-
-    def _check_not_closed(self) -> None:
-        if self._event_ch.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
-
-    def _check_input_not_ended(self) -> None:
-        if self._input_ch.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
