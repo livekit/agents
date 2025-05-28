@@ -1,6 +1,6 @@
-# fal plugin for LiveKit Agents
+# Spitch plugin for LiveKit Agents
 
-Support for speech-to-text with [spitch.app](https://spitch.app/).
+Support for STT and TTS with [spitch.app](https://spitch.app/).
 
 ## Installation
 
