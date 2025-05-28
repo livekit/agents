@@ -240,7 +240,7 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.spi-tch.com:443",
         },
         id="spitch",
-    )
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()

@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Spitch plugin for LiveKit Agents
-
-"""
+"""Spitch plugin for LiveKit Agents"""
 
 from .stt import STT
 from .tts import TTS
