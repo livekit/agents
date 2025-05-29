@@ -68,7 +68,7 @@ class AudioSettings:
     sample_rate: int = 16000
     """Sampling rate in hertz."""
 
-    def asdict(self):
+    def asdict(self) -> dict[str, Any]:
         return {
             "type": "raw",
             "encoding": self.encoding,

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -26,7 +26,7 @@ import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool
+from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -36,6 +36,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from openai.types.chat import (
     ChatCompletionChunk,
+    ChatCompletionMessageParam,
     ChatCompletionToolChoiceOptionParam,
     completion_create_params,
 )
@@ -259,7 +260,7 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
-    ):
+    ) -> LLM:
         """
         Create a new instance of XAI LLM.
 
@@ -516,8 +517,7 @@ class LLM(llm.LLM):
             raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
 
         api_key = api_key or os.environ.get("LETTA_API_KEY")
-        # Might not be necessary if self-hosted Letta instance
-        if base_url.startswith("https://api.letta.com/v1/") and api_key is None:
+        if api_key is None:
             raise ValueError(
                 "Letta API key is required, either as argument or set LETTA_API_KEY environmental variable"  # noqa: E501
             )
@@ -537,7 +537,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -582,7 +582,7 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         if is_given(response_format):
-            extra["response_format"] = llm_utils.to_openai_response_format(response_format)
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         return LLMStream(
             self,
@@ -605,7 +605,7 @@ class LLMStream(llm.LLMStream):
         provider_fmt: str,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:
@@ -641,7 +641,7 @@ class LLMStream(llm.LLMStream):
                 )
 
             self._oai_stream = stream = await self._client.chat.completions.create(
-                messages=chat_ctx,
+                messages=cast(list[ChatCompletionMessageParam], chat_ctx),
                 tools=fnc_ctx,
                 model=self._model,
                 stream_options={"include_usage": True},

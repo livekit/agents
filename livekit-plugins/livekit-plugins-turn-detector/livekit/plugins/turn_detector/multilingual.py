@@ -8,7 +8,7 @@ from .base import EOUModelBase, _EUORunnerBase
 class _EUORunnerMultilingual(_EUORunnerBase):
     INFERENCE_METHOD = "lk_end_of_utterance_multilingual"
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("multilingual")
 
 

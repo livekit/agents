@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-import aioboto3
-import botocore
-import botocore.exceptions
-from aiobotocore.config import AioConfig
+import aioboto3  # type: ignore
+import botocore  # type: ignore
+import botocore.exceptions  # type: ignore
+from aiobotocore.config import AioConfig  # type: ignore
 
 from livekit.agents import (
     APIConnectionError,
@@ -115,7 +115,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             config = AioConfig(
                 connect_timeout=self._conn_options.timeout,

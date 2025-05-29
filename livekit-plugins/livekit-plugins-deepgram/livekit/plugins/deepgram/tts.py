@@ -116,7 +116,7 @@ class TTS(tts.TTS):
             timeout,
         )
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -163,10 +163,10 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with self._tts._ensure_session().post(
                 _to_deepgram_url(
@@ -214,7 +214,7 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
@@ -228,7 +228,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        async def _tokenize_input():
+        async def _tokenize_input() -> None:
             # Converts incoming text into WordStreams and sends them into _segments_ch
             word_stream = None
             async for input in self._input_ch:
@@ -244,7 +244,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._segments_ch.close()
 
-        async def _run_segments():
+        async def _run_segments() -> None:
             async for word_stream in self._segments_ch:
                 await self._run_ws(word_stream, output_emitter)
 
@@ -265,11 +265,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.gracefully_cancel(*tasks)
 
-    async def _run_ws(self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter):
+    async def _run_ws(
+        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
+    ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for word in word_stream:
                 speak_msg = {"type": "Speak", "text": f"{word.token} "}
                 self._mark_started()
@@ -279,7 +281,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             flush_msg = {"type": "Flush"}
             await ws.send_str(json.dumps(flush_msg))
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
                 msg = await ws.receive()
                 if msg.type in (

@@ -106,13 +106,13 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        config = dataclasses.replace(self._audio_settings)
+        transcription_config = dataclasses.replace(self._transcription_config)
         if is_given(language):
-            config.language = language
+            transcription_config.language = language
         stream = SpeechStream(
             stt=self,
-            transcription_config=self._transcription_config,
-            audio_settings=config,
+            transcription_config=transcription_config,
+            audio_settings=self._audio_settings,
             connection_settings=self._connection_settings,
             conn_options=conn_options,
             http_session=self.session,
@@ -146,10 +146,10 @@ class SpeechStream(stt.SpeechStream):
         self._recognition_started = asyncio.Event()
         self._seq_no = 0
 
-    async def _run(self):
+    async def _run(self) -> None:
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
             start_recognition_msg = {
@@ -187,7 +187,7 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             while True:
                 msg = await ws.receive()
@@ -222,9 +222,9 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
+                        (tasks_group, wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
+                    )
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()
