@@ -342,8 +342,12 @@ class SpeechStream(stt.SpeechStream):
                             tokens = content["tokens"]
 
                             if tokens:
-                                # Got at least one token, so we can reset the auto finalize delay.
-                                self._last_tokens_received = time.time()
+                                if len(tokens) == 1 and tokens[0]["text"] == FINALIZED_TOKEN:
+                                    # Ignore finalized token, prevent auto finalize cycle.
+                                    pass
+                                else:
+                                    # Got at least one token, reset the auto finalize delay.
+                                    self._last_tokens_received = time.time()
 
                             # We will only send the final tokens after we get the "endpoint" event.
                             non_final_transcription = ""
