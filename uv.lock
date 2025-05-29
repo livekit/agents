@@ -49,6 +49,7 @@ members = [
     "livekit-plugins-speechmatics",
     "livekit-plugins-tavus",
     "livekit-plugins-turn-detector",
+    "livekit-plugins-ultravox",
 ]
 constraints = [{ name = "onnxruntime", marker = "python_full_version == '3.9.*'", specifier = "<1.20.0" }]
 
@@ -1957,6 +1958,25 @@ requires-dist = [
     { name = "onnxruntime", specifier = ">=1.18" },
     { name = "transformers", specifier = ">=4.47.1" },
 ]
+
+[[package]]
+name = "livekit-plugins-ultravox"
+source = { editable = "livekit-plugins/livekit-plugins-ultravox" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.optional-dependencies]
+vertex = [
+    { name = "google-auth" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+]
+provides-extras = ["vertex"]
 
 [[package]]
 name = "livekit-protocol"

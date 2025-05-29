@@ -859,7 +859,7 @@ class RealtimeSession(llm.RealtimeSession):
         pass
 
     def clear_audio(self) -> None:
-        self._bstream.clear()
+        self._bstream._buf.clear()
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
