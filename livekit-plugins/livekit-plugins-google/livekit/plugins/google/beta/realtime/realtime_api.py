@@ -727,15 +727,7 @@ class RealtimeSession(llm.RealtimeSession):
         if server_content.generation_complete:
             # The only way we'd know that the transcription is complete is by when they are
             # done with generation
-            if current_gen.input_transcription:
-                self.emit(
-                    "input_audio_transcription_completed",
-                    llm.InputTranscriptionCompleted(
-                        item_id=current_gen.response_id,
-                        transcript=current_gen.input_transcription,
-                        is_final=True,
-                    ),
-                )
+            self._on_final_input_audio_transcription()
             current_gen._completed_timestamp = time.time()
 
         if server_content.interrupted:
@@ -777,6 +769,7 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
+        self._on_final_input_audio_transcription()
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(
@@ -854,6 +847,15 @@ class RealtimeSession(llm.RealtimeSession):
         )
         # TODO(dz): this isn't a seamless reconnection just yet
         self._session_should_close.set()
+
+    def _on_final_input_audio_transcription(self) -> None:
+        if (gen := self._current_generation) and gen.input_transcription:
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=gen.response_id, transcript=gen.input_transcription, is_final=True
+                ),
+            )
 
     def commit_audio(self) -> None:
         pass
