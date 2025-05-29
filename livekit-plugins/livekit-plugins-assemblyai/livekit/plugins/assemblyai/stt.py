@@ -381,7 +381,6 @@ class SpeechStream(stt.SpeechStream):
             logger.debug("AssemblyAI session started: %s", str(data))
 
         elif message_type == "Turn":
-            logger.debug("AssemblyAI turn received: %s", str(data))
             alts = live_transcription_to_speech_data(ENGLISH, data)
 
             if self._opts.token_mode:
