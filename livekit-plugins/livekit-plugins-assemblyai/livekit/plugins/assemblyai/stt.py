@@ -183,7 +183,6 @@ class SpeechStream(stt.SpeechStream):
         self._api_key = api_key
         self._session = http_session
         self._speech_duration: float = 0
-        self._utterance_mapping = {}
         self._reconnect_event = asyncio.Event()
 
     def update_options(
