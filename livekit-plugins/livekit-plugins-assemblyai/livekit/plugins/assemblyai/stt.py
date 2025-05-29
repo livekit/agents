@@ -306,8 +306,10 @@ class SpeechStream(stt.SpeechStream):
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
-                    fs: list[asyncio.Task | asyncio.Future] = [tasks_group, wait_reconnect_task]
-                    done, _ = await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
+                    done, _ = await asyncio.wait(
+                        (tasks_group, wait_reconnect_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()

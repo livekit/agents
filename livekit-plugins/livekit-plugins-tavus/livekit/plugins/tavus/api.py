@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import Any, cast
+from typing import Any
 
 import aiohttp
 
@@ -33,10 +33,10 @@ class TavusAPI:
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         session: aiohttp.ClientSession | None = None,
     ) -> None:
-        self._api_key = api_key or os.getenv("TAVUS_API_KEY")
-        if self._api_key is None:
+        tavus_api_key = api_key or os.getenv("TAVUS_API_KEY")
+        if tavus_api_key is None:
             raise TavusException("TAVUS_API_KEY must be set")
-        self._api_key = cast(str, self._api_key)
+        self._api_key = tavus_api_key
 
         self._api_url = api_url or DEFAULT_API_URL
         self._conn_options = conn_options
@@ -50,11 +50,11 @@ class TavusAPI:
         properties: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
-        replica_id = replica_id or os.getenv("TAVUS_REPLICA_ID")
+        replica_id = replica_id or (os.getenv("TAVUS_REPLICA_ID") or NOT_GIVEN)
         if not replica_id:
             raise TavusException("TAVUS_REPLICA_ID must be set")
 
-        persona_id = persona_id or os.getenv("TAVUS_PERSONA_ID")
+        persona_id = persona_id or (os.getenv("TAVUS_PERSONA_ID") or NOT_GIVEN)
         if not persona_id:
             # create a persona if not provided
             persona_id = await self.create_persona()
@@ -72,7 +72,7 @@ class TavusAPI:
             payload["conversation_name"] = utils.shortuuid("lk_conversation_")
 
         response_data = await self._post("conversations", payload)
-        return response_data["conversation_id"]
+        return response_data["conversation_id"]  # type: ignore
 
     async def create_persona(
         self,
@@ -94,7 +94,7 @@ class TavusAPI:
             payload.update(extra_payload)
 
         response_data = await self._post("personas", payload)
-        return response_data["persona_id"]
+        return response_data["persona_id"]  # type: ignore
 
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         """
@@ -119,14 +119,14 @@ class TavusAPI:
                         "x-api-key": self._api_key,
                     },
                     json=payload,
-                    timeout=self._conn_options.timeout,
+                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
                 ) as response:
                     if not response.ok:
                         text = await response.text()
                         raise APIStatusError(
                             "Server returned an error", status_code=response.status, body=text
                         )
-                    return await response.json()
+                    return await response.json()  # type: ignore
             except Exception as e:
                 if isinstance(e, APIConnectionError):
                     logger.warning("failed to call tavus api", extra={"error": str(e)})

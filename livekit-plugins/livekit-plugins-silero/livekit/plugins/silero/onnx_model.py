@@ -78,5 +78,5 @@ class OnnxModel:
             "sr": self._sample_rate_nd,
         }
         out, self._state = self._sess.run(None, ort_inputs)
-        self._context = self._input_buffer[:, -self._context_size :]
-        return out.item()
+        self._context = self._input_buffer[:, -self._context_size :]  # type: ignore
+        return out.item()  # type: ignore

@@ -72,7 +72,7 @@ class STT(stt.STT):
         self._opts = _STTOptions(
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
-            language_code=language_code,
+            language_code=language_code if is_given(language_code) else "en",
         )
         self._session = http_session
 
