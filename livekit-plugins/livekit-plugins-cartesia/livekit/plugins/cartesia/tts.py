@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
@@ -140,7 +140,7 @@ class TTS(tts.TTS):
         )
         return await asyncio.wait_for(session.ws_connect(url), timeout)
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -179,9 +179,9 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = language
         if is_given(voice):
-            self._opts.voice = voice
+            self._opts.voice = cast(str | list[float], voice)
         if is_given(speed):
-            self._opts.speed = speed
+            self._opts.speed = cast(TTSVoiceSpeed | float | None, speed)
         if is_given(emotion):
             self._opts.emotion = emotion
 
@@ -208,10 +208,10 @@ class ChunkedStream(tts.ChunkedStream):
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         json = _to_cartesia_options(self._opts)
         json["transcript"] = self._input_text
 
@@ -251,7 +251,7 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
             min_sentence_len=BUFFERED_WORDS_COUNT
         ).stream()
@@ -267,7 +267,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse):
+        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             context_id = utils.shortuuid()
             base_pkt = _to_cartesia_options(self._opts)
             async for ev in self._sent_tokenizer_stream:
@@ -284,7 +284,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             end_pkt["continue"] = False
             await ws.send_str(json.dumps(end_pkt))
 
-        async def _input_task():
+        async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
                     self._sent_tokenizer_stream.flush()
@@ -294,7 +294,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._sent_tokenizer_stream.end_input()
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_segment_id: str | None = None
             while True:
                 msg = await ws.receive()

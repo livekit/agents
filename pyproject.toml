@@ -90,9 +90,5 @@ follow_imports = "normal"
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = "aiobotocore"
-follow_untyped_imports = true
-
-[[tool.mypy.overrides]]
 module = "boto3"
 follow_untyped_imports = true

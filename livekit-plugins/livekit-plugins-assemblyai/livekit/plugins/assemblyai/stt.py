@@ -63,7 +63,7 @@ class STTOptions:
     end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN
     # Buffer to collect frames to send to AssemblyAI
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.encoding not in (NOT_GIVEN, "pcm_s16le", "pcm_mulaw"):
             raise ValueError(f"Invalid encoding: {self.encoding}")
 
@@ -88,13 +88,14 @@ class STT(stt.STT):
                 interim_results=True,
             ),
         )
-        self._api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
-        if not self._api_key:
+        assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
+        if assemblyai_api_key is None:
             raise ValueError(
                 "AssemblyAI API key is required. "
                 "Pass one in via the `api_key` parameter, "
                 "or set it as the `ASSEMBLYAI_API_KEY` environment variable"
             )
+        self._api_key = assemblyai_api_key
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -148,7 +149,7 @@ class STT(stt.STT):
         end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
         enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
-    ):
+    ) -> None:
         if is_given(disable_partial_transcripts):
             self._opts.disable_partial_transcripts = disable_partial_transcripts
         if is_given(word_boost):
@@ -202,7 +203,7 @@ class SpeechStream(stt.SpeechStream):
         end_utterance_silence_threshold: NotGivenOr[int] = NOT_GIVEN,
         enable_extra_session_information: NotGivenOr[bool] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
-    ):
+    ) -> None:
         if is_given(disable_partial_transcripts):
             self._opts.disable_partial_transcripts = disable_partial_transcripts
         if is_given(word_boost):
@@ -224,7 +225,7 @@ class SpeechStream(stt.SpeechStream):
 
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
             if is_given(self._opts.end_utterance_silence_threshold):
@@ -259,7 +260,7 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             while True:
                 try:
@@ -305,10 +306,8 @@ class SpeechStream(stt.SpeechStream):
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
+                    fs: list[asyncio.Task | asyncio.Future] = [tasks_group, wait_reconnect_task]
+                    done, _ = await asyncio.wait(fs, return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()
