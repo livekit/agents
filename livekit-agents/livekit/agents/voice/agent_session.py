@@ -453,8 +453,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        if self._activity.draining and self._next_activity is None:
-            raise RuntimeError("AgentSession is closing, cannot use say()")
+        if self._activity.draining:
+            if self._next_activity is None:
+                raise RuntimeError("AgentSession is closing, cannot use say()")
+
+            return self._next_activity.say(
+                text,
+                audio=audio,
+                allow_interruptions=allow_interruptions,
+                add_to_chat_ctx=add_to_chat_ctx,
+            )
 
         return self._activity.say(
             text,
@@ -493,8 +501,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else NOT_GIVEN
         )
 
-        if self._activity.draining and self._next_activity is None:
-            raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+        if self._activity.draining:
+            if self._next_activity is None:
+                raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+
+            return self._next_activity._generate_reply(
+                user_message=user_message,
+                instructions=instructions,
+                tool_choice=tool_choice,
+                allow_interruptions=allow_interruptions,
+            )
 
         return self._activity._generate_reply(
             user_message=user_message,
