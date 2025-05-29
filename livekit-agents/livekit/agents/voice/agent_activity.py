@@ -551,6 +551,9 @@ class AgentActivity(RecognitionHooks):
             instructions=instructions or None,
         )
 
+        if self.llm is None:
+            raise RuntimeError("trying to generate reply without an LLM model")
+
         from .agent import _get_inline_task_info
 
         task = asyncio.current_task()
@@ -840,7 +843,11 @@ class AgentActivity(RecognitionHooks):
 
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=False),
+            UserInputTranscribedEvent(
+                transcript=ev.alternatives[0].text,
+                is_final=False,
+                speaker_id=ev.alternatives[0].speaker_id,
+            ),
         )
 
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None:
@@ -850,7 +857,11 @@ class AgentActivity(RecognitionHooks):
 
         self._session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript=ev.alternatives[0].text, is_final=True),
+            UserInputTranscribedEvent(
+                transcript=ev.alternatives[0].text,
+                is_final=True,
+                speaker_id=ev.alternatives[0].speaker_id,
+            ),
         )
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
@@ -931,7 +942,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.interrupt()
 
         # id is generated
-        user_message = llm.ChatMessage(role="user", content=[info.new_transcript])
+        user_message: llm.ChatMessage = llm.ChatMessage(role="user", content=[info.new_transcript])
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
         # the user can edit it for the current generation, but changes will not be kept inside the
@@ -953,6 +964,8 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
+        elif self.llm is None:
+            return  # skip response if no llm is set
 
         # Ensure the new message is passed to generate_reply
         # This preserves the original message_id, making it easier for users to track responses

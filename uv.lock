@@ -1592,12 +1592,14 @@ name = "livekit-plugins-anthropic"
 source = { editable = "livekit-plugins/livekit-plugins-anthropic" }
 dependencies = [
     { name = "anthropic" },
+    { name = "httpx" },
     { name = "livekit-agents" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.41" },
+    { name = "httpx" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 

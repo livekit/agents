@@ -9,7 +9,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, Union, overload
+from typing import Any, Literal, Optional, Union, cast, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -96,7 +96,7 @@ class _RealtimeOptions:
     input_audio_noise_reduction: InputAudioNoiseReduction | None
     turn_detection: TurnDetection | None
     max_response_output_tokens: int | Literal["inf"] | None
-    api_key: str
+    api_key: str | None
     base_url: str
     is_azure: bool
     azure_deployment: str | None
@@ -142,8 +142,12 @@ class _CreateResponseHandle:
             if not self.done_fut.done():
                 self.done_fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
+        def _on_done(_: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            if self.timeout:
+                self.timeout.cancel()
+
         self.timeout = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        self.done_fut.add_done_callback(lambda _: self.timeout.cancel())
+        self.done_fut.add_done_callback(_on_done)
 
 
 _MOCK_AUDIO_ID_PREFIX = "lk_mock_audio_item_"
@@ -192,7 +196,7 @@ class RealtimeModel(llm.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         api_key: str | None = None,
-        base_url: str | None = None,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None: ...
@@ -205,7 +209,7 @@ class RealtimeModel(llm.RealtimeModel):
         entra_token: str | None = None,
         api_key: str | None = None,
         api_version: str | None = None,
-        base_url: str | None = None,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
@@ -284,7 +288,7 @@ class RealtimeModel(llm.RealtimeModel):
             azure_deployment=azure_deployment,
             entra_token=entra_token,
             api_version=api_version,
-            max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
+            max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
@@ -308,7 +312,7 @@ class RealtimeModel(llm.RealtimeModel):
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: float = 0.8,
         http_session: aiohttp.ClientSession | None = None,
-    ):
+    ) -> RealtimeModel:
         """
         Create a RealtimeClient instance configured for Azure OpenAI Service.
 
@@ -400,7 +404,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.turn_detection = turn_detection
 
         if is_given(tool_choice):
-            self._opts.tool_choice = tool_choice
+            self._opts.tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
@@ -409,7 +413,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(max_response_output_tokens):
-            self._opts.max_response_output_tokens = max_response_output_tokens
+            self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
 
         for sess in self._sessions:
             sess.update_options(
@@ -486,9 +490,9 @@ class RealtimeSession(
 
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
-        self._realtime_model = realtime_model
+        self._realtime_model: RealtimeModel = realtime_model
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict]]()
+        self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict[str, Any]]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._instructions: str | None = None
@@ -496,11 +500,11 @@ class RealtimeSession(
         self._initial_session_update()
 
         self._response_created_futures: dict[str, _CreateResponseHandle] = {}
-        self._text_mode_recovery_atask: asyncio.Task | None = None
+        self._text_mode_recovery_atask: asyncio.Task[None] | None = None
         self._text_mode_recovery_retries: int = 0
 
-        self._item_delete_future: dict[str, asyncio.Future] = {}
-        self._item_create_future: dict[str, asyncio.Future] = {}
+        self._item_delete_future: dict[str, asyncio.Future[None]] = {}
+        self._item_create_future: dict[str, asyncio.Future[None]] = {}
 
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -512,9 +516,9 @@ class RealtimeSession(
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
-        self._pushed_duration_s = 0  # duration of audio pushed to the OpenAI Realtime API
+        self._pushed_duration_s: float = 0  # duration of audio pushed to the OpenAI Realtime API
 
-    def send_event(self, event: RealtimeClientEvent | dict) -> None:
+    def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
 
@@ -765,29 +769,29 @@ class RealtimeSession(
             await ws_conn.close()
 
     def _initial_session_update(self, *, _build_event: bool = False) -> SessionUpdateEvent | None:
-        input_audio_transcription = self._realtime_model._opts.input_audio_transcription
+        input_audio_transcription_opts = self._realtime_model._opts.input_audio_transcription
         input_audio_transcription = (
             session_update_event.SessionInputAudioTranscription.model_validate(
-                input_audio_transcription.model_dump(
+                input_audio_transcription_opts.model_dump(
                     by_alias=True,
                     exclude_unset=True,
                     exclude_defaults=True,
                 )
             )
-            if input_audio_transcription
+            if input_audio_transcription_opts
             else None
         )
 
-        turn_detection = self._realtime_model._opts.turn_detection
+        turn_detection_opts = self._realtime_model._opts.turn_detection
         turn_detection = (
             session_update_event.SessionTurnDetection.model_validate(
-                turn_detection.model_dump(
+                turn_detection_opts.model_dump(
                     by_alias=True,
                     exclude_unset=True,
                     exclude_defaults=True,
                 )
             )
-            if turn_detection
+            if turn_detection_opts
             else None
         )
 
@@ -839,9 +843,10 @@ class RealtimeSession(
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
     ) -> None:
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
 
         if is_given(tool_choice):
+            tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
             kwargs["tool_choice"] = _to_oai_tool_choice(tool_choice)
 
@@ -858,7 +863,7 @@ class RealtimeSession(
             kwargs["turn_detection"] = turn_detection
 
         if is_given(max_response_output_tokens):
-            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
             kwargs["max_response_output_tokens"] = max_response_output_tokens
 
         if is_given(input_audio_transcription):
@@ -912,7 +917,7 @@ class RealtimeSession(
                 )
                 if not _build_event:
                     self.send_event(ev)
-                    futs.append(f := asyncio.Future())
+                    futs.append(f := asyncio.Future[None]())
                     self._item_delete_future[msg_id] = f
 
             for previous_msg_id, msg_id in diff_ops.to_create:
@@ -930,7 +935,7 @@ class RealtimeSession(
                 )
                 if not _build_event:
                     self.send_event(ev)
-                    futs.append(f := asyncio.Future())
+                    futs.append(f := asyncio.Future[None]())
                     self._item_create_future[msg_id] = f
 
             if _build_event:
@@ -1109,6 +1114,8 @@ class RealtimeSession(
 
     def _emit_generation_event(self, response_id: str) -> None:
         # called when the generation is a function call or a audio message
+        assert self._current_generation is not None, "current_generation is None"
+
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
@@ -1328,7 +1335,7 @@ class RealtimeSession(
             extra={"error": event.error},
         )
 
-    def _handle_response_audio_transcript_delta(self, event: dict) -> None:
+    def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
         assert self._current_generation is not None, "current_generation is None"
 
         item_id = event["item_id"]
@@ -1422,7 +1429,7 @@ class RealtimeSession(
         duration = time.time() - created_timestamp
         metrics = RealtimeModelMetrics(
             timestamp=created_timestamp,
-            request_id=event.response.id,
+            request_id=event.response.id or "",
             ttft=ttft,
             duration=duration,
             cancelled=event.response.status == "cancelled",
@@ -1573,7 +1580,7 @@ def _openai_item_to_livekit_item(item: ConversationItem) -> llm.ChatItem:
 
 
 def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
-    audio_data = b"\x00\x00" * (SAMPLE_RATE * duration)
+    audio_data = b"\x00\x00" * int(SAMPLE_RATE * duration)
     return llm.ChatMessage(
         id=utils.shortuuid(_MOCK_AUDIO_ID_PREFIX),
         role="user",
@@ -1592,8 +1599,8 @@ def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
     )
 
 
-def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
-    oai_tool_choice: str | None = None
+def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str | llm.tool_context.Function:
+    oai_tool_choice: str | llm.tool_context.Function | None = None
     if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
         oai_tool_choice = tool_choice["function"]
     else:

@@ -26,11 +26,11 @@ __all__ = ["english", "multilingual", "__version__"]
 
 
 class EOUPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self) -> None:
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer  # type: ignore
 
         from .base import _download_from_hf_hub
         from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME

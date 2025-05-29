@@ -151,10 +151,10 @@ class ChunkedStream(tts.ChunkedStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with self._tts._ensure_session().post(
                 f"https://{self._opts.base_url}/sse/speak/{self._opts.lang_code}",
@@ -223,7 +223,7 @@ def _parse_sse_message(message: str) -> dict | None:
         return None
 
     _, value = message.split(": ", 1)
-    message_dict = json.loads(value)
+    message_dict: dict = json.loads(value)
 
     if message_dict.get("errors") is not None:
         raise Exception(
