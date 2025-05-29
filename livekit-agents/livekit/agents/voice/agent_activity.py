@@ -672,6 +672,7 @@ class AgentActivity(RecognitionHooks):
         if self.draining and not bypass_draining:
             raise RuntimeError("cannot schedule new speech, the agent is draining")
 
+        # Negate the priority to make it a max heap
         heapq.heappush(self._speech_q, (-priority, time.time(), speech))
         self._wake_up_main_task()
 
