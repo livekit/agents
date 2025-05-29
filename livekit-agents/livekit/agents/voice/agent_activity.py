@@ -551,6 +551,9 @@ class AgentActivity(RecognitionHooks):
             instructions=instructions or None,
         )
 
+        if self.llm is None:
+            raise RuntimeError("trying to generate reply without an LLM model")
+
         from .agent import _get_inline_task_info
 
         task = asyncio.current_task()
