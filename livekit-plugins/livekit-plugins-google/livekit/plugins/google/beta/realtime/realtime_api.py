@@ -30,13 +30,13 @@ from google.genai.types import (
     ModalityTokenCount,
     Part,
     PrebuiltVoiceConfig,
+    ProactivityConfig,
     RealtimeInputConfig,
     SessionResumptionConfig,
     SpeechConfig,
     Tool,
     UsageMetadata,
     VoiceConfig,
-    ProactivityConfig,
 )
 from livekit import rtc
 from livekit.agents import llm, utils

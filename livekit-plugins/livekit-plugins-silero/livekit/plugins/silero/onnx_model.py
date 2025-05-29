@@ -1,3 +1,5 @@
+# mypy: disable-error-code=unused-ignore
+
 import atexit
 import importlib.resources
 from contextlib import ExitStack

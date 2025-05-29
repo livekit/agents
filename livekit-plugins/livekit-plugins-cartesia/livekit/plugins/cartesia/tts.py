@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Any, Union, cast, Optional
 
 import aiohttp
 
@@ -179,9 +179,9 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = language
         if is_given(voice):
-            self._opts.voice = cast(str | list[float], voice)
+            self._opts.voice = cast(Union[str, list[float]], voice)
         if is_given(speed):
-            self._opts.speed = cast(TTSVoiceSpeed | float | None, speed)
+            self._opts.speed = cast(Optional[Union[TTSVoiceSpeed, float]], speed)
         if is_given(emotion):
             self._opts.emotion = emotion
 

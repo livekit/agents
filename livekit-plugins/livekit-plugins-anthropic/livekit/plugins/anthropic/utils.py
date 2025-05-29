@@ -8,6 +8,7 @@ from livekit.agents.llm.tool_context import (
     is_function_tool,
     is_raw_function_tool,
 )
+from typing import Union
 
 # We can define up to 4 cache breakpoints, we will add them at:
 # - the last tool definition
@@ -21,7 +22,7 @@ __all__ = ["to_fnc_ctx", "CACHE_CONTROL_EPHEMERAL"]
 
 
 def to_fnc_ctx(
-    fncs: list[FunctionTool | RawFunctionTool], caching: Optional[Literal["ephemeral"]]
+    fncs: list[Union[FunctionTool, RawFunctionTool]], caching: Optional[Literal["ephemeral"]]
 ) -> list[anthropic.types.ToolParam]:
     tools: list[anthropic.types.ToolParam] = []
     for fnc in fncs:
@@ -34,7 +35,7 @@ def to_fnc_ctx(
 
 
 def _build_anthropic_schema(
-    function_tool: FunctionTool | RawFunctionTool,
+    function_tool: Union[FunctionTool, RawFunctionTool],
 ) -> anthropic.types.ToolParam:
     if is_function_tool(function_tool):
         fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
