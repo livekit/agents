@@ -19,7 +19,6 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import aiohttp
 
@@ -62,9 +61,9 @@ def is_end_token(token: dict) -> bool:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: Optional[SonioxModels] = "stt-rt-preview"
-    language_hints: Optional[list[str]] = None
-    context: Optional[str] = None
+    model: SonioxModels | None = "stt-rt-preview"
+    language_hints: list[str] | None = None
+    context: str | None = None
 
     num_channels: int = 1
     sample_rate: int = 16000
@@ -75,7 +74,7 @@ class STTOptions:
 
     enable_endpoint_detection: bool = True
 
-    client_reference_id: Optional[str] = None
+    client_reference_id: str | None = None
 
 
 class STT(stt.STT):
@@ -91,17 +90,18 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         base_url: str = BASE_URL,
-        http_session: Optional[aiohttp.ClientSession] = None,
-        vad: Optional[vad.VAD] = None,
-        params: Optional[STTOptions] = None,
+        http_session: aiohttp.ClientSession | None = None,
+        vad: vad.VAD | None = None,
+        params: STTOptions | None = None,
     ):
         """Initialize instance of Soniox Speech-to-Text API service.
 
         Args:
             api_key: Soniox API key, if not provided, will look for SONIOX_API_KEY env variable.
-            base_url: Base URL for Soniox Speech-to-Text API, default to BASE_URL defined in this module.
+            base_url: Base URL for Soniox Speech-to-Text API, default to BASE_URL defined in this
+                module.
             http_session: Optional aiohttp.ClientSession to use for requests.
             vad: If passed, enable Voice Activity Detection (VAD) for audio frames.
             params: Additional configuration parameters, such as model, language hints, context and
@@ -122,8 +122,10 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        """Raise error since single-frame recognition is not supported by Soniox Speech-to-Text API."""
-        raise NotImplementedError("Soniox Speech-to-Text API does not support single frame recognition")
+        """Raise error since single-frame recognition is not supported
+            by Soniox Speech-to-Text API."""
+        raise NotImplementedError(
+            "Soniox Speech-to-Text API does not support single frame recognition")
 
     def stream(
         self,
@@ -147,12 +149,12 @@ class SpeechStream(stt.SpeechStream):
         """Set up state and queues for a WebSocket-based transcription stream."""
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
         self._stt = stt
-        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconnect_event = asyncio.Event()
 
         self.audio_queue = asyncio.Queue()
 
-        self._last_tokens_received: Optional[float] = None
+        self._last_tokens_received: float | None = None
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp ClientSession for WebSocket connections."""
@@ -162,7 +164,8 @@ class SpeechStream(stt.SpeechStream):
         return self._stt._http_session
 
     async def _connect_ws(self):
-        """Open a WebSocket connection to the Soniox Speech-to-Text API and send the initial configuration."""
+        """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
+            initial configuration."""
         # Create initial config object.
         config = {
             "api_key": self._stt._api_key,
@@ -221,11 +224,17 @@ class SpeechStream(stt.SpeechStream):
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
             # Handle errors.
             except asyncio.TimeoutError as e:
-                logger.error(f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}")
-                raise APITimeoutError("Timeout connecting to or initializing Soniox Speech-to-Text API session") from e
+                logger.error(
+                    f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}")
+                raise APITimeoutError(
+                    "Timeout connecting to or initializing Soniox Speech-to-Text API session"
+                    ) from e
 
             except aiohttp.ClientResponseError as e:
-                logger.error(f"Soniox Speech-to-Text API API status error during session init: {e.status} {e.message}")
+                logger.error(
+                    "Soniox Speech-to-Text API status error during session init:" +
+                    f"{e.status} {e.message}"
+                )
                 raise APIStatusError(
                     message=e.message, status_code=e.status, request_id=None, body=None
                 ) from e
@@ -340,8 +349,9 @@ class SpeechStream(stt.SpeechStream):
                             for token in tokens:
                                 if token["is_final"]:
                                     if is_end_token(token):
-                                        # Found an endpoint, tokens until here will be sent as transcript,
-                                        # the rest will be sent as interim tokens (even final tokens).
+                                        # Found an endpoint, tokens until here will be sent as
+                                        # transcript, the rest will be sent as interim tokens
+                                        # (even final tokens).
                                         send_endpoint_transcript()
                                     else:
                                         final_transcript_buffer += token["text"]
@@ -386,7 +396,8 @@ class SpeechStream(stt.SpeechStream):
                     ):
                         break
                     else:
-                        logger.warning(f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}")
+                        logger.warning(
+                            f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}")
             except aiohttp.ClientError as e:
                 logger.error(f"WebSocket error while receiving: {e}")
             except Exception as e:
