@@ -931,9 +931,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.interrupt()
 
         # id is generated
-        user_message: llm.ChatMessage | None = llm.ChatMessage(
-            role="user", content=[info.new_transcript]
-        )
+        user_message: llm.ChatMessage = llm.ChatMessage(role="user", content=[info.new_transcript])
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
         # the user can edit it for the current generation, but changes will not be kept inside the
@@ -954,7 +952,7 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
-            user_message = None
+            user_message = None  # type: ignore
         elif self.llm is None:
             return  # skip response if no llm is set
 
