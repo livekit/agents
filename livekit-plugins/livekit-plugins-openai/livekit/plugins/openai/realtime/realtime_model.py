@@ -9,7 +9,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Union, cast, overload
+from typing import Any, Callable, Literal, Optional, Union, cast, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -537,13 +537,12 @@ class RealtimeSession(
                 events: list[RealtimeClientEvent] = []
 
                 # options and instructions
-                if ev := self._initial_session_update(_build_event=True):
-                    events.append(ev)
+                self._initial_session_update(send_event_cb=events.append)
 
                 # tools
                 tools = list(self._tools.function_tools.values())
-                if tools and (ev := await self.update_tools(tools, _build_event=True)):
-                    events.append(ev)
+                if tools:
+                    await self.update_tools(tools, send_event_cb=events.append)
 
                 # chat context
                 chat_ctx = self.chat_ctx.copy(
@@ -552,8 +551,7 @@ class RealtimeSession(
                     exclude_empty_message=True,
                 )
                 self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-                if msgs := await self.update_chat_ctx(chat_ctx, _build_event=True):
-                    events.extend(msgs)
+                await self.update_chat_ctx(chat_ctx, send_event_cb=events.append)
 
                 try:
                     for ev in events:
@@ -768,7 +766,9 @@ class RealtimeSession(
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
 
-    def _initial_session_update(self, *, _build_event: bool = False) -> SessionUpdateEvent | None:
+    def _initial_session_update(
+        self, *, send_event_cb: Callable[[RealtimeClientEvent], None] | None = None
+    ) -> None:
         input_audio_transcription_opts = self._realtime_model._opts.input_audio_transcription
         input_audio_transcription = (
             session_update_event.SessionInputAudioTranscription.model_validate(
@@ -815,14 +815,12 @@ class RealtimeSession(
             type="session.update",
             # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
             # Other providers support different voices, so we need to accommodate that.
-            session=session_update_event.Session.model_construct(**kwargs),
+            session=session_update_event.Session.model_construct(**kwargs),  # type: ignore
             event_id=utils.shortuuid("session_update_"),
         )
 
-        if _build_event:
-            return ev
-
-        self.send_event(ev)
+        send_event_cb = send_event_cb or self.send_event
+        send_event_cb(ev)
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -887,9 +885,9 @@ class RealtimeSession(
         self,
         chat_ctx: llm.ChatContext,
         *,
+        send_event_cb: Callable[[RealtimeClientEvent], None] | None = None,
         _add_mock_audio: bool = False,
-        _build_event: bool = False,
-    ) -> list[ConversationItemCreateEvent] | None:
+    ) -> None:
         chat_ctx = chat_ctx.copy()
         if _add_mock_audio:
             chat_ctx.items.append(_create_mock_audio_item())
@@ -899,47 +897,49 @@ class RealtimeSession(
                 item for item in chat_ctx.items if not item.id.startswith(_MOCK_AUDIO_ID_PREFIX)
             ]
 
+        futs = []
+
+        def _send_event(ev: RealtimeClientEvent) -> None:
+            futs.append(f := asyncio.Future[None]())
+            if isinstance(ev, ConversationItemDeleteEvent):
+                self._item_delete_future[ev.item_id] = f
+            elif isinstance(ev, ConversationItemCreateEvent):
+                assert ev.item.id is not None
+                self._item_create_future[ev.item.id] = f
+            self.send_event(ev)
+
+        send_event_cb = send_event_cb or _send_event
+
         async with self._update_chat_ctx_lock:
             diff_ops = llm.utils.compute_chat_ctx_diff(
                 self._remote_chat_ctx.to_chat_ctx(), chat_ctx
             )
 
-            events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
-            futs = []
             for msg_id in diff_ops.to_remove:
                 event_id = utils.shortuuid("chat_ctx_delete_")
-                events.append(
-                    ev := ConversationItemDeleteEvent(
+                send_event_cb(
+                    ConversationItemDeleteEvent(
                         type="conversation.item.delete",
                         item_id=msg_id,
                         event_id=event_id,
                     )
                 )
-                if not _build_event:
-                    self.send_event(ev)
-                    futs.append(f := asyncio.Future[None]())
-                    self._item_delete_future[msg_id] = f
 
             for previous_msg_id, msg_id in diff_ops.to_create:
                 event_id = utils.shortuuid("chat_ctx_create_")
                 chat_item = chat_ctx.get_by_id(msg_id)
                 assert chat_item is not None
-
-                events.append(
-                    ev := ConversationItemCreateEvent(
+                send_event_cb(
+                    ConversationItemCreateEvent(
                         type="conversation.item.create",
                         item=_livekit_item_to_openai_item(chat_item),
                         previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
                         event_id=event_id,
                     )
                 )
-                if not _build_event:
-                    self.send_event(ev)
-                    futs.append(f := asyncio.Future[None]())
-                    self._item_create_future[msg_id] = f
 
-            if _build_event:
-                return events
+            if not futs:
+                return
 
             try:
                 await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
@@ -950,8 +950,8 @@ class RealtimeSession(
         self,
         tools: list[llm.FunctionTool | llm.RawFunctionTool],
         *,
-        _build_event: bool = False,
-    ) -> list[SessionUpdateEvent] | None:
+        send_event_cb: Callable[[RealtimeClientEvent], None] | None = None,
+    ) -> None:
         async with self._update_fnc_ctx_lock:
             oai_tools: list[session_update_event.SessionTool] = []
             retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
@@ -994,10 +994,8 @@ class RealtimeSession(
 
             self._tools = llm.ToolContext(retained_tools)
 
-            if _build_event:
-                return ev
-
-            self.send_event(ev)
+            send_event_cb = send_event_cb or self.send_event
+            send_event_cb(ev)
 
     async def update_instructions(self, instructions: str) -> None:
         event_id = utils.shortuuid("instructions_update_")
