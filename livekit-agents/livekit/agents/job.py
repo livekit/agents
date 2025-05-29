@@ -292,6 +292,10 @@ class JobContext:
         trunk_id: str,
         participant_identity: str,
         participant_name: NotGivenOr[str] = "SIP-participant",
+        wait_until_answered: bool = False,
+        play_dialtone: bool = False,
+        play_ringtone: bool = False,
+        **kwargs: Any,
     ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
         """
         Add a SIP participant to the room.
@@ -303,6 +307,7 @@ class JobContext:
             trunk_id: The ID of the SIP trunk to use
             participant_identity: The identity of the participant to add
             participant_name: The name of the participant to add
+            wait_until_answered: Blocks until user answers the call, or if the call fails
 
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
@@ -315,6 +320,10 @@ class JobContext:
                     sip_trunk_id=trunk_id,
                     sip_call_to=call_to,
                     participant_name=participant_name if is_given(participant_name) else None,
+                    wait_until_answered=wait_until_answered,
+                    play_dialtone=play_dialtone,
+                    play_ringtone=play_ringtone,
+                    **kwargs,
                 )
             ),
         )
