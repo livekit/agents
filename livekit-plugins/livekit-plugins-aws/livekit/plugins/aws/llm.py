@@ -120,6 +120,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         opts: dict[str, Any] = {}
@@ -161,7 +162,8 @@ class LLM(llm.LLM):
         inference_config: dict[str, Any] = {}
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
-        if temperature := extra_kwargs.get("temperature"):
+        temperature = temperature if is_given(temperature) else self._opts.temperature
+        if is_given(temperature):
             inference_config["temperature"] = temperature
         if is_given(self._opts.top_p):
             inference_config["topP"] = self._opts.top_p

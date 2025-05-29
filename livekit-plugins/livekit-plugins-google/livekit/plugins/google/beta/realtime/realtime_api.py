@@ -25,6 +25,7 @@ from google.genai.types import (
     LiveServerGoAway,
     LiveServerToolCall,
     LiveServerToolCallCancellation,
+    MediaModality,
     Modality,
     ModalityTokenCount,
     Part,
@@ -35,6 +36,7 @@ from google.genai.types import (
     Tool,
     UsageMetadata,
     VoiceConfig,
+    ProactivityConfig,
 )
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -195,7 +197,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
-        gcp_location = (
+        gcp_location: str | None = (
             location
             if is_given(location)
             else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
@@ -315,7 +317,7 @@ class RealtimeSession(llm.RealtimeSession):
                 finally:
                     self._active_session = None
 
-    def _mark_restart_needed(self):
+    def _mark_restart_needed(self) -> None:
         if not self._session_should_close.is_set():
             self._session_should_close.set()
             # reset the msg_ch, do not send messages from previous session
@@ -368,7 +370,7 @@ class RealtimeSession(llm.RealtimeSession):
             if tool_results:
                 self._send_client_event(tool_results)
 
-    async def update_tools(self, tools: list[llm.FunctionTool]) -> None:
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         new_declarations: list[FunctionDeclaration] = to_fnc_ctx(tools)
         current_tool_names = {f.name for f in self._gemini_declarations}
         new_tool_names = {f.name for f in new_declarations}
@@ -416,16 +418,16 @@ class RealtimeSession(llm.RealtimeSession):
             )
             self._pending_generation_fut.cancel("Superseded by new generate_reply call")
 
-        fut = asyncio.Future()
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._pending_generation_fut = fut
 
         # Gemini requires the last message to end with user's turn
         # so we need to add a placeholder user turn in order to trigger a new generation
-        event = LiveClientContent(turns=[], turn_complete=True)
+        turns = []
         if is_given(instructions):
-            event.turns.append(Content(parts=[Part(text=instructions)], role="model"))
-        event.turns.append(Content(parts=[Part(text=".")], role="user"))
-        self._send_client_event(event)
+            turns.append(Content(parts=[Part(text=instructions)], role="model"))
+        turns.append(Content(parts=[Part(text=".")], role="user"))
+        self._send_client_event(LiveClientContent(turns=turns, turn_complete=True))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -470,7 +472,7 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_current_generation_done()
 
     @utils.log_exceptions(logger=logger)
-    async def _main_task(self):
+    async def _main_task(self) -> None:
         while not self._msg_ch.closed:
             # previous session might not be closed yet, we'll do it here.
             await self._close_active_session()
@@ -523,7 +525,7 @@ class RealtimeSession(llm.RealtimeSession):
             finally:
                 await self._close_active_session()
 
-    async def _send_task(self, session: AsyncSession):
+    async def _send_task(self, session: AsyncSession) -> None:
         try:
             async for msg in self._msg_ch:
                 async with self._session_lock:
@@ -533,12 +535,13 @@ class RealtimeSession(llm.RealtimeSession):
                         break
                 if isinstance(msg, LiveClientContent):
                     await session.send_client_content(
-                        turns=msg.turns, turn_complete=msg.turn_complete
+                        turns=msg.turns,  # type: ignore
+                        turn_complete=msg.turn_complete or True,
                     )
-                elif isinstance(msg, LiveClientToolResponse):
+                elif isinstance(msg, LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, LiveClientRealtimeInput):
-                    for media_chunk in msg.media_chunks:
+                    for media_chunk in msg.media_chunks or []:
                         await session.send_realtime_input(media=media_chunk)
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
@@ -550,7 +553,7 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             logger.debug("send task finished.")
 
-    async def _recv_task(self, session: AsyncSession):
+    async def _recv_task(self, session: AsyncSession) -> None:
         try:
             while True:
                 async with self._session_lock:
@@ -629,11 +632,11 @@ class RealtimeSession(llm.RealtimeSession):
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=SessionResumptionConfig(handle=self._session_resumption_handle),
-            realtime_input_config=self._opts.realtime_input_config,
+            realtime_input_config=self._opts.realtime_input_config or None,
         )
 
         if is_given(self._opts.proactivity):
-            conf.proactivity = {"proactive_audio": self._opts.proactivity}
+            conf.proactivity = ProactivityConfig(proactive_audio=self._opts.proactivity)
         if is_given(self._opts.enable_affective_dialog):
             conf.enable_affective_dialog = self._opts.enable_affective_dialog
         if is_given(self._opts.realtime_input_config):
@@ -641,7 +644,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         return conf
 
-    def _start_new_generation(self):
+    def _start_new_generation(self) -> None:
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
@@ -677,14 +680,14 @@ class RealtimeSession(llm.RealtimeSession):
 
         self.emit("generation_created", generation_event)
 
-    def _handle_server_content(self, server_content: LiveServerContent):
+    def _handle_server_content(self, server_content: LiveServerContent) -> None:
         current_gen = self._current_generation
         if not current_gen:
             logger.warning("received server content but no active generation.")
             return
 
         if model_turn := server_content.model_turn:
-            for part in model_turn.parts:
+            for part in model_turn.parts or []:
                 if part.text:
                     current_gen.text_ch.send_nowait(part.text)
                 if part.inline_data:
@@ -692,6 +695,8 @@ class RealtimeSession(llm.RealtimeSession):
                         current_gen._first_token_timestamp = time.time()
                     frame_data = part.inline_data.data
                     try:
+                        if not isinstance(frame_data, bytes):
+                            raise ValueError("frame_data is not bytes")
                         frame = rtc.AudioFrame(
                             data=frame_data,
                             sample_rate=OUTPUT_AUDIO_SAMPLE_RATE,
@@ -758,22 +763,22 @@ class RealtimeSession(llm.RealtimeSession):
         gen.message_ch.close()
         gen._done = True
 
-    def _handle_input_speech_started(self):
+    def _handle_input_speech_started(self) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
-    def _handle_tool_calls(self, tool_call: LiveServerToolCall):
+    def _handle_tool_calls(self, tool_call: LiveServerToolCall) -> None:
         if not self._current_generation:
             logger.warning("received tool call but no active generation.")
             return
 
         gen = self._current_generation
-        for fnc_call in tool_call.function_calls:
+        for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
 
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
                     call_id=fnc_call.id or utils.shortuuid("fnc-call-"),
-                    name=fnc_call.name,
+                    name=fnc_call.name,  # type: ignore
                     arguments=arguments,
                 )
             )
@@ -781,13 +786,13 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _handle_tool_call_cancellation(
         self, tool_call_cancellation: LiveServerToolCallCancellation
-    ):
+    ) -> None:
         logger.warning(
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
         )
 
-    def _handle_usage_metadata(self, usage_metadata: UsageMetadata):
+    def _handle_usage_metadata(self, usage_metadata: UsageMetadata) -> None:
         current_gen = self._current_generation
         if not current_gen:
             logger.warning("no active generation to report metrics for")
@@ -804,7 +809,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         def _token_details_map(
             token_details: list[ModalityTokenCount] | None,
-        ) -> dict[Modality, int]:
+        ) -> dict[str, int]:
             token_details_map = {"audio_tokens": 0, "text_tokens": 0, "image_tokens": 0}
             if not token_details:
                 return token_details_map
@@ -813,11 +818,11 @@ class RealtimeSession(llm.RealtimeSession):
                 if not token_detail.token_count:
                     continue
 
-                if token_detail.modality == Modality.AUDIO:
+                if token_detail.modality == MediaModality.AUDIO:
                     token_details_map["audio_tokens"] += token_detail.token_count
-                elif token_detail.modality == Modality.TEXT:
+                elif token_detail.modality == MediaModality.TEXT:
                     token_details_map["text_tokens"] += token_detail.token_count
-                elif token_detail.modality == Modality.IMAGE:
+                elif token_detail.modality == MediaModality.IMAGE:
                     token_details_map["image_tokens"] += token_detail.token_count
             return token_details_map
 
@@ -848,7 +853,7 @@ class RealtimeSession(llm.RealtimeSession):
         )
         self.emit("metrics_collected", metrics)
 
-    def _handle_go_away(self, go_away: LiveServerGoAway):
+    def _handle_go_away(self, go_away: LiveServerGoAway) -> None:
         logger.warning(
             f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}"
         )
@@ -859,7 +864,7 @@ class RealtimeSession(llm.RealtimeSession):
         pass
 
     def clear_audio(self) -> None:
-        self._bstream.clear()
+        pass
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
