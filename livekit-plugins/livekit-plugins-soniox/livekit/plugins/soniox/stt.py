@@ -123,9 +123,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         """Raise error since single-frame recognition is not supported
-            by Soniox Speech-to-Text API."""
+        by Soniox Speech-to-Text API."""
         raise NotImplementedError(
-            "Soniox Speech-to-Text API does not support single frame recognition")
+            "Soniox Speech-to-Text API does not support single frame recognition"
+        )
 
     def stream(
         self,
@@ -165,7 +166,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self):
         """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
-            initial configuration."""
+        initial configuration."""
         # Create initial config object.
         config = {
             "api_key": self._stt._api_key,
@@ -225,15 +226,16 @@ class SpeechStream(stt.SpeechStream):
             # Handle errors.
             except asyncio.TimeoutError as e:
                 logger.error(
-                    f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}")
+                    f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
+                )
                 raise APITimeoutError(
                     "Timeout connecting to or initializing Soniox Speech-to-Text API session"
-                    ) from e
+                ) from e
 
             except aiohttp.ClientResponseError as e:
                 logger.error(
-                    "Soniox Speech-to-Text API status error during session init:" +
-                    f"{e.status} {e.message}"
+                    "Soniox Speech-to-Text API status error during session init:"
+                    + f"{e.status} {e.message}"
                 )
                 raise APIStatusError(
                     message=e.message, status_code=e.status, request_id=None, body=None
@@ -376,9 +378,7 @@ class SpeechStream(stt.SpeechStream):
                             if error_code or error_message:
                                 # In case of error, still send the final transcript.
                                 send_endpoint_transcript()
-                                logger.error(
-                                    f"WebSocket error: {error_code} - {error_message}"
-                                )
+                                logger.error(f"WebSocket error: {error_code} - {error_message}")
 
                             finished = content.get("finished")
 
@@ -397,7 +397,8 @@ class SpeechStream(stt.SpeechStream):
                         break
                     else:
                         logger.warning(
-                            f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}")
+                            f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
+                        )
             except aiohttp.ClientError as e:
                 logger.error(f"WebSocket error while receiving: {e}")
             except Exception as e:
