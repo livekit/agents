@@ -69,7 +69,7 @@ class STTOptions:
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     token_mode: NotGivenOr[bool] = NOT_GIVEN  # Added token_mode
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.encoding not in (NOT_GIVEN, "pcm_s16le", "pcm_mulaw"):
             raise ValueError(f"Invalid encoding: {self.encoding}")
 
@@ -96,13 +96,14 @@ class STT(stt.STT):
                 interim_results=True,
             ),
         )
-        self._api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
-        if not self._api_key:
+        assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
+        if assemblyai_api_key is None:
             raise ValueError(
                 "AssemblyAI API key is required. "
                 "Pass one in via the `api_key` parameter, "
                 "or set it as the `ASSEMBLYAI_API_KEY` environment variable"
             )
+        self._api_key = assemblyai_api_key
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -160,6 +161,7 @@ class STT(stt.STT):
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
     ):
+    ) -> None:
         if is_given(word_boost):
             self._opts.word_boost = word_boost
         if is_given(buffer_size_seconds):
@@ -219,7 +221,7 @@ class SpeechStream(stt.SpeechStream):
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
-    ):
+    ) -> None:
         if is_given(word_boost):
             self._opts.word_boost = word_boost
         if is_given(buffer_size_seconds):
@@ -243,7 +245,7 @@ class SpeechStream(stt.SpeechStream):
 
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
@@ -269,7 +271,7 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             while True:
                 try:
@@ -317,7 +319,7 @@ class SpeechStream(stt.SpeechStream):
                     done, _ = await asyncio.wait(
                         [asyncio.gather(*tasks), wait_reconnect_task],
                         return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
+                    )
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()

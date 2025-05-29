@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -18,9 +17,7 @@ from livekit.agents.llm.tool_context import (
     is_raw_function_tool,
 )
 
-from .log import logger
-
-__all__ = ["to_chat_ctx", "to_fnc_ctx"]
+__all__ = ["to_fnc_ctx"]
 
 
 def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.FunctionDeclaration]:
@@ -58,98 +55,13 @@ def get_tool_results_for_realtime(
     )
 
 
-def to_chat_ctx(
-    chat_ctx: llm.ChatContext,
-    cache_key: Any,
-    ignore_functions: bool = False,
-    generate: bool = False,
-) -> tuple[list[types.Content], types.Content | None]:
-    turns: list[types.Content] = []
-    system_instruction: types.Content | None = None
-    current_role: str | None = None
-    parts: list[types.Part] = []
-
-    for msg in chat_ctx.items:
-        if msg.type == "message" and msg.role == "system":
-            sys_parts = []
-            for content in msg.content:
-                if content and isinstance(content, str):
-                    sys_parts.append(types.Part(text=content))
-            system_instruction = types.Content(parts=sys_parts)
-            continue
-
-        if msg.type == "message":
-            role = "model" if msg.role == "assistant" else "user"
-        elif msg.type == "function_call":
-            role = "model"
-        elif msg.type == "function_call_output":
-            role = "user"
-
-        # if the effective role changed, finalize the previous turn.
-        if role != current_role:
-            if current_role is not None and parts:
-                turns.append(types.Content(role=current_role, parts=parts))
-            parts = []
-            current_role = role
-
-        if msg.type == "message":
-            for content in msg.content:
-                if content and isinstance(content, str):
-                    parts.append(types.Part(text=content))
-                elif content and isinstance(content, dict):
-                    parts.append(types.Part(text=json.dumps(content)))
-                elif isinstance(content, llm.ImageContent):
-                    parts.append(_to_image_part(content, cache_key))
-        elif msg.type == "function_call" and not ignore_functions:
-            parts.append(
-                types.Part(
-                    function_call=types.FunctionCall(
-                        name=msg.name,
-                        args=json.loads(msg.arguments),
-                    )
-                )
-            )
-        elif msg.type == "function_call_output" and not ignore_functions:
-            parts.append(
-                types.Part(
-                    function_response=types.FunctionResponse(
-                        name=msg.name,
-                        response={"text": msg.output},
-                    )
-                )
-            )
-
-    if current_role is not None and parts:
-        turns.append(types.Content(role=current_role, parts=parts))
-
-    # Gemini requires the last message to end with user's turn before they can generate
-    if generate and current_role != "user":
-        turns.append(types.Content(role="user", parts=[types.Part(text=".")]))
-
-    return turns, system_instruction
-
-
-def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
-    img = llm.utils.serialize_image(image)
-    if img.external_url:
-        if img.mime_type:
-            mime_type = img.mime_type
-        else:
-            logger.debug("No media type provided for image, defaulting to image/jpeg.")
-            mime_type = "image/jpeg"
-        return types.Part.from_uri(file_uri=img.external_url, mime_type=mime_type)
-    if cache_key not in image._cache:
-        image._cache[cache_key] = img.data_bytes
-    return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.mime_type)
-
-
 def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
     fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
     json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
     return types.FunctionDeclaration(
         name=fnc["name"],
         description=fnc["description"],
-        parameters=json_schema,
+        parameters=types.Schema.model_validate(json_schema),
     )
 
 

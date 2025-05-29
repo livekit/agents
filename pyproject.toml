@@ -42,6 +42,8 @@ dev = [
     "ruff",
     "pytest-asyncio>=0.25.3",
     "jiwer>=3.1.0",
+    "scipy>=1.13.1",
+    "tiktoken>=0.9.0",
 ]
 
 [tool.ruff]
@@ -76,9 +78,6 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 
 [tool.mypy]
 strict = true
-
-[[tool.mypy.overrides]]
-module = "livekit.agents.*"
 disallow_any_generics = false
 
 [[tool.mypy.overrides]]
@@ -88,10 +87,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "google.genai"
 follow_imports = "normal"
-follow_untyped_imports = true
-
-[[tool.mypy.overrides]]
-module = "aiobotocore"
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]

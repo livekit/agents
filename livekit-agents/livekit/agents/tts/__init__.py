@@ -7,9 +7,9 @@ from .fallback_adapter import (
 from .stream_adapter import StreamAdapter, StreamAdapterWrapper
 from .tts import (
     TTS,
+    AudioEmitter,
     ChunkedStream,
     SynthesizedAudio,
-    SynthesizedAudioEmitter,
     SynthesizeStream,
     TTSCapabilities,
     TTSError,
@@ -27,7 +27,7 @@ __all__ = [
     "FallbackAdapter",
     "FallbackChunkedStream",
     "FallbackSynthesizeStream",
-    "SynthesizedAudioEmitter",
+    "AudioEmitter",
     "TTSError",
 ]
 
