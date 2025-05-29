@@ -20,7 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Union, cast, Optional
+from typing import Any, Optional, Union, cast
 
 import aiohttp
 

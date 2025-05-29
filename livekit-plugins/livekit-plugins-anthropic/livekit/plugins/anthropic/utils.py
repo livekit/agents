@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import anthropic
 from livekit.agents import llm
@@ -8,7 +8,6 @@ from livekit.agents.llm.tool_context import (
     is_function_tool,
     is_raw_function_tool,
 )
-from typing import Union
 
 # We can define up to 4 cache breakpoints, we will add them at:
 # - the last tool definition
