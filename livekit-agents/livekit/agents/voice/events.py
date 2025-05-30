@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -31,7 +32,7 @@ class RunContext(Generic[Userdata_T]):
     def __init__(
         self,
         *,
-        session: AgentSession,
+        session: AgentSession[Userdata_T],
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
     ) -> None:
@@ -88,6 +89,7 @@ class UserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
+    speaker_id: str | None = None
 
 
 class MetricsCollectedEvent(BaseModel):
@@ -107,9 +109,9 @@ class ConversationItemAddedEvent(BaseModel):
 class FunctionToolsExecutedEvent(BaseModel):
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
-    function_call_outputs: list[FunctionCallOutput]
+    function_call_outputs: list[FunctionCallOutput | None]
 
-    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
+    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
         return list(zip(self.function_calls, self.function_call_outputs))
 
     @model_validator(mode="after")
@@ -139,9 +141,18 @@ class ErrorEvent(BaseModel):
     source: LLM | STT | TTS | RealtimeModel | Any
 
 
+@unique
+class CloseReason(str, Enum):
+    ERROR = "error"
+    JOB_SHUTDOWN = "job_shutdown"
+    PARTICIPANT_DISCONNECTED = "participant_disconnected"
+    USER_INITIATED = "user_initiated"
+
+
 class CloseEvent(BaseModel):
     type: Literal["close"] = "close"
     error: LLMError | STTError | TTSError | RealtimeModelError | None = None
+    reason: CloseReason
 
 
 AgentEvent = Annotated[

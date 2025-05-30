@@ -24,6 +24,7 @@ NOISY_LOGGERS = [
     "livekit",
     "botocore",
     "aiobotocore",
+    "urllib3.connectionpool",
     "mcp.client",
 ]
 
@@ -64,7 +65,7 @@ _RESERVED_ATTRS: tuple[str, ...] = (
 )
 
 
-def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]):
+def _merge_record_extra(record: logging.LogRecord, target: dict[Any, Any]) -> None:
     for key, value in record.__dict__.items():
         if key not in _RESERVED_ATTRS and not (hasattr(key, "startswith") and key.startswith("_")):
             target[key] = value
@@ -89,7 +90,7 @@ def _parse_style(formatter: logging.Formatter) -> list[str]:
 
 class JsonFormatter(logging.Formatter):
     class JsonEncoder(json.JSONEncoder):
-        def default(self, o: Any):
+        def default(self, o: Any) -> Any:
             if isinstance(o, (date, datetime, time)):
                 return o.isoformat()
             elif istraceback(o):
@@ -106,7 +107,7 @@ class JsonFormatter(logging.Formatter):
                 except Exception:
                     return None
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._required_fields = _parse_style(self)
 
@@ -146,7 +147,7 @@ class JsonFormatter(logging.Formatter):
 
 
 class ColoredFormatter(logging.Formatter):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._esc_codes = {
             "esc_reset": self._esc(0),

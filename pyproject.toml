@@ -13,6 +13,7 @@ livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }
 livekit-plugins-google = { workspace = true }
+livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-rime = { workspace = true }
@@ -42,6 +43,8 @@ dev = [
     "ruff",
     "pytest-asyncio>=0.25.3",
     "jiwer>=3.1.0",
+    "scipy>=1.13.1",
+    "tiktoken>=0.9.0",
 ]
 
 [tool.ruff]
@@ -76,13 +79,17 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 
 [tool.mypy]
 strict = true
+disallow_any_generics = false
 
-[tool.mypy-google.genai]
+[[tool.mypy.overrides]]
+module = "mcp.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "google.genai"
 follow_imports = "normal"
 follow_untyped_imports = true
 
-[tool.mypy-aiobotocore]
-follow_untyped_imports = true
-
-[tool.mypy-boto3]
+[[tool.mypy.overrides]]
+module = "boto3"
 follow_untyped_imports = true

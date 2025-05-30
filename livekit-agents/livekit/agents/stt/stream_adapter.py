@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
+from typing import Any
 
 from .. import utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -21,7 +22,7 @@ class StreamAdapter(STT):
         self._stt = stt
 
         @self._stt.on("metrics_collected")
-        def _forward_metrics(*args, **kwargs):
+        def _forward_metrics(*args: Any, **kwargs: Any) -> None:
             self.emit("metrics_collected", *args, **kwargs)
 
     @property
@@ -32,9 +33,9 @@ class StreamAdapter(STT):
         self,
         buffer: utils.AudioBuffer,
         *,
-        language: NotGivenOr[str],
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ):
+    ) -> SpeechEvent:
         return await self._stt.recognize(
             buffer=buffer, language=language, conn_options=conn_options
         )
@@ -42,7 +43,7 @@ class StreamAdapter(STT):
     def stream(
         self,
         *,
-        language: NotGivenOr[str | None] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return StreamAdapterWrapper(
@@ -61,7 +62,7 @@ class StreamAdapterWrapper(RecognizeStream):
         *,
         vad: VAD,
         wrapped_stt: STT,
-        language: NotGivenOr[str | None],
+        language: NotGivenOr[str],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
@@ -75,7 +76,7 @@ class StreamAdapterWrapper(RecognizeStream):
         pass  # do nothing
 
     async def _run(self) -> None:
-        async def _forward_input():
+        async def _forward_input() -> None:
             """forward input to vad"""
             async for input in self._input_ch:
                 if isinstance(input, self._FlushSentinel):
@@ -85,7 +86,7 @@ class StreamAdapterWrapper(RecognizeStream):
 
             self._vad_stream.end_input()
 
-        async def _recognize():
+        async def _recognize() -> None:
             """recognize speech from vad"""
             async for event in self._vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:

@@ -12,19 +12,18 @@
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-import aioboto3
-import aiohttp
+import aioboto3  # type: ignore
+import botocore  # type: ignore
+import botocore.exceptions  # type: ignore
+from aiobotocore.config import AioConfig  # type: ignore
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     APITimeoutError,
     tts,
-    utils,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -33,36 +32,34 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from .models import TTS_LANGUAGE, TTS_SPEECH_ENGINE
-from .utils import _strip_nones, get_aws_async_session
+from .models import TTSLanguages, TTSSpeechEngine
+from .utils import _strip_nones
 
-TTS_NUM_CHANNELS: int = 1
-DEFAULT_SPEECH_ENGINE: TTS_SPEECH_ENGINE = "generative"
+DEFAULT_SPEECH_ENGINE: TTSSpeechEngine = "generative"
 DEFAULT_VOICE = "Ruth"
-DEFAULT_SAMPLE_RATE = 16000
 
 
 @dataclass
 class _TTSOptions:
     # https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
-    voice: NotGivenOr[str]
-    speech_engine: NotGivenOr[TTS_SPEECH_ENGINE]
-    region: str
+    voice: str
+    speech_engine: TTSSpeechEngine
+    region: str | None
     sample_rate: int
-    language: NotGivenOr[TTS_LANGUAGE | str]
+    language: TTSLanguages | str | None
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[TTS_LANGUAGE | str] = NOT_GIVEN,
-        speech_engine: NotGivenOr[TTS_SPEECH_ENGINE] = NOT_GIVEN,
-        sample_rate: int = DEFAULT_SAMPLE_RATE,
-        region: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        voice: str = "Ruth",
+        language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
+        speech_engine: TTSSpeechEngine = "generative",
+        sample_rate: int = 16000,
+        region: str | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
         session: aioboto3.Session | None = None,
     ) -> None:
         """
@@ -88,108 +85,72 @@ class TTS(tts.TTS):
                 streaming=False,
             ),
             sample_rate=sample_rate,
-            num_channels=TTS_NUM_CHANNELS,
+            num_channels=1,
         )
-        self._session = session or get_aws_async_session(
-            api_key=api_key if is_given(api_key) else None,
-            api_secret=api_secret if is_given(api_secret) else None,
-            region=region if is_given(region) else None,
+        self._session = session or aioboto3.Session(
+            aws_access_key_id=api_key if is_given(api_key) else None,
+            aws_secret_access_key=api_secret if is_given(api_secret) else None,
+            region_name=region if is_given(region) else None,
         )
+
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
-            region=region,
-            language=language,
+            region=region or None,
+            language=language or None,
             sample_rate=sample_rate,
         )
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            text=text,
-            conn_options=conn_options,
-            session=self._session,
-            opts=self._opts,
-        )
+        return ChunkedStream(tts=self, text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-        self,
-        *,
-        tts: TTS,
-        text: str,
-        session: aioboto3.Session,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        opts: _TTSOptions,
+        self, *, tts: TTS, text: str, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> None:
         super().__init__(tts=tts, input_text=text, conn_options=conn_options)
-        self._opts = opts
-        self._segment_id = utils.shortuuid()
-        self._session = session
+        self._tts = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self):
-        request_id = utils.shortuuid()
-
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            async with self._session.client("polly") as client:
-                params = {
-                    "Text": self._input_text,
-                    "OutputFormat": "mp3",
-                    "Engine": self._opts.speech_engine
-                    if is_given(self._opts.speech_engine)
-                    else DEFAULT_SPEECH_ENGINE,
-                    "VoiceId": self._opts.voice if is_given(self._opts.voice) else DEFAULT_VOICE,
-                    "TextType": "text",
-                    "SampleRate": str(self._opts.sample_rate),
-                    "LanguageCode": self._opts.language if is_given(self._opts.language) else None,
-                }
-                response = await client.synthesize_speech(**_strip_nones(params))
+            config = AioConfig(
+                connect_timeout=self._conn_options.timeout,
+                read_timeout=10,
+                retries={"mode": "standard", "total_max_attempts": 1},
+            )
+            async with self._tts._session.client("polly", config=config) as client:  # type: ignore
+                response = await client.synthesize_speech(
+                    **_strip_nones(
+                        {
+                            "Text": self._input_text,
+                            "OutputFormat": "mp3",
+                            "Engine": self._opts.speech_engine,
+                            "VoiceId": self._opts.voice,
+                            "TextType": "text",
+                            "SampleRate": str(self._opts.sample_rate),
+                            "LanguageCode": self._opts.language,
+                        }
+                    )
+                )
+
                 if "AudioStream" in response:
-                    decoder = utils.codecs.AudioStreamDecoder(
+                    output_emitter.initialize(
+                        request_id=response["ResponseMetadata"]["RequestId"],
                         sample_rate=self._opts.sample_rate,
                         num_channels=1,
+                        mime_type="audio/mp3",
                     )
 
-                    # Create a task to push data to the decoder
-                    async def push_data():
-                        try:
-                            async with response["AudioStream"] as resp:
-                                async for data, _ in resp.content.iter_chunks():
-                                    decoder.push(data)
-                        finally:
-                            decoder.end_input()
+                    async with response["AudioStream"] as resp:
+                        async for data, _ in resp.content.iter_chunks():
+                            output_emitter.push(data)
 
-                    # Start pushing data to the decoder
-                    push_task = asyncio.create_task(push_data())
-
-                    try:
-                        # Create emitter and process decoded frames
-                        emitter = tts.SynthesizedAudioEmitter(
-                            event_ch=self._event_ch,
-                            request_id=request_id,
-                            segment_id=self._segment_id,
-                        )
-                        async for frame in decoder:
-                            emitter.push(frame)
-                        emitter.flush()
-                        await push_task
-                    finally:
-                        await utils.aio.gracefully_cancel(push_task)
-
-        except asyncio.TimeoutError:
+                    output_emitter.flush()
+        except botocore.exceptions.ConnectTimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=request_id,
-                body=None,
-            ) from None
         except Exception as e:
             raise APIConnectionError() from e

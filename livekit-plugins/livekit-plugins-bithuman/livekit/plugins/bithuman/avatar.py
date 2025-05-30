@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from loguru import logger as _logger
 
-from bithuman import AsyncBithuman
+from bithuman import AsyncBithuman  # type: ignore
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, utils
 from livekit.agents.voice.avatar import (
@@ -39,11 +39,12 @@ class AvatarSession:
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         api_token: NotGivenOr[str] = NOT_GIVEN,
+        runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
     ) -> None:
-        self._api_url = api_url or os.getenv("BITHUMAN_API_URL")
-        self._api_secret = api_secret or os.getenv("BITHUMAN_API_SECRET")
-        self._api_token = api_token or os.getenv("BITHUMAN_API_TOKEN")
-        self._model_path = model_path or os.getenv("BITHUMAN_MODEL_PATH")
+        self._api_url = api_url or (os.getenv("BITHUMAN_API_URL") or NOT_GIVEN)
+        self._api_secret = api_secret or (os.getenv("BITHUMAN_API_SECRET") or NOT_GIVEN)
+        self._api_token = api_token or (os.getenv("BITHUMAN_API_TOKEN") or NOT_GIVEN)
+        self._model_path = model_path or (os.getenv("BITHUMAN_MODEL_PATH") or NOT_GIVEN)
 
         if self._api_secret is None and self._api_token is None:
             raise BitHumanException("BITHUMAN_API_SECRET or BITHUMAN_API_TOKEN must be set")
@@ -51,20 +52,25 @@ class AvatarSession:
             raise BitHumanException("BITHUMAN_MODEL_PATH must be set")
 
         self._avatar_runner: AvatarRunner | None = None
+        self._runtime = runtime
 
     async def start(self, agent_session: AgentSession, room: rtc.Room) -> None:
-        kwargs = {
-            "model_path": self._model_path,
-        }
-        if self._api_secret:
-            kwargs["api_secret"] = self._api_secret
-        if self._api_token:
-            kwargs["token"] = self._api_token
-        if self._api_url:
-            kwargs["api_url"] = self._api_url
+        if self._runtime:
+            runtime = self._runtime
+        else:
+            kwargs = {
+                "model_path": self._model_path,
+            }
+            if self._api_secret:
+                kwargs["api_secret"] = self._api_secret
+            if self._api_token:
+                kwargs["token"] = self._api_token
+            if self._api_url:
+                kwargs["api_url"] = self._api_url
 
-        runtime = await AsyncBithuman.create(**kwargs)
-        await runtime.start()
+            runtime = await AsyncBithuman.create(**kwargs)
+            await runtime.start()
+
         video_generator = BithumanGenerator(runtime)
 
         output_width, output_height = video_generator.video_resolution
@@ -102,11 +108,11 @@ class BithumanGenerator(VideoGenerator):
 
     @property
     def video_fps(self) -> int:
-        return self._runtime.settings.FPS
+        return self._runtime.settings.FPS  # type: ignore
 
     @property
     def audio_sample_rate(self) -> int:
-        return self._runtime.settings.INPUT_SAMPLE_RATE
+        return self._runtime.settings.INPUT_SAMPLE_RATE  # type: ignore
 
     @utils.log_exceptions(logger=logger)
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:

@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from multiprocessing import current_process
+from types import TracebackType
 
 if current_process().name == "inference_proc":
     import signal
@@ -8,7 +11,9 @@ if current_process().name == "inference_proc":
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-    def _no_traceback_excepthook(exc_type, exc_val, traceback):
+    def _no_traceback_excepthook(
+        exc_type: type[BaseException], exc_val: BaseException, traceback: TracebackType | None
+    ) -> None:
         if isinstance(exc_val, KeyboardInterrupt):
             return
         sys.__excepthook__(exc_type, exc_val, traceback)

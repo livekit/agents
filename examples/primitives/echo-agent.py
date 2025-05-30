@@ -5,8 +5,6 @@ from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import (
-    ATTRIBUTE_AGENT_STATE,
-    AgentState,
     AutoSubscribe,
     JobContext,
     WorkerOptions,
@@ -49,8 +47,8 @@ async def entrypoint(ctx: JobContext):
     is_speaking = False
     is_echoing = False
 
-    async def _set_state(state: AgentState):
-        await ctx.room.local_participant.set_attributes({ATTRIBUTE_AGENT_STATE: state})
+    async def _set_state(state: str):
+        await ctx.room.local_participant.set_attributes({"lk.agent.state": state})
 
     await _set_state("listening")
 

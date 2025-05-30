@@ -69,6 +69,7 @@ class STT(stt.STT):
                 operating_point="enhanced",
                 enable_partials=True,
                 max_delay=0.7,
+                speaker_diarization_config={"max_speakers": 2},
             )
         if not is_given(connection_settings):
             connection_settings = ConnectionSettings(  # noqa: B008
@@ -105,13 +106,13 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        config = dataclasses.replace(self._audio_settings)
+        transcription_config = dataclasses.replace(self._transcription_config)
         if is_given(language):
-            config.language = language
+            transcription_config.language = language
         stream = SpeechStream(
             stt=self,
-            transcription_config=self._transcription_config,
-            audio_settings=config,
+            transcription_config=transcription_config,
+            audio_settings=self._audio_settings,
             connection_settings=self._connection_settings,
             conn_options=conn_options,
             http_session=self.session,
@@ -145,10 +146,10 @@ class SpeechStream(stt.SpeechStream):
         self._recognition_started = asyncio.Event()
         self._seq_no = 0
 
-    async def _run(self):
+    async def _run(self) -> None:
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
             start_recognition_msg = {
@@ -186,7 +187,7 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             while True:
                 msg = await ws.receive()
@@ -216,13 +217,14 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                 ]
+                tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        (tasks_group, wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
+                    )
                     for task in done:
                         if task != wait_reconnect_task:
                             task.result()
@@ -233,6 +235,7 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await tasks_group
             finally:
                 if ws is not None:
                     await ws.close()
@@ -314,6 +317,7 @@ def live_transcription_to_speech_data(data: dict) -> list[stt.SpeechData]:
                 alt.get("confidence", 1.0),
                 alt.get("language", "en"),
             )
+            speaker = alt.get("speaker")
 
             if not content:
                 continue
@@ -324,8 +328,9 @@ def live_transcription_to_speech_data(data: dict) -> list[stt.SpeechData]:
             elif speech_data and start_time == speech_data[-1].end_time:
                 speech_data[-1].text += " " + content
             else:
-                speech_data.append(
-                    stt.SpeechData(language, content, start_time, end_time, confidence)
-                )
+                sd = stt.SpeechData(language, content, start_time, end_time, confidence)
+                if speaker is not None:
+                    sd.speaker_id = speaker
+                speech_data.append(sd)
 
     return speech_data

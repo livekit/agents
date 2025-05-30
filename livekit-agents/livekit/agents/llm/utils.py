@@ -220,7 +220,7 @@ def build_strict_openai_schema(
 ResponseFormatT = TypeVar("ResponseFormatT", default=None)
 
 
-def is_typed_dict(cls) -> bool:
+def is_typed_dict(cls: type | Any) -> bool:
     return isinstance(cls, type) and issubclass(cls, dict) and hasattr(cls, "__annotations__")
 
 
@@ -229,13 +229,15 @@ def is_typed_dict(cls) -> bool:
 
 
 def to_response_format_param(
-    response_format: type | dict,
+    response_format: type | dict[str, Any],
 ) -> tuple[str, type[BaseModel] | TypeAdapter[Any]]:
     if isinstance(response_format, dict):
         # TODO(theomonnom): better type validation, copy TypedDict from OpenAI
         if response_format.get("type", "") not in ("text", "json_schema", "json_object"):
             raise TypeError("Unsupported response_format type")
 
+        # TODO(long): fix return value
+        raise TypeError("Unsupported response_format type")
         return response_format
 
     # add support for TypedDict
@@ -259,7 +261,7 @@ def to_response_format_param(
     return name, json_schema_type
 
 
-def to_openai_response_format(response_format: type | dict) -> dict:
+def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
     name, json_schema_type = to_response_format_param(response_format)
 
     schema = _strict.to_strict_json_schema(json_schema_type)
@@ -273,13 +275,13 @@ def to_openai_response_format(response_format: type | dict) -> dict:
     }
 
 
-def function_arguments_to_pydantic_model(func: Callable) -> type[BaseModel]:
+def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
     """Create a Pydantic model from a function’s signature. (excluding context types)"""
 
     from docstring_parser import parse_from_object
 
-    fnc_name = func.__name__.split("_")
-    fnc_name = "".join(x.capitalize() for x in fnc_name)
+    fnc_names = func.__name__.split("_")
+    fnc_name = "".join(x.capitalize() for x in fnc_names)
     model_name = fnc_name + "Args"
 
     docstring = parse_from_object(func)
@@ -323,7 +325,7 @@ def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
     json_arguments: str,  # raw function output from the LLM
-    call_ctx: RunContext | None = None,
+    call_ctx: RunContext[Any] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """
     Create the positional and keyword arguments to call a function tool from

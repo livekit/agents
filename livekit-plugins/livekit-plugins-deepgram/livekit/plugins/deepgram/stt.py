@@ -94,7 +94,7 @@ class AudioEnergyFilter:
 
 @dataclass
 class STTOptions:
-    language: DeepgramLanguages | str
+    language: DeepgramLanguages | str | None
     detect_language: bool
     interim_results: bool
     punctuate: bool
@@ -181,9 +181,10 @@ class STT(stt.STT):
         )
         self._base_url = base_url
 
-        self._api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        if not self._api_key:
+        deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
+        if not deepgram_api_key:
             raise ValueError("Deepgram API key is required")
+        self._api_key = deepgram_api_key
 
         model = _validate_model(model, language)
         _validate_keyterms(model, language, keyterms, keywords)
@@ -305,7 +306,7 @@ class STT(stt.STT):
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
-    ):
+    ) -> None:
         if is_given(language):
             self._opts.language = language
         if is_given(model):
@@ -383,14 +384,13 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         base_url: str,
     ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
-
         if opts.detect_language or opts.language is None:
             raise ValueError(
                 "language detection is not supported in streaming mode, "
                 "please disable it and specify a language"
             )
 
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
@@ -429,7 +429,7 @@ class SpeechStream(stt.SpeechStream):
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
-    ):
+    ) -> None:
         if is_given(language):
             self._opts.language = language
         if is_given(model):
@@ -466,7 +466,7 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         closing_ws = False
 
-        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse):
+        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # if we want to keep the connection alive even if no audio is sent,
             # Deepgram expects a keepalive message.
             # https://developers.deepgram.com/reference/listen-live#stream-keepalive
@@ -478,7 +478,7 @@ class SpeechStream(stt.SpeechStream):
                 return
 
         @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse):
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
             # forward audio to deepgram in chunks of 50ms
@@ -529,7 +529,7 @@ class SpeechStream(stt.SpeechStream):
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
         @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             while True:
                 msg = await ws.receive()
@@ -565,12 +565,13 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(recv_task(ws)),
                     asyncio.create_task(keepalive_task(ws)),
                 ]
+                tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        (tasks_group, wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
-                    )  # type: ignore
+                    )
 
                     # propagate exceptions from completed tasks
                     for task in done:
@@ -583,6 +584,7 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await tasks_group
             finally:
                 if ws is not None:
                     await ws.close()
