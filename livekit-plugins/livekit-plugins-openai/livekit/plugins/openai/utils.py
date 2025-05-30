@@ -22,7 +22,7 @@ def get_base_url(base_url: str | None) -> str:
 
 
 def to_fnc_ctx(
-    fnc_ctx: list[llm.FunctionTool | llm.RawFunctionTool],
+    fnc_ctx: list[llm.FunctionTool | llm.RawFunctionTool], *, strict: bool = True
 ) -> list[ChatCompletionToolParam]:
     tools: list[ChatCompletionToolParam] = []
     for fnc in fnc_ctx:
@@ -35,6 +35,9 @@ def to_fnc_ctx(
                 }
             )
         elif is_function_tool(fnc):
-            tools.append(llm.utils.build_strict_openai_schema(fnc))  # type: ignore
-
+            tools.append(
+                llm.utils.build_strict_openai_schema(fnc)
+                if strict
+                else llm.utils.build_legacy_openai_schema(fnc)
+            )
     return tools

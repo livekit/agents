@@ -51,7 +51,6 @@ from .models import (
     PerplexityChatModels,
     TelnyxChatModels,
     TogetherChatModels,
-    XAIChatModels,
 )
 from .utils import AsyncAzureADTokenProvider, to_fnc_ctx
 
@@ -68,6 +67,7 @@ class _LLMOptions:
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
     max_completion_tokens: NotGivenOr[int]
+    strict_tool_call: NotGivenOr[bool]
 
 
 class LLM(llm.LLM):
@@ -87,6 +87,7 @@ class LLM(llm.LLM):
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
+        _strict_tool_call: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -104,6 +105,7 @@ class LLM(llm.LLM):
             store=store,
             metadata=metadata,
             max_completion_tokens=max_completion_tokens,
+            strict_tool_call=_strict_tool_call,
         )
         self._provider_fmt = _provider_fmt or "openai"
         self._client = client or openai.AsyncClient(
@@ -247,42 +249,6 @@ class LLM(llm.LLM):
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
-        )
-
-    @staticmethod
-    def with_x_ai(
-        *,
-        model: str | XAIChatModels = "grok-2-public",
-        api_key: str | None = None,
-        base_url: str = "https://api.x.ai/v1",
-        client: openai.AsyncClient | None = None,
-        user: NotGivenOr[str] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: ToolChoice = "auto",
-    ) -> LLM:
-        """
-        Create a new instance of XAI LLM.
-
-        ``api_key`` must be set to your XAI API key, either using the argument or by setting
-        the ``XAI_API_KEY`` environmental variable.
-        """
-        api_key = api_key or os.environ.get("XAI_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "XAI API key is required, either as argument or set XAI_API_KEY environmental variable"  # noqa: E501
-            )
-
-        return LLM(
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            client=client,
-            user=user,
-            temperature=temperature,
-            parallel_tool_calls=parallel_tool_calls,
-            tool_choice=tool_choice,
-            # TODO(long): add provider fmt for grok
         )
 
     @staticmethod
@@ -588,6 +554,9 @@ class LLM(llm.LLM):
             self,
             model=self._opts.model,
             provider_fmt=self._provider_fmt,
+            strict_tool_call=self._opts.strict_tool_call
+            if is_given(self._opts.strict_tool_call)
+            else True,
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
@@ -603,6 +572,7 @@ class LLMStream(llm.LLMStream):
         *,
         model: str | ChatModels,
         provider_fmt: str,
+        strict_tool_call: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
         tools: list[FunctionTool | RawFunctionTool],
@@ -614,6 +584,7 @@ class LLMStream(llm.LLMStream):
         self._provider_fmt = provider_fmt
         self._client = client
         self._llm = llm
+        self._strict_tool_call = strict_tool_call
         self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
@@ -628,7 +599,11 @@ class LLMStream(llm.LLMStream):
 
         try:
             chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
-            fnc_ctx = to_fnc_ctx(self._tools) if self._tools else openai.NOT_GIVEN
+            fnc_ctx = (
+                to_fnc_ctx(self._tools, strict=self._strict_tool_call)
+                if self._tools
+                else openai.NOT_GIVEN
+            )
             if lk_oai_debug:
                 tool_choice = self._extra_kwargs.get("tool_choice", NOT_GIVEN)
                 logger.debug(

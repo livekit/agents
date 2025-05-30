@@ -453,7 +453,7 @@ def process_base_url(
             query_params["deployment"] = [azure_deployment]
 
     else:
-        if "model" not in query_params:
+        if "model" not in query_params and model:
             query_params["model"] = [model]
 
     new_query = urlencode(query_params, doseq=True)
