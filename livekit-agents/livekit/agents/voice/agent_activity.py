@@ -511,7 +511,7 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
 
-        self._create_speech_task(
+        task = self._create_speech_task(
             self._tts_task(
                 speech_handle=handle,
                 text=text,
@@ -522,6 +522,7 @@ class AgentActivity(RecognitionHooks):
             owned_speech_handle=handle,
             name="AgentActivity.tts_say",
         )
+        task.add_done_callback(self._on_pipeline_reply_done)
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -593,7 +594,7 @@ class AgentActivity(RecognitionHooks):
             if instructions:
                 instructions = "\n".join([self._agent.instructions, instructions])
 
-            self._create_speech_task(
+            task = self._create_speech_task(
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
@@ -609,6 +610,7 @@ class AgentActivity(RecognitionHooks):
                 owned_speech_handle=handle,
                 name="AgentActivity.pipeline_reply",
             )
+            task.add_done_callback(self._on_pipeline_reply_done)
 
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
@@ -689,9 +691,6 @@ class AgentActivity(RecognitionHooks):
                 speech._authorize_playout()
                 await speech.wait_for_playout()
                 self._current_speech = None
-
-            if not isinstance(self.llm, llm.RealtimeModel) and not self._speech_tasks:
-                self._session._update_agent_state("listening")
 
             # If we're draining and there are no more speech tasks, we can exit.
             # Only speech tasks can bypass draining to create a tool response
@@ -997,6 +996,10 @@ class AgentActivity(RecognitionHooks):
         return self._agent.chat_ctx
 
     # endregion
+
+    def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
+        if not self._speech_q and (not self._current_speech or self._current_speech.done()):
+            self._session._update_agent_state("listening")
 
     @utils.log_exceptions(logger=logger)
     async def _tts_task(
@@ -1352,7 +1355,7 @@ class AgentActivity(RecognitionHooks):
                         speech_handle=handle, user_initiated=False, source="tool_response"
                     ),
                 )
-                self._create_speech_task(
+                tool_response_task = self._create_speech_task(
                     self._pipeline_reply_task(
                         speech_handle=handle,
                         chat_ctx=chat_ctx,
@@ -1369,6 +1372,7 @@ class AgentActivity(RecognitionHooks):
                     owned_speech_handle=handle,
                     name="AgentActivity.pipeline_reply",
                 )
+                tool_response_task.add_done_callback(self._on_pipeline_reply_done)
                 self._schedule_speech(
                     handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, bypass_draining=True
                 )
