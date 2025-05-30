@@ -690,7 +690,7 @@ class AgentActivity(RecognitionHooks):
                 await speech.wait_for_playout()
                 self._current_speech = None
 
-            if not isinstance(self.llm, llm.RealtimeModel):
+            if not isinstance(self.llm, llm.RealtimeModel) and not self._speech_tasks:
                 self._session._update_agent_state("listening")
 
             # If we're draining and there are no more speech tasks, we can exit.
