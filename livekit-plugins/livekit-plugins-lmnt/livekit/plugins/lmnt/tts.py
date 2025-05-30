@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import weakref
 from dataclasses import dataclass, replace
 from typing import Final
 
@@ -25,6 +27,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -35,9 +38,11 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
 from .models import LMNTAudioFormats, LMNTLanguages, LMNTModels, LMNTSampleRate
 
 LMNT_BASE_URL: Final[str] = "https://api.lmnt.com/v1/ai/speech/bytes"
+LMNT_STREAM_URL: Final[str] = "https://api.lmnt.com/v1/ai/speech/stream"
 NUM_CHANNELS: Final[int] = 1
 MIME_TYPE: dict[str, str] = {
     "aac": "audio/aac",
@@ -78,6 +83,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         temperature: float = 1.0,
         top_p: float = 0.8,
+        use_websockets: bool = True,
     ) -> None:
         """
         Create a new instance of LMNT TTS.
@@ -104,9 +110,11 @@ class TTS(tts.TTS):
                 A higher value (like 0.9) gives more flexibility in how words are spoken,
                 but might occasionally produce unusual intonations or speech patterns.
                 Default is 0.8.
+            use_websockets: If True, uses websockets for real time streaming synthesis.
+                Else, synthesis is done chunk by chunk over HTTP. Default is True.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=True if use_websockets else False),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -133,6 +141,20 @@ class TTS(tts.TTS):
         )
 
         self._session = http_session
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+            max_session_duration=90,
+            mark_refreshed_on_get=True,
+        )
+        self._streams = weakref.WeakSet[SynthesizeStream]()
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        return await asyncio.wait_for(session.ws_connect(LMNT_STREAM_URL), timeout)
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse):
+        await ws.close()
 
     def synthesize(
         self,
@@ -190,6 +212,19 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
 
         return self._session
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -251,5 +286,98 @@ class ChunkedStream(tts.ChunkedStream):
                 request_id=None,
                 body=None,
             ) from None
+        except Exception as e:
+            raise APIConnectionError() from e
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    """Synthesize text to speech in a stream using websockets"""
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(min_sentence_len=10).stream()
+        self._opts = replace(tts._opts)
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=self._opts.sample_rate,
+            num_channels=NUM_CHANNELS,
+            mime_type=MIME_TYPE[self._opts.format],
+            stream=True,
+        )
+
+        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            """
+            This task sends sentences to the LMNT service.
+            It uses a SentenceTokenizer to split the input text into sentences.
+            """
+            async for sentence in self._sent_tokenizer_stream:
+                self._mark_started()
+                await ws.send_str(json.dumps({"text": sentence.token + " "}))
+            await ws.send_str('{"eof": true}')
+
+        async def _input_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            async for text in self._input_ch:
+                if isinstance(text, self._FlushSentinel):
+                    self._sent_tokenizer_stream.flush()
+                    continue
+
+                self._sent_tokenizer_stream.push_text(text)
+            self._sent_tokenizer_stream.end_input()
+
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            output_emitter.start_segment(segment_id=request_id)
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    output_emitter.end_input()
+                    break
+
+                try:
+                    output_emitter.push(msg.data)
+                except Exception as e:
+                    logger.warning("Failed to parse LMNT message: %s", e)
+
+        try:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                init_msg = {
+                    "X-API-Key": self._opts.api_key,
+                    "voice": self._opts.voice,
+                    "format": self._opts.format,
+                    "language": "en" if self._opts.language == "auto" else self._opts.language,
+                    "sample_rate": self._opts.sample_rate,
+                    "model": self._opts.model,
+                    "temperature": self._opts.temperature,
+                    "top_p": self._opts.top_p,
+                }
+
+                await ws.send_str(json.dumps(init_msg))
+
+                tasks = [
+                    asyncio.create_task(_input_task(ws)),
+                    asyncio.create_task(_sentence_stream_task(ws)),
+                    asyncio.create_task(_recv_task(ws)),
+                ]
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=request_id,
+                body=None,
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e
