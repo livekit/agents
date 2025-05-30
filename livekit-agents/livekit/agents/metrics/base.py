@@ -45,6 +45,7 @@ class TTSMetrics(BaseModel):
     cancelled: bool
     characters_count: int
     streamed: bool
+    segment_id: str | None = None
     speech_id: str | None = None
 
 

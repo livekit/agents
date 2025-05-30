@@ -30,14 +30,16 @@ import numpy as np
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    NotGivenOr,
     stt,
     utils,
 )
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils import AudioBuffer, is_given
 
 from ._utils import PeriodicCollector
 from .log import logger
@@ -197,7 +199,7 @@ class STT(stt.STT):
             energy_filter=energy_filter,
         )
         self._session = http_session
-        self._streams = weakref.WeakSet()
+        self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -209,11 +211,11 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: list[str] | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         """Implement synchronous speech recognition for Gladia using the live endpoint."""
-        config = self._sanitize_options(languages=language)
+        config = self._sanitize_options(languages=[language] if is_given(language) else None)
 
         streaming_config = {
             "encoding": config.encoding,
@@ -245,8 +247,8 @@ class STT(stt.STT):
 
         # Add translation configuration if enabled
         if config.translation_config.enabled:
-            streaming_config["realtime_processing"]["translation"] = True
-            streaming_config["realtime_processing"]["translation_config"] = {
+            streaming_config["realtime_processing"]["translation"] = True  # type: ignore
+            streaming_config["realtime_processing"]["translation_config"] = {  # type: ignore
                 "target_languages": config.translation_config.target_languages,
                 "model": config.translation_config.model,
                 "match_original_utterances": config.translation_config.match_original_utterances,
@@ -259,12 +261,10 @@ class STT(stt.STT):
             session_url = session_response["url"]
 
             # Connect to the WebSocket
+            receive_timeout = conn_options.timeout * 5
             async with self._ensure_session().ws_connect(
                 session_url,
-                timeout=aiohttp.ClientTimeout(
-                    total=30,  # Keep a reasonable total timeout
-                    sock_connect=conn_options.timeout,
-                ),
+                timeout=aiohttp.ClientWSTimeout(ws_receive=receive_timeout, ws_close=10),
             ) as ws:
                 # Combine audio frames to get a single frame with all raw PCM data
                 combined_frame = rtc.combine_audio_frames(buffer)
@@ -292,8 +292,7 @@ class STT(stt.STT):
                 # Receive messages until we get the post_final_transcript message
                 try:
                     # Set a timeout for waiting for the final results after sending stop_recording
-                    receive_timeout = conn_options.timeout * 5
-                    async for msg in ws.iter(timeout=receive_timeout):
+                    async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
                             # Collect final utterances
@@ -352,9 +351,7 @@ class STT(stt.STT):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=e.headers.get(
-                    "X-Request-ID"
-                ),  # Check if Gladia provides a request ID header
+                request_id=e.headers.get("X-Request-ID") if e.headers else None,
                 body=await e.response.text() if hasattr(e, "response") else None,
             ) from e
         except aiohttp.ClientError as e:
@@ -388,7 +385,7 @@ class STT(stt.STT):
                         request_id=None,
                         body=await res.text(),
                     )
-                return await res.json()
+                return await res.json()  # type: ignore
         except Exception as e:
             logger.exception(f"Failed to initialize Gladia session: {e}")
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
@@ -433,10 +430,10 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: list[str] | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        config = self._sanitize_options(languages=language)
+        config = self._sanitize_options(languages=[language] if is_given(language) else None)
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -462,7 +459,7 @@ class STT(stt.STT):
         translation_target_languages: list[str] | None = None,
         translation_model: str | None = None,
         translation_match_original_utterances: bool | None = None,
-    ):
+    ) -> None:
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
                 self._opts.language_config,
@@ -584,7 +581,7 @@ class SpeechStream(stt.SpeechStream):
         translation_target_languages: list[str] | None = None,
         translation_model: str | None = None,
         translation_match_original_utterances: bool | None = None,
-    ):
+    ) -> None:
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
                 self._opts.language_config,
@@ -706,8 +703,8 @@ class SpeechStream(stt.SpeechStream):
 
         # Add translation configuration if enabled
         if self._opts.translation_config.enabled:
-            streaming_config["realtime_processing"]["translation"] = True
-            streaming_config["realtime_processing"]["translation_config"] = {
+            streaming_config["realtime_processing"]["translation"] = True  # type: ignore
+            streaming_config["realtime_processing"]["translation_config"] = {  # type: ignore
                 "target_languages": self._opts.translation_config.target_languages,
                 "model": self._opts.translation_config.model,
                 "match_original_utterances": (
@@ -725,20 +722,13 @@ class SpeechStream(stt.SpeechStream):
                     sock_connect=self._conn_options.timeout,
                 ),
             ) as res:
-                # Gladia returns 201 Created when successfully creating a session
-                if res.status not in (200, 201):
-                    raise APIStatusError(
-                        message=f"Failed to initialize Gladia session: {res.status}",
-                        status_code=res.status,
-                        request_id=None,
-                        body=await res.text(),
-                    )
-                return await res.json()
+                res.raise_for_status()
+                return await res.json()  # type: ignore
+
         except Exception as e:
-            logger.exception(f"Failed to initialize Gladia session: {e}")
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
-    async def _send_audio_task(self):
+    async def _send_audio_task(self) -> None:
         """Send audio data to Gladia WebSocket."""
         if not self._ws:
             return
@@ -794,7 +784,7 @@ class SpeechStream(stt.SpeechStream):
         if self._ws:
             await self._ws.send_str(json.dumps({"type": "stop_recording"}))
 
-    async def _recv_messages_task(self):
+    async def _recv_messages_task(self) -> None:
         """Receive and process messages from Gladia WebSocket."""
         if not self._ws:
             return
@@ -815,7 +805,7 @@ class SpeechStream(stt.SpeechStream):
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
 
-    def _process_gladia_message(self, data: dict):
+    def _process_gladia_message(self, data: dict) -> None:
         """Process messages from Gladia WebSocket."""
         if data["type"] == "transcript":
             is_final = data["data"]["is_final"]

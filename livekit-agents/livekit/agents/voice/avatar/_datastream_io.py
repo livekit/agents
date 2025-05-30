@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import ctypes
 import json
 import logging
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -201,19 +200,20 @@ class DataStreamAudioReceiver(AudioReceiver):
 
                 sample_rate = int(attrs["sample_rate"])
                 num_channels = int(attrs["num_channels"])
+                bstream = utils.audio.AudioByteStream(
+                    sample_rate=sample_rate, num_channels=num_channels
+                )
                 async for data in self._current_reader:
                     if self._current_reader_cleared:
                         # ignore the rest data of the current reader if clear_buffer was called
-                        continue
+                        break
+                    for frame in bstream.push(data):
+                        yield frame
 
-                    samples_per_channel = len(data) // num_channels // ctypes.sizeof(ctypes.c_int16)
-                    frame = rtc.AudioFrame(
-                        data=data,
-                        sample_rate=sample_rate,
-                        num_channels=num_channels,
-                        samples_per_channel=samples_per_channel,
-                    )
-                    yield frame
+                if not self._current_reader_cleared:
+                    for frame in bstream.flush():
+                        yield frame
+
                 self._current_reader = None
                 self._current_reader_cleared = False
                 yield AudioSegmentEnd()
