@@ -134,6 +134,9 @@ class TTS(tts.TTS):
         self._streams.add(stream)
         return stream
 
+    async def aclose(self) -> None:
+        await self._client.close()
+
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
