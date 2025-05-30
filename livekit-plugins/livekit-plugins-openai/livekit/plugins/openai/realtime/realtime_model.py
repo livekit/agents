@@ -9,7 +9,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Optional, Union, cast, overload
+from typing import Any, Literal, Optional, Union, cast, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
 from livekit.agents.llm.tool_context import (
+    get_function_info,
     get_raw_function_info,
     is_function_tool,
     is_raw_function_tool,
@@ -497,7 +498,7 @@ class RealtimeSession(
 
         self._instructions: str | None = None
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
-        self._initial_session_update()
+        self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, _CreateResponseHandle] = {}
         self._text_mode_recovery_atask: asyncio.Task[None] | None = None
@@ -537,12 +538,12 @@ class RealtimeSession(
                 events: list[RealtimeClientEvent] = []
 
                 # options and instructions
-                self._initial_session_update(send_event_cb=events.append)
+                events.append(self._create_session_update_event())
 
                 # tools
                 tools = list(self._tools.function_tools.values())
                 if tools:
-                    await self.update_tools(tools, send_event_cb=events.append)
+                    events.append(self._create_tools_update_event(tools))
 
                 # chat context
                 chat_ctx = self.chat_ctx.copy(
@@ -551,7 +552,7 @@ class RealtimeSession(
                     exclude_empty_message=True,
                 )
                 self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-                await self.update_chat_ctx(chat_ctx, send_event_cb=events.append)
+                events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
                 try:
                     for ev in events:
@@ -766,9 +767,7 @@ class RealtimeSession(
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
 
-    def _initial_session_update(
-        self, *, send_event_cb: Callable[[RealtimeClientEvent], None] | None = None
-    ) -> None:
+    def _create_session_update_event(self) -> SessionUpdateEvent:
         input_audio_transcription_opts = self._realtime_model._opts.input_audio_transcription
         input_audio_transcription = (
             session_update_event.SessionInputAudioTranscription.model_validate(
@@ -811,16 +810,13 @@ class RealtimeSession(
             kwargs["instructions"] = self._instructions
 
         # initial session update
-        ev = SessionUpdateEvent(
+        return SessionUpdateEvent(
             type="session.update",
             # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
             # Other providers support different voices, so we need to accommodate that.
             session=session_update_event.Session.model_construct(**kwargs),  # type: ignore
             event_id=utils.shortuuid("session_update_"),
         )
-
-        send_event_cb = send_event_cb or self.send_event
-        send_event_cb(ev)
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -882,12 +878,31 @@ class RealtimeSession(
             )
 
     async def update_chat_ctx(
-        self,
-        chat_ctx: llm.ChatContext,
-        *,
-        send_event_cb: Callable[[RealtimeClientEvent], None] | None = None,
-        _add_mock_audio: bool = False,
+        self, chat_ctx: llm.ChatContext, *, _add_mock_audio: bool = False
     ) -> None:
+        async with self._update_chat_ctx_lock:
+            events = self._create_update_chat_ctx_events(chat_ctx, _add_mock_audio=_add_mock_audio)
+            futs: list[asyncio.Future[None]] = []
+
+            for ev in events:
+                futs.append(f := asyncio.Future[None]())
+                if isinstance(ev, ConversationItemDeleteEvent):
+                    self._item_delete_future[ev.item_id] = f
+                elif isinstance(ev, ConversationItemCreateEvent):
+                    assert ev.item.id is not None
+                    self._item_create_future[ev.item.id] = f
+                self.send_event(ev)
+
+            if not futs:
+                return
+            try:
+                await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
+            except asyncio.TimeoutError:
+                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+
+    def _create_update_chat_ctx_events(
+        self, chat_ctx: llm.ChatContext, *, _add_mock_audio: bool = False
+    ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
         chat_ctx = chat_ctx.copy()
         if _add_mock_audio:
             chat_ctx.items.append(_create_mock_audio_item())
@@ -897,105 +912,88 @@ class RealtimeSession(
                 item for item in chat_ctx.items if not item.id.startswith(_MOCK_AUDIO_ID_PREFIX)
             ]
 
-        futs = []
+        events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
+        diff_ops = llm.utils.compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
 
-        def _send_event(ev: RealtimeClientEvent) -> None:
-            futs.append(f := asyncio.Future[None]())
-            if isinstance(ev, ConversationItemDeleteEvent):
-                self._item_delete_future[ev.item_id] = f
-            elif isinstance(ev, ConversationItemCreateEvent):
-                assert ev.item.id is not None
-                self._item_create_future[ev.item.id] = f
+        for msg_id in diff_ops.to_remove:
+            events.append(
+                ConversationItemDeleteEvent(
+                    type="conversation.item.delete",
+                    item_id=msg_id,
+                    event_id=utils.shortuuid("chat_ctx_delete_"),
+                )
+            )
+
+        for previous_msg_id, msg_id in diff_ops.to_create:
+            chat_item = chat_ctx.get_by_id(msg_id)
+            assert chat_item is not None
+            events.append(
+                ConversationItemCreateEvent(
+                    type="conversation.item.create",
+                    item=_livekit_item_to_openai_item(chat_item),
+                    previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
+                    event_id=utils.shortuuid("chat_ctx_create_"),
+                )
+            )
+
+        return events
+
+    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
+        async with self._update_fnc_ctx_lock:
+            ev = self._create_tools_update_event(tools)
             self.send_event(ev)
 
-        send_event_cb = send_event_cb or _send_event
-
-        async with self._update_chat_ctx_lock:
-            diff_ops = llm.utils.compute_chat_ctx_diff(
-                self._remote_chat_ctx.to_chat_ctx(), chat_ctx
-            )
-
-            for msg_id in diff_ops.to_remove:
-                event_id = utils.shortuuid("chat_ctx_delete_")
-                send_event_cb(
-                    ConversationItemDeleteEvent(
-                        type="conversation.item.delete",
-                        item_id=msg_id,
-                        event_id=event_id,
-                    )
+            assert ev.session.tools is not None
+            retained_tool_names = {name for t in ev.session.tools if (name := t.name) is not None}
+            retained_tools = [
+                tool
+                for tool in tools
+                if (is_function_tool(tool) and get_function_info(tool).name in retained_tool_names)
+                or (
+                    is_raw_function_tool(tool)
+                    and get_raw_function_info(tool).name in retained_tool_names
                 )
-
-            for previous_msg_id, msg_id in diff_ops.to_create:
-                event_id = utils.shortuuid("chat_ctx_create_")
-                chat_item = chat_ctx.get_by_id(msg_id)
-                assert chat_item is not None
-                send_event_cb(
-                    ConversationItemCreateEvent(
-                        type="conversation.item.create",
-                        item=_livekit_item_to_openai_item(chat_item),
-                        previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
-                        event_id=event_id,
-                    )
-                )
-
-            if not futs:
-                return
-
-            try:
-                await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
-            except asyncio.TimeoutError:
-                raise llm.RealtimeError("update_chat_ctx timed out.") from None
-
-    async def update_tools(
-        self,
-        tools: list[llm.FunctionTool | llm.RawFunctionTool],
-        *,
-        send_event_cb: Callable[[RealtimeClientEvent], None] | None = None,
-    ) -> None:
-        async with self._update_fnc_ctx_lock:
-            oai_tools: list[session_update_event.SessionTool] = []
-            retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
-
-            for tool in tools:
-                if is_function_tool(tool):
-                    tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-                elif is_raw_function_tool(tool):
-                    tool_info = get_raw_function_info(tool)
-                    tool_desc = tool_info.raw_schema
-                    tool_desc["type"] = "function"  # internally tagged
-                else:
-                    logger.error(
-                        "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
-                    )
-                    continue
-
-                try:
-                    session_tool = session_update_event.SessionTool.model_validate(tool_desc)
-                    oai_tools.append(session_tool)
-                    retained_tools.append(tool)
-                except ValidationError:
-                    logger.error(
-                        "OpenAI Realtime API doesn't support this tool",
-                        extra={"tool": tool_desc},
-                    )
-                    continue
-
-            event_id = utils.shortuuid("tools_update_")
-            # f = asyncio.Future()
-            # self._response_futures[event_id] = f
-            ev = SessionUpdateEvent(
-                type="session.update",
-                session=session_update_event.Session.model_construct(
-                    model=self._realtime_model._opts.model,
-                    tools=oai_tools,
-                ),
-                event_id=event_id,
-            )
-
+            ]
             self._tools = llm.ToolContext(retained_tools)
 
-            send_event_cb = send_event_cb or self.send_event
-            send_event_cb(ev)
+    def _create_tools_update_event(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
+    ) -> SessionUpdateEvent:
+        oai_tools: list[session_update_event.SessionTool] = []
+        retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+
+        for tool in tools:
+            if is_function_tool(tool):
+                tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+            elif is_raw_function_tool(tool):
+                tool_info = get_raw_function_info(tool)
+                tool_desc = tool_info.raw_schema
+                tool_desc["type"] = "function"  # internally tagged
+            else:
+                logger.error(
+                    "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
+                )
+                continue
+
+            try:
+                session_tool = session_update_event.SessionTool.model_validate(tool_desc)
+                oai_tools.append(session_tool)
+                retained_tools.append(tool)
+            except ValidationError:
+                logger.error(
+                    "OpenAI Realtime API doesn't support this tool",
+                    extra={"tool": tool_desc},
+                )
+                continue
+
+        return SessionUpdateEvent(
+            type="session.update",
+            session=session_update_event.Session.model_construct(
+                model=self._realtime_model._opts.model,
+                tools=oai_tools,
+            ),
+            event_id=utils.shortuuid("tools_update_"),
+        )
 
     async def update_instructions(self, instructions: str) -> None:
         event_id = utils.shortuuid("instructions_update_")
