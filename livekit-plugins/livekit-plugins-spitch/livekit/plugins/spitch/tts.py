@@ -1,22 +1,22 @@
-import asyncio
 import uuid
 from dataclasses import dataclass
 
 import httpx
-
 import spitch
+from spitch import AsyncSpitch
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    tts
 )
-from livekit.agents.log import logger
-from livekit.agents.tts import tts
-from livekit.agents.utils import codecs, log_exceptions
-from livekit.agents.utils.aio import gracefully_cancel
-from spitch import AsyncSpitch
+
+SAMPLE_RATE = 24_000
+NUM_CHANNELS = 1
+MIME_TYPE = "audio/wav"
 
 
 @dataclass
@@ -63,7 +63,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._client = client
         self._opts = opts
 
-    async def _run(self) -> None:
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         spitch_stream = self._client.speech.with_streaming_response.generate(
             text=self.input_text,
             language=self._opts.language,
@@ -72,27 +72,20 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         request_id = str(uuid.uuid4().hex)[:12]
-        decoder = codecs.AudioStreamDecoder(sample_rate=24_000, num_channels=1)
-
-        @log_exceptions(logger=logger)
-        async def _decode_loop():
-            try:
-                async with spitch_stream as stream:
-                    async for chunk in stream.iter_bytes():
-                        decoder.push(chunk)
-            finally:
-                decoder.end_input()
-
-        decode_task = asyncio.create_task(_decode_loop())
-
         try:
-            emitter = tts.SynthesizedAudioEmitter(
-                event_ch=self._event_ch,
-                request_id=request_id,
-            )
-            async for frame in decoder:
-                emitter.push(frame)
-            emitter.flush()
+            async with spitch_stream as stream:
+                output_emitter.initialize(
+                    request_id=request_id,
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    mime_type=MIME_TYPE,
+                )
+
+                async for data in stream.iter_bytes():
+                    output_emitter.push(data)
+
+            output_emitter.flush()
+
         except spitch.APITimeoutError:
             raise APITimeoutError() from None
         except spitch.APIStatusError as e:
@@ -101,6 +94,4 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            await gracefully_cancel(decode_task)
-            await decoder.aclose()
+
