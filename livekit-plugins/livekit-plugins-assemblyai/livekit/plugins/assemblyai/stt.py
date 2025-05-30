@@ -320,7 +320,7 @@ class SpeechStream(stt.SpeechStream):
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else DEFAULT_END_OF_TURN_CONFIDENCE_THRESHOLD,
-            "min_end_of_turn_silence_when_confident": self._opts.min_end_of_turn_silence_when_confident
+            "min_end_of_turn_silence_when_confident": self._opts.min_end_of_turn_silence_when_confident  # noqa: E501
             if is_given(self._opts.min_end_of_turn_silence_when_confident)
             else DEFAULT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT,
             "max_turn_silence": self._opts.max_turn_silence

@@ -17,6 +17,9 @@ from livekit.agents.llm.tool_context import (
     is_raw_function_tool,
 )
 
+from .log import logger
+from .tools import _LLMTool
+
 __all__ = ["to_fnc_ctx"]
 
 
@@ -36,7 +39,7 @@ def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.Functio
 def create_tools_config(
     *,
     function_tools: list[types.FunctionDeclaration] | None = None,
-    gemini_tools: list[LLMTool] | None = None,
+    gemini_tools: list[_LLMTool] | None = None,
 ) -> list[types.Tool]:
     tools: list[types.Tool] = []
 

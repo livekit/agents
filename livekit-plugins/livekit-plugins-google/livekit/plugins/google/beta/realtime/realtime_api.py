@@ -548,7 +548,9 @@ class RealtimeSession(llm.RealtimeSession):
                 ) as session:
                     async with self._session_lock:
                         self._active_session = session
-                        turns, _ = self._chat_ctx.copy(exclude_function_call=True).to_provider_format(format="google")
+                        turns, _ = self._chat_ctx.copy(
+                            exclude_function_call=True
+                        ).to_provider_format(format="google")
                         if turns:
                             self._send_client_event(
                                 types.LiveClientContent(turns=turns, turn_complete=False)
@@ -706,7 +708,9 @@ class RealtimeSession(llm.RealtimeSession):
             tools=tools_config,
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
-            session_resumption=types.SessionResumptionConfig(handle=self._session_resumption_handle),
+            session_resumption=types.SessionResumptionConfig(
+                handle=self._session_resumption_handle
+            ),
         )
 
         if is_given(self._opts.proactivity):
