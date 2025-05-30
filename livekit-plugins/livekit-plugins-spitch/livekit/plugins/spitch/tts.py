@@ -2,17 +2,17 @@ import uuid
 from dataclasses import dataclass
 
 import httpx
-import spitch
-from spitch import AsyncSpitch
 
+import spitch
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    tts
+    tts,
 )
+from spitch import AsyncSpitch
 
 SAMPLE_RATE = 24_000
 NUM_CHANNELS = 1
