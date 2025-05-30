@@ -290,7 +290,7 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        (asyncio.gather(*tasks), wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
