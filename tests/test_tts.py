@@ -421,6 +421,13 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": playai.TTS(),
+            "proxy-upstream": "api.play.ht:443",
+        },
+        id="playai",
+    ),
+    pytest.param(
+        lambda: {
             "tts": tts.StreamAdapter(
                 tts=openai.TTS(), sentence_tokenizer=tokenize.basic.SentenceTokenizer()
             ),

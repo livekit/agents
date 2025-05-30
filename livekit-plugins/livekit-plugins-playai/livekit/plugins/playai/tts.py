@@ -194,9 +194,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=utils.shortuuid())
 
         input_task = asyncio.create_task(self._tokenize_input())
-        try:
-            text_stream = await self._create_text_stream()
 
+        async def _text_stream():
+            async for word_stream in self._segments_ch:
+                async for word in word_stream:
+                    self._mark_started()
+                    yield word.token
+
+        text_stream = _text_stream()
+
+        try:
             async for chunk in self._tts._client.stream_tts_input(
                 text_stream=text_stream,
                 options=self._opts.play_options,
@@ -208,11 +215,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
+            await text_stream.aclose()
             await utils.aio.gracefully_cancel(input_task)
 
     @utils.log_exceptions(logger=logger)
     async def _tokenize_input(self):
-        # Converts incoming text into WordStreams and sends them into _segments_ch
         word_stream = None
         async for input in self._input_ch:
             if isinstance(input, str):
@@ -225,16 +232,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     word_stream.end_input()
                 word_stream = None
         self._segments_ch.close()
-
-    @utils.log_exceptions(logger=logger)
-    async def _create_text_stream(self):
-        async def text_stream():
-            async for word_stream in self._segments_ch:
-                async for word in word_stream:
-                    self._mark_started()
-                    yield word.token
-
-        return text_stream()
 
 
 def _validate_kwargs(kwargs: dict) -> None:
