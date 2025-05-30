@@ -62,6 +62,8 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._last_final_transcript_time: float = 0
         self._audio_transcript = ""
         self._last_language: str | None = None
+        self._audio_stream_start_time: float | None = None
+        self._last_transcript_end_time: float = 0
         self._vad_graph = tracing.Tracing.add_graph(
             title="vad",
             x_label="time",
@@ -83,6 +85,9 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
         self.update_vad(None)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if self._audio_stream_start_time is None:
+            self._audio_stream_start_time = time.time()
+
         if self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
 
@@ -102,6 +107,7 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
     def update_stt(self, stt: io.STTNode | None) -> None:
         self._stt = stt
         if stt:
+            self._audio_stream_start_time = None  # Reset when STT is updated
             self._stt_ch = aio.Chan[rtc.AudioFrame]()
             self._stt_atask = asyncio.create_task(
                 self._stt_task(stt, self._stt_ch, self._stt_atask)
@@ -147,6 +153,9 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
+
+            if hasattr(ev.alternatives[0], "end_time") and ev.alternatives[0].end_time > 0:
+                self._last_transcript_end_time = ev.alternatives[0].end_time
 
             if not self._speaking:
                 if not self._vad:
@@ -214,12 +223,22 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             )
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
+
+            transcription_delay = 0.0
+            if self._audio_stream_start_time and self._last_transcript_end_time > 0:
+                actual_speech_end_time = (
+                    self._audio_stream_start_time + self._last_transcript_end_time
+                )
+            else:
+                actual_speech_end_time = self._last_speaking_time
+
+            transcription_delay = max(self._last_final_transcript_time - actual_speech_end_time, 0)
+            end_of_utterance_delay = max(time.time() - actual_speech_end_time, 0)
+
             eou_metrics = metrics.EOUMetrics(
                 timestamp=time.time(),
-                end_of_utterance_delay=time.time() - self._last_speaking_time,
-                transcription_delay=max(
-                    self._last_final_transcript_time - self._last_speaking_time, 0
-                ),
+                end_of_utterance_delay=end_of_utterance_delay,
+                transcription_delay=transcription_delay,
             )
             self.emit("metrics_collected", eou_metrics)
             await self._hooks.on_end_of_turn(self._audio_transcript)
