@@ -708,7 +708,7 @@ class RealtimeSession(llm.RealtimeSession):
                 ),
                 language_code=self._opts.language if is_given(self._opts.language) else None,
             ),
-            tools=tools_config,
+            tools=tools_config,  # type: ignore
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=types.SessionResumptionConfig(
