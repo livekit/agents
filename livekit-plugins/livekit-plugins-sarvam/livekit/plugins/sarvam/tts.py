@@ -26,7 +26,7 @@ import os
 import wave
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 import aiohttp
 
@@ -78,28 +78,44 @@ MODEL_SPEAKER_COMPATIBILITY = {
     "bulbul:v1": {
         "female": ["diya", "maya", "meera", "pavithra", "maitreyi", "misha"],
         "male": ["amol", "arjun", "amartya", "arvind", "neel", "vian"],
-        "all": ["diya", "maya", "meera", "pavithra", "maitreyi", "misha", 
-                "amol", "arjun", "amartya", "arvind", "neel", "vian"]
+        "all": [
+            "diya",
+            "maya",
+            "meera",
+            "pavithra",
+            "maitreyi",
+            "misha",
+            "amol",
+            "arjun",
+            "amartya",
+            "arvind",
+            "neel",
+            "vian",
+        ],
     },
     "bulbul:v2": {
         "female": ["anushka", "manisha", "vidya", "arya"],
         "male": ["abhilash", "karun", "hitesh"],
-        "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"]
-    }
+        "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
+    },
 }
+
 
 def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     """Validate that the speaker is compatible with the model version."""
     if model not in MODEL_SPEAKER_COMPATIBILITY:
         logger.warning(f"Unknown model '{model}', skipping compatibility check")
         return True
-    
+
     compatible_speakers = MODEL_SPEAKER_COMPATIBILITY[model]["all"]
     if speaker.lower() not in compatible_speakers:
-        logger.error(f"Speaker '{speaker}' is not compatible with model '{model}'. "
-                    f"Compatible speakers for {model}: {', '.join(compatible_speakers)}")
+        logger.error(
+            f"Speaker '{speaker}' is not compatible with model '{model}'. "
+            f"Compatible speakers for {model}: {', '.join(compatible_speakers)}"
+        )
         return False
     return True
+
 
 @dataclass
 class SarvamTTSOptions:
@@ -183,9 +199,10 @@ class TTS(tts.TTS):
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
+            compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(model, {}).get("all", [])
             raise ValueError(
                 f"Speaker '{speaker}' is not compatible with model '{model}'. "
-                f"Please choose a compatible speaker from: {', '.join(MODEL_SPEAKER_COMPATIBILITY.get(model, {}).get('all', []))}"
+                f"Please choose a compatible speaker from: {', '.join(compatible_speakers)}"
             )
 
         self._opts = SarvamTTSOptions(
@@ -209,7 +226,9 @@ class TTS(tts.TTS):
         return self._session
 
     # Implement the abstract synthesize method
-    async def synthesize(self, text: str, *, conn_options: Optional[APIConnectOptions] = None) -> AsyncIterator[tts.SynthesizedAudio]:
+    async def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions | None = None
+    ) -> AsyncIterator[tts.SynthesizedAudio]:
         """Synthesize text to audio using Sarvam.ai TTS API.
 
         Args:
@@ -229,7 +248,9 @@ class TTS(tts.TTS):
         async for audio_event in self._synthesize_impl(text, conn_options=conn_options):
             yield audio_event
 
-    async def _synthesize_impl(self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> AsyncIterable[tts.SynthesizedAudio]:
+    async def _synthesize_impl(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> AsyncIterable[tts.SynthesizedAudio]:
         payload = {
             "target_language_code": self._opts.target_language_code,
             "text": text,
