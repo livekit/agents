@@ -1861,6 +1861,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "livekit" },
     { name = "livekit-agents", extra = ["codecs"] },
+    { name = "pyht" },
 ]
 
 [package.metadata]
@@ -1868,6 +1869,7 @@ requires-dist = [
     { name = "aiohttp" },
     { name = "livekit" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "pyht", specifier = ">=0.1.14" },
 ]
 
 [[package]]
@@ -3236,6 +3238,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fe/9a/e6bca0eed82db26562c73b5076539a4a08d3cffd19c3cc5913a3e61145fd/pydub-0.25.1.tar.gz", hash = "sha256:980a33ce9949cab2a569606b65674d748ecbca4f0796887fd6f46173a7b0d30f", size = 38326 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a6/53/d78dc063216e62fc55f6b2eebb447f6a4b0a59f55c8406376f76bf959b08/pydub-0.25.1-py2.py3-none-any.whl", hash = "sha256:65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6", size = 32327 },
+]
+
+[[package]]
+name = "pyht"
+version = "0.1.14"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "filelock" },
+    { name = "grpcio" },
+    { name = "protobuf" },
+    { name = "requests" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/79/52/56509b7f7f47846283b3873025c7be77ba98f4fbac23c000c6ffd0664422/pyht-0.1.14.tar.gz", hash = "sha256:f6d8414712bcfdf0306f790eca1be78b4dddd1c7053aae391ffcc1d1f887e6a1", size = 32610 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/61/372fc080561bd84265c75aaa5b20fa6896cf1714b5ddb51512e67d37de21/pyht-0.1.14-py3-none-any.whl", hash = "sha256:f97034ecad1291a6cf7bad5bf3efeb0eeb499603ecc8e1467f85b4daba1fb799", size = 33036 },
 ]
 
 [[package]]
