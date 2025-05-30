@@ -175,8 +175,6 @@ class SpeechStream(stt.SpeechStream):
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
         if is_given(end_of_turn_confidence_threshold):
-            self._opts.word_finalization_max_wait_time = word_finalization_max_wait_time
-        if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
         if is_given(min_end_of_turn_silence_when_confident):
             self._opts.min_end_of_turn_silence_when_confident = (
