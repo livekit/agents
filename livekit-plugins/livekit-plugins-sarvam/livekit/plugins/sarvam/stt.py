@@ -193,7 +193,8 @@ class STT(stt.STT):
 
                 # If start/end times are still 0, use buffer duration as an estimate for end_time
                 if start_time == 0.0 and end_time == 0.0:
-                    # Calculate duration from buffer - AudioBuffer can be list[AudioFrame] or AudioFrame
+                    # Calculate duration from buffer - AudioBuffer can be list[AudioFrame]
+                    # or AudioFrame
                     try:
                         if isinstance(buffer, list):
                             # Calculate total duration from all frames
@@ -201,13 +202,17 @@ class STT(stt.STT):
                             if buffer and total_samples > 0:
                                 sample_rate = buffer[0].sample_rate
                                 end_time = total_samples / sample_rate
-                        elif hasattr(buffer, 'duration'):
+                        elif hasattr(buffer, "duration"):
                             end_time = buffer.duration / 1000.0  # buffer.duration is in ms
-                        elif hasattr(buffer, 'samples_per_channel') and hasattr(buffer, 'sample_rate'):
+                        elif hasattr(buffer, "samples_per_channel") and hasattr(
+                            buffer, "sample_rate"
+                        ):
                             # Single AudioFrame
                             end_time = buffer.samples_per_channel / buffer.sample_rate
                     except Exception as duration_error:
-                        self._logger.warning(f"Could not calculate audio duration: {duration_error}")
+                        self._logger.warning(
+                            f"Could not calculate audio duration: {duration_error}"
+                        )
                         end_time = 0.0
 
                 alternatives = [
