@@ -14,8 +14,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Union
 
 import httpx
@@ -27,27 +26,20 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     tts,
-    utils,
 )
-from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    NotGivenOr,
-)
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
 
-OPENAI_TTS_SAMPLE_RATE = 48000
-OPENAI_TTS_CHANNELS = 1
+SAMPLE_RATE = 24000
+NUM_CHANNELS = 1
 
 DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "ash"
 
-
-_RESPONSE_FORMATS = Union[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"], str]
+RESPONSE_FORMATS = Union[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"], str]
 
 
 @dataclass
@@ -56,7 +48,7 @@ class _TTSOptions:
     voice: TTSVoices | str
     speed: float
     instructions: str | None
-    response_format: _RESPONSE_FORMATS
+    response_format: RESPONSE_FORMATS
 
 
 class TTS(tts.TTS):
@@ -70,7 +62,7 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
-        response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,
+        response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI TTS.
@@ -79,11 +71,9 @@ class TTS(tts.TTS):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=False,
-            ),
-            sample_rate=OPENAI_TTS_SAMPLE_RATE,
-            num_channels=OPENAI_TTS_CHANNELS,
+            capabilities=tts.TTSCapabilities(streaming=False),
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
         )
 
         self._opts = _TTSOptions(
@@ -102,9 +92,7 @@ class TTS(tts.TTS):
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
-                    max_connections=50,
-                    max_keepalive_connections=50,
-                    keepalive_expiry=120,
+                    max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
                 ),
             ),
         )
@@ -142,20 +130,21 @@ class TTS(tts.TTS):
         organization: str | None = None,
         project: str | None = None,
         base_url: str | None = None,
-        response_format: NotGivenOr[_RESPONSE_FORMATS] = NOT_GIVEN,
+        response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> TTS:
         """
         Create a new instance of Azure OpenAI TTS.
 
-        This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+        This automatically infers the following arguments from their corresponding environment
+        variables if they are not provided:
         - `api_key` from `AZURE_OPENAI_API_KEY`
         - `organization` from `OPENAI_ORG_ID`
         - `project` from `OPENAI_PROJECT_ID`
         - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
         - `api_version` from `OPENAI_API_VERSION`
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
-        """  # noqa: E501
+        """
 
         azure_client = openai.AsyncAzureOpenAI(
             max_retries=0,
@@ -183,73 +172,42 @@ class TTS(tts.TTS):
         )
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-            opts=self._opts,
-            client=self._client,
-        )
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        conn_options: APIConnectOptions,
-        opts: _TTSOptions,
-        client: openai.AsyncClient,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._client = client
-        self._opts = opts
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self):
-        oai_stream = self._client.audio.speech.with_streaming_response.create(
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        oai_stream = self._tts._client.audio.speech.with_streaming_response.create(
             input=self.input_text,
             model=self._opts.model,
-            voice=self._opts.voice,
-            response_format=self._opts.response_format,
+            voice=self._opts.voice,  # type: ignore
+            response_format=self._opts.response_format,  # type: ignore
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.NOT_GIVEN,
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
-        request_id = utils.shortuuid()
-        decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=OPENAI_TTS_SAMPLE_RATE,
-            num_channels=OPENAI_TTS_CHANNELS,
-        )
-
-        @utils.log_exceptions(logger=logger)
-        async def _decode_loop():
-            try:
-                async with oai_stream as stream:
-                    async for data in stream.iter_bytes():
-                        decoder.push(data)
-            finally:
-                decoder.end_input()
-
-        decode_task = asyncio.create_task(_decode_loop())
-
         try:
-            emitter = tts.SynthesizedAudioEmitter(
-                event_ch=self._event_ch,
-                request_id=request_id,
-            )
-            async for frame in decoder:
-                emitter.push(frame)
+            async with oai_stream as stream:
+                output_emitter.initialize(
+                    request_id=stream.request_id or "",
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    mime_type=f"audio/{self._opts.response_format}",
+                )
 
-            emitter.flush()
+                async for data in stream.iter_bytes():
+                    output_emitter.push(data)
 
-            await decode_task  # await here to raise the error if any
+            output_emitter.flush()
+
         except openai.APITimeoutError:
             raise APITimeoutError() from None
         except openai.APIStatusError as e:
@@ -258,6 +216,3 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            await utils.aio.cancel_and_wait(decode_task)
-            await decoder.aclose()

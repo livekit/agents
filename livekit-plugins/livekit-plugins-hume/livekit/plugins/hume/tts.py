@@ -16,268 +16,165 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any, TypedDict
 
 import aiohttp
 
-from hume import AsyncHumeClient
-from hume.tts import Format, FormatWav, PostedContext, PostedUtterance, PostedUtteranceVoice
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APITimeoutError,
-    tokenize,
-    tts,
-    utils,
-)
-from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    NotGivenOr,
-)
+from livekit.agents import APIConnectionError, APIConnectOptions, APITimeoutError, tts, utils
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-# Default audio settings
-DEFAULT_SAMPLE_RATE = 48000
-DEFAULT_NUM_CHANNELS = 1
+API_AUTH_HEADER = "X-Hume-Api-Key"
+STREAM_PATH = "/v0/tts/stream/json"
+DEFAULT_BASE_URL = "https://api.hume.ai"
+
+
+class PostedUtterance(TypedDict, total=False):
+    text: str
+    description: str
+    voice: dict[str, Any]
+    speed: float
+    trailing_silence: float
+
+
+class PostedContext(TypedDict, total=False):
+    utterances: list[PostedUtterance]
 
 
 @dataclass
 class _TTSOptions:
-    """TTS options for Hume API"""
-
     api_key: str
-    voice: PostedUtteranceVoice | None
-    description: str | None
-    speed: float | None
+    utterance_options: PostedUtterance
     context: PostedContext | None
-    format: Format
-    strip_headers: bool
+    sample_rate: int
+    split_utterances: bool
     instant_mode: bool
-    word_tokenizer: tokenize.WordTokenizer
+    base_url: str
+
+    def http_url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: NotGivenOr[PostedUtteranceVoice] = NOT_GIVEN,
-        description: NotGivenOr[str] = NOT_GIVEN,
-        speed: NotGivenOr[float] = NOT_GIVEN,
-        context: NotGivenOr[PostedContext] = NOT_GIVEN,
-        format: NotGivenOr[Format] = NOT_GIVEN,
-        instant_mode: bool = False,
-        strip_headers: bool = True,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        word_tokenizer: tokenize.WordTokenizer | None = None,
+        api_key: str | None = None,
+        utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
+        split_utterances: bool = True,
+        instant_mode: bool = True,
+        sample_rate: int = 24000,
+        base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
-    ) -> None:
-        """Initialize the Hume TTS client.
-
-        See https://dev.hume.ai/reference/text-to-speech-tts/synthesize-json-streaming for API doc
-
-        Args:
-            voice (NotGivenOr[PostedUtteranceVoice]): The voice, specified by name or id, to be
-                used. When no voice is specified, a novel voice will be generated based on the
-                text and optionally provided description.
-            description (NotGivenOr[str]): Natural language instructions describing how the
-                synthesized speech should sound, including but not limited to tone, intonation,
-                pacing, and accent. If a Voice is specified in the request, this description
-                serves as acting instructions. If no Voice is specified, a new voice is generated
-                based on this description.
-            speed: (NotGivenOr[float]): Adjusts the relative speaking rate on a non-linear scale
-                from 0.25 (much slower) to 3.0 (much faster), where 1.0 represents normal speaking
-                pace.
-            context (NotGivenOr[PostedContext]): Utterances to use as context for generating
-                consistent speech style and prosody across multiple requests.
-            format (NotGivenOr[Format]): Specifies the output audio file format (WAV, MP3 or PCM).
-                Defaults to WAV format.
-            instant_mode (bool): Enables ultra-low latency streaming, reducing time to first chunk.
-                Recommended for real-time applications. Only for streaming endpoints.
-                With this enabled, requests incur 10% higher cost. Defaults to False.
-            strip_headers (bool): If enabled, the audio for all the chunks of a generation.
-                Once concatenated together, will constitute a single audio file.
-                If disabled, each chunk’s audio will be its own audio file, each with its headers.
-            api_key (NotGivenOr[str]): Hume API key for authentication. If not provided,
-                will attempt to read from HUME_API_KEY environment variable.
-            word_tokenizer (tokenize.WordTokenizer | None): Custom word tokenizer to use for text.
-                If None, a basic word tokenizer will be used.
-            http_session (aiohttp.ClientSession | None): Optional HTTP session for API requests.
-                If None, a new session will be created.
-        """
-
+    ):
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=False,
-            ),
-            sample_rate=DEFAULT_SAMPLE_RATE,
-            num_channels=DEFAULT_NUM_CHANNELS,
+            capabilities=tts.TTSCapabilities(streaming=True),
+            sample_rate=sample_rate,
+            num_channels=1,
         )
+        key = api_key or os.environ.get("HUME_API_KEY")
+        if not key:
+            raise ValueError("Hume API key is required via api_key or HUME_API_KEY env var")
 
-        self._api_key = api_key if is_given(api_key) else os.environ.get("HUME_API_KEY")
-        if not self._api_key:
-            raise ValueError(
-                "Hume API key is required, either as argument or set HUME_API_KEY env variable"
-            )
-
-        if not word_tokenizer:
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+        default_utterance: PostedUtterance = {
+            "speed": 1.0,
+            "trailing_silence": 0.35,
+        }
+        if is_given(utterance_options):
+            default_utterance.update(utterance_options)
 
         self._opts = _TTSOptions(
-            voice=voice if is_given(voice) else None,
-            description=description if is_given(description) else None,
-            speed=speed if is_given(speed) else None,
-            context=context if is_given(context) else None,
-            format=format if is_given(format) else FormatWav(),
-            api_key=self._api_key,
-            strip_headers=strip_headers,
+            api_key=key,
+            utterance_options=default_utterance,
+            context=None,
+            sample_rate=sample_rate,
+            split_utterances=split_utterances,
             instant_mode=instant_mode,
-            word_tokenizer=word_tokenizer,
+            base_url=base_url,
         )
-
-        self._client = AsyncHumeClient(api_key=self._api_key)
         self._session = http_session
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
+
         return self._session
 
     def update_options(
         self,
         *,
-        voice: NotGivenOr[PostedUtteranceVoice] = NOT_GIVEN,
-        description: NotGivenOr[str] = NOT_GIVEN,
-        speed: NotGivenOr[float] = NOT_GIVEN,
+        utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
-        format: NotGivenOr[Format] = NOT_GIVEN,
+        split_utterances: NotGivenOr[bool] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
-        strip_headers: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        """Update TTS options for synthesizing speech.
-
-        Args:
-            voice (NotGivenOr[PostedUtteranceVoice]): The voice, specified by name or id, to be
-                used. When no voice is specified, a novel voice will be generated based on the
-                text and optionally provided description.
-            description (NotGivenOr[str]): Natural language instructions describing how the
-                synthesized speech should sound, including but not limited to tone, intonation,
-                pacing, and accent. If a Voice is specified in the request, this description
-                serves as acting instructions. If no Voice is specified, a new voice is generated
-                based on this description.
-            speed: (NotGivenOr[float]): Adjusts the relative speaking rate on a non-linear scale
-                from 0.25 (much slower) to 3.0 (much faster), where 1.0 represents normal speaking
-                pace.
-            context (Optional[PostedContext]): Utterances to use as context for generating
-                consistent speech style and prosody across multiple requests.
-            format (NotGivenOr[Format]): Specifies the output audio file format (WAV, MP3 or PCM).
-            instant_mode (NotGivenOr[bool]): Enables ultra-low latency streaming.
-                Reduces time to first audio chunk, recommended for real-time applications.
-                Note: Incurs 10% higher cost when enabled.
-            strip_headers (NotGivenOr[bool]): If enabled, the audio for the chunks of a generation.
-                Once concatenated together, will constitute a single audio file.
-                If disabled, each chunk’s audio will be its own audio file, each with its headers.
-        """
-
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(description):
-            self._opts.description = description
-        if is_given(speed):
-            self._opts.speed = speed
-        if is_given(format):
-            self._opts.format = format
-        if is_given(context):
+        if is_given(utterance_options):
+            self._opts.utterance_options = utterance_options
+        if is_given(context):  #
             self._opts.context = context
+        if is_given(split_utterances):
+            self._opts.split_utterances = split_utterances
         if is_given(instant_mode):
             self._opts.instant_mode = instant_mode
-        if is_given(strip_headers):
-            self._opts.strip_headers = strip_headers
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> ChunkedStream:
-        return ChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-            opts=self._opts,
-        )
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.ChunkedStream:
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
-    """Stream for Hume TTS JSON streaming API."""
-
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        opts: _TTSOptions,
-        conn_options: APIConnectOptions,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts = opts
-        self._client = tts._client
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self) -> None:
-        request_id = utils.shortuuid()
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        utterance: PostedUtterance = {"text": self._input_text}
+        utterance.update(self._opts.utterance_options)
 
-        decoder = utils.codecs.AudioStreamDecoder(
-            sample_rate=DEFAULT_SAMPLE_RATE,
-            num_channels=DEFAULT_NUM_CHANNELS,
-        )
-
-        decode_task: asyncio.Task | None = None
+        payload: dict[str, Any] = {
+            "utterances": [utterance],
+            "split_utterances": self._opts.split_utterances,
+            "strip_headers": True,
+            "instant_mode": self._opts.instant_mode,
+            "format": {"type": "mp3"},
+        }
+        if self._opts.context:
+            payload["context"] = self._opts.context
 
         try:
+            async with self._tts._ensure_session().post(
+                self._opts.http_url(STREAM_PATH),
+                headers={API_AUTH_HEADER: self._opts.api_key},
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=self._conn_options.timeout),
+                # large read_bufsize to avoid `ValueError: Chunk too big`
+                read_bufsize=10 * 1024 * 1024,
+            ) as resp:
+                resp.raise_for_status()
+                output_emitter.initialize(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=self._tts.num_channels,
+                    mime_type="audio/mp3",
+                )
 
-            async def _decode_loop():
-                utterance_options = {
-                    "voice": self._opts.voice,
-                    "description": self._opts.description,
-                    "speed": self._opts.speed,
-                }
+                async for raw_line in resp.content:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
 
-                utterance_kwargs = {
-                    "text": self._input_text,
-                    **{k: v for k, v in utterance_options.items() if v is not None},
-                }
+                    data = json.loads(line.decode())
+                    audio_b64 = data.get("audio")
+                    if audio_b64:
+                        output_emitter.push(base64.b64decode(audio_b64))
 
-                try:
-                    utterance = PostedUtterance(**utterance_kwargs)
-
-                    async for chunk in self._client.tts.synthesize_json_streaming(
-                        utterances=[utterance],
-                        context=self._opts.context,
-                        format=self._opts.format,
-                        instant_mode=self._opts.instant_mode,
-                        strip_headers=self._opts.strip_headers,
-                    ):
-                        decoder.push(base64.b64decode(chunk.audio))
-
-                finally:
-                    decoder.end_input()
-
-            decode_task = asyncio.create_task(_decode_loop())
-            emitter = tts.SynthesizedAudioEmitter(
-                event_ch=self._event_ch,
-                request_id=request_id,
-            )
-            async for frame in decoder:
-                emitter.push(frame)
-
-            emitter.flush()
-
+                output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            if decode_task:
-                await utils.aio.gracefully_cancel(decode_task)
-            await decoder.aclose()

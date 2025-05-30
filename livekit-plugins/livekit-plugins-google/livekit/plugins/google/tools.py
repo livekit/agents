@@ -8,4 +8,4 @@ from google.genai.types import (
     UrlContext,
 )
 
-LLMTool = Union[GoogleSearchRetrieval, ToolCodeExecution, GoogleSearch, UrlContext, GoogleMaps]
+_LLMTool = Union[GoogleSearchRetrieval, ToolCodeExecution, GoogleSearch, UrlContext, GoogleMaps]
