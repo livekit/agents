@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import inspect
 import logging
 import multiprocessing as mp
 from collections.abc import Coroutine
@@ -224,7 +225,8 @@ class JobContext:
         Add a callback to be called when the job is shutting down.
         Optionally the callback can take a single argument, the shutdown reason.
         """
-        if callback.__code__.co_argcount > 0:
+        min_args_num = 2 if inspect.ismethod(callback) else 1
+        if callback.__code__.co_argcount >= min_args_num:
             self._shutdown_callbacks.append(callback)  # type: ignore
         else:
 

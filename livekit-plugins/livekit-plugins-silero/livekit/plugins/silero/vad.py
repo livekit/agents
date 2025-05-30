@@ -266,7 +266,7 @@ class VADStream(agents.vad.VADStream):
                 self._speech_buffer_max_reached = False
 
     @agents.utils.log_exceptions(logger=logger)
-    async def _main_task(self):
+    async def _main_task(self) -> None:
         inference_f32_data = np.empty(self._model.window_size_samples, dtype=np.float32)
         speech_buffer_index: int = 0
 
@@ -280,8 +280,8 @@ class VADStream(agents.vad.VADStream):
         speech_threshold_duration = 0.0
         silence_threshold_duration = 0.0
 
-        input_frames = []
-        inference_frames = []
+        input_frames: list[rtc.AudioFrame] = []
+        inference_frames: list[rtc.AudioFrame] = []
         resampler: rtc.AudioResampler | None = None
 
         # used to avoid drift when the sample_rate ratio is not an integer
@@ -394,7 +394,7 @@ class VADStream(agents.vad.VADStream):
                         extra={"delay": extra_inference_time},
                     )
 
-                def _reset_write_cursor():
+                def _reset_write_cursor() -> None:
                     nonlocal speech_buffer_index, speech_buffer_max_reached
                     assert self._speech_buffer is not None
 

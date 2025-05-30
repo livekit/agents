@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 
@@ -25,7 +25,7 @@ import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool
+from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -118,7 +118,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -141,8 +141,10 @@ class LLM(llm.LLM):
         extra["max_tokens"] = self._opts.max_tokens if is_given(self._opts.max_tokens) else 1024
 
         if tools:
-            extra["tools"] = to_fnc_ctx(tools, self._opts.caching)
-            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+            extra["tools"] = to_fnc_ctx(tools, self._opts.caching or None)
+            tool_choice = (
+                cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
+            )
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -167,6 +169,7 @@ class LLM(llm.LLM):
                     extra["tool_choice"] = anthropic_tool_choice
 
         anthropic_ctx, extra_data = chat_ctx.to_provider_format(format="anthropic")
+        messages = cast(list[anthropic.types.MessageParam], anthropic_ctx)
         if extra_data.system_messages:
             extra["system"] = [
                 anthropic.types.TextBlockParam(text=content, type="text")
@@ -179,22 +182,21 @@ class LLM(llm.LLM):
                 extra["system"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
 
             seen_assistant = False
-            for msg in reversed(anthropic_ctx):
-                msg: anthropic.types.MessageParam
+            for msg in reversed(messages):
                 if (
                     msg["role"] == "assistant"
                     and (content := msg["content"])
                     and not seen_assistant
                 ):
-                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
                     seen_assistant = True
 
                 elif msg["role"] == "user" and (content := msg["content"]) and seen_assistant:
-                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
                     break
 
         stream = self._client.messages.create(
-            messages=anthropic_ctx,
+            messages=messages,
             model=self._opts.model,
             stream=True,
             **extra,
@@ -216,7 +218,7 @@ class LLMStream(llm.LLMStream):
         *,
         anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
