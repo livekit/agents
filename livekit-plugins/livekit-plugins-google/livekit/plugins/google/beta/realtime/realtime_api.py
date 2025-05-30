@@ -415,11 +415,13 @@ class RealtimeSession(llm.RealtimeSession):
 
     @property
     def _manual_activity_detection(self) -> bool:
-        return (
-            self._opts.realtime_input_config
-            and self._opts.realtime_input_config.automatic_activity_detection
+        if (
+            is_given(self._opts.realtime_input_config)
+            and self._opts.realtime_input_config.automatic_activity_detection is not None
             and self._opts.realtime_input_config.automatic_activity_detection.disabled
-        )
+        ):
+            return True
+        return False
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
@@ -548,10 +550,11 @@ class RealtimeSession(llm.RealtimeSession):
                 ) as session:
                     async with self._session_lock:
                         self._active_session = session
-                        turns, _ = self._chat_ctx.copy(
+                        turns_dict, _ = self._chat_ctx.copy(
                             exclude_function_call=True
                         ).to_provider_format(format="google")
-                        if turns:
+                        if turns_dict:
+                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
                             self._send_client_event(
                                 types.LiveClientContent(turns=turns, turn_complete=False)
                             )
@@ -675,7 +678,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         tools_config = create_tools_config(
             function_tools=self._gemini_declarations,
-            gemini_tools=self._opts.gemini_tools,
+            gemini_tools=self._opts.gemini_tools if is_given(self._opts.gemini_tools) else None,
         )
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities
