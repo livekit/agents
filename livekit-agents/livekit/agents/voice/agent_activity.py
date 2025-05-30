@@ -690,6 +690,9 @@ class AgentActivity(RecognitionHooks):
                 await speech.wait_for_playout()
                 self._current_speech = None
 
+            if not isinstance(self.llm, llm.RealtimeModel):
+                self._session._update_agent_state("listening")
+
             # If we're draining and there are no more speech tasks, we can exit.
             # Only speech tasks can bypass draining to create a tool response
             if self._draining and len(self._speech_tasks) == 0:
@@ -1098,7 +1101,8 @@ class AgentActivity(RecognitionHooks):
             speech_handle._set_chat_message(msg)
             self._session._conversation_item_added(msg)
 
-        self._session._update_agent_state("listening")
+        if self._session.agent_state == "speaking":
+            self._session._update_agent_state("listening")
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -1214,8 +1218,6 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
-            if not speech_handle.interrupted:
-                self._session._update_agent_state("listening")
 
         # add the tools messages that triggers this reply to the chat context
         if _tools_messages:
@@ -1253,7 +1255,8 @@ class AgentActivity(RecognitionHooks):
                 created_at=reply_started_at,
             )
             self._agent._chat_ctx.insert(msg)
-            self._session._update_agent_state("listening")
+            if self._session.agent_state == "speaking":
+                self._session._update_agent_state("listening")
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
             speech_handle._mark_playout_done()
@@ -1272,14 +1275,15 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
             speech_handle._set_chat_message(msg)
 
-        self._session._update_agent_state("listening")
+        if len(tool_output.output) > 0:
+            self._session._update_agent_state("thinking")
+        elif self._session.agent_state == "speaking":
+            self._session._update_agent_state("listening")
+
         log_event("playout completed", speech_id=speech_handle.id)
 
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
-        tool_output.first_tool_fut.add_done_callback(
-            lambda _: self._session._update_agent_state("thinking")
-        )
         await exe_task
 
         # important: no agent output should be used after this point
