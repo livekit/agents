@@ -13,6 +13,7 @@ livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }
 livekit-plugins-google = { workspace = true }
+livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-rime = { workspace = true }
@@ -79,9 +80,6 @@ addopts = ["--import-mode=importlib", "--ignore=examples"]
 
 [tool.mypy]
 strict = true
-
-[[tool.mypy.overrides]]
-module = "livekit.agents.*"
 disallow_any_generics = false
 
 [[tool.mypy.overrides]]
@@ -91,10 +89,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "google.genai"
 follow_imports = "normal"
-follow_untyped_imports = true
-
-[[tool.mypy.overrides]]
-module = "aiobotocore"
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]

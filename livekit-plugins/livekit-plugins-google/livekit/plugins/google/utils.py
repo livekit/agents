@@ -61,7 +61,7 @@ def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
     return types.FunctionDeclaration(
         name=fnc["name"],
         description=fnc["description"],
-        parameters=json_schema,
+        parameters=types.Schema.model_validate(json_schema),
     )
 
 

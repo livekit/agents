@@ -78,7 +78,7 @@ class STT(stt.STT):
         self._region = region
         self._client = TranscribeStreamingClient(
             region=self._region,
-            credential_resolver=AwsCrtCredentialResolver(None),
+            credential_resolver=AwsCrtCredentialResolver(None),  # type: ignore
         )
 
         self._config = STTOptions(
@@ -153,15 +153,15 @@ class SpeechStream(stt.SpeechStream):
                 "language_model_name": self._opts.language_model_name,
             }
             filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
-            stream = await self._client.start_stream_transcription(**filtered_config)
+            stream = await self._client.start_stream_transcription(**filtered_config)  # type: ignore
 
-            async def input_generator(stream: StartStreamTranscriptionEventStream):
+            async def input_generator(stream: StartStreamTranscriptionEventStream) -> None:
                 async for frame in self._input_ch:
                     if isinstance(frame, rtc.AudioFrame):
                         await stream.input_stream.send_audio_event(audio_chunk=frame.data.tobytes())
-                await stream.input_stream.end_stream()
+                await stream.input_stream.end_stream()  # type: ignore
 
-            async def handle_transcript_events(stream: StartStreamTranscriptionEventStream):
+            async def handle_transcript_events(stream: StartStreamTranscriptionEventStream) -> None:
                 async for event in stream.output_stream:
                     if isinstance(event, TranscriptEvent):
                         self._process_transcript_event(event)
@@ -184,7 +184,7 @@ class SpeechStream(stt.SpeechStream):
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
 
-    def _process_transcript_event(self, transcript_event: TranscriptEvent):
+    def _process_transcript_event(self, transcript_event: TranscriptEvent) -> None:
         stream = transcript_event.transcript.results
         for resp in stream:
             if resp.start_time and resp.start_time == 0.0:

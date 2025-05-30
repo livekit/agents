@@ -27,6 +27,7 @@ from livekit.plugins import (
     google,
     groq,
     hume,
+    lmnt,
     neuphonic,
     openai,
     playai,
@@ -184,6 +185,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.groq.com:443",
         },
         id="groq",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": lmnt.TTS(),
+            "proxy-upstream": "api.lmnt.com:443",
+        },
+        id="lmnt",
     ),
     pytest.param(
         lambda: {
