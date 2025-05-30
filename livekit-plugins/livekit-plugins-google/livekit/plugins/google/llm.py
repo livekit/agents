@@ -301,7 +301,7 @@ class LLMStream(llm.LLMStream):
             function_declarations = to_fnc_ctx(self._tools)
             tools_config = create_tools_config(
                 function_tools=function_declarations,
-                gemini_tools=self._gemini_tools,
+                gemini_tools=self._gemini_tools if is_given(self._gemini_tools) else None,
             )
             if tools_config:
                 self._extra_kwargs["tools"] = tools_config
