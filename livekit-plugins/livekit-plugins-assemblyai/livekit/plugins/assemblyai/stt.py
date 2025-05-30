@@ -44,7 +44,6 @@ from .log import logger
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float
-    word_boost: NotGivenOr[list[str]] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
