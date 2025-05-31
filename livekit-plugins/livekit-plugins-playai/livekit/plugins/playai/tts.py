@@ -122,6 +122,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "voice_engine": self._opts.model,
                     "output_format": "wav",
                     "sample_rate": self._opts.sample_rate,
+                    "language": self._opts.language,
                 },
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
