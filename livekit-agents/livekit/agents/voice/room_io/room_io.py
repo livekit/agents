@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -11,6 +12,8 @@ from ... import utils
 from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
+    ATTRIBUTE_AGENT_INPUTS,
+    ATTRIBUTE_AGENT_OUTPUTS,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     NOT_GIVEN,
     TOPIC_CHAT,
@@ -140,6 +143,7 @@ class RoomIO:
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
+        self._advertise_capabilities_atask: asyncio.Task[None] | None = None
         self._close_session_atask: asyncio.Task[None] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
@@ -252,6 +256,9 @@ class RoomIO:
 
         if self._update_state_atask:
             await utils.aio.cancel_and_wait(self._update_state_atask)
+
+        if self._advertise_capabilities_atask:
+            await utils.aio.cancel_and_wait(self._advertise_capabilities_atask)
 
         if self._pre_connect_audio_handler:
             await self._pre_connect_audio_handler.aclose()
@@ -367,6 +374,33 @@ class RoomIO:
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
+            self._advertise_capabilities()
+
+    def _advertise_capabilities(self) -> None:
+        if self._advertise_capabilities_atask is not None:
+            self._advertise_capabilities_atask.cancel()
+
+        async def _set_capabilities() -> None:
+            inputs = []
+            if self._input_options.audio_enabled:
+                inputs.append("audio")
+            if self._input_options.video_enabled:
+                inputs.append("video")
+            if self._input_options.text_enabled:
+                inputs.append("text")
+
+            outputs = []
+            if self._output_options.audio_enabled:
+                outputs.append("audio")
+            if self._output_options.transcription_enabled:
+                outputs.append("transcription")
+
+            await self._room.local_participant.set_attributes({
+                ATTRIBUTE_AGENT_INPUTS: json.dumps(inputs),
+                ATTRIBUTE_AGENT_OUTPUTS: json.dumps(outputs),
+            })
+
+        self._advertise_capabilities_atask = asyncio.create_task(_set_capabilities())
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
