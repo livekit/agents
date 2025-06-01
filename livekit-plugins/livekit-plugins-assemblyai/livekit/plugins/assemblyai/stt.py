@@ -40,19 +40,12 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 
-# from https://www.assemblyai.com/docs/speech-to-text/universal-streaming
-DEFAULT_WORD_FINALIZATION_MAX_WAIT_TIME = 240
-DEFAULT_END_OF_TURN_CONFIDENCE_THRESHOLD = 0.65
-DEFAULT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT = 480
-DEFAULT_MAX_TURN_SILENCE = 700
-
 
 @dataclass
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float
-    word_boost: NotGivenOr[list[str]] = NOT_GIVEN
-    word_finalization_max_wait_time: NotGivenOr[int] = NOT_GIVEN
+    encoding: str = "pcm_s16le"
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -64,8 +57,7 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 16000,
-        word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
-        word_finalization_max_wait_time: NotGivenOr[int] = NOT_GIVEN,
+        encoding: str = "pcm_s16le",
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -87,8 +79,7 @@ class STT(stt.STT):
         self._opts = STTOptions(
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
-            word_boost=word_boost,
-            word_finalization_max_wait_time=word_finalization_max_wait_time,
+            encoding=encoding,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
             max_turn_silence=max_turn_silence,
@@ -131,19 +122,13 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
-        word_finalization_max_wait_time: NotGivenOr[int] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
-        if is_given(word_boost):
-            self._opts.word_boost = word_boost
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
-        if is_given(word_finalization_max_wait_time):
-            self._opts.word_finalization_max_wait_time = word_finalization_max_wait_time
         if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
         if is_given(min_end_of_turn_silence_when_confident):
@@ -155,9 +140,7 @@ class STT(stt.STT):
 
         for stream in self._streams:
             stream.update_options(
-                word_boost=word_boost,
                 buffer_size_seconds=buffer_size_seconds,
-                word_finalization_max_wait_time=word_finalization_max_wait_time,
                 end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
                 min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
                 max_turn_silence=max_turn_silence,
@@ -188,19 +171,13 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        word_boost: NotGivenOr[list[str]] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
-        word_finalization_max_wait_time: NotGivenOr[int] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
-        if is_given(word_boost):
-            self._opts.word_boost = word_boost
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
-        if is_given(word_finalization_max_wait_time):
-            self._opts.word_finalization_max_wait_time = word_finalization_max_wait_time
         if is_given(end_of_turn_confidence_threshold):
             self._opts.end_of_turn_confidence_threshold = end_of_turn_confidence_threshold
         if is_given(min_end_of_turn_silence_when_confident):
@@ -310,22 +287,16 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
             "sample_rate": self._opts.sample_rate,
-            "word_boost": json.dumps(self._opts.word_boost)
-            if is_given(self._opts.word_boost)
-            else None,
-            "encoding": "pcm_s16le",
-            "word_finalization_max_wait_time": self._opts.word_finalization_max_wait_time
-            if is_given(self._opts.word_finalization_max_wait_time)
-            else DEFAULT_WORD_FINALIZATION_MAX_WAIT_TIME,
+            "encoding": self._opts.encoding,
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
-            else DEFAULT_END_OF_TURN_CONFIDENCE_THRESHOLD,
+            else None,
             "min_end_of_turn_silence_when_confident": self._opts.min_end_of_turn_silence_when_confident  # noqa: E501
             if is_given(self._opts.min_end_of_turn_silence_when_confident)
-            else DEFAULT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT,
+            else None,
             "max_turn_silence": self._opts.max_turn_silence
             if is_given(self._opts.max_turn_silence)
-            else DEFAULT_MAX_TURN_SILENCE,
+            else None,
         }
 
         headers = {
