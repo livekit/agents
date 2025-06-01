@@ -141,8 +141,9 @@ class STT(stt.STT):
         translation_target_languages: list[str] | None = None,
         translation_model: str = "base",
         translation_match_original_utterances: bool = True,
-        pre_processing: PreProcessingConfiguration = dataclasses.field(
-            default_factory=PreProcessingConfiguration
+        pre_processing: PreProcessingConfiguration = PreProcessingConfiguration(
+            audio_enhancer=True,
+            speech_threshold=0.99,
         ),
     ) -> None:
         """Create a new instance of Gladia STT.
