@@ -100,6 +100,12 @@ class TranslationConfiguration:
     match_original_utterances: bool = True
 
 
+
+@dataclass
+class PreProcessingConfiguration:
+    audio_enhancer: bool = True
+    speech_threshold: float = 0.99
+
 @dataclass
 class STTOptions:
     language_config: LanguageConfiguration
@@ -112,7 +118,9 @@ class STTOptions:
         default_factory=TranslationConfiguration
     )
     energy_filter: AudioEnergyFilter | bool = False
-
+    pre_processing: PreProcessingConfiguration = dataclasses.field(
+        default_factory=PreProcessingConfiguration
+    )
 
 class STT(stt.STT):
     def __init__(
@@ -133,6 +141,9 @@ class STT(stt.STT):
         translation_target_languages: list[str] | None = None,
         translation_model: str = "base",
         translation_match_original_utterances: bool = True,
+        pre_processing: PreProcessingConfiguration = dataclasses.field(
+            default_factory=PreProcessingConfiguration
+        ),
     ) -> None:
         """Create a new instance of Gladia STT.
 
@@ -159,7 +170,7 @@ class STT(stt.STT):
             translation_model: Translation model to use. Defaults to "base".
             translation_match_original_utterances: Whether to match original utterances with
                                                     translations. Defaults to True.
-
+            pre_processing: Pre-processing configuration for audio enhancement and speech threshold.
         Raises:
             ValueError: If no API key is provided or found in environment variables.
         """
@@ -197,6 +208,7 @@ class STT(stt.STT):
             encoding=encoding,
             translation_config=translation_config,
             energy_filter=energy_filter,
+            pre_processing=pre_processing,
         )
         self._session = http_session
         self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
@@ -225,6 +237,10 @@ class STT(stt.STT):
             "language_config": {
                 "languages": config.language_config.languages or [],
                 "code_switching": config.language_config.code_switching,
+            },
+            "pre_processing": {
+                "audio_enhancer": config.pre_processing.audio_enhancer,
+                "speech_threshold": config.pre_processing.speech_threshold,
             },
             "realtime_processing": {
                 "words_accurate_timestamps": False,
@@ -459,6 +475,7 @@ class STT(stt.STT):
         translation_target_languages: list[str] | None = None,
         translation_model: str | None = None,
         translation_match_original_utterances: bool | None = None,
+        pre_processing: PreProcessingConfiguration | None = None,
     ) -> None:
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
@@ -471,6 +488,9 @@ class STT(stt.STT):
                 else self._opts.language_config.code_switching,
             )
             self._opts.language_config = language_config
+        
+        if pre_processing is not None:
+            self._opts.pre_processing = pre_processing
 
         if (
             translation_enabled is not None
@@ -519,6 +539,7 @@ class STT(stt.STT):
                 translation_target_languages=translation_target_languages,
                 translation_model=translation_model,
                 translation_match_original_utterances=translation_match_original_utterances,
+                pre_processing=pre_processing,
             )
 
     def _sanitize_options(self, *, languages: list[str] | None = None) -> STTOptions:
@@ -581,6 +602,7 @@ class SpeechStream(stt.SpeechStream):
         translation_target_languages: list[str] | None = None,
         translation_model: str | None = None,
         translation_match_original_utterances: bool | None = None,
+        pre_processing: PreProcessingConfiguration | None = None,
     ) -> None:
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
@@ -616,6 +638,9 @@ class SpeechStream(stt.SpeechStream):
                 else self._opts.translation_config.match_original_utterances,
             )
             self._opts.translation_config = translation_config
+
+        if pre_processing is not None:
+            self._opts.pre_processing = pre_processing
 
         if interim_results is not None:
             self._opts.interim_results = interim_results
@@ -697,6 +722,10 @@ class SpeechStream(stt.SpeechStream):
             "language_config": {
                 "languages": self._opts.language_config.languages or [],
                 "code_switching": self._opts.language_config.code_switching,
+            },
+            "pre_processing": {
+                "audio_enhancer": self._opts.pre_processing.audio_enhancer,
+                "speech_threshold": self._opts.pre_processing.speech_threshold,
             },
             "realtime_processing": {},
         }
