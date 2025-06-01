@@ -40,10 +40,12 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 
+
 @dataclass
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float
+    encoding: str = "pcm_s16le"
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -55,6 +57,7 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 16000,
+        encoding: str = "pcm_s16le",
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -76,6 +79,7 @@ class STT(stt.STT):
         self._opts = STTOptions(
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
+            encoding=encoding,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
             max_turn_silence=max_turn_silence,
@@ -283,7 +287,7 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config = {
             "sample_rate": self._opts.sample_rate,
-            "encoding": "pcm_s16le",
+            "encoding": self._opts.encoding,
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else None,
