@@ -557,7 +557,7 @@ class RealtimeSession(llm.RealtimeSession):
                         if turns_dict:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
                             await session.send_client_content(
-                                turns=turns,
+                                turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
 
