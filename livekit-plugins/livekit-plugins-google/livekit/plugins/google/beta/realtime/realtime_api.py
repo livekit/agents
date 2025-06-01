@@ -383,7 +383,8 @@ class RealtimeSession(llm.RealtimeSession):
         if append_ctx.items:
             turns_dict, _ = append_ctx.copy(
                 exclude_function_call=True,
-            ).to_provider_format(format="google")
+            ).to_provider_format(format="google", inject_dummy_user_message=False)
+            # we are not generating, and do not need to inject
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_results = get_tool_results_for_realtime(append_ctx, vertexai=self._opts.vertexai)
             if turns:
@@ -551,12 +552,13 @@ class RealtimeSession(llm.RealtimeSession):
                     async with self._session_lock:
                         self._active_session = session
                         turns_dict, _ = self._chat_ctx.copy(
-                            exclude_function_call=True
-                        ).to_provider_format(format="google")
+                            exclude_function_call=True,
+                        ).to_provider_format(format="google", inject_dummy_user_message=False)
                         if turns_dict:
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                            self._send_client_event(
-                                types.LiveClientContent(turns=turns, turn_complete=False)
+                            await session.send_client_content(
+                                turns=turns,
+                                turn_complete=False,
                             )
 
                     # queue up existing chat context
@@ -938,7 +940,9 @@ class RealtimeSession(llm.RealtimeSession):
             input_tokens=usage_metadata.prompt_token_count or 0,
             output_tokens=usage_metadata.response_token_count or 0,
             total_tokens=usage_metadata.total_token_count or 0,
-            tokens_per_second=(usage_metadata.response_token_count or 0) / duration,
+            tokens_per_second=(usage_metadata.response_token_count or 0) / duration
+            if duration > 0
+            else 0,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 **_token_details_map(usage_metadata.prompt_tokens_details),
                 cached_tokens=sum(
