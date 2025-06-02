@@ -522,7 +522,7 @@ TaskResult_T = TypeVar("TaskResult_T")
 
 
 # TODO: rename to InlineAgent?
-class InlineTask(Agent, Generic[TaskResult_T]):
+class AgentTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,
         *,
@@ -550,11 +550,11 @@ class InlineTask(Agent, Generic[TaskResult_T]):
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
 
-    def complete(self, result: TaskResult_T | ToolError) -> None:
+    def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
             raise RuntimeError(f"{self.__class__.__name__} is already done")
 
-        if isinstance(result, ToolError):
+        if isinstance(result, Exception):
             self.__fut.set_exception(result)
         else:
             self.__fut.set_result(result)
@@ -577,22 +577,30 @@ class InlineTask(Agent, Generic[TaskResult_T]):
 
             # if the asyncio.Task running the InlineTask completes before the InlineTask itself, log
             # an error and attempt to recover by terminating the InlineTask.
-            self.__fut.set_exception(
-                RuntimeError(
-                    f"{self.__class__.__name__} was not completed by the time the asyncio.Task running it was done"  # noqa: E501
-                )
-            )
             logger.error(
-                f"{self.__class__.__name__} was not completed by the time the asyncio.Task running it was done"  # noqa: E501
+                f"The asyncio.Task finished before {self.__class__.__name__} was completed."
             )
 
-            # TODO(theomonnom): recover somehow
+            self.complete(
+                RuntimeError(
+                    f"The asyncio.Task finished before {self.__class__.__name__} was completed."
+                )
+            )
 
         task.add_done_callback(_handle_task_done)
 
-        # enter task
-        return await asyncio.shield(self.__fut)
-        # exit task
+        resume_agent = self.session.current_agent
+        if resume_agent is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__} cannot be awaited because no current agent is set"
+            )
+
+        self.session._update_agent(self, no_exit=True)  # no exit, it's transient
+        res = await asyncio.shield(self.__fut)
+        task = self.session._update_agent(resume_agent, no_start=True)  # resuming
+        assert task is not None, "AgentSession must be started"
+        await task
+        return res
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()

@@ -290,7 +290,7 @@ class AgentActivity(RecognitionHooks):
     async def resume(self) -> None:
         pass
 
-    async def start(self) -> None:
+    async def start(self, *, transient: bool) -> None:
         from .agent import _authorize_inline_task
 
         async with self._lock:
@@ -389,18 +389,20 @@ class AgentActivity(RecognitionHooks):
             self._audio_recognition.start()
             self._started = True
 
-            task = self._create_speech_task(self._agent.on_enter(), name="AgentTask_on_enter")
-            _authorize_inline_task(task)
+            if not transient:
+                task = self._create_speech_task(self._agent.on_enter(), name="AgentTask_on_enter")
+                _authorize_inline_task(task)
 
-    async def drain(self) -> None:
+    async def drain(self, *, transient: bool) -> None:
         from .agent import _authorize_inline_task
 
         async with self._lock:
             if self._draining:
                 return
 
-            task = self._create_speech_task(self._agent.on_exit(), name="AgentTask_on_exit")
-            _authorize_inline_task(task)
+            if not transient:
+                task = self._create_speech_task(self._agent.on_exit(), name="AgentTask_on_exit")
+                _authorize_inline_task(task)
 
             self._wake_up_main_task()
             self._draining = True

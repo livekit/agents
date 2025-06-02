@@ -586,12 +586,35 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity.commit_user_turn()
 
     def update_agent(self, agent: Agent) -> None:
+        self._update_agent(agent)
+
+    def _update_agent(
+        self, agent: Agent, *, no_exit: bool = False, no_start: bool = False
+    ) -> asyncio.Task | None:
         self._agent = agent
 
         if self._started:
             self._update_activity_atask = asyncio.create_task(
-                self._update_activity_task(self._agent), name="_update_activity_task"
+                self._update_activity_task(self._agent, no_exit=no_exit, no_start=no_start),
+                name="_update_activity_task",
             )
+
+        return self._update_activity_atask
+
+    @utils.log_exceptions(logger=logger)
+    async def _update_activity_task(
+        self, task: Agent, no_exit: bool = False, no_start: bool = False
+    ) -> None:
+        async with self._activity_lock:
+            self._next_activity = AgentActivity(task, self)
+
+            if self._activity is not None:
+                await self._activity.drain(transient=no_exit)
+                await self._activity.aclose()
+
+            self._activity = self._next_activity
+            self._next_activity = None
+            await self._activity.start(transient=no_start)
 
     def _on_error(
         self,
@@ -609,19 +632,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aclose_impl(error=error, reason=CloseReason.ERROR)
         )
         self._closing_task.add_done_callback(on_close_done)
-
-    @utils.log_exceptions(logger=logger)
-    async def _update_activity_task(self, task: Agent) -> None:
-        async with self._activity_lock:
-            self._next_activity = AgentActivity(task, self)
-
-            if self._activity is not None:
-                await self._activity.drain()
-                await self._activity.aclose()
-
-            self._activity = self._next_activity
-            self._next_activity = None
-            await self._activity.start()
 
     @utils.log_exceptions(logger=logger)
     async def _forward_audio_task(self) -> None:
