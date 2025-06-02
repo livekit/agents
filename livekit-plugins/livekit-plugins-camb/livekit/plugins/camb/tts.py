@@ -74,9 +74,9 @@ class TTS(tts.TTS):
         self,
         *,
         voice_id: int,
-        language: int = 1,  # Default to English
+        language: int = 1,
         gender: Gender = Gender.NOT_KNOWN,
-        age: int = 1,  # Default to 1 (API requires > 0)
+        age: int = 1,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
@@ -274,7 +274,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             # Step 2: Poll for task completion
             run_id = None
-            max_attempts = 30  # Increased from 3 to 30 (30 seconds)
+            max_attempts = 30
             attempt = 0
 
             while attempt < max_attempts:
@@ -333,6 +333,7 @@ class ChunkedStream(tts.ChunkedStream):
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
                 )
+
 
                 # Process the audio data
                 audio_data = await audio_resp.read()
