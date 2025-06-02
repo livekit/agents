@@ -26,7 +26,12 @@ class _TTSOptions:
 
 
 class TTS(tts.TTS):
-    def __init__(self, *, language: str, voice: str):
+    def __init__(
+            self,
+            *,
+            language: str = "en",
+            voice: str = "lina"
+    ):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24_000, num_channels=1
         )
