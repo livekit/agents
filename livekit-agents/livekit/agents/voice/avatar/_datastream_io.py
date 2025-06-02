@@ -115,13 +115,13 @@ class DataStreamAudioReceiver(AudioReceiver):
         room: rtc.Room,
         *,
         sender_identity: str | None = None,
-        duration_per_frame: NotGivenOr[float] = NOT_GIVEN,
+        frame_size_ms: NotGivenOr[int] = NOT_GIVEN,
     ):
         super().__init__()
         self._room = room
         self._sender_identity = sender_identity
         self._remote_participant: rtc.RemoteParticipant | None = None
-        self._duration_per_frame = duration_per_frame or 0.1
+        self._frame_size_ms = frame_size_ms or 100
 
         self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
@@ -212,7 +212,7 @@ class DataStreamAudioReceiver(AudioReceiver):
                 bstream = utils.audio.AudioByteStream(
                     sample_rate=sample_rate,
                     num_channels=num_channels,
-                    samples_per_channel=int(math.ceil(sample_rate * self._duration_per_frame)),
+                    samples_per_channel=int(math.ceil(sample_rate * self._frame_size_ms / 1000)),
                 )
                 async for data in self._current_reader:
                     if self._current_reader_cleared:
