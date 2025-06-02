@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import weakref
 from dataclasses import dataclass
 
@@ -274,10 +275,12 @@ class ChunkedStream(tts.ChunkedStream):
 
             # Step 2: Poll for task completion
             run_id = None
-            max_attempts = 30
-            attempt = 0
+            timeout_seconds = 60
+            start = time.monotonic()
 
-            while attempt < max_attempts:
+            while True:
+                if time.monotonic() - start > timeout_seconds:
+                    raise APITimeoutError("Timed out waiting for TTS task to complete")
                 async with self._session.get(
                     f"{self._opts.base_url}/tts/{task_id}",
                     headers={"x-api-key": self._opts.api_key},
@@ -306,7 +309,6 @@ class ChunkedStream(tts.ChunkedStream):
 
                     # Wait before checking again
                     await asyncio.sleep(1)
-                    attempt += 1
 
             if not run_id:
                 raise APITimeoutError("Timed out waiting for TTS task to complete")
@@ -341,7 +343,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 # Emit the audio frames
                 async for frame in decoder:
-                    output_emitter.push(frame)
+                    output_emitter.push(frame.data)
 
                 output_emitter.flush()
                 await decoder.aclose()
