@@ -14,10 +14,6 @@
 
 from enum import IntEnum
 
-# Note: Camb AI doesn't explicitly define model names in their API
-# They use voice_id instead of specific model names
-# This is kept for consistency with other plugins
-
 
 class Gender(IntEnum):
     """Gender enum for Camb AI API"""

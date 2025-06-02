@@ -18,7 +18,6 @@ import asyncio
 import os
 import weakref
 from dataclasses import dataclass
-from typing import list
 
 import aiohttp
 
@@ -43,7 +42,7 @@ from .models import Gender
 # Constants
 API_BASE_URL = "https://client.camb.ai/apis"
 NUM_CHANNELS = 1
-DEFAULT_SAMPLE_RATE = 48000
+DEFAULT_SAMPLE_RATE = 24000
 
 
 @dataclass
@@ -77,7 +76,7 @@ class TTS(tts.TTS):
         voice_id: int,
         language: int = 1,  # Default to English
         gender: Gender = Gender.NOT_KNOWN,
-        age: int = 0,
+        age: int = 1,  # Default to 1 (API requires > 0)
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
@@ -275,7 +274,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             # Step 2: Poll for task completion
             run_id = None
-            max_attempts = 30
+            max_attempts = 30  # Increased from 3 to 30 (30 seconds)
             attempt = 0
 
             while attempt < max_attempts:
@@ -335,24 +334,17 @@ class ChunkedStream(tts.ChunkedStream):
                     num_channels=NUM_CHANNELS,
                 )
 
-                try:
-                    # Process the audio data
-                    audio_data = await audio_resp.read()
-                    decoder.push(audio_data)
-                    decoder.end_input()
+                # Process the audio data
+                audio_data = await audio_resp.read()
+                decoder.push(audio_data)
+                decoder.end_input()
 
-                    # Emit the audio frames
-                    emitter = tts.SynthesizedAudioEmitter(
-                        event_ch=self._event_ch,
-                        request_id=request_id,
-                    )
+                # Emit the audio frames
+                async for frame in decoder:
+                    output_emitter.push(frame)
 
-                    async for frame in decoder:
-                        emitter.push(frame)
-
-                    emitter.flush()
-                finally:
-                    await decoder.aclose()
+                output_emitter.flush()
+                await decoder.aclose()
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
