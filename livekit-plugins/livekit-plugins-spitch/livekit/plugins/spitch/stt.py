@@ -23,11 +23,7 @@ class _STTOptions:
 
 
 class STT(stt.STT):
-    def __init__(
-            self,
-            *,
-            language: str = "en"
-    ) -> None:
+    def __init__(self, *, language: str = "en") -> None:
         super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
 
         self._opts = _STTOptions(language=language)
