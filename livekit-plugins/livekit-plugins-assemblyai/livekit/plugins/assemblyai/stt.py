@@ -49,6 +49,7 @@ class STTOptions:
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
+    format_turns: NotGivenOr[bool] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -61,7 +62,7 @@ class STT(stt.STT):
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
-        formatted_finals: NotGivenOr[bool] = NOT_GIVEN,
+        format_turns: NotGivenOr[bool] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
     ):
@@ -83,6 +84,7 @@ class STT(stt.STT):
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_end_of_turn_silence_when_confident=min_end_of_turn_silence_when_confident,
             max_turn_silence=max_turn_silence,
+            format_turns=format_turns,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -288,6 +290,7 @@ class SpeechStream(stt.SpeechStream):
         live_config = {
             "sample_rate": self._opts.sample_rate,
             "encoding": self._opts.encoding,
+            "format_turns": self._opts.format_turns if is_given(self._opts.format_turns) else None,
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else None,
@@ -319,11 +322,16 @@ class SpeechStream(stt.SpeechStream):
             end_of_turn = data.get("end_of_turn")
 
             if transcript and end_of_turn:
-                final_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    # TODO: We can't know the language?
-                    alternatives=[stt.SpeechData(language="en-US", text=transcript)],
-                )
+                turn_is_formatted = data.get("turn_is_formatted", False)
+                if not self._opts.format_turns or (self._opts.format_turns and turn_is_formatted):
+                    final_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        # TODO: We can't know the language?
+                        alternatives=[stt.SpeechData(language="en-US", text=transcript)],
+                    )
+                else:
+                    # Skip emitting final transcript if format_turns is True but turn isn't formatted
+                    return
                 self._event_ch.send_nowait(final_event)
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
