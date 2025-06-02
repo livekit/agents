@@ -290,9 +290,7 @@ class SpeechStream(stt.SpeechStream):
         live_config = {
             "sample_rate": self._opts.sample_rate,
             "encoding": self._opts.encoding,
-            "format_turns": self._opts.format_turns
-            if is_given(self._opts.format_turns)
-            else None,
+            "format_turns": self._opts.format_turns if is_given(self._opts.format_turns) else None,
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else None,
