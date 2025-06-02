@@ -334,7 +334,6 @@ class ChunkedStream(tts.ChunkedStream):
                     num_channels=NUM_CHANNELS,
                 )
 
-
                 # Process the audio data
                 audio_data = await audio_resp.read()
                 decoder.push(audio_data)
