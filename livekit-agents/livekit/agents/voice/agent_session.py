@@ -14,7 +14,7 @@ from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent
@@ -47,6 +47,9 @@ class VoiceOptions:
     max_endpointing_delay: float
     max_tool_steps: int
     user_away_timeout: float | None
+    stt_conn_options: APIConnectOptions
+    llm_conn_options: APIConnectOptions
+    tts_conn_options: APIConnectOptions
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -119,6 +122,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
+        stt_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        llm_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        tts_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        max_unrecoverable_errors: int = 3,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -176,6 +183,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Default ``15.0`` s, set to ``None`` to disable.
+            stt_conn_options (APIConnectOptions, optional): Connection options for stt.
+            llm_conn_options (APIConnectOptions, optional): Connection options for llm.
+            tts_conn_options (APIConnectOptions, optional): Connection options for tts.
+            max_unrecoverable_errors (int): Close the session after this number of
+                consecutive unrecoverable errors from llm or tts. Default ``3``.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
         """
@@ -198,6 +210,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            stt_conn_options=stt_conn_options or DEFAULT_API_CONNECT_OPTIONS,
+            llm_conn_options=llm_conn_options or DEFAULT_API_CONNECT_OPTIONS,
+            tts_conn_options=tts_conn_options or DEFAULT_API_CONNECT_OPTIONS,
         )
         self._started = False
         self._turn_detection = turn_detection or None
@@ -206,6 +221,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
         self._mcp_servers = mcp_servers or None
+
+        self._max_unrecoverable_errors = max_unrecoverable_errors
+        self._llm_error_counts = 0
+        self._tts_error_counts = 0
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -600,6 +619,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
+        if error.type == "llm_error":
+            self._llm_error_counts += 1
+            if self._llm_error_counts <= self._max_unrecoverable_errors:
+                return
+        elif error.type == "tts_error":
+            self._tts_error_counts += 1
+            if self._tts_error_counts <= self._max_unrecoverable_errors:
+                return
+
         logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
 
         def on_close_done(_: asyncio.Task[None]) -> None:
@@ -663,6 +691,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_agent_state(self, state: AgentState) -> None:
         if self._agent_state == state:
             return
+
+        if state == "speaking":
+            self._llm_error_counts = 0
+            self._tts_error_counts = 0
 
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()
