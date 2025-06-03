@@ -14,7 +14,7 @@ from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent
@@ -47,9 +47,9 @@ class VoiceOptions:
     max_endpointing_delay: float
     max_tool_steps: int
     user_away_timeout: float | None
-    stt_conn_options: APIConnectOptions
-    llm_conn_options: APIConnectOptions
-    tts_conn_options: APIConnectOptions
+    stt_conn_options: NotGivenOr[APIConnectOptions]
+    llm_conn_options: NotGivenOr[APIConnectOptions]
+    tts_conn_options: NotGivenOr[APIConnectOptions]
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -210,9 +210,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
-            stt_conn_options=stt_conn_options or DEFAULT_API_CONNECT_OPTIONS,
-            llm_conn_options=llm_conn_options or DEFAULT_API_CONNECT_OPTIONS,
-            tts_conn_options=tts_conn_options or DEFAULT_API_CONNECT_OPTIONS,
+            stt_conn_options=stt_conn_options,
+            llm_conn_options=llm_conn_options,
+            tts_conn_options=tts_conn_options,
         )
         self._started = False
         self._turn_detection = turn_detection or None

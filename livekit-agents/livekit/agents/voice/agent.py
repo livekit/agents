@@ -11,7 +11,7 @@ from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import ChatContext, FunctionTool, RawFunctionTool, ToolError, find_function_tools
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -39,6 +39,9 @@ class Agent:
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        stt_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        llm_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        tts_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         self._instructions = instructions
@@ -50,6 +53,9 @@ class Agent:
         self._tts = tts
         self._vad = vad
         self._allow_interruptions = allow_interruptions
+        self._stt_conn_options = stt_conn_options or DEFAULT_API_CONNECT_OPTIONS
+        self._llm_conn_options = llm_conn_options or DEFAULT_API_CONNECT_OPTIONS
+        self._tts_conn_options = tts_conn_options or DEFAULT_API_CONNECT_OPTIONS
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -315,7 +321,8 @@ class Agent:
 
                 wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
 
-            async with wrapped_stt.stream() as stream:
+            conn_options = activity.session.options.stt_conn_options or agent._stt_conn_options
+            async with wrapped_stt.stream(conn_options=conn_options) as stream:
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
@@ -346,8 +353,9 @@ class Agent:
             tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
             activity_llm = activity.llm
 
+            conn_options = activity.session.options.llm_conn_options or agent._llm_conn_options
             async with activity_llm.chat(
-                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice
+                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
             ) as stream:
                 async for chunk in stream:
                     yield chunk
@@ -367,7 +375,8 @@ class Agent:
                     tts=wrapped_tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
                 )
 
-            async with wrapped_tts.stream() as stream:
+            conn_options = activity.session.options.tts_conn_options or agent._tts_conn_options
+            async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
                 async def _forward_input() -> None:
                     async for chunk in text:
