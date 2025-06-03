@@ -8,6 +8,7 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
@@ -171,8 +172,9 @@ class MCPServerHTTP(MCPServer):
         Returns True for streamable HTTP if URL ends with 'mcp',
         False for SSE if URL ends with 'sse' or for backward compatibility.
         """
-        url_lower = url.lower().rstrip("/")
-        return url_lower.endswith("mcp")
+        parsed_url = urlparse(url)
+        path_lower = parsed_url.path.lower().rstrip("/")
+        return path_lower.endswith("mcp")
 
     def client_streams(
         self,

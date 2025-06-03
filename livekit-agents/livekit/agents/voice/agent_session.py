@@ -462,6 +462,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._started = False
             self.emit("close", CloseEvent(error=error, reason=reason))
 
+        logger.debug("session closed", extra={"reason": reason.value, "error": error})
+
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
 

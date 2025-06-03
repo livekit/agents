@@ -92,19 +92,16 @@ class AvatarRunner:
     async def _publish_track(self) -> None:
         async with self._lock:
             audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self._audio_source)
-            video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self._video_source)
             audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-            video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
             self._audio_publication = await self._room.local_participant.publish_track(
                 audio_track, audio_options
             )
+            await self._audio_publication.wait_for_subscription()
+
+            video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self._video_source)
+            video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
             self._video_publication = await self._room.local_participant.publish_track(
                 video_track, video_options
-            )
-
-            await asyncio.gather(
-                self._audio_publication.wait_for_subscription(),
-                self._video_publication.wait_for_subscription(),
             )
 
     @log_exceptions(logger=logger)
@@ -119,9 +116,6 @@ class AvatarRunner:
         """Forward video to the room through the AV synchronizer"""
 
         async for frame in self._video_gen:
-            if not self._video_publication:
-                await self._publish_track()
-
             if isinstance(frame, AudioSegmentEnd):
                 # notify the agent that the audio has finished playing
                 if self._audio_playing:
@@ -134,6 +128,9 @@ class AvatarRunner:
                     if asyncio.iscoroutine(notify_task):
                         await notify_task
                 continue
+
+            if not self._video_publication:
+                await self._publish_track()
 
             await self._av_sync.push(frame)
             if isinstance(frame, rtc.AudioFrame):

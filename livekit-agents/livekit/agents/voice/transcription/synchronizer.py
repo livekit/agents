@@ -161,6 +161,14 @@ class _SegmentSynchronizerImpl:
     def closed(self) -> bool:
         return self._close_future.done()
 
+    @property
+    def audio_input_ended(self) -> bool:
+        return self._audio_data.done
+
+    @property
+    def text_input_ended(self) -> bool:
+        return self._text_data.done
+
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if self.closed:
             logger.warning("_SegmentSynchronizerImpl.push_audio called after close")
@@ -490,6 +498,14 @@ class _SyncedAudioOutput(io.AudioOutput):
         if not self._synchronizer.enabled:
             return
 
+        if self._synchronizer._impl.audio_input_ended:
+            # this should not happen if `on_playback_finished` is called after each flush
+            logger.warning(
+                "_SegmentSynchronizerImpl audio marked as ended in capture audio, rotating segment"
+            )
+            self._synchronizer.rotate_segment()
+            await self._synchronizer.barrier()
+
         self._synchronizer._impl.push_audio(frame)
 
     def flush(self) -> None:
@@ -565,6 +581,14 @@ class _SyncedTextOutput(io.TextOutput):
             return
 
         self._capturing = True
+        if self._synchronizer._impl.text_input_ended:
+            # this should not happen if `on_playback_finished` is called after each flush
+            logger.warning(
+                "_SegmentSynchronizerImpl text marked as ended in capture text, rotating segment"
+            )
+            self._synchronizer.rotate_segment()
+            await self._synchronizer.barrier()
+
         self._synchronizer._impl.push_text(text)
 
     def flush(self) -> None:

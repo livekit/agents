@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import inspect
+import types
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -380,8 +381,11 @@ def prepare_function_arguments(
 
 
 def _is_optional_type(hint: Any) -> bool:
+    if get_origin(hint) is Annotated:
+        hint = get_args(hint)[0]
+
     origin = get_origin(hint)
-    return origin is Union and type(None) in get_args(hint)
+    return (origin is Union or origin is types.UnionType) and type(None) in get_args(hint)
 
 
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
