@@ -42,7 +42,7 @@ class MyAgent(Agent):
         email_result = await workflows.GetEmailAgent()
         email_address = email_result.email_address
 
-        print(f"got email {email_address}")
+        logger.info(f"User's email address: {email_address}")
 
         return "The user is confirmed for seat 23 in group LK1. "
 
