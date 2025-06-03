@@ -198,6 +198,7 @@ class SessionRecorder:
         if self._clear_task:
             await self._clear_task
         await self._main_atask
+        self._file.close()
 
     def start(self) -> None:
         """
