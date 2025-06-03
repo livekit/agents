@@ -37,11 +37,12 @@ class MyAgent(Agent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
-    session = AgentSession()
-    await session.start(
-        agent=MyAgent(),
+    session = AgentSession(
         llm=openai.LLM(model="gpt-4o-mini"),
         # note that no TTS or STT are needed here
+    )
+    await session.start(
+        agent=MyAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(text_enabled=True, audio_enabled=False),
         room_output_options=RoomOutputOptions(transcription_enabled=True, audio_enabled=False),
