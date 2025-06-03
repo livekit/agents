@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dataclasses
 from dataclasses import dataclass
 
@@ -6,6 +8,7 @@ import httpx
 import spitch
 from livekit import rtc
 from livekit.agents import (
+    NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -41,14 +44,14 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str] = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
-            config = self._sanitize_options(language=language)
+            config = self._sanitize_options(language=language or None)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
             resp = await self._client.speech.transcribe(
-                language=config.language,
+                language=config.language,  # type: ignore
                 content=data,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )

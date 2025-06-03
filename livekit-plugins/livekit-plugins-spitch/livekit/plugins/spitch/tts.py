@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import uuid
 from dataclasses import dataclass
 
@@ -39,7 +41,7 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "ChunkedStream":
+    ) -> ChunkedStream:
         return ChunkedStream(
             tts=self,
             input_text=text,
@@ -66,8 +68,8 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         spitch_stream = self._client.speech.with_streaming_response.generate(
             text=self.input_text,
-            language=self._opts.language,
-            voice=self._opts.voice,
+            language=self._opts.language,  # type: ignore
+            voice=self._opts.voice,  # type: ignore
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
