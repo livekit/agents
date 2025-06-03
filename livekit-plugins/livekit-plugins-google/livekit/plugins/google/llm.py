@@ -41,7 +41,8 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .utils import to_fnc_ctx, to_response_format
+from .tools import _LLMTool
+from .utils import create_tools_config, to_fnc_ctx, to_response_format
 
 
 @dataclass
@@ -58,6 +59,7 @@ class _LLMOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
+    gemini_tools: NotGivenOr[list[_LLMTool]]
 
 
 class LLM(llm.LLM):
@@ -77,6 +79,7 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
+        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -102,6 +105,7 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
+            gemini_tools (list[LLMTool], optional): The Gemini-specific tools to use for the session.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -161,6 +165,7 @@ class LLM(llm.LLM):
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             thinking_config=thinking_config,
+            gemini_tools=gemini_tools,
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -181,6 +186,7 @@ class LLM(llm.LLM):
             types.SchemaUnion | type[llm_utils.ResponseFormatT]
         ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
 
@@ -251,6 +257,8 @@ class LLM(llm.LLM):
         if is_given(self._opts.thinking_config):
             extra["thinking_config"] = self._opts.thinking_config
 
+        gemini_tools = gemini_tools if is_given(gemini_tools) else self._opts.gemini_tools
+
         return LLMStream(
             self,
             client=self._client,
@@ -258,6 +266,7 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
+            gemini_tools=gemini_tools,
             extra_kwargs=extra,
         )
 
@@ -273,12 +282,14 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         tools: list[FunctionTool | RawFunctionTool],
         extra_kwargs: dict[str, Any],
+        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm
         self._extra_kwargs = extra_kwargs
+        self._gemini_tools = gemini_tools
 
     async def _run(self) -> None:
         retryable = True
@@ -288,10 +299,13 @@ class LLMStream(llm.LLMStream):
             turns_dict, extra_data = self._chat_ctx.to_provider_format(format="google")
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             function_declarations = to_fnc_ctx(self._tools)
-            if function_declarations:
-                self._extra_kwargs["tools"] = [
-                    types.Tool(function_declarations=function_declarations)
-                ]
+            tools_config = create_tools_config(
+                function_tools=function_declarations,
+                gemini_tools=self._gemini_tools if is_given(self._gemini_tools) else None,
+            )
+            if tools_config:
+                self._extra_kwargs["tools"] = tools_config
+
             config = types.GenerateContentConfig(
                 system_instruction=(
                     [types.Part(text=content) for content in extra_data.system_messages]

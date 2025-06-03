@@ -12,32 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Google AI plugin for LiveKit Agents
+"""LMNT plugin for LiveKit Agents
 
-Supports Gemini, Cloud Speech-to-Text, and Cloud Text-to-Speech.
-
-See https://docs.livekit.io/agents/integrations/stt/google/ for more information.
+See https://docs.livekit.io/agents/integrations/tts/lmnt/ for more information.
 """
 
-from . import beta
-from .llm import LLM
-from .stt import STT, SpeechStream
-from .tools import _LLMTool
-from .tts import TTS
+from .tts import TTS, ChunkedStream
 from .version import __version__
 
-__all__ = ["STT", "TTS", "SpeechStream", "__version__", "beta", "LLM", "_LLMTool"]
+__all__ = ["TTS", "ChunkedStream", "__version__"]
+
 from livekit.agents import Plugin
 
-from .log import logger
 
-
-class GooglePlugin(Plugin):
+class LMNTPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __package__)
 
 
-Plugin.register_plugin(GooglePlugin())
+Plugin.register_plugin(LMNTPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
