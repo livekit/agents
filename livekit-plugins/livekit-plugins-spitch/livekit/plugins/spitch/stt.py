@@ -8,12 +8,12 @@ import httpx
 import spitch
 from livekit import rtc
 from livekit.agents import (
+    NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     NotGivenOr,
-    NOT_GIVEN,
 )
 from livekit.agents.stt import stt
 from livekit.agents.utils import AudioBuffer
