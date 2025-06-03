@@ -212,6 +212,14 @@ class AgentActivity(RecognitionHooks):
     def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool | mcp.MCPTool]:
         return self._agent.tools + self._mcp_tools  # type: ignore
 
+    @property
+    def min_consecutive_speech_delay(self) -> float:
+        return (
+            self._agent.min_consecutive_speech_delay
+            if is_given(self._agent.min_consecutive_speech_delay)
+            else self._session.options.min_consecutive_speech_delay
+        )
+
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
 
@@ -683,14 +691,20 @@ class AgentActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        last_playout_ts = 0.0
         while True:
             await self._q_updated.wait()
             while self._speech_q:
                 _, _, speech = heapq.heappop(self._speech_q)
                 self._current_speech = speech
+                if self.min_consecutive_speech_delay > 0.0:
+                    await asyncio.sleep(
+                        self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
+                    )
                 speech._authorize_playout()
                 await speech.wait_for_playout()
                 self._current_speech = None
+                last_playout_ts = time.time()
 
             # If we're draining and there are no more speech tasks, we can exit.
             # Only speech tasks can bypass draining to create a tool response
