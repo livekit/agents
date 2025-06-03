@@ -14,7 +14,7 @@ from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent
@@ -38,6 +38,15 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class SessionConnectOptions:
+    stt_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    llm_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    tts_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    max_unrecoverable_errors: int = 3
+    """Maximum number of consecutive unrecoverable errors from llm or tts."""
+
+
+@dataclass
 class VoiceOptions:
     allow_interruptions: bool
     discard_audio_if_uninterruptible: bool
@@ -48,9 +57,6 @@ class VoiceOptions:
     max_tool_steps: int
     user_away_timeout: float | None
     min_consecutive_speech_delay: float
-    stt_conn_options: NotGivenOr[APIConnectOptions]
-    llm_conn_options: NotGivenOr[APIConnectOptions]
-    tts_conn_options: NotGivenOr[APIConnectOptions]
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -124,10 +130,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
         min_consecutive_speech_delay: float = 0.0,
-        stt_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-        llm_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-        tts_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-        max_unrecoverable_errors: int = 3,
+        connect_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -187,11 +190,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Default ``15.0`` s, set to ``None`` to disable.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
-            stt_conn_options (APIConnectOptions, optional): Connection options for stt.
-            llm_conn_options (APIConnectOptions, optional): Connection options for llm.
-            tts_conn_options (APIConnectOptions, optional): Connection options for tts.
-            max_unrecoverable_errors (int): Close the session after this number of
-                consecutive unrecoverable errors from llm or tts. Default ``3``.
+            connect_options (SessionConnectOptions, optional): Connection options for
+                stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
         """
@@ -215,10 +215,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
-            stt_conn_options=stt_conn_options,
-            llm_conn_options=llm_conn_options,
-            tts_conn_options=tts_conn_options,
         )
+        self._connect_options = connect_options or SessionConnectOptions()
         self._started = False
         self._turn_detection = turn_detection or None
         self._stt = stt or None
@@ -227,7 +225,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts = tts or None
         self._mcp_servers = mcp_servers or None
 
-        self._max_unrecoverable_errors = max_unrecoverable_errors
+        # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
         self._tts_error_counts = 0
 
@@ -290,6 +288,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def options(self) -> VoiceOptions:
         return self._opts
+
+    @property
+    def connect_options(self) -> SessionConnectOptions:
+        return self._connect_options
 
     @property
     def history(self) -> llm.ChatContext:
@@ -626,11 +628,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if error.type == "llm_error":
             self._llm_error_counts += 1
-            if self._llm_error_counts <= self._max_unrecoverable_errors:
+            if self._llm_error_counts <= self.connect_options.max_unrecoverable_errors:
                 return
         elif error.type == "tts_error":
             self._tts_error_counts += 1
-            if self._tts_error_counts <= self._max_unrecoverable_errors:
+            if self._tts_error_counts <= self.connect_options.max_unrecoverable_errors:
                 return
 
         logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
