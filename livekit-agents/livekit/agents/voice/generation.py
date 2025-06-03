@@ -294,7 +294,7 @@ async def _execute_tools_task(
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
-    from .agent import _authorize_inline_task
+    from .agent import _set_activity_task_info
     from .events import RunContext
 
     tasks: list[asyncio.Task[Any]] = []
@@ -373,7 +373,9 @@ async def _execute_tools_task(
                 )
 
                 tasks.append(task)
-                _authorize_inline_task(task, function_call=fnc_call)
+                _set_activity_task_info(
+                    task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
+                )
             except Exception:
                 # catching exceptions here because even though the function is asynchronous,
                 # errors such as missing or incompatible arguments can still occur at

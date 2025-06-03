@@ -1,4 +1,4 @@
-from .agent import Agent, InlineTask, ModelSettings
+from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import AgentSession, VoiceActivityVideoSampler
 from .chat_cli import ChatCLI
 from .events import (
@@ -23,7 +23,7 @@ __all__ = [
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
-    "InlineTask",
+    "AgentTask",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",

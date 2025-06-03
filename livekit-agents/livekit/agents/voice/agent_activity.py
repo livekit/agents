@@ -23,7 +23,7 @@ from ..metrics import (
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
-from .agent import Agent, ModelSettings
+from .agent import Agent, ModelSettings, _set_activity_task_info, _get_activity_task_info
 from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
 from .events import (
     ErrorEvent,
@@ -70,7 +70,8 @@ class AgentActivity(RecognitionHooks):
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
-        self._draining = False
+        self._closed = False
+        self._scheduling_paused = True
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
@@ -79,13 +80,15 @@ class AgentActivity(RecognitionHooks):
         # this is used to wake up the main task when the scheduling state changes
         self._q_updated = asyncio.Event()
 
-        self._main_atask: asyncio.Task[None] | None = None
+        self._scheduling_atask: asyncio.Task[None] | None = None
         self._user_turn_completed_atask: asyncio.Task[None] | None = None
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._turn_detection_mode = (
             self.turn_detection if isinstance(self.turn_detection, str) else None
         )
+
+        self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
 
         if self._turn_detection_mode == "vad" and not self.vad:
             logger.warning("turn_detection is set to 'vad', but no VAD model is provided")
@@ -164,8 +167,8 @@ class AgentActivity(RecognitionHooks):
         self._mcp_tools: list[mcp.MCPTool] = []
 
     @property
-    def draining(self) -> bool:
-        return self._draining
+    def scheduling_paused(self) -> bool:
+        return self._scheduling_paused
 
     @property
     def session(self) -> AgentSession:
@@ -266,99 +269,38 @@ class AgentActivity(RecognitionHooks):
         """
         # https://github.com/python/cpython/pull/31837 alternative impl
         tk = _AgentActivityContextVar.set(self)
+        tk1 = None
+        if owned_speech_handle is not None:
+            tk1 = _SpeechHandleContextVar.set(owned_speech_handle)
 
         task = asyncio.create_task(coro, name=name)
         self._speech_tasks.append(task)
         task.add_done_callback(lambda _: self._speech_tasks.remove(task))
+
+        _set_activity_task_info(task, speech_handle=owned_speech_handle)
 
         if owned_speech_handle is not None:
             # make sure to finish playout in case something goes wrong
             # the tasks should normally do this before their function calls
             task.add_done_callback(lambda _: owned_speech_handle._mark_playout_done())
 
-        task.add_done_callback(lambda _: self._wake_up_main_task())
+        task.add_done_callback(lambda _: self._wake_up_scheduling_task())
         _AgentActivityContextVar.reset(tk)
+
+        if tk1:
+            _SpeechHandleContextVar.reset(tk1)
+
         return task
 
-    def _wake_up_main_task(self) -> None:
-        self._q_updated.set()
-
-    # TODO(theomonnom): Shoukd pause and resume call on_enter and on_exit? probably not
-    async def pause(self) -> None:
-        pass
-
-    async def resume(self) -> None:
-        pass
-
     async def start(self) -> None:
-        from .agent import _authorize_inline_task
+        # `start` must only be called by AgentSession
 
         async with self._lock:
+            if self._started:
+                return
+
             self._agent._activity = self
 
-            if self.mcp_servers:
-
-                @utils.log_exceptions(logger=logger)
-                async def _list_mcp_tools_task(mcp_server: mcp.MCPServer) -> list[mcp.MCPTool]:
-                    if not mcp_server.initialized:
-                        await mcp_server.initialize()
-
-                    return await mcp_server.list_tools()
-
-                gathered = await asyncio.gather(
-                    *(_list_mcp_tools_task(s) for s in self.mcp_servers), return_exceptions=True
-                )
-                tools: list[mcp.MCPTool] = []
-                for mcp_server, res in zip(self.mcp_servers, gathered):
-                    if isinstance(res, BaseException):
-                        logger.error(
-                            f"Failed to list tools from MCP server {mcp_server}", exc_info=res
-                        )
-                    else:
-                        tools.extend(res)
-
-                self._mcp_tools = tools
-
-            if isinstance(self.llm, llm.RealtimeModel):
-                self._rt_session = self.llm.session()
-                self._rt_session.on("generation_created", self._on_generation_created)
-                self._rt_session.on("input_speech_started", self._on_input_speech_started)
-                self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
-                self._rt_session.on(
-                    "input_audio_transcription_completed",
-                    self._on_input_audio_transcription_completed,
-                )
-                self._rt_session.on("metrics_collected", self._on_metrics_collected)
-                self._rt_session.on("error", self._on_error)
-
-                remove_instructions(self._agent._chat_ctx)
-
-                try:
-                    await self._rt_session.update_instructions(self._agent.instructions)
-                except llm.RealtimeError:
-                    logger.exception("failed to update the instructions")
-
-                try:
-                    await self._rt_session.update_chat_ctx(self._agent.chat_ctx)
-                except llm.RealtimeError:
-                    logger.exception("failed to update the chat_ctx")
-
-                try:
-                    await self._rt_session.update_tools(self.tools)
-                except llm.RealtimeError:
-                    logger.exception("failed to update the tools")
-
-            elif isinstance(self.llm, llm.LLM):
-                try:
-                    update_instructions(
-                        self._agent._chat_ctx,
-                        instructions=self._agent.instructions,
-                        add_if_missing=True,
-                    )
-                except ValueError:
-                    logger.exception("failed to update the instructions")
-
-            # metrics and error handling
             if isinstance(self.llm, llm.LLM):
                 self.llm.on("metrics_collected", self._on_metrics_collected)
                 self.llm.on("error", self._on_error)
@@ -374,45 +316,165 @@ class AgentActivity(RecognitionHooks):
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)
 
-            self._main_atask = asyncio.create_task(self._main_task(), name="_main_task")
-            self._audio_recognition = AudioRecognition(
-                hooks=self,
-                stt=self._agent.stt_node if self.stt else None,
-                vad=self.vad,
-                turn_detector=(
-                    self.turn_detection if not isinstance(self.turn_detection, str) else None
-                ),
-                min_endpointing_delay=self._session.options.min_endpointing_delay,
-                max_endpointing_delay=self._session.options.max_endpointing_delay,
-                turn_detection_mode=self._turn_detection_mode,
-            )
-            self._audio_recognition.start()
+            await self._start_session()
             self._started = True
 
             task = self._create_speech_task(self._agent.on_enter(), name="AgentTask_on_enter")
-            _authorize_inline_task(task)
+            _set_activity_task_info(task, inline_task=True)
+
+    async def _start_session(self):
+        assert self._lock.locked, "_start_session should only be used when locked."
+
+        if self.mcp_servers:
+
+            @utils.log_exceptions(logger=logger)
+            async def _list_mcp_tools_task(mcp_server: mcp.MCPServer) -> list[mcp.MCPTool]:
+                if not mcp_server.initialized:
+                    await mcp_server.initialize()
+
+                return await mcp_server.list_tools()
+
+            gathered = await asyncio.gather(
+                *(_list_mcp_tools_task(s) for s in self.mcp_servers), return_exceptions=True
+            )
+            tools: list[mcp.MCPTool] = []
+            for mcp_server, res in zip(self.mcp_servers, gathered):
+                if isinstance(res, BaseException):
+                    logger.error(f"failed to list tools from MCP server {mcp_server}", exc_info=res)
+                    continue
+
+                tools.extend(res)
+
+            self._mcp_tools = tools
+
+        if isinstance(self.llm, llm.RealtimeModel):
+            self._rt_session = self.llm.session()
+            self._rt_session.on("generation_created", self._on_generation_created)
+            self._rt_session.on("input_speech_started", self._on_input_speech_started)
+            self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
+            self._rt_session.on(
+                "input_audio_transcription_completed",
+                self._on_input_audio_transcription_completed,
+            )
+            self._rt_session.on("metrics_collected", self._on_metrics_collected)
+            self._rt_session.on("error", self._on_error)
+
+            remove_instructions(self._agent._chat_ctx)
+
+            try:
+                await self._rt_session.update_instructions(self._agent.instructions)
+            except llm.RealtimeError:
+                logger.exception("failed to update the instructions")
+
+            try:
+                await self._rt_session.update_chat_ctx(self._agent.chat_ctx)
+            except llm.RealtimeError:
+                logger.exception("failed to update the chat_ctx")
+
+            try:
+                await self._rt_session.update_tools(self.tools)
+            except llm.RealtimeError:
+                logger.exception("failed to update the tools")
+
+        elif isinstance(self.llm, llm.LLM):
+            try:
+                update_instructions(
+                    self._agent._chat_ctx,
+                    instructions=self._agent.instructions,
+                    add_if_missing=True,
+                )
+            except ValueError:
+                logger.exception("failed to update the instructions")
+
+        await self._resume_scheduling_task()
+        self._audio_recognition = AudioRecognition(
+            hooks=self,
+            stt=self._agent.stt_node if self.stt else None,
+            vad=self.vad,
+            turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
+            min_endpointing_delay=self._session.options.min_endpointing_delay,
+            max_endpointing_delay=self._session.options.max_endpointing_delay,
+            turn_detection_mode=self._turn_detection_mode,  # type: ignore
+        )
+        self._audio_recognition.start()
 
     async def drain(self) -> None:
-        from .agent import _authorize_inline_task
+        # `drain` must only be called by AgentSession
 
         async with self._lock:
-            if self._draining:
-                return
-
             task = self._create_speech_task(self._agent.on_exit(), name="AgentTask_on_exit")
-            _authorize_inline_task(task)
+            _set_activity_task_info(task, inline_task=True)
 
-            self._wake_up_main_task()
-            self._draining = True
-            if self._main_atask is not None:
-                await asyncio.shield(self._main_atask)
+            await self._pause_scheduling_task()
+
+    async def _pause_scheduling_task(
+        self, *, blocked_tasks: list[asyncio.Task] | None = None
+    ) -> None:
+        assert self._lock.locked, "_finalize_main_task should only be used when locked."
+
+        if self._scheduling_paused:
+            return
+
+        self._scheduling_paused = True
+        self._drain_blocked_tasks = blocked_tasks or []
+        self._wake_up_scheduling_task()
+
+        if self._scheduling_atask is not None:
+            # When pausing/draining, we ensure that all speech_tasks complete fully.
+            # This means that even if the SpeechHandle themselves have finished,
+            # we still wait for the entire execution (e.g function_tools)
+            await asyncio.shield(self._scheduling_atask)
+
+    async def _resume_scheduling_task(self) -> None:
+        assert self._lock.locked, "_finalize_main_task should only be used when locked."
+
+        if not self._scheduling_paused:
+            return
+
+        self._scheduling_paused = False
+        self._scheduling_atask = asyncio.create_task(
+            self._scheduling_task(), name="_scheduling_task"
+        )
+
+    async def resume(self) -> None:
+        # `resume` must only be called by AgentSession
+
+        async with self._lock:
+            await self._start_session()
+
+    def _wake_up_scheduling_task(self) -> None:
+        self._q_updated.set()
+
+    async def pause(self, *, blocked_tasks: list[asyncio.Task]) -> None:
+        # `pause` must only be called by AgentSession
+
+        # When draining, the tasks that have done the "premption" must be ignored.
+        # They will most likely block until the Agent transition is done. So we must not
+        # wait for them to avoid deadlocks.
+
+        # When resuming, the AgentSession.update_agent must use the same AgentActivity instance!
+        async with self._lock:
+            await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
+            await self._close_session()
+
+    async def _close_session(self) -> None:
+        assert self._lock.locked, "_close_session should only be used when locked."
+
+        if self._rt_session is not None:
+            await self._rt_session.aclose()
+
+        if self._audio_recognition is not None:
+            await self._audio_recognition.aclose()
 
     async def aclose(self) -> None:
-        async with self._lock:
-            if not self._draining:
-                logger.warning("task closing without draining")
+        # `aclose` must only be called by AgentSession
 
-            # Unregister event handlers to prevent duplicate metrics
+        async with self._lock:
+            if self._closed:
+                return
+
+            self._closed = True
+
             if isinstance(self.llm, llm.LLM):
                 self.llm.off("metrics_collected", self._on_metrics_collected)
                 self.llm.off("error", self._on_error)
@@ -438,14 +500,10 @@ class AgentActivity(RecognitionHooks):
             if isinstance(self.vad, vad.VAD):
                 self.vad.off("metrics_collected", self._on_metrics_collected)
 
-            if self._rt_session is not None:
-                await self._rt_session.aclose()
+            await self._close_session()
 
-            if self._audio_recognition is not None:
-                await self._audio_recognition.aclose()
-
-            if self._main_atask is not None:
-                await utils.aio.cancel_and_wait(self._main_atask)
+            if self._scheduling_atask is not None:
+                await utils.aio.cancel_and_wait(self._scheduling_atask)
 
             self._agent._activity = None
 
@@ -555,11 +613,9 @@ class AgentActivity(RecognitionHooks):
         if self.llm is None:
             raise RuntimeError("trying to generate reply without an LLM model")
 
-        from .agent import _get_inline_task_info
-
         task = asyncio.current_task()
         if not is_given(tool_choice) and task is not None:
-            if task_info := _get_inline_task_info(task):
+            if task_info := _get_activity_task_info(task):
                 if task_info.function_call is not None:
                     # when generate_reply is called inside a function_tool, set tool_choice to None by default  # noqa: E501
                     tool_choice = "none"
@@ -663,26 +719,27 @@ class AgentActivity(RecognitionHooks):
             audio_detached=not self._session.input.audio_enabled
         )
 
-    def _schedule_speech(
-        self, speech: SpeechHandle, priority: int, bypass_draining: bool = False
-    ) -> None:
-        """
-        This method is used to schedule a new speech.
+    def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
+        # when force=True, we still allow to schedule a new speech even if `pause_speech_scheduling` is
+        # waiting for the schedule_task to drain.
+        # This allows for tool responses to be generated before the AgentActivity is finalized.
 
-        Args:
-            bypass_draining: bypass_draining should only be used to allow the last tool response to be scheduled
+        if self._scheduling_paused and not force:
+            raise RuntimeError(
+                "cannot schedule new speech, the speech scheduling is draining/pausing"
+            )
 
-        Raises RuntimeError if the agent is draining
-        """  # noqa: E501
-        if self.draining and not bypass_draining:
-            raise RuntimeError("cannot schedule new speech, the agent is draining")
+        if self._scheduling_atask and self._scheduling_atask.done():
+            logger.warning(
+                "attempting to schedule a new SpeechHandle, but the scheduling_task is not running."
+            )
+            return
 
-        # Negate the priority to make it a max heap
         heapq.heappush(self._speech_q, (-priority, time.monotonic_ns(), speech))
-        self._wake_up_main_task()
+        self._wake_up_scheduling_task()
 
     @utils.log_exceptions(logger=logger)
-    async def _main_task(self) -> None:
+    async def _scheduling_task(self) -> None:
         while True:
             await self._q_updated.wait()
             while self._speech_q:
@@ -692,9 +749,33 @@ class AgentActivity(RecognitionHooks):
                 await speech.wait_for_playout()
                 self._current_speech = None
 
-            # If we're draining and there are no more speech tasks, we can exit.
-            # Only speech tasks can bypass draining to create a tool response
-            if self._draining and len(self._speech_tasks) == 0:
+            # if we're draining/pasuing and there are no more speech tasks, we can exit.
+            # only speech tasks can bypass draining to create a tool response (see `_schedule_speech`)
+
+            blocked_handles: list[SpeechHandle] = []
+            for task in self._drain_blocked_tasks:
+                info = _get_activity_task_info(task)
+                if not info:
+                    logger.error("blocked task without activity info; skipping.")
+                    continue
+
+                if not info.speech_handle:
+                    continue  # on_enter/on_exit
+
+                blocked_handles.append(info.speech_handle)
+
+            to_wait: list[asyncio.Task] = []
+            for task in self._speech_tasks:
+                if task in self._drain_blocked_tasks:
+                    continue
+
+                info = _get_activity_task_info(task)
+                if info and info.speech_handle in blocked_handles:
+                    continue
+
+                to_wait.append(task)
+
+            if self._scheduling_paused and len(to_wait) == 0:
                 break
 
             self._q_updated.clear()
@@ -771,9 +852,9 @@ class AgentActivity(RecognitionHooks):
             # user_initiated generations are directly handled inside _realtime_reply_task
             return
 
-        if self.draining:
+        if self._scheduling_paused:
             # TODO(theomonnom): should we "forward" this new turn to the next agent?
-            logger.warning("skipping new realtime generation, the agent is draining")
+            logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
 
         handle = SpeechHandle.create(allow_interruptions=self.allow_interruptions)
@@ -874,13 +955,13 @@ class AgentActivity(RecognitionHooks):
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
 
-        if self.draining:
+        if self._scheduling_paused:
             logger.warning(
-                "skipping user input, task is draining",
+                "skipping user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
             log_event(
-                "skipping user input, task is draining",
+                "skipping user input, speech scheduling is paused",
                 user_input=info.new_transcript,
             )
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
@@ -1014,8 +1095,6 @@ class AgentActivity(RecognitionHooks):
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
     ) -> None:
-        _SpeechHandleContextVar.set(speech_handle)
-
         tr_output = (
             self._session.output.transcription
             if self._session.output.transcription_enabled
@@ -1125,8 +1204,6 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         from .agent import ModelSettings
 
-        _SpeechHandleContextVar.set(speech_handle)
-
         log_event(
             "generation started",
             speech_id=speech_handle.id,
@@ -1152,6 +1229,9 @@ class AgentActivity(RecognitionHooks):
                 update_instructions(chat_ctx, instructions=instructions, add_if_missing=True)
             except ValueError:
                 logger.exception("failed to update the instructions")
+
+        # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue
+        # I should implement a retry mechanism?
 
         self._session._update_agent_state("thinking")
         tasks: list[asyncio.Task[Any]] = []
@@ -1339,7 +1419,7 @@ class AgentActivity(RecognitionHooks):
                 new_agent_task = sanitized_out.agent_task
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
-            draining = self.draining
+            draining = self.scheduling_paused
             if not ignore_task_switch and new_agent_task is not None:
                 self._session.update_agent(new_agent_task)
                 draining = True
@@ -1377,9 +1457,7 @@ class AgentActivity(RecognitionHooks):
                     name="AgentActivity.pipeline_reply",
                 )
                 tool_response_task.add_done_callback(self._on_pipeline_reply_done)
-                self._schedule_speech(
-                    handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, bypass_draining=True
-                )
+                self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True)
             elif len(new_fnc_outputs) > 0:
                 # add the tool calls and outputs to the chat context even no reply is generated
                 for msg in tool_messages:
@@ -1395,8 +1473,6 @@ class AgentActivity(RecognitionHooks):
         user_input: str | None = None,
         instructions: str | None = None,
     ) -> None:
-        _SpeechHandleContextVar.set(speech_handle)  # not needed, but here for completeness
-
         assert self._rt_session is not None, "rt_session is not available"
 
         await speech_handle.wait_if_not_interrupted(
@@ -1442,8 +1518,6 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
     ) -> None:
-        _SpeechHandleContextVar.set(speech_handle)
-
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
@@ -1639,7 +1713,7 @@ class AgentActivity(RecognitionHooks):
                 new_agent_task = sanitized_out.agent_task
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
-            draining = self.draining
+            draining = self.scheduling_paused
             if not ignore_task_switch and new_agent_task is not None:
                 self._session.update_agent(new_agent_task)
                 draining = True
@@ -1685,11 +1759,7 @@ class AgentActivity(RecognitionHooks):
                     owned_speech_handle=handle,
                     name="AgentActivity.realtime_reply",
                 )
-                self._schedule_speech(
-                    handle,
-                    SpeechHandle.SPEECH_PRIORITY_NORMAL,
-                    bypass_draining=True,
-                )
+                self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True)
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
