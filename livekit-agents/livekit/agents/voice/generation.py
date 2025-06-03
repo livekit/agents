@@ -332,6 +332,7 @@ async def _execute_tools_task(
                 )
                 continue
 
+            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 json_args = fnc_call.arguments or "{}"
                 fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
@@ -342,7 +343,7 @@ async def _execute_tools_task(
                     ),
                 )
 
-            except (ValidationError, ValueError):
+            except (ValidationError, ValueError) as e:
                 logger.exception(
                     f"tried to call AI function `{fnc_call.name}` with invalid arguments",
                     extra={
@@ -351,6 +352,8 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                py_out.exception = e
+                tool_output.output.append(py_out)
                 continue
 
             if not tool_output.first_tool_fut.done():
@@ -365,7 +368,6 @@ async def _execute_tools_task(
                 },
             )
 
-            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 task = asyncio.create_task(
                     function_tool(*fnc_args, **fnc_kwargs),
@@ -374,7 +376,7 @@ async def _execute_tools_task(
 
                 tasks.append(task)
                 _authorize_inline_task(task, function_call=fnc_call)
-            except Exception:
+            except Exception as e:
                 # catching exceptions here because even though the function is asynchronous,
                 # errors such as missing or incompatible arguments can still occur at
                 # invocation time.
@@ -385,6 +387,8 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                py_out.exception = e
+                tool_output.output.append(py_out)
                 continue
 
             def _log_exceptions(
