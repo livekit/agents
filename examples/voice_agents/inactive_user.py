@@ -1,17 +1,17 @@
+import asyncio
 import logging
 
 from dotenv import load_dotenv
 
-import asyncio
 from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
+    UserStateChangedEvent,
     WorkerOptions,
     cli,
-    UserStateChangedEvent,
 )
-from livekit.plugins import deepgram, openai, cartesia, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("get-email-agent")
 
@@ -31,7 +31,7 @@ async def entrypoint(ctx: JobContext):
 
     async def user_presence_task():
         # try to ping the user 3 times, if we get no answer, close the session
-        for i in range(3):
+        for _ in range(3):
             await session.generate_reply(
                 instructions=(
                     "The user has been inactive. Politely check if the user is still present, and "
