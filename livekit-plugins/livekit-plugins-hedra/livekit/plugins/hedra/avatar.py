@@ -23,7 +23,7 @@ from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .log import logger
 
-DEFAULT_API_URL = "https://api.hedra.com"
+DEFAULT_API_URL = "https://api.hedra.com/public/livekit/v1/session"
 _AVATAR_AGENT_IDENTITY = "hedra-avatar-agent"
 _AVATAR_AGENT_NAME = "hedra-avatar-agent"
 
