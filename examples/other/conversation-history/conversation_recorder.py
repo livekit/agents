@@ -11,7 +11,8 @@ from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, RunContext
 from livekit.agents.voice.agent import ModelSettings
-from livekit.plugins import deepgram, openai, silero
+from livekit.agents.voice.events import AgentStateChangedEvent
+from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.rtc import AudioFrame, AudioMixer, AudioResampler
 
 # Default settings for the file
@@ -49,10 +50,6 @@ def tts_recorder(*, tts, recorder):
 
     async def tts_node_wrapper(self, text: AsyncIterable[str], model_settings: ModelSettings):
         async for frame in tts(self, text, model_settings):
-            # FIXME will handle interruptions so full playout isn't recorded
-            if recorder.session.current_speech.interrupted:
-                ...
-
             await recorder.queue_tts_audio(frame)
             yield frame
 
@@ -61,11 +58,15 @@ def tts_recorder(*, tts, recorder):
 
 
 class SessionRecorder:
-    def __init__(self, session: AgentSession, file_name: str):
+    def __init__(
+        self,
+        session: AgentSession,
+        file_name: str,
+    ):
         """
         Initializes an instance of a SessionRecorder which records an AgentSession to a wav file.
         The STT and TTS nodes of the default Agent class are wrapped to catch and queue AudioFrames.
-        AudioFrames are also converted to a uniform format and mixed before being recorded.
+        AudioFrames are also converted to a uniform format before being recorded.
         Args:
             session (AgentSession): Session to be recorded
             file_name (str): The name of the wav file
@@ -74,9 +75,10 @@ class SessionRecorder:
         self._user_audio = asyncio.Queue[AudioFrame]()
         self._agent_audio = asyncio.Queue[AudioFrame]()
 
+        self._audio_mixer: AudioMixer | None = None
         self._stt_resampler: AudioResampler | None = None
         self._tts_resampler: AudioResampler | None = None
-        self._audio_mixer: AudioMixer | None = None
+        self._current_tts_input_rate: int = 0
 
         self._file_name = file_name
         self._file = wave.open(self._file_name, "wb")
@@ -91,10 +93,26 @@ class SessionRecorder:
     def session(self) -> AgentSession:
         return self._session
 
+    @property
+    def user_queue(self) -> asyncio.Queue[AudioFrame]:
+        return self._user_audio
+
+    @property
+    def agent_queue(self) -> asyncio.Queue[AudioFrame]:
+        return self._agent_audio
+
+    async def clear_agent_queue(self) -> None:
+        while not self._agent_audio.empty():
+            self._agent_audio.get_nowait()
+
     async def queue_stt_audio(self, audioframe: AudioFrame):
         """
-        Resamples given AudioFrame and adds to the STT queue. An empty AudioFrame is added to the
-        TTS queue to align the two streams for the AudioMixer.
+        Resamples via an AudioResampler and queues the AudioFrame to the user audio queue.
+        If there is no agent AudioFrame to pair with, an empty AudioFrame is queued to the
+        TTS queue to ensure level queues.
+
+        Args:
+            audioframe (AudioFrame): The AudioFrame to be queued and recorded
         """
         if audioframe.sample_rate != FRAMERATE:
             if not self._stt_resampler:
@@ -117,14 +135,24 @@ class SessionRecorder:
 
     async def queue_tts_audio(self, audioframe: AudioFrame):
         """
-        Resamples given AudioFrame and adds to the TTS queue.
-        Interruptions will be handled accordingly.
+        Resamples via an AudioResampler and queues the AudioFrame to the agent audio queue.
+        In the case that the input frame rate changes due to different TTS providers, new
+        AudioResamplers are created accordingly.
+
+        Args:
+            audioframe (AudioFrame): The AudioFrame to be queued and recorded
         """
         if audioframe.sample_rate != FRAMERATE:
+            if self._tts_resampler and audioframe.sample_rate != self._current_tts_input_rate:
+                flushed_frames = self._tts_resampler.flush()
+                for frame in flushed_frames:
+                    self._agent_audio.put_nowait(frame)
+                self._tts_resampler = None
             if not self._tts_resampler:
                 self._tts_resampler = AudioResampler(
                     input_rate=audioframe.sample_rate, output_rate=FRAMERATE, quality="very_high"
                 )
+                self._current_tts_input_rate = audioframe.sample_rate
             frames = self._tts_resampler.push(audioframe)
             if frames:
                 for resampled_frame in frames:
@@ -132,7 +160,15 @@ class SessionRecorder:
         else:
             self._agent_audio.put_nowait(audioframe)
 
-    async def stream_audio_queue(self, queue) -> AsyncIterator[AudioFrame]:
+    async def stream_audio_queue(
+        self, queue: asyncio.Queue[AudioFrame]
+    ) -> AsyncIterator[AudioFrame]:
+        """
+        Creates an AsyncIterator for the contents of a queue.
+
+        Args:
+            queue (asyncio.Queue[AudioFrame]): A queue to be returned as an AsyncIterator
+        """
         while (frame := await queue.get()) is not None:
             yield frame
 
@@ -144,10 +180,12 @@ class SessionRecorder:
 
     async def _main_atask(self) -> None:
         """
-        Creates an AudioMixer to combine the STT and TTS streams. The mixed bytes are then written
-        to the specified wav file.
+        Creates an AudioMixer to combine the STT and TTS audio streams
+        and writes the mixed bytes to the wav file.
         """
-        self._audio_mixer = AudioMixer(sample_rate=FRAMERATE, num_channels=1, stream_timeout_ms=300)
+        self._audio_mixer = AudioMixer(
+            sample_rate=FRAMERATE, num_channels=1, stream_timeout_ms=3000
+        )
 
         self._audio_mixer.add_stream(self.user_audio_stream())
         self._audio_mixer.add_stream(self.agent_audio_stream())
@@ -156,11 +194,30 @@ class SessionRecorder:
             self._file.writeframes(mixed_frame.data.tobytes())
 
     async def aclose(self) -> None:
-        await self._main_atask
         await self._audio_mixer.aclose()
+        if self._clear_task:
+            await self._clear_task
+        await self._main_atask
 
     def start(self) -> None:
+        """
+        Begins the recording and keeps track of agent interruptions.
+        """
         self._main_atask = asyncio.create_task(self._main_atask())
+
+        @self._session.on("agent_state_changed")
+        def check_interruption(ev: AgentStateChangedEvent):
+            if (
+                self._session.current_speech is not None
+                and self._session.current_speech.interrupted
+                and ev.old_state == "speaking"
+            ):
+                self._clear_task = asyncio.create_task(self.clear_agent_queue())
+
+        @self._session.on("close")
+        def on_close(ev):
+            self._clear_task = asyncio.create_task(self.clear_agent_queue())
+            self._close_task = asyncio.create_task(self.aclose())
 
 
 class AgentA(Agent):
@@ -173,7 +230,6 @@ class AgentA(Agent):
     @function_tool()
     async def open_door(self) -> str:
         await self.session.generate_reply(instructions="Opening the door..", tool_choice="none")
-
         return "The door is open!"
 
     @function_tool()
@@ -211,7 +267,7 @@ async def entrypoint(ctx: JobContext):
         userdata=agent_bank,
         stt=deepgram.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
-        tts=deepgram.TTS(),
+        tts=cartesia.TTS(),
         vad=silero.VAD.load(),
     )
     recorder = SessionRecorder(session=session, file_name="recording.wav")
