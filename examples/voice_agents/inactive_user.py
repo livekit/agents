@@ -38,6 +38,7 @@ async def entrypoint(ctx: JobContext):
                     "gently guide the conversation back toward your intended goal."
                 )
             )
+            await asyncio.sleep(10)
 
         await asyncio.shield(session.aclose())
         ctx.delete_room()
