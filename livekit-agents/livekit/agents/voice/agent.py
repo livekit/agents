@@ -12,6 +12,8 @@ from ..llm import ChatContext, FunctionTool, RawFunctionTool, ToolError, find_fu
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import is_given
+from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -291,7 +293,7 @@ class Agent:
     def _get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:
-            raise RuntimeError("no activity context found, this task is not running")
+            raise RuntimeError("no activity context found, the agent is not running")
 
         return self._activity
 
@@ -521,7 +523,6 @@ class Agent:
 TaskResult_T = TypeVar("TaskResult_T")
 
 
-# TODO: rename to InlineAgent?
 class AgentTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,
@@ -565,10 +566,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self.__started = True
 
-        task = asyncio.current_task()
-        if task is None or not _is_inline_task_authorized(task):
+        current_task = asyncio.current_task()
+        if current_task is None:
+            raise RuntimeError("{self.__class__.__name__} must be executed inside an async context")
+
+        task_info = _get_activity_task_info(current_task)
+        if not task_info or not task_info.inline_task:
             raise RuntimeError(
-                f"{self.__class__.__name__} should only be awaited inside an async ai_function or the on_enter/on_exit methods of an AgentTask"  # noqa: E501
+                f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
             )
 
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
@@ -587,39 +592,62 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 )
             )
 
-        task.add_done_callback(_handle_task_done)
+        current_task.add_done_callback(_handle_task_done)
 
-        resume_agent = self.session.current_agent
-        if resume_agent is None:
-            raise RuntimeError(
-                f"{self.__class__.__name__} cannot be awaited because no current agent is set"
+        from .agent_activity import _AgentActivityContextVar
+
+        old_activity = _AgentActivityContextVar.get()
+        old_agent = old_activity.agent
+        session = old_activity.session
+        await session._update_activity(
+            self, previous_activity="pause", blocked_tasks=[current_task]
+        )
+        task_result = await asyncio.shield(self.__fut)
+
+        if session.current_agent != self:
+            logger.warning(
+                (
+                    "{self.__class__.__name__} completed, but the agent has changed in the meantime. "
+                    "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
+                )
             )
+            await old_activity.aclose()
+            return task_result
 
-        self.session._update_agent(self, no_exit=True)  # no exit, it's transient
-        res = await asyncio.shield(self.__fut)
-        task = self.session._update_agent(resume_agent, no_start=True)  # resuming
-        assert task is not None, "AgentSession must be started"
-        await task
-        return res
+        await session._update_activity(old_agent, new_activity="resume")
+        return task_result
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
 
 
 @dataclass
-class _InlineTaskInfo:
-    function_call: llm.FunctionCall | None
+class _ActivityTaskInfo:
+    function_call: llm.FunctionCall | None = None
+    speech_handle: SpeechHandle | None = None
+    inline_task: bool = False
 
 
-def _authorize_inline_task(
-    task: asyncio.Task[Any], *, function_call: llm.FunctionCall | None = None
+def _set_activity_task_info(
+    task: asyncio.Task[Any],
+    *,
+    function_call: NotGivenOr[llm.FunctionCall | None] = NOT_GIVEN,
+    speech_handle: NotGivenOr[SpeechHandle | None] = NOT_GIVEN,
+    inline_task: NotGivenOr[bool] = NOT_GIVEN,
 ) -> None:
-    setattr(task, "__livekit_agents_inline_task", _InlineTaskInfo(function_call=function_call))
+    info = _get_activity_task_info(task) or _ActivityTaskInfo()
+
+    if is_given(function_call):
+        info.function_call = function_call
+
+    if is_given(speech_handle):
+        info.speech_handle = speech_handle
+
+    if is_given(inline_task):
+        info.inline_task = inline_task
+
+    setattr(task, "__livekit_agents_activity_task", info)
 
 
-def _get_inline_task_info(task: asyncio.Task[Any]) -> _InlineTaskInfo | None:
-    return getattr(task, "__livekit_agents_inline_task", None)
-
-
-def _is_inline_task_authorized(task: asyncio.Task[Any]) -> bool:
-    return getattr(task, "__livekit_agents_inline_task", None) is not None
+def _get_activity_task_info(task: asyncio.Task[Any]) -> _ActivityTaskInfo | None:
+    return getattr(task, "__livekit_agents_activity_task", None)

@@ -31,7 +31,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
-from .speech_handle import SpeechHandle
+from .speech_handle import RunResult, SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -386,8 +386,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 except RuntimeError:
                     pass  # ignore
 
-            # it is ok to await it directly, there is no previous task to drain
-            await self._update_activity_task(self._agent)
+            await self._update_activity(self._agent)
 
             # important: no await should be done after this!
 
@@ -488,7 +487,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        if self._activity.draining:
+        if self._activity.scheduling_paused:
             if self._next_activity is None:
                 raise RuntimeError("AgentSession is closing, cannot use say()")
 
@@ -536,7 +535,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else NOT_GIVEN
         )
 
-        if self._activity.draining:
+        if self._activity.scheduling_paused:
             if self._next_activity is None:
                 raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
@@ -586,35 +585,55 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity.commit_user_turn()
 
     def update_agent(self, agent: Agent) -> None:
-        self._update_agent(agent)
-
-    def _update_agent(
-        self, agent: Agent, *, no_exit: bool = False, no_start: bool = False
-    ) -> asyncio.Task | None:
         self._agent = agent
 
         if self._started:
             self._update_activity_atask = asyncio.create_task(
-                self._update_activity_task(self._agent, no_exit=no_exit, no_start=no_start),
+                self._update_activity_task(self._agent),
                 name="_update_activity_task",
             )
 
-        return self._update_activity_atask
-
-    @utils.log_exceptions(logger=logger)
-    async def _update_activity_task(
-        self, task: Agent, no_exit: bool = False, no_start: bool = False
+    async def _update_activity(
+        self,
+        agent: Agent,
+        *,
+        previous_activity: Literal["close", "pause"] = "close",
+        new_activity: Literal["start", "resume"] = "start",
+        blocked_tasks: list[asyncio.Task] | None = None,
     ) -> None:
         async with self._activity_lock:
-            self._next_activity = AgentActivity(task, self)
+            # _update_activity is called directy sometimes, update for redundancy
+            self._agent = agent
+
+            if new_activity == "start":
+                if agent._activity is not None:
+                    raise RuntimeError("cannot start agent: an activity is already running")
+
+                self._next_activity = AgentActivity(agent, self)
+            elif new_activity == "resume":
+                if agent._activity is None:
+                    raise RuntimeError("cannot resume agent: no existing active activity to resume")
+
+                self._next_activity = agent._activity
 
             if self._activity is not None:
-                await self._activity.drain(transient=no_exit)
-                await self._activity.aclose()
+                if previous_activity == "close":
+                    await self._activity.drain()
+                    await self._activity.aclose()
+                elif previous_activity == "pause":
+                    await self._activity.pause(blocked_tasks=blocked_tasks or [])
 
             self._activity = self._next_activity
             self._next_activity = None
-            await self._activity.start(transient=no_start)
+
+            if new_activity == "start":
+                await self._activity.start()
+            elif new_activity == "resume":
+                await self._activity.resume()
+
+    @utils.log_exceptions(logger=logger)
+    async def _update_activity_task(self, task: Agent) -> None:
+        await self._update_activity(task)
 
     def _on_error(
         self,
