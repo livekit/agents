@@ -129,7 +129,7 @@ class AvatarSession:
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._ensure_http_session().post(
-                    f"{self._api_url}/v1/session",
+                    self._api_url,
                     headers={
                         "x-api-key": self._api_key,
                     },
