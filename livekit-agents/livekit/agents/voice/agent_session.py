@@ -47,6 +47,7 @@ class VoiceOptions:
     max_endpointing_delay: float
     max_tool_steps: int
     user_away_timeout: float | None
+    min_consecutive_speech_delay: float
     stt_conn_options: NotGivenOr[APIConnectOptions]
     llm_conn_options: NotGivenOr[APIConnectOptions]
     tts_conn_options: NotGivenOr[APIConnectOptions]
@@ -122,6 +123,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
+        min_consecutive_speech_delay: float = 0.0,
         stt_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
         llm_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
         tts_conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -183,6 +185,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Default ``15.0`` s, set to ``None`` to disable.
+            min_consecutive_speech_delay (float, optional): The minimum delay between
+                consecutive speech. Default ``0.0`` s.
             stt_conn_options (APIConnectOptions, optional): Connection options for stt.
             llm_conn_options (APIConnectOptions, optional): Connection options for llm.
             tts_conn_options (APIConnectOptions, optional): Connection options for tts.
@@ -210,6 +214,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            min_consecutive_speech_delay=min_consecutive_speech_delay,
             stt_conn_options=stt_conn_options,
             llm_conn_options=llm_conn_options,
             tts_conn_options=tts_conn_options,
