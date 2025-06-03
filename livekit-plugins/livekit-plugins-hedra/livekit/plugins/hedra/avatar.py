@@ -79,9 +79,9 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        livekit_url = livekit_url or os.getenv("LIVEKIT_URL")
-        livekit_api_key = livekit_api_key or os.getenv("LIVEKIT_API_KEY")
-        livekit_api_secret = livekit_api_secret or os.getenv("LIVEKIT_API_SECRET")
+        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
+        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise HedraException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
@@ -134,7 +134,7 @@ class AvatarSession:
                         "x-api-key": self._api_key,
                     },
                     data=data,
-                    timeout=self._conn_options.timeout,
+                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
                 ) as response:
                     if not response.ok:
                         text = await response.text()
