@@ -31,6 +31,7 @@ livekit-plugins-speechify = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-hedra = { workspace = true }
+livekit-plugins-spitch = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
