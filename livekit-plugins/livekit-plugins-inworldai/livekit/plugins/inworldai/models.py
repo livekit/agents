@@ -1,0 +1,8 @@
+from inworld_sdk import TTSVoices as inworld_tts_voices
+from inworld_sdk import TTSLanguageCodes as inworld_tts_language_codes
+from inworld_sdk import TTSAudioEncoding as inworld_tts_audio_encoding
+
+
+TTSVoices = inworld_tts_voices
+TTSLanguageCodes = inworld_tts_language_codes
+TTSAudioEncoding = inworld_tts_audio_encoding
