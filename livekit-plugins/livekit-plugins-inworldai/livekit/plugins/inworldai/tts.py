@@ -33,13 +33,15 @@ from .models import (
 NUM_CHANNELS = 1
 WAV_HEADER_SIZE = 44
 
+
 def strip_wav_header(audio_data: bytes) -> bytes:
     if len(audio_data) <= WAV_HEADER_SIZE:
         return audio_data
-    elif audio_data.startswith(b'RIFF') and audio_data[8:12] == b'WAVE':
+    elif audio_data.startswith(b"RIFF") and audio_data[8:12] == b"WAVE":
         return audio_data[WAV_HEADER_SIZE:]
     else:
         return audio_data
+
 
 @dataclass
 class _TTSOptions:
@@ -49,6 +51,7 @@ class _TTSOptions:
     speed: float
     sampleRateHertz: int
     tokenizer: tokenize.basic.SentenceTokenizer
+
 
 class TTS(tts.TTS):
     def __init__(
@@ -93,9 +96,7 @@ class TTS(tts.TTS):
         )
 
         self._client = InworldAIClient(
-            api_key=(
-                api_key if api_key is not None else os.environ.get("INWORLD_API_KEY")
-            ),
+            api_key=(api_key if api_key is not None else os.environ.get("INWORLD_API_KEY")),
             auth_type=auth_type,
             base_url=base_url,
         )
@@ -139,7 +140,9 @@ class TTS(tts.TTS):
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
-        self, *, conn_options: tts.APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self,
+        *,
+        conn_options: tts.APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.SynthesizeStream:
         return SynthesizeStream(tts=self, conn_options=conn_options)
 
@@ -282,4 +285,3 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             print(f"Error synthesizing segment: {e}")
             raise
-
