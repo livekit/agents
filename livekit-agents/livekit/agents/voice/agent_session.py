@@ -130,7 +130,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
         min_consecutive_speech_delay: float = 0.0,
-        connect_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
+        conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -190,7 +190,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Default ``15.0`` s, set to ``None`` to disable.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
-            connect_options (SessionConnectOptions, optional): Connection options for
+            conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
@@ -216,7 +216,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
         )
-        self._connect_options = connect_options or SessionConnectOptions()
+        self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
         self._turn_detection = turn_detection or None
         self._stt = stt or None
@@ -290,8 +290,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._opts
 
     @property
-    def connect_options(self) -> SessionConnectOptions:
-        return self._connect_options
+    def conn_options(self) -> SessionConnectOptions:
+        return self._conn_options
 
     @property
     def history(self) -> llm.ChatContext:
@@ -628,11 +628,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if error.type == "llm_error":
             self._llm_error_counts += 1
-            if self._llm_error_counts <= self.connect_options.max_unrecoverable_errors:
+            if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
                 return
         elif error.type == "tts_error":
             self._tts_error_counts += 1
-            if self._tts_error_counts <= self.connect_options.max_unrecoverable_errors:
+            if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
                 return
 
         logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
