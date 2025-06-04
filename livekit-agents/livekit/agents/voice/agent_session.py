@@ -14,7 +14,7 @@ from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent
@@ -35,6 +35,15 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
+
+
+@dataclass
+class SessionConnectOptions:
+    stt_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    llm_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    tts_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    max_unrecoverable_errors: int = 3
+    """Maximum number of consecutive unrecoverable errors from llm or tts."""
 
 
 @dataclass
@@ -121,6 +130,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
         min_consecutive_speech_delay: float = 0.0,
+        conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -180,6 +190,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Default ``15.0`` s, set to ``None`` to disable.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
+            conn_options (SessionConnectOptions, optional): Connection options for
+                stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
         """
@@ -204,6 +216,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
         )
+        self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
         self._turn_detection = turn_detection or None
         self._stt = stt or None
@@ -211,6 +224,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
         self._mcp_servers = mcp_servers or None
+
+        # unrecoverable error counts, reset after agent speaking
+        self._llm_error_counts = 0
+        self._tts_error_counts = 0
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -271,6 +288,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def options(self) -> VoiceOptions:
         return self._opts
+
+    @property
+    def conn_options(self) -> SessionConnectOptions:
+        return self._conn_options
 
     @property
     def history(self) -> llm.ChatContext:
@@ -605,6 +626,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
+        if error.type == "llm_error":
+            self._llm_error_counts += 1
+            if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
+                return
+        elif error.type == "tts_error":
+            self._tts_error_counts += 1
+            if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
+                return
+
         logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
 
         def on_close_done(_: asyncio.Task[None]) -> None:
@@ -668,6 +698,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_agent_state(self, state: AgentState) -> None:
         if self._agent_state == state:
             return
+
+        if state == "speaking":
+            self._llm_error_counts = 0
+            self._tts_error_counts = 0
 
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()
