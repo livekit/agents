@@ -61,8 +61,8 @@ from openai.types.beta.realtime.response_create_event import Response
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
-    TurnDetection,
     Tracing,
+    TurnDetection,
 )
 
 from ..log import logger
