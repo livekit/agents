@@ -330,7 +330,8 @@ class SpeechStream(stt.SpeechStream):
                         alternatives=[stt.SpeechData(language="en-US", text=transcript)],
                     )
                 else:
-                    # Skip emitting final transcript if format_turns is True but turn isn't formatted  # noqa: E501
+                    # skip emitting final transcript if format_turns is enabled but this
+                    # turn isn't formatted
                     return
                 self._event_ch.send_nowait(final_event)
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
