@@ -124,6 +124,9 @@ class JobContext:
         self._init_log_factory()
         self._log_fields: dict[str, Any] = {}
 
+        self._connected = False
+        self._lock = asyncio.Lock()
+
     def _init_log_factory(self) -> None:
         old_factory = logging.getLogRecordFactory()
 
@@ -263,18 +266,23 @@ class JobContext:
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
         """  # noqa: E501
-        room_options = rtc.RoomOptions(
-            e2ee=e2ee,
-            auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
-            rtc_config=rtc_config,
-        )
+        async with self._lock:
+            if self._connected:
+                return
 
-        await self._room.connect(self._info.url, self._info.token, options=room_options)
-        self._on_connect()
-        for p in self._room.remote_participants.values():
-            self._participant_available(p)
+            room_options = rtc.RoomOptions(
+                e2ee=e2ee,
+                auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
+                rtc_config=rtc_config,
+            )
 
-        _apply_auto_subscribe_opts(self._room, auto_subscribe)
+            await self._room.connect(self._info.url, self._info.token, options=room_options)
+            self._on_connect()
+            for p in self._room.remote_participants.values():
+                self._participant_available(p)
+
+            _apply_auto_subscribe_opts(self._room, auto_subscribe)
+            self._connected = True
 
     def delete_room(self) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
