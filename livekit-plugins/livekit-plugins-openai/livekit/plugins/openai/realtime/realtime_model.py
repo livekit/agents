@@ -300,7 +300,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
             speed=speed if is_given(speed) else None,
-            tracing=tracing if is_given(tracing) else None,
+            tracing=cast(Union[Tracing, None], tracing) if is_given(tracing) else None,
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
@@ -437,7 +437,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.speed = speed
 
         if is_given(tracing):
-            self._opts.tracing = tracing
+            self._opts.tracing = cast(Union[Tracing, None], tracing)
 
         for sess in self._sessions:
             sess.update_options(
@@ -902,8 +902,8 @@ class RealtimeSession(
             kwargs["speed"] = speed
 
         if is_given(tracing):
-            self._realtime_model._opts.tracing = tracing
-            kwargs["tracing"] = tracing
+            self._realtime_model._opts.tracing = cast(Union[Tracing, None], tracing)
+            kwargs["tracing"] = cast(Union[Tracing, None], tracing)
 
         if kwargs:
             self.send_event(
