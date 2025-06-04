@@ -62,6 +62,7 @@ from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
     TurnDetection,
+    Tracing,
 )
 
 from ..log import logger
@@ -97,6 +98,8 @@ class _RealtimeOptions:
     input_audio_noise_reduction: InputAudioNoiseReduction | None
     turn_detection: TurnDetection | None
     max_response_output_tokens: int | Literal["inf"] | None
+    speed: float | None
+    tracing: Tracing | None
     api_key: str | None
     base_url: str
     is_azure: bool
@@ -196,6 +199,8 @@ class RealtimeModel(llm.RealtimeModel):
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
@@ -217,6 +222,8 @@ class RealtimeModel(llm.RealtimeModel):
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None: ...
@@ -232,6 +239,8 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         azure_deployment: str | None = None,
@@ -290,6 +299,8 @@ class RealtimeModel(llm.RealtimeModel):
             entra_token=entra_token,
             api_version=api_version,
             max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
+            speed=speed if is_given(speed) else None,
+            tracing=tracing if is_given(tracing) else None,
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
@@ -312,6 +323,8 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: float = 0.8,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> RealtimeModel:
         """
@@ -376,6 +389,8 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection,
             temperature=temperature,
+            speed=speed,
+            tracing=tracing,
             api_key=api_key,
             http_session=http_session,
             azure_deployment=azure_deployment,
@@ -394,6 +409,8 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
@@ -416,6 +433,12 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(max_response_output_tokens):
             self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
 
+        if is_given(speed):
+            self._opts.speed = speed
+
+        if is_given(tracing):
+            self._opts.tracing = tracing
+
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
@@ -424,6 +447,8 @@ class RealtimeModel(llm.RealtimeModel):
                 tool_choice=tool_choice,
                 input_audio_transcription=input_audio_transcription,
                 max_response_output_tokens=max_response_output_tokens,
+                speed=speed,
+                tracing=tracing,
             )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -805,6 +830,8 @@ class RealtimeSession(
             "input_audio_noise_reduction": self._realtime_model._opts.input_audio_noise_reduction,
             "temperature": self._realtime_model._opts.temperature,
             "tool_choice": _to_oai_tool_choice(self._realtime_model._opts.tool_choice),
+            "speed": self._realtime_model._opts.speed,
+            "tracing": self._realtime_model._opts.tracing,
         }
         if self._instructions is not None:
             kwargs["instructions"] = self._instructions
@@ -836,6 +863,8 @@ class RealtimeSession(
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
     ) -> None:
         kwargs: dict[str, Any] = {}
 
@@ -867,6 +896,14 @@ class RealtimeSession(
         if is_given(input_audio_noise_reduction):
             self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
             kwargs["input_audio_noise_reduction"] = input_audio_noise_reduction
+
+        if is_given(speed):
+            self._realtime_model._opts.speed = speed
+            kwargs["speed"] = speed
+
+        if is_given(tracing):
+            self._realtime_model._opts.tracing = tracing
+            kwargs["tracing"] = tracing
 
         if kwargs:
             self.send_event(
