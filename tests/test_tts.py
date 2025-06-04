@@ -27,6 +27,7 @@ from livekit.plugins import (
     google,
     groq,
     hume,
+    inworld,
     lmnt,
     neuphonic,
     openai,
@@ -249,6 +250,13 @@ SYNTHESIZE_TTS = [
         },
         id="spitch",
     ),
+    pytest.param(
+        lambda: {
+            "tts": inworld.TTS(),
+            "proxy-upstream": "api.inworld.ai:443",
+        },
+        id="inworld",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
@@ -442,6 +450,13 @@ STREAM_TTS = [
             "proxy-upstream": "api.openai.com:443",
         },
         id="openai-stream-adapter",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": inworld.TTS(),
+            "proxy-upstream": "api.inworld.ai:443",
+        },
+        id="inworld",
     ),
 ]
 
