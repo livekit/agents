@@ -253,6 +253,11 @@ class LLMStream(llm.LLMStream):
                 usage=llm.CompletionUsage(
                     completion_tokens=metadata["usage"]["outputTokens"],
                     prompt_tokens=metadata["usage"]["inputTokens"],
+                    prompt_cached_tokens=(
+                        metadata["usage"]["cacheReadInputTokens"]
+                        if "cacheReadInputTokens" in metadata["usage"]
+                        else 0
+                    ),
                     total_tokens=metadata["usage"]["totalTokens"],
                 ),
             )
