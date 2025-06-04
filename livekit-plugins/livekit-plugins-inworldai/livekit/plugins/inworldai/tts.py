@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from dataclasses import dataclass, replace
 import os
+from dataclasses import dataclass, replace
 
 from inworld_sdk import InworldAIClient
+
 from livekit.agents import APIConnectionError, tokenize, tts, utils
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
+
 from .models import (
     TTSLanguageCodes,
     TTSVoices,
@@ -65,7 +67,8 @@ class TTS(tts.TTS):
         Create a new instance of Inworld AI TTS.
 
         Args:
-            api_key (str, optional): The Inworld AI API key. If not provided, it will be read from the INWORLD_API_KEY environment variable.
+            api_key (str, optional): The Inworld AI API key.
+                If not provided, it will be read from the INWORLD_API_KEY environment variable.
             model (str, optional): The Inworld AI model to use.
             language (TTSLanguageCodes, optional): The language code for synthesis.
             voice (TTSVoices, optional): The voice to use.
@@ -134,7 +137,7 @@ class TTS(tts.TTS):
         conn_options: tts.APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
-    
+
     def stream(
         self, *, conn_options: tts.APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.SynthesizeStream:
@@ -173,7 +176,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "sampleRateHertz": self._opts.sampleRateHertz,
                 },
             )
-            
+
             if resp and resp.get("audioContent"):
                 try:
                     decoded_audio = base64.b64decode(resp["audioContent"])
@@ -187,7 +190,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         except Exception as e:
             raise APIConnectionError() from e
-            
+
 
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
