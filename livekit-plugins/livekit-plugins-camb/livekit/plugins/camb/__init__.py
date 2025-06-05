@@ -35,7 +35,7 @@ from .log import logger
 
 class CambPlugin(Plugin):
     def __init__(self):
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __package__ or __name__, logger)
 
 
 Plugin.register_plugin(CambPlugin())

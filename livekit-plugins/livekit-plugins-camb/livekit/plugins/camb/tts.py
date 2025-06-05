@@ -100,7 +100,7 @@ class TTS(tts.TTS):
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(
-                streaming=False,
+                streaming=True,
             ),
             sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
@@ -132,8 +132,17 @@ class TTS(tts.TTS):
         self._streams = weakref.WeakSet[ChunkedStream]()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
+        """Ensure we have a valid HTTP session"""
+        if self._session is not None:
+            return self._session
+        
+        # Only try to get a session from the context if we don't have one
+        try:
             self._session = utils.http_context.http_session()
+        except RuntimeError:
+            # If we're outside a job context, create a new session
+            self._session = aiohttp.ClientSession()
+        
         return self._session
 
     async def list_voices(self) -> list[Voice]:
@@ -226,7 +235,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
         self._session = session
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+    async def _run(self) -> None:
         """Run the TTS synthesis process"""
         request_id = utils.shortuuid()
 
@@ -253,16 +262,8 @@ class ChunkedStream(tts.ChunkedStream):
                     sock_connect=self._conn_options.timeout,
                 ),
             ) as resp:
-                if resp.status != 200:
-                    raise APIStatusError(
-                        message=f"Failed to create TTS task: {resp.reason}",
-                        status_code=resp.status,
-                        request_id=request_id,
-                        body=await resp.text(),
-                    )
-
+                resp.raise_for_status()
                 data = await resp.json()
-                # The API returns task_id directly in the response, not in a payload object
                 task_id = data.get("task_id")
 
                 if not task_id:
@@ -281,18 +282,12 @@ class ChunkedStream(tts.ChunkedStream):
             while True:
                 if time.monotonic() - start > timeout_seconds:
                     raise APITimeoutError("Timed out waiting for TTS task to complete")
+
                 async with self._session.get(
                     f"{self._opts.base_url}/tts/{task_id}",
                     headers={"x-api-key": self._opts.api_key},
                 ) as status_resp:
-                    if status_resp.status != 200:
-                        raise APIStatusError(
-                            message=f"Failed to check TTS task status: {status_resp.reason}",
-                            status_code=status_resp.status,
-                            request_id=request_id,
-                            body=await status_resp.text(),
-                        )
-
+                    status_resp.raise_for_status()
                     status_data = await status_resp.json()
                     status = status_data.get("status")
 
@@ -311,9 +306,9 @@ class ChunkedStream(tts.ChunkedStream):
                     await asyncio.sleep(1)
 
             if not run_id:
-                raise APITimeoutError("Timed out waiting for TTS task to complete")
+                raise APITimeoutError("No run_id received from completed task")
 
-            # Step 3: Get the audio result
+            # Step 3: Get the audio result and emit it to the event channel
             async with self._session.get(
                 f"{self._opts.base_url}/tts-result/{run_id}",
                 headers={"x-api-key": self._opts.api_key},
@@ -322,31 +317,31 @@ class ChunkedStream(tts.ChunkedStream):
                     sock_connect=self._conn_options.timeout,
                 ),
             ) as audio_resp:
-                if audio_resp.status != 200:
-                    raise APIStatusError(
-                        message=f"Failed to get TTS result: {audio_resp.reason}",
-                        status_code=audio_resp.status,
-                        request_id=request_id,
-                        body=await audio_resp.text(),
+                audio_resp.raise_for_status()
+
+                # Read the audio data
+                audio_data = await audio_resp.read()
+
+                if audio_data:
+                    # Create an audio decoder to convert the audio data to frames
+                    decoder = utils.codecs.AudioStreamDecoder(
+                        sample_rate=self._opts.sample_rate,
+                        num_channels=NUM_CHANNELS,
                     )
 
-                # Create decoder for the audio stream
-                decoder = utils.codecs.AudioStreamDecoder(
-                    sample_rate=self._opts.sample_rate,
-                    num_channels=NUM_CHANNELS,
-                )
+                    # Push the audio data to the decoder
+                    decoder.push(audio_data)
+                    decoder.end_input()
 
-                # Process the audio data
-                audio_data = await audio_resp.read()
-                decoder.push(audio_data)
-                decoder.end_input()
+                    # Process the decoded frames and emit them
+                    async for frame in decoder:
+                        synthesized_audio = tts.SynthesizedAudio(
+                            frame=frame,
+                            request_id=request_id,
+                        )
+                        self._event_ch.send_nowait(synthesized_audio)
 
-                # Emit the audio frames
-                async for frame in decoder:
-                    output_emitter.push(frame.data)
-
-                output_emitter.flush()
-                await decoder.aclose()
+                    await decoder.aclose()
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
