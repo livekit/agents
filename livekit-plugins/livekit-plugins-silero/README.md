@@ -2,7 +2,7 @@
 
 Support for VAD-based turn detection.
 
-See [https://docs.livekit.io/build/turns/vad/](https://docs.livekit.io/build/turns/vad/) for more information.
+See [https://docs.livekit.io/agents/build/turns/vad/](https://docs.livekit.io/agents/build/turns/vad/) for more information.
 
 ## Installation
 
