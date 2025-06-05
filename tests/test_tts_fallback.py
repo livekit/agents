@@ -7,7 +7,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, utils
-from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter, StreamAdapter
+from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
 from livekit.agents.tts.tts import SynthesizeStream
 from livekit.agents.utils.aio.channel import ChanEmpty
 
