@@ -55,10 +55,13 @@ class FakeVADStream(VADStream):
                 await asyncio.sleep(next_start_of_speech_time - current_time())
 
             self._send_vad_event(VADEventType.START_OF_SPEECH, fake_speech, current_time())
-            while current_time() < next_end_of_speech_time - 0.05:
-                await asyncio.sleep(0.05)
+
+            inference_interval = 0.05  # 20fps
+            while current_time() < next_end_of_speech_time - inference_interval * 2:
+                await asyncio.sleep(inference_interval)
                 self._send_vad_event(VADEventType.INFERENCE_DONE, fake_speech, current_time())
 
+            await asyncio.sleep(next_end_of_speech_time - current_time())
             self._send_vad_event(VADEventType.END_OF_SPEECH, fake_speech, current_time())
 
         async for _ in self._input_ch:

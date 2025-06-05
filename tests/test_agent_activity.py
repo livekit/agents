@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from fake_llm import FakeLLM, FakeLLMResponse
 from fake_stt import FakeSTT, FakeUserSpeech
@@ -9,88 +10,118 @@ from fake_tts import FakeTTS, FakeTTSResponse
 from fake_vad import FakeVAD
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, utils
-from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput
+from livekit.agents import Agent, AgentSession, MetricsCollectedEvent, utils
+from livekit.agents.voice.io import AudioInput, AudioOutput, PlaybackFinishedEvent, TextOutput
+from livekit.agents.voice.transcription import TranscriptSynchronizer
 
-fake_user_speeches = [
+tracing = [
     {
+        "type": "user_speech",
         "start_time": 0.5,
         "end_time": 2.5,
         "transcript": "Hello, how are you?",
         "stt_delay": 0.2,
-    },
+    },  # +0.55s (min_silence_duration)
     {
-        "start_time": 5.0,
-        "end_time": 6.0,
-        "transcript": "Tell me a joke",
-        "stt_delay": 0.2,
-    }
-]
-
-fake_llm_responses = [
-    {
-        "input": "Hello, how are you?",
+        "type": "llm",
         "content": "I'm doing well, thank you!",
         "ttft": 0.1,
         "duration": 0.2,
-    },
+    },  # +0.2s (duration, start tts after flush)
     {
-        "input": "Tell me a joke",
-        "content": "Why did the chicken cross the road? To get to the other side!",
-        "ttft": 0.1,
-        "duration": 0.2,
-    },
-]
-
-fake_tts_responses = [
-    {
-        "input": "I'm doing well, thank you!",
+        "type": "tts",
         "audio_duration": 2.0,
         "ttfb": 0.1,
         "duration": 0.2,
-    },
-    {
-        "input": "Why did the chicken cross the road? To get to the other side!",
-        "audio_duration": 5.0,
-        "ttfb": 0.2,
-        "duration": 0.3,
-    },
+    },  # +0.1s (ttfb)
 ]
+
+
+def parse_test_cases(
+    tracing: list[dict[str, Any]], *, speed_factor: float = 1.0
+) -> list[FakeUserSpeech | FakeLLMResponse | FakeTTSResponse]:
+    items: list[FakeUserSpeech | FakeLLMResponse | FakeTTSResponse] = []
+    prev_item: FakeUserSpeech | FakeLLMResponse | FakeTTSResponse | None = None
+    for data in tracing:
+        if not (type := data.get("type")):
+            raise ValueError("type is required")
+
+        if type == "llm" and "input" not in data and isinstance(prev_item, FakeUserSpeech):
+            data["input"] = prev_item.transcript
+        elif type == "tts" and "input" not in data and isinstance(prev_item, FakeLLMResponse):
+            data["input"] = prev_item.content
+
+        if type == "user_speech":
+            item = FakeUserSpeech.model_validate(data)
+        elif type == "llm":
+            item = FakeLLMResponse.model_validate(data)
+        elif type == "tts":
+            item = FakeTTSResponse.model_validate(data)
+        else:
+            raise ValueError(f"unknown type: {type}")
+
+        items.append(item)
+        prev_item = item
+
+    if speed_factor != 1.0:
+        items = [item.speed_up(speed_factor) for item in items]
+
+    return items
 
 
 async def entrypoint() -> None:
     agent = Agent(instructions="You are a helpful assistant.")
 
-    speed_factor = 5.0
-    user_speeches = [
-        FakeUserSpeech.model_validate(r).speed_up(speed_factor) for r in fake_user_speeches
-    ]
-    llm_responses = [
-        FakeLLMResponse.model_validate(r).speed_up(speed_factor) for r in fake_llm_responses
-    ]
-    tts_responses = [
-        FakeTTSResponse.model_validate(r).speed_up(speed_factor) for r in fake_tts_responses
-    ]
+    speed_factor = 1.0
+    tracing_items = parse_test_cases(tracing, speed_factor=speed_factor)
+    user_speeches = [item for item in tracing_items if isinstance(item, FakeUserSpeech)]
+    llm_responses = [item for item in tracing_items if isinstance(item, FakeLLMResponse)]
+    tts_responses = [item for item in tracing_items if isinstance(item, FakeTTSResponse)]
 
     session = AgentSession(
-        vad=FakeVAD(fake_user_speeches=user_speeches),
+        vad=FakeVAD(
+            fake_user_speeches=user_speeches,
+            min_silence_duration=0.55 / speed_factor,
+            min_speech_duration=0.05 / speed_factor,
+        ),
         stt=FakeSTT(fake_user_speeches=user_speeches),
         llm=FakeLLM(fake_responses=llm_responses),
         tts=FakeTTS(fake_responses=tts_responses),
+        min_interruption_duration=0.5 / speed_factor,
+        min_endpointing_delay=0.5 / speed_factor,
+        max_endpointing_delay=6.0 / speed_factor,
     )
 
+    # setup io with transcription sync
     audio_input = FakeAudioInput()
     audio_output = FakeAudioOutput()
     transcription_output = FakeTextOutput()
+
+    transcript_sync = TranscriptSynchronizer(
+        next_in_chain_audio=audio_output,
+        next_in_chain_text=transcription_output,
+        speed=speed_factor,
+    )
     session.input.audio = audio_input
-    session.output.audio = audio_output
-    session.output.transcription = transcription_output
+    session.output.audio = transcript_sync.audio_output
+    session.output.transcription = transcript_sync.text_output
+
+    start_time = time.time()
+    audio_input.push_empty_audio(0.1)
+
+    @session.on("metrics_collected")
+    def on_metrics_collected(ev: MetricsCollectedEvent) -> None:
+        print(ev.metrics)
+
+    @session.output.audio.on("playback_finished")
+    def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
+        print(f"playback_finished: {time.time() - start_time}: {ev}")
 
     await session.start(agent)
 
-    audio_input.push_empty_audio(0.1)
-
-    await asyncio.sleep(5)
+    await asyncio.sleep(10)
+    if session.current_speech:
+        await session.current_speech
 
 
 class FakeAudioInput(AudioInput):
@@ -128,6 +159,7 @@ class FakeAudioOutput(AudioOutput):
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
+
         if not self._pushed_duration:
             self._start_time = time.time()
         self._pushed_duration += frame.duration

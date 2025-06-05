@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -19,6 +20,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 class FakeTTSResponse(BaseModel):
     """Map from input text to audio duration, ttfb, and duration"""
 
+    type: Literal["tts"] = "tts"
     input: str
     audio_duration: float
     ttfb: float
@@ -208,6 +210,7 @@ class FakeSynthesizeStream(SynthesizeStream):
                 continue
 
             start_time = time.time()
+            self._mark_started()
             if not (resp := self._tts.fake_response_map.get(input_text)):
                 resp = FakeTTSResponse(
                     input=input_text,

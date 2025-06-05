@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -24,6 +25,7 @@ class RecognizeSentinel:
 
 
 class FakeUserSpeech(BaseModel):
+    type: Literal["user_speech"] = "user_speech"
     start_time: float
     end_time: float
     transcript: str

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,7 @@ from livekit.agents.types import (
 class FakeLLMResponse(BaseModel):
     """Map from input text to output content, tool calls, ttft, and duration"""
 
+    type: Literal["llm"] = "llm"
     input: str
     content: str
     ttft: float
@@ -80,6 +81,8 @@ class FakeLLMStream(LLMStream):
         self._llm = llm
 
     async def _run(self) -> None:
+        start_time = time.time()
+
         index_text = self._get_index_text()
         if index_text not in self._llm.fake_response_map:
             raise ValueError(f"No response found for input: {index_text}")
@@ -87,8 +90,6 @@ class FakeLLMStream(LLMStream):
         resp = self._llm.fake_response_map[index_text]
 
         await asyncio.sleep(resp.ttft)
-
-        start_time = time.time()
         chunk_size = 3
         num_chunks = max(1, len(resp.content) // chunk_size + 1)
         for i in range(num_chunks):
