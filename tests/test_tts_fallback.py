@@ -258,4 +258,3 @@ async def test_timeout():
     assert await asyncio.wait_for(fake2.stream_ch.recv(), 1.0)
 
     await fallback_adapter.aclose()
-
