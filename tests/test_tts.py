@@ -35,6 +35,7 @@ from livekit.plugins import (
     rime,
     speechify,
     spitch,
+    inworldai,
 )
 
 from .fake_tts import FakeTTS
@@ -249,6 +250,13 @@ SYNTHESIZE_TTS = [
         },
         id="spitch",
     ),
+    pytest.param(
+        lambda: {
+            "tts": inworldai.TTS(),
+            "proxy-upstream": "api.inworld.ai:443",
+        },
+        id="inworldai",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
@@ -435,6 +443,13 @@ STREAM_TTS = [
             "proxy-upstream": "api.openai.com:443",
         },
         id="openai-stream-adapter",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": inworldai.TTS(),
+            "proxy-upstream": "api.inworld.ai:443",
+        },
+        id="inworldai",
     ),
 ]
 
