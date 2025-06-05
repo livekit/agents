@@ -819,9 +819,9 @@ class RealtimeSession(llm.RealtimeSession):
             current_gen._completed_timestamp = time.time()
 
         if server_content.interrupted:
+            self._mark_current_generation_done()
             self._handle_input_speech_started()
-
-        if server_content.turn_complete:
+        elif server_content.turn_complete:
             self._mark_current_generation_done()
 
     def _mark_current_generation_done(self) -> None:
