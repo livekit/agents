@@ -112,6 +112,7 @@ class AvatarSession:
 
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
+        assert isinstance(self._api_url, str)
 
         data = aiohttp.FormData({"livekit_url": livekit_url, "livekit_token": livekit_token})
 
