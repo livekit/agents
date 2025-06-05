@@ -7,6 +7,7 @@ livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
+livekit-plugins-baseten = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
