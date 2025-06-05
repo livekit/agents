@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "livekit-plugins-inworldai"
+name = "livekit-plugins-inworld"
 dynamic = ["version"]
 description = "Agent Framework plugin for voice synthesis with Inworld AI's API."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "video", "livekit", "inworldai"]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "inworld"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["inworld-sdk==0.2.1"]
+dependencies = ["inworld-sdk==0.3.0"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
@@ -30,7 +30,7 @@ Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
-path = "livekit/plugins/inworldai/version.py"
+path = "livekit/plugins/inworld/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]

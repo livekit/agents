@@ -37,7 +37,7 @@ members = [
     "livekit-plugins-google",
     "livekit-plugins-groq",
     "livekit-plugins-hume",
-    "livekit-plugins-inworldai",
+    "livekit-plugins-inworld",
     "livekit-plugins-lmnt",
     "livekit-plugins-minimal",
     "livekit-plugins-neuphonic",
@@ -1235,14 +1235,14 @@ wheels = [
 
 [[package]]
 name = "inworld-sdk"
-version = "0.2.1"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e2/0c/00801069601cfb24202496d566fce2a89868b0048452318364c36a928d2a/inworld_sdk-0.2.1.tar.gz", hash = "sha256:b2a81e226ab17c771f11ac6a3429cbbcc8098a1ba1e0e44bfafcd2b777101a5d", size = 7648, upload-time = "2025-06-03T19:42:34.947Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/b3/4ffc6bcbddf4c7c1cfa8a7bc64863a93631d4e927adc70bbac3618693154/inworld_sdk-0.3.0.tar.gz", hash = "sha256:83aa335cc10ed11829316c867f8c70c7cfb47c354c961112b2f8938d937abf0b", size = 7626, upload-time = "2025-06-05T00:41:07.13Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bb/8d/927eebc4759639530d09cfceec38d50d884d5147f935d0be884f9b724d40/inworld_sdk-0.2.1-py3-none-any.whl", hash = "sha256:0df9e1fc64ab8123ae9c9c51fbde89674f872f47c104cd6395e48a39a5ad7de7", size = 7439, upload-time = "2025-06-03T19:42:33.264Z" },
+    { url = "https://files.pythonhosted.org/packages/df/de/d6bb791290a20a907f69a7b3c8f0ab0df70c6382897c3c9603ab773fbd13/inworld_sdk-0.3.0-py3-none-any.whl", hash = "sha256:df1552fcfe16de6ac667006d2d769ab0943df535b71a078c6e0a223c3950c84e", size = 7436, upload-time = "2025-06-05T00:41:06.046Z" },
 ]
 
 [[package]]
@@ -1824,14 +1824,14 @@ requires-dist = [
 ]
 
 [[package]]
-name = "livekit-plugins-inworldai"
-source = { editable = "livekit-plugins/livekit-plugins-inworldai" }
+name = "livekit-plugins-inworld"
+source = { editable = "livekit-plugins/livekit-plugins-inworld" }
 dependencies = [
     { name = "inworld-sdk" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "inworld-sdk", specifier = "==0.2.1" }]
+requires-dist = [{ name = "inworld-sdk", specifier = "==0.3.0" }]
 
 [[package]]
 name = "livekit-plugins-lmnt"

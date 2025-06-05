@@ -19,7 +19,7 @@ import base64
 import os
 from dataclasses import dataclass, replace
 
-from inworld_sdk import InworldAIClient
+from inworld_sdk import InworldClient
 
 from livekit.agents import APIConnectionError, tokenize, tts, utils
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -95,7 +95,7 @@ class TTS(tts.TTS):
             tokenizer=tokenize.basic.SentenceTokenizer(),
         )
 
-        self._client = InworldAIClient(
+        self._client = InworldClient(
             api_key=(api_key if api_key is not None else os.environ.get("INWORLD_API_KEY")),
             auth_type=auth_type,
             base_url=base_url,

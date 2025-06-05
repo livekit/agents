@@ -14,7 +14,7 @@
 
 """Inworld AI plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/integrations/tts/inworldai/ for more information.
+See https://docs.livekit.io/agents/integrations/tts/inworld/ for more information.
 """
 
 from .tts import TTS
@@ -30,12 +30,12 @@ from livekit.agents import Plugin
 from .log import logger
 
 
-class InworldAIPlugin(Plugin):
+class InworldPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(InworldAIPlugin())
+Plugin.register_plugin(InworldPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
