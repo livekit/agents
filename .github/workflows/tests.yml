@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, lmnt, neuphonic, playai, resemble, openai, rime, speechify, hume, spitch]
+        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, lmnt, neuphonic, playai, resemble, openai, rime, speechify, hume, spitch, inworld]
 
     runs-on: ubuntu-latest
     name: livekit-plugins-${{ matrix.plugin }}

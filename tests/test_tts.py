@@ -27,6 +27,7 @@ from livekit.plugins import (
     google,
     groq,
     hume,
+    inworld,
     lmnt,
     neuphonic,
     openai,
@@ -35,7 +36,6 @@ from livekit.plugins import (
     rime,
     speechify,
     spitch,
-    inworld,
 )
 
 from .fake_tts import FakeTTS
