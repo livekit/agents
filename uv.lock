@@ -37,6 +37,7 @@ members = [
     "livekit-plugins-google",
     "livekit-plugins-groq",
     "livekit-plugins-hume",
+    "livekit-plugins-lmnt",
     "livekit-plugins-minimal",
     "livekit-plugins-neuphonic",
     "livekit-plugins-nltk",
@@ -47,6 +48,7 @@ members = [
     "livekit-plugins-silero",
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
+    "livekit-plugins-spitch",
     "livekit-plugins-tavus",
     "livekit-plugins-turn-detector",
 ]
@@ -1480,6 +1482,9 @@ hume = [
 images = [
     { name = "pillow" },
 ]
+lmnt = [
+    { name = "livekit-plugins-lmnt" },
+]
 mcp = [
     { name = "mcp", marker = "python_full_version >= '3.10'" },
 ]
@@ -1543,6 +1548,7 @@ requires-dist = [
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
     { name = "livekit-plugins-hume", marker = "extra == 'hume'", editable = "livekit-plugins/livekit-plugins-hume" },
+    { name = "livekit-plugins-lmnt", marker = "extra == 'lmnt'", editable = "livekit-plugins/livekit-plugins-lmnt" },
     { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
@@ -1569,7 +1575,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hume", "images", "mcp", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechify", "speechmatics", "tavus", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hume", "images", "lmnt", "mcp", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechify", "speechmatics", "tavus", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
@@ -1592,12 +1598,14 @@ name = "livekit-plugins-anthropic"
 source = { editable = "livekit-plugins/livekit-plugins-anthropic" }
 dependencies = [
     { name = "anthropic" },
+    { name = "httpx" },
     { name = "livekit-agents" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.41" },
+    { name = "httpx" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -1798,6 +1806,16 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-lmnt"
+source = { editable = "livekit-plugins/livekit-plugins-lmnt" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
 name = "livekit-plugins-minimal"
 source = { editable = "livekit-plugins/livekit-plugins-minimal" }
 dependencies = [
@@ -1925,6 +1943,20 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-spitch"
+source = { editable = "livekit-plugins/livekit-plugins-spitch" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "spitch" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "spitch" },
+]
 
 [[package]]
 name = "livekit-plugins-tavus"
@@ -4062,6 +4094,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a5/4a/6a11d62cfd6383c88f4918bdc5191d9c437f649c9101ceb5eec7e2837f0b/soxr-0.5.0.post1-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:94de2812368e98cb42b4eaeddf8ee1657ecc19bd053f8e67b9b5aa12a3592012", size = 221450 },
     { url = "https://files.pythonhosted.org/packages/25/d1/83a66e795381ddfc5c3ebf34cc0ac68735c7c459ed1fe65a2193a52c57b1/soxr-0.5.0.post1-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9c8e9c980637e03d3f345a4fd81d56477a58c294fb26205fa121bc4eb23d9d01", size = 253025 },
     { url = "https://files.pythonhosted.org/packages/cd/2e/1fbad5cc8c49c45a0b94221d16445792f55b63fe4f6d3885db960d92892c/soxr-0.5.0.post1-cp39-cp39-win_amd64.whl", hash = "sha256:7e71b0b0db450f36de70f1047505231db77a713f8c47df9342582ae8a4b828f2", size = 167292 },
+]
+
+[[package]]
+name = "spitch"
+version = "1.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2d/46/5ef327b5ddfd1ea3e87675a34e5639744c4279e16bc3999e5627fe5717ff/spitch-1.16.0.tar.gz", hash = "sha256:706f391cc4c0adb4534e1a3662226f0f742200501da41691ac420c794730a52c", size = 90093 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8e/fd/d8145d8bd6d089b7c3c2e13b84f8bcf34a4eace721ac6cae17c41bb51261/spitch-1.16.0-py3-none-any.whl", hash = "sha256:70891cf9877f2d8f0d141c5aa383cc4697bb9bf7649cf33df41e6389d476c51b", size = 72019 },
 ]
 
 [[package]]

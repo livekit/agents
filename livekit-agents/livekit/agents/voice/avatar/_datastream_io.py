@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import asdict
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from livekit import rtc
 
 from ... import utils
+from ...types import NOT_GIVEN, NotGivenOr
 from ..io import AudioOutput, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
@@ -108,11 +110,18 @@ class DataStreamAudioReceiver(AudioReceiver):
     subscribe to the first agent participant in the room.
     """
 
-    def __init__(self, room: rtc.Room, *, sender_identity: str | None = None):
+    def __init__(
+        self,
+        room: rtc.Room,
+        *,
+        sender_identity: str | None = None,
+        frame_size_ms: NotGivenOr[int] = NOT_GIVEN,
+    ):
         super().__init__()
         self._room = room
         self._sender_identity = sender_identity
         self._remote_participant: rtc.RemoteParticipant | None = None
+        self._frame_size_ms = frame_size_ms or 100
 
         self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
@@ -201,7 +210,9 @@ class DataStreamAudioReceiver(AudioReceiver):
                 sample_rate = int(attrs["sample_rate"])
                 num_channels = int(attrs["num_channels"])
                 bstream = utils.audio.AudioByteStream(
-                    sample_rate=sample_rate, num_channels=num_channels
+                    sample_rate=sample_rate,
+                    num_channels=num_channels,
+                    samples_per_channel=int(math.ceil(sample_rate * self._frame_size_ms / 1000)),
                 )
                 async for data in self._current_reader:
                     if self._current_reader_cleared:

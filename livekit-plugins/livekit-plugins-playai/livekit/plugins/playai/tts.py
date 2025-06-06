@@ -103,10 +103,10 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with self._tts._ensure_session().post(
                 "https://api.play.ht/api/v2/tts/stream",
@@ -122,6 +122,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "voice_engine": self._opts.model,
                     "output_format": "wav",
                     "sample_rate": self._opts.sample_rate,
+                    "language": self._opts.language,
                 },
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:

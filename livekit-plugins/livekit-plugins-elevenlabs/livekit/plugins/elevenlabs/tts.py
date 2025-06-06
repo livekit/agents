@@ -227,10 +227,10 @@ class ChunkedStream(tts.ChunkedStream):
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice_settings))
             if is_given(self._opts.voice_settings)
@@ -286,7 +286,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
@@ -300,7 +300,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/mp3",
         )
 
-        async def _tokenize_input():
+        async def _tokenize_input() -> None:
             """tokenize text from the input_ch to words"""
             word_stream = None
             async for input in self._input_ch:
@@ -321,7 +321,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._segments_ch.close()
 
-        async def _process_segments():
+        async def _process_segments() -> None:
             async for word_stream in self._segments_ch:
                 await self._run_ws(word_stream, output_emitter)
 
@@ -369,9 +369,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         eos_sent = False
 
         @utils.log_exceptions(logger=logger)
-        async def send_task():
+        async def send_task() -> None:
             nonlocal eos_sent
-            xml_content = []
+            xml_content: list[str] = []
             async for data in word_stream:
                 text = data.token
                 # send xml tags fully formed
@@ -405,7 +405,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         # receives from ws and decodes audio
         @utils.log_exceptions(logger=logger)
-        async def recv_task():
+        async def recv_task() -> None:
             nonlocal eos_sent
 
             while True:
@@ -448,7 +448,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws_conn.close()
 
 
-def _dict_to_voices_list(data: dict[str, Any]):
+def _dict_to_voices_list(data: dict[str, Any]) -> list[Voice]:
     voices: list[Voice] = []
     for voice in data["voices"]:
         voices.append(Voice(id=voice["voice_id"], name=voice["name"], category=voice["category"]))
@@ -456,7 +456,7 @@ def _dict_to_voices_list(data: dict[str, Any]):
     return voices
 
 
-def _strip_nones(data: dict[str, Any]):
+def _strip_nones(data: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in data.items() if is_given(v) and v is not None}
 
 

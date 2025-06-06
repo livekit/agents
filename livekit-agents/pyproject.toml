@@ -74,6 +74,7 @@ bithuman = ["livekit-plugins-bithuman>=1.0.22"]
 speechify = ["livekit-plugins-speechify>=1.0.22"]
 tavus = ["livekit-plugins-tavus>=1.0.22"]
 hume = ["livekit-plugins-hume>=1.0.22"]
+lmnt = ["livekit-plugins-lmnt>=1.0.22"]
 
 
 [project.urls]

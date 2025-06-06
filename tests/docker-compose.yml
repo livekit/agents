@@ -57,6 +57,8 @@ services:
       - RESEMBLE_API_KEY
       - SPEECHIFY_API_KEY
       - HUME_API_KEY
+      - SPITCH_API_KEY
+      - LMNT_API_KEY
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"
@@ -74,6 +76,7 @@ services:
       - "websocket.cluster.resemble.ai:172.30.0.10"
       - "users.rime.ai:172.30.0.10"
       - "api.hume.ai:172.30.0.10"
+      - "api.lmnt.com:172.30.0.10"
     networks:
       - toxinet
 

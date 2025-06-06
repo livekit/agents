@@ -310,7 +310,6 @@ class SynthesizeStream(ABC):
             try:
                 await self._run(output_emitter)
 
-                output_emitter.flush()
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
@@ -675,6 +674,8 @@ class AudioEmitter:
                     return
                 elif segment_ctx.audio_duration > 0:
                     if frame is None:
+                        # NOTE: if end_input called after flush with no new audio frames pushed,
+                        # it will create a 0.01s empty frame to indicate the end of the segment
                         frame = rtc.AudioFrame(
                             data=b"\0\0" * (self._sample_rate // 100 * self._num_channels),
                             sample_rate=self._sample_rate,

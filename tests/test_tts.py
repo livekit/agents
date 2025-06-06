@@ -27,12 +27,14 @@ from livekit.plugins import (
     google,
     groq,
     hume,
+    lmnt,
     neuphonic,
     openai,
     playai,
     resemble,
     rime,
     speechify,
+    spitch,
 )
 
 from .fake_tts import FakeTTS
@@ -186,6 +188,13 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": lmnt.TTS(),
+            "proxy-upstream": "api.lmnt.com:443",
+        },
+        id="lmnt",
+    ),
+    pytest.param(
+        lambda: {
             "tts": neuphonic.TTS(),
             "proxy-upstream": "api.neuphonic.com:443",
         },
@@ -232,6 +241,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.hume.ai:443",
         },
         id="hume",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": spitch.TTS(),
+            "proxy-upstream": "api.spi-tch.com:443",
+        },
+        id="spitch",
     ),
 ]
 

@@ -16,12 +16,18 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, cast
 
-import aioboto3
+import aioboto3  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
-from livekit.agents.llm import ChatContext, FunctionTool, FunctionToolCall, ToolChoice
+from livekit.agents.llm import (
+    ChatContext,
+    FunctionTool,
+    FunctionToolCall,
+    RawFunctionTool,
+    ToolChoice,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -33,12 +39,12 @@ from livekit.agents.utils import is_given
 from .log import logger
 from .utils import to_fnc_ctx
 
-TEXT_MODEL = Literal["anthropic.claude-3-5-sonnet-20241022-v1:0"]
+DEFAULT_TEXT_MODEL = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 
 @dataclass
 class _LLMOptions:
-    model: str | TEXT_MODEL
+    model: str
     temperature: NotGivenOr[float]
     tool_choice: NotGivenOr[ToolChoice]
     max_output_tokens: NotGivenOr[int]
@@ -50,10 +56,10 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: NotGivenOr[str | TEXT_MODEL] = NOT_GIVEN,
+        model: NotGivenOr[str] = DEFAULT_TEXT_MODEL,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        region: NotGivenOr[str] = NOT_GIVEN,
+        region: NotGivenOr[str] = "us-east-1",
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -70,7 +76,8 @@ class LLM(llm.LLM):
         See https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html for more details on the AWS Bedrock Runtime API.
 
         Args:
-            model (TEXT_MODEL, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html). Defaults to 'anthropic.claude-3-5-sonnet-20240620-v1:0'.
+            model (str, optional): model or inference profile arn to use(https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html).
+                Defaults to 'anthropic.claude-3-5-sonnet-20240620-v1:0'.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
@@ -89,13 +96,15 @@ class LLM(llm.LLM):
             region_name=region if is_given(region) else None,
         )
 
-        model = model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
-        if not model:
+        bedrock_model = (
+            model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
+        )
+        if not bedrock_model:
             raise ValueError(
                 "model or inference profile arn must be set using the argument or by setting the BEDROCK_INFERENCE_PROFILE_ARN environment variable."  # noqa: E501
             )
         self._opts = _LLMOptions(
-            model=model,
+            model=bedrock_model,
             temperature=temperature,
             tool_choice=tool_choice,
             max_output_tokens=max_output_tokens,
@@ -107,12 +116,15 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
-        opts = {}
+        opts: dict[str, Any] = {}
+        extra_kwargs = extra_kwargs if is_given(extra_kwargs) else {}
 
         if is_given(self._opts.model):
             opts["modelId"] = self._opts.model
@@ -124,7 +136,9 @@ class LLM(llm.LLM):
                 return None
 
             tool_config: dict[str, Any] = {"tools": to_fnc_ctx(tools)}
-            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+            tool_choice = (
+                cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
+            )
             if is_given(tool_choice):
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
                     tool_config["toolChoice"] = {"tool": {"name": tool_choice["function"]["name"]}}
@@ -145,7 +159,7 @@ class LLM(llm.LLM):
         if extra_data.system_messages:
             opts["system"] = [{"text": content} for content in extra_data.system_messages]
 
-        inference_config = {}
+        inference_config: dict[str, Any] = {}
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
         temperature = temperature if is_given(temperature) else self._opts.temperature
@@ -176,7 +190,7 @@ class LLMStream(llm.LLMStream):
         chat_ctx: ChatContext,
         session: aioboto3.Session,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -192,7 +206,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
         try:
             async with self._session.client("bedrock-runtime") as client:
-                response = await client.converse_stream(**self._opts)  # type: ignore
+                response = await client.converse_stream(**self._opts)
                 request_id = response["ResponseMetadata"]["RequestId"]
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
@@ -240,6 +254,11 @@ class LLMStream(llm.LLMStream):
                     completion_tokens=metadata["usage"]["outputTokens"],
                     prompt_tokens=metadata["usage"]["inputTokens"],
                     total_tokens=metadata["usage"]["totalTokens"],
+                    prompt_cached_tokens=(
+                        metadata["usage"]["cacheReadInputTokens"]
+                        if "cacheReadInputTokens" in metadata["usage"]
+                        else 0
+                    ),
                 ),
             )
         elif "contentBlockStop" in chunk:
