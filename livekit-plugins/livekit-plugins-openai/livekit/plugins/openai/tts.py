@@ -63,6 +63,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
         response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
+        request_timeout: int = 30
     ) -> None:
         """
         Create a new instance of OpenAI TTS.
@@ -96,6 +97,8 @@ class TTS(tts.TTS):
                 ),
             ),
         )
+
+        self.request_timeout = request_timeout
 
     def update_options(
         self,
@@ -191,7 +194,7 @@ class ChunkedStream(tts.ChunkedStream):
             response_format=self._opts.response_format,  # type: ignore
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.NOT_GIVEN,
-            timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
+            timeout=httpx.Timeout(self._tts.request_timeout, connect=self._conn_options.timeout),
         )
 
         try:
