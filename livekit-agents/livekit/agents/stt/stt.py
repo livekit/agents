@@ -196,6 +196,10 @@ class STT(
     ) -> None:
         await self.aclose()
 
+    def prewarm(self) -> None:
+        """Pre-warm connection to the STT service"""
+        pass
+
 
 class RecognizeStream(ABC):
     class _FlushSentinel:

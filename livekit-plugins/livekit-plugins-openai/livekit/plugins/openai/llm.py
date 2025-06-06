@@ -1,6 +1,5 @@
 # Copyright 2023 LiveKit, Inc.
 #
-
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -16,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -24,6 +24,7 @@ import httpx
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents.utils import aio
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
@@ -594,6 +595,18 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
         )
+
+    def prewarm(self) -> None:
+        async def _prewarm() -> None:
+            try:
+                await self._client.get("/", cast_to=str)
+            except Exception as e:
+                logger.warning("failed to prewarm openai llm", exc_info=e)
+
+        self._prewarm_task = asyncio.create_task(_prewarm())
+
+    async def aclose(self) -> None:
+        await aio.cancel_and_wait(self._prewarm_task)
 
 
 class LLMStream(llm.LLMStream):
