@@ -71,6 +71,7 @@ from .voice import (
     UserStateChangedEvent,
     avatar,
     io,
+    workflows,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -161,6 +162,7 @@ __all__ = [
     "utils",
     "vad",
     "voice",
+    "workflows",
 ]
 
 # Cleanup docs of unexported modules

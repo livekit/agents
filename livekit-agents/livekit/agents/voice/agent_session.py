@@ -559,11 +559,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated.
-
-        Example:
-            ```python
-            await session.interrupt()
-            ```
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")

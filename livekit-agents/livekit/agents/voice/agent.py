@@ -3,12 +3,19 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, Callable, Awaitable
 
 from livekit import rtc
 
 from .. import llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, FunctionTool, RawFunctionTool, ToolError, find_function_tools
+from ..llm import (
+    ChatContext,
+    FunctionTool,
+    RawFunctionTool,
+    ToolError,
+    find_function_tools,
+    function_tool,
+)
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -535,6 +542,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         super().__init__(
@@ -546,6 +555,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             vad=vad,
             llm=llm,
             tts=tts,
+            mcp_servers=mcp_servers,
+            allow_interruptions=allow_interruptions,
         )
 
         self.__started = False
@@ -568,7 +579,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         current_task = asyncio.current_task()
         if current_task is None:
-            raise RuntimeError("{self.__class__.__name__} must be executed inside an async context")
+            raise RuntimeError(
+                f"{self.__class__.__name__} must be executed inside an async context"
+            )
 
         task_info = _get_activity_task_info(current_task)
         if not task_info or not task_info.inline_task:
@@ -607,7 +620,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         if session.current_agent != self:
             logger.warning(
                 (
-                    "{self.__class__.__name__} completed, but the agent has changed in the meantime. "
+                    f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
                     "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
                 )
             )
