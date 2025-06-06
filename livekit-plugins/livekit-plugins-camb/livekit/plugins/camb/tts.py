@@ -135,14 +135,14 @@ class TTS(tts.TTS):
         """Ensure we have a valid HTTP session"""
         if self._session is not None:
             return self._session
-        
+
         # Only try to get a session from the context if we don't have one
         try:
             self._session = utils.http_context.http_session()
         except RuntimeError:
             # If we're outside a job context, create a new session
             self._session = aiohttp.ClientSession()
-        
+
         return self._session
 
     async def list_voices(self) -> list[Voice]:
