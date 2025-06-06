@@ -36,6 +36,7 @@ members = [
     "livekit-plugins-gladia",
     "livekit-plugins-google",
     "livekit-plugins-groq",
+    "livekit-plugins-hedra",
     "livekit-plugins-hume",
     "livekit-plugins-lmnt",
     "livekit-plugins-minimal",
@@ -1790,6 +1791,16 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "livekit-plugins-openai", editable = "livekit-plugins/livekit-plugins-openai" },
 ]
+
+[[package]]
+name = "livekit-plugins-hedra"
+source = { editable = "livekit-plugins/livekit-plugins-hedra" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-hume"
