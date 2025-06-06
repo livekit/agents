@@ -370,14 +370,17 @@ class AgentActivity(RecognitionHooks):
             if isinstance(self.llm, llm.LLM):
                 self.llm.on("metrics_collected", self._on_metrics_collected)
                 self.llm.on("error", self._on_error)
+                self.llm.prewarm()
 
             if isinstance(self.stt, stt.STT):
                 self.stt.on("metrics_collected", self._on_metrics_collected)
                 self.stt.on("error", self._on_error)
+                self.stt.prewarm()
 
             if isinstance(self.tts, tts.TTS):
                 self.tts.on("metrics_collected", self._on_metrics_collected)
                 self.tts.on("error", self._on_error)
+                self.tts.prewarm()
 
             if isinstance(self.vad, vad.VAD):
                 self.vad.on("metrics_collected", self._on_metrics_collected)

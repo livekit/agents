@@ -27,11 +27,14 @@ from livekit.agents import (
     APITimeoutError,
     tts,
 )
+import asyncio
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, aio
 
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
+
+from .log import logger
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -175,6 +178,18 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    def prewarm(self) -> None:
+        async def _prewarm() -> None:
+            try:
+                await self._client.get("/", cast_to=str)
+            except Exception as e:
+                logger.warning("failed to prewarm openai tts", exc_info=e)
+
+        self._prewarm_task = asyncio.create_task(_prewarm())
+
+    async def aclose(self) -> None:
+        await aio.cancel_and_wait(self._prewarm_task)
 
 
 class ChunkedStream(tts.ChunkedStream):
