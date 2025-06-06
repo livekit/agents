@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any, cast
@@ -649,10 +650,11 @@ class LLMStream(llm.LLMStream):
                 **self._extra_kwargs,
             )
 
+            thinking = asyncio.Event()
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
-                        chat_chunk = self._parse_choice(chunk.id, choice)
+                        chat_chunk = self._parse_choice(chunk.id, choice, thinking)
                         if chat_chunk is not None:
                             retryable = False
                             self._event_ch.send_nowait(chat_chunk)
@@ -685,7 +687,9 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_choice(self, id: str, choice: Choice) -> llm.ChatChunk | None:
+    def _parse_choice(
+        self, id: str, choice: Choice, thinking: asyncio.Event
+    ) -> llm.ChatChunk | None:
         delta = choice.delta
 
         # https://github.com/livekit/agents/issues/688
@@ -744,6 +748,11 @@ class LLMStream(llm.LLMStream):
             )
             self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
             return call_chunk
+
+        delta.content = llm_utils.strip_thinking_tokens(delta.content, thinking)
+
+        if not delta.content:
+            return None
 
         return llm.ChatChunk(
             id=id,
