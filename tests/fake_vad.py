@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import time
 
-from fake_stt import FakeUserSpeech
-
 from livekit.agents.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
+
+from .fake_stt import FakeUserSpeech
 
 
 class FakeVAD(VAD):
@@ -42,10 +42,10 @@ class FakeVADStream(VADStream):
             return
 
         await self._input_ch.recv()
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         def current_time() -> float:
-            return time.time() - start_time
+            return time.perf_counter() - start_time
 
         for fake_speech in self._vad._fake_user_speeches:
             next_start_of_speech_time = fake_speech.start_time + self._vad._min_speech_duration

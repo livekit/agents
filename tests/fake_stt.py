@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import time
 from typing import Literal
@@ -62,6 +63,7 @@ class FakeSTT(STT):
                 if prev.end_time > next.start_time:
                     raise ValueError("fake user speeches overlap")
         self._fake_user_speeches = fake_user_speeches
+        self._done_fut = asyncio.Future[None]()
 
         self._recognize_ch = utils.aio.Chan[RecognizeSentinel]()
         self._stream_ch = utils.aio.Chan[FakeRecognizeStream]()
@@ -93,6 +95,10 @@ class FakeSTT(STT):
     @property
     def fake_user_speeches(self) -> list[FakeUserSpeech]:
         return self._fake_user_speeches
+
+    @property
+    def fake_user_speeches_done(self) -> asyncio.Future[None]:
+        return self._done_fut
 
     async def _recognize_impl(
         self,
@@ -152,10 +158,12 @@ class FakeRecognizeStream(RecognizeStream):
     def attempt(self) -> int:
         return self._attempt
 
-    def send_fake_transcript(self, transcript: str) -> None:
+    def send_fake_transcript(self, transcript: str, is_final: bool = True) -> None:
         self._event_ch.send_nowait(
             SpeechEvent(
-                type=SpeechEventType.FINAL_TRANSCRIPT,
+                type=SpeechEventType.FINAL_TRANSCRIPT
+                if is_final
+                else SpeechEventType.INTERIM_TRANSCRIPT,
                 alternatives=[SpeechData(text=transcript, language="")],
             )
         )
@@ -184,12 +192,21 @@ class FakeRecognizeStream(RecognizeStream):
 
         # start from when the first frame is pushed
         await self._input_ch.recv()
-        start_time = time.time()
+        start_time = time.perf_counter()
+
+        def curr_time() -> float:
+            return time.perf_counter() - start_time
 
         for fake_speech in self._stt._fake_user_speeches:
-            curr_time = time.time() - start_time
-            next_transcript_time = fake_speech.end_time + fake_speech.stt_delay
-            if curr_time < next_transcript_time:
-                await asyncio.sleep(next_transcript_time - curr_time)
+            interim_transcript_time = fake_speech.end_time + fake_speech.stt_delay * 0.5
+            if curr_time() < interim_transcript_time:
+                await asyncio.sleep(interim_transcript_time - curr_time())
+            self.send_fake_transcript(" ".join(fake_speech.transcript.split()[:2]), is_final=False)
 
-            self.send_fake_transcript(fake_speech.transcript)
+            final_transcript_time = fake_speech.end_time + fake_speech.stt_delay
+            if curr_time() < final_transcript_time:
+                await asyncio.sleep(final_transcript_time - curr_time())
+            self.send_fake_transcript(fake_speech.transcript, is_final=True)
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._stt._done_fut.set_result(None)

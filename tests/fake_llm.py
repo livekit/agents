@@ -81,11 +81,12 @@ class FakeLLMStream(LLMStream):
         self._llm = llm
 
     async def _run(self) -> None:
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         index_text = self._get_index_text()
         if index_text not in self._llm.fake_response_map:
-            raise ValueError(f"No response found for input: {index_text}")
+            # empty response
+            return
 
         resp = self._llm.fake_response_map[index_text]
 
@@ -96,9 +97,9 @@ class FakeLLMStream(LLMStream):
             delta = resp.content[i * chunk_size : (i + 1) * chunk_size]
             self._send_chunk(delta=delta)
 
-        self._send_chunk(tool_calls=resp.tool_calls)
+        await asyncio.sleep(resp.duration - (time.perf_counter() - start_time))
 
-        await asyncio.sleep(resp.duration - (time.time() - start_time))
+        self._send_chunk(tool_calls=resp.tool_calls)
 
     def _send_chunk(
         self, *, delta: str | None = None, tool_calls: list[FunctionToolCall] | None = None
@@ -116,19 +117,21 @@ class FakeLLMStream(LLMStream):
 
     def _get_index_text(self) -> str:
         assert self.chat_ctx.items
+        items = self.chat_ctx.items
+
+        # for generate_reply(instructions=...)
+        for item in items:
+            if item.type == "message" and item.role == "system":
+                contents = item.text_content.split("\n")
+                if len(contents) > 1 and contents[-1].startswith("instructions:"):
+                    return contents[-1]
 
         # if the last item is a user message
-        items = self.chat_ctx.items
         if items[-1].type == "message" and items[-1].role == "user":
             return items[-1].text_content
 
         # if the last item is a function call output, use the tool output
         if items[-1].type == "function_call_output":
             return items[-1].output
-
-        # find the first system message
-        for item in items:
-            if item.type == "message" and item.role == "system":
-                return item.text_content
 
         raise ValueError("No input text found")

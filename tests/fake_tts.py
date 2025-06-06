@@ -136,7 +136,7 @@ class FakeChunkedStream(ChunkedStream):
 
             await asyncio.sleep(self._tts._fake_timeout)
 
-        start_time = time.time()
+        start_time = time.perf_counter()
         if not (resp := self._tts.fake_response_map.get(self._input_text)):
             resp = FakeTTSResponse(
                 input=self._input_text,
@@ -162,7 +162,7 @@ class FakeChunkedStream(ChunkedStream):
 
         output_emitter.flush()
 
-        delay = resp.duration - (time.time() - start_time)
+        delay = resp.duration - (time.perf_counter() - start_time)
         if delay > 0.0:
             await asyncio.sleep(delay)
 
@@ -209,7 +209,7 @@ class FakeSynthesizeStream(SynthesizeStream):
             elif isinstance(data, SynthesizeStream._FlushSentinel) and not input_text:
                 continue
 
-            start_time = time.time()
+            start_time = time.perf_counter()
             self._mark_started()
             if not (resp := self._tts.fake_response_map.get(input_text)):
                 resp = FakeTTSResponse(
@@ -224,7 +224,7 @@ class FakeSynthesizeStream(SynthesizeStream):
                 continue
 
             if resp.ttfb > 0.0:
-                await asyncio.sleep(resp.ttfb)
+                await asyncio.sleep(resp.ttfb - (time.perf_counter() - start_time))
 
             output_emitter.start_segment(segment_id=utils.shortuuid("fake_segment_"))
 
@@ -237,7 +237,7 @@ class FakeSynthesizeStream(SynthesizeStream):
                 output_emitter.push(b"\x00\x00" * num_samples)
                 pushed_samples += num_samples
 
-            delay = resp.duration - (time.time() - start_time)
+            delay = resp.duration - (time.perf_counter() - start_time)
             if delay > 0.0:
                 await asyncio.sleep(delay)
 
