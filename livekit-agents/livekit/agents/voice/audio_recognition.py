@@ -102,13 +102,15 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_vad(None)
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
+    def push_vad_audio(self, frame: rtc.AudioFrame) -> None:
+        self._sample_rate = frame.sample_rate
+        if self._vad_ch is not None:
+            self._vad_ch.send_nowait(frame)
+
+    def push_stt_audio(self, frame: rtc.AudioFrame) -> None:
         self._sample_rate = frame.sample_rate
         if self._stt_ch is not None:
             self._stt_ch.send_nowait(frame)
-
-        if self._vad_ch is not None:
-            self._vad_ch.send_nowait(frame)
 
     async def aclose(self) -> None:
         await aio.cancel_and_wait(*self._tasks)
