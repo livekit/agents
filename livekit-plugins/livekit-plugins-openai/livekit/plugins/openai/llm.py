@@ -646,6 +646,7 @@ class LLMStream(llm.LLMStream):
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,
+                timeout=httpx.Timeout(self._conn_options.timeout),
                 **self._extra_kwargs,
             )
 
