@@ -312,6 +312,9 @@ class LLMStream(llm.LLMStream):
                     if extra_data.system_messages
                     else None
                 ),
+                http_options=types.HttpOptions(
+                    timeout=int(self._conn_options.timeout * 1000),
+                ),
                 **self._extra_kwargs,
             )
 
