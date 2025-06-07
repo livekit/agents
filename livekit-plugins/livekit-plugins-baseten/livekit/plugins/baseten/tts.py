@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import ssl
 from dataclasses import dataclass, replace
 
 import aiohttp
-import ssl
 
 from livekit.agents import (
     APIConnectionError,
@@ -80,7 +80,7 @@ class TTS(tts.TTS):
                 "Pass one in via the `api_key` parameter, "
                 "or set it as the `BASETEN_API_KEY` environment variable"
             )
-        
+
         if not model_endpoint:
             raise ValueError(
                 "The model endpoint is required, you can find it in the Baseten dashboard"
@@ -88,7 +88,7 @@ class TTS(tts.TTS):
 
         self._api_key = api_key
         self._model_endpoint = model_endpoint
-        
+
         self._opts = _TTSOptions(
             voice=voice, model=model, language=language, temperature=temperature
         )
@@ -104,7 +104,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[TTSModel | str] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN
     ) -> None:
@@ -120,12 +120,30 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, api_key=self._api_key, input_text=text, model_endpoint=self._model_endpoint, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            api_key=self._api_key,
+            input_text=text,
+            model_endpoint=self._model_endpoint,
+            conn_options=conn_options
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, api_key: str, model_endpoint: str, input_text: str, conn_options: APIConnectOptions) -> None:
-        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+    def __init__(
+    self,
+    *,
+    tts: TTS,
+    api_key: str,
+    model_endpoint: str,
+    input_text: str,
+    conn_options: APIConnectOptions,
+) -> None:
+        super().__init__(
+            tts=tts,
+            input_text=input_text,
+            conn_options=conn_options,
+        )
         self._tts = tts
         self._api_key = api_key
         self._model_endpoint = model_endpoint

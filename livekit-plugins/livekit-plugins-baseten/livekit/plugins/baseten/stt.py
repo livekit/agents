@@ -19,14 +19,13 @@ import asyncio
 import dataclasses
 import json
 import os
+import ssl
 import weakref
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlencode
-import ssl
-import numpy as np
 
 import aiohttp
+import numpy as np
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -84,7 +83,6 @@ class STT(stt.STT):
     vad_threshold: float = 0.5,
     vad_min_silence_duration_ms: int = 300,
     vad_speech_pad_ms: int = 30,
-    whisper_audio_url: str = "https://example.com/audio.wav",
     whisper_audio_language: str = "en",
     http_session: aiohttp.ClientSession | None = None,
 ):
@@ -127,7 +125,7 @@ class STT(stt.STT):
             self._session = utils.http_context.http_session()
         return self._session
 
-    
+
     async def _recognize_impl(
     self,
     buffer: AudioBuffer,
@@ -180,7 +178,6 @@ class STT(stt.STT):
                 vad_threshold=vad_threshold,
                 vad_min_silence_duration_ms=vad_min_silence_duration_ms,
                 vad_speech_pad_ms=vad_speech_pad_ms,
-                whisper_audio_url=whisper_audio_url,
                 whisper_audio_language=whisper_audio_language,
                 buffer_size_seconds=buffer_size_seconds,
             )
@@ -218,7 +215,6 @@ class SpeechStream(stt.SpeechStream):
     vad_threshold: NotGivenOr[float] = NOT_GIVEN,
     vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
     vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
-    whisper_audio_url: NotGivenOr[str] = NOT_GIVEN,
     whisper_audio_language: NotGivenOr[str] = NOT_GIVEN,
     buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
 ):
@@ -300,6 +296,9 @@ class SpeechStream(stt.SpeechStream):
                         segments = data.get("segments", [])
 
                         if text:
+                            start_time = segments[0].get("start", 0.0) if segments else 0.0
+                            end_time = segments[-1].get("end", 0.0) if segments else 0.0
+
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                                 alternatives=[
@@ -307,13 +306,13 @@ class SpeechStream(stt.SpeechStream):
                                         language="",
                                         text=text,
                                         confidence=confidence,
-                                        start_time=segments[0].get("start", 0.0) if segments else 0.0,
-                                        end_time=segments[-1].get("end", 0.0) if segments else 0.0,
+                                        start_time=start_time,
+                                        end_time=end_time,
                                     )
                                 ]
                             )
                             self._event_ch.send_nowait(event)
-                    
+
                     elif msg_type == "final_transcript":
                         text = data.get("transcript", "")
                         confidence = data.get("confidence", 0.0)
@@ -321,6 +320,9 @@ class SpeechStream(stt.SpeechStream):
                         language = data.get("language", "")
 
                         if text:
+                            start_time=segments[0].get("start", 0.0) if segments else 0.0
+                            end_time=segments[-1].get("end", 0.0) if segments else 0.0
+
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                 alternatives=[
@@ -328,8 +330,8 @@ class SpeechStream(stt.SpeechStream):
                                         language=language,
                                         text=text,
                                         confidence=confidence,
-                                        start_time=segments[0].get("start", 0.0) if segments else 0.0,
-                                        end_time=segments[-1].get("end", 0.0) if segments else 0.0,
+                                        start_time=start_time,
+                                        end_time=end_time,
                                     )
                                 ]
                             )
