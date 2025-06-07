@@ -354,6 +354,50 @@ async def test_interruption_by_text_input() -> None:
     assert chat_ctx_items[4].text_content == "Ok, I'll stop now."
 
 
+async def test_interruption_before_speaking() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.", duration=1.0)
+    actions.add_tts(10.0)
+    actions.add_user_speech(3.0, 4.0, "Stop!")
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await run_session(session, agent)
+
+    assert len(agent_state_events) == 5
+    assert agent_state_events[0].old_state == "initializing"
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"  # without speaking state
+    assert agent_state_events[2].new_state == "listening"
+    check_timestamp(
+        agent_state_events[2].created_at - t_origin, 3.5, speed_factor=speed
+    )  # interrupted at 3.5s
+    assert agent_state_events[3].new_state == "thinking"
+    assert agent_state_events[4].new_state == "listening"
+
+    assert len(playback_finished_events) == 0
+
+    assert len(agent.chat_ctx.items) == 3
+    assert agent.chat_ctx.items[0].type == "message"
+    assert agent.chat_ctx.items[0].role == "system"
+    assert agent.chat_ctx.items[1].type == "message"
+    assert agent.chat_ctx.items[1].role == "user"
+    assert agent.chat_ctx.items[1].text_content == "Tell me a story."
+    # before we insert an empty assistant message with interrupted=True
+    # now we ignore it when the text is empty
+    assert agent.chat_ctx.items[2].type == "message"
+    assert agent.chat_ctx.items[2].role == "user"
+    assert agent.chat_ctx.items[2].text_content == "Stop!"
+
+
 async def test_generate_reply() -> None:
     """
     Test `generate_reply` in `on_enter` and tool call, `say` in `on_user_turn_completed`
