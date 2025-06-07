@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import time
+from typing import Literal
+
+from pydantic import BaseModel
 
 from livekit.agents import NOT_GIVEN, APIConnectionError, NotGivenOr, tts, utils
 from livekit.agents.tts import (
@@ -12,6 +17,23 @@ from livekit.agents.tts import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 
+class FakeTTSResponse(BaseModel):
+    """Map from input text to audio duration, ttfb, and duration"""
+
+    type: Literal["tts"] = "tts"
+    input: str
+    audio_duration: float
+    ttfb: float
+    duration: float
+
+    def speed_up(self, factor: float) -> FakeTTSResponse:
+        obj = copy.deepcopy(self)
+        obj.audio_duration /= factor
+        obj.ttfb /= factor
+        obj.duration /= factor
+        return obj
+
+
 class FakeTTS(TTS):
     def __init__(
         self,
@@ -21,6 +43,7 @@ class FakeTTS(TTS):
         fake_timeout: float | None = None,
         fake_audio_duration: float | None = None,
         fake_exception: Exception | None = None,
+        fake_responses: list[FakeTTSResponse] | None = None,
     ) -> None:
         super().__init__(
             capabilities=TTSCapabilities(streaming=True),
@@ -31,6 +54,10 @@ class FakeTTS(TTS):
         self._fake_timeout = fake_timeout
         self._fake_audio_duration = fake_audio_duration
         self._fake_exception = fake_exception
+        self._fake_response_map: dict[str, FakeTTSResponse] = {}
+        if fake_responses is not None:
+            for response in fake_responses:
+                self._fake_response_map[response.input] = response
 
         self._synthesize_ch = utils.aio.Chan[FakeChunkedStream]()
         self._stream_ch = utils.aio.Chan[FakeSynthesizeStream]()
@@ -58,6 +85,10 @@ class FakeTTS(TTS):
     @property
     def stream_ch(self) -> utils.aio.ChanReceiver[FakeSynthesizeStream]:
         return self._stream_ch
+
+    @property
+    def fake_response_map(self) -> dict[str, FakeTTSResponse]:
+        return self._fake_response_map
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -105,11 +136,21 @@ class FakeChunkedStream(ChunkedStream):
 
             await asyncio.sleep(self._tts._fake_timeout)
 
-        if self._tts._fake_audio_duration is not None:
+        start_time = time.perf_counter()
+        if not (resp := self._tts.fake_response_map.get(self._input_text)):
+            resp = FakeTTSResponse(
+                input=self._input_text,
+                audio_duration=self._tts._fake_audio_duration or 0.0,
+                ttfb=0.0,
+                duration=0.0,  # duration from ttfb to end of generation
+            )
+
+        if resp.audio_duration > 0.0:
+            await asyncio.sleep(resp.ttfb)
+
             pushed_samples = 0
             max_samples = (
-                int(self._tts.sample_rate * self._tts._fake_audio_duration + 0.5)
-                * self._tts.num_channels
+                int(self._tts.sample_rate * resp.audio_duration + 0.5) * self._tts.num_channels
             )
             while pushed_samples < max_samples:
                 num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
@@ -120,6 +161,10 @@ class FakeChunkedStream(ChunkedStream):
             raise self._tts._fake_exception
 
         output_emitter.flush()
+
+        delay = resp.duration - (time.perf_counter() - start_time)
+        if delay > 0.0:
+            await asyncio.sleep(delay)
 
 
 class FakeSynthesizeStream(SynthesizeStream):
@@ -156,32 +201,47 @@ class FakeSynthesizeStream(SynthesizeStream):
             stream=True,
         )
 
-        has_data = False
+        input_text = ""
         async for data in self._input_ch:
             if isinstance(data, str):
-                has_data = True
+                input_text += data
                 continue
-            elif isinstance(data, SynthesizeStream._FlushSentinel) and not has_data:
+            elif isinstance(data, SynthesizeStream._FlushSentinel) and not input_text:
                 continue
 
-            has_data = False
+            start_time = time.perf_counter()
+            self._mark_started()
+            if not (resp := self._tts.fake_response_map.get(input_text)):
+                resp = FakeTTSResponse(
+                    input=input_text,
+                    audio_duration=self._tts._fake_audio_duration or 0.0,
+                    ttfb=0.0,
+                    duration=0.0,
+                )
 
-            if self._tts._fake_audio_duration is None:
+            input_text = ""
+            if resp.audio_duration == 0.0:
                 continue
+
+            if resp.ttfb > 0.0:
+                await asyncio.sleep(resp.ttfb - (time.perf_counter() - start_time))
 
             output_emitter.start_segment(segment_id=utils.shortuuid("fake_segment_"))
 
             pushed_samples = 0
             max_samples = (
-                int(self._tts.sample_rate * self._tts._fake_audio_duration + 0.5)
-                * self._tts.num_channels
+                int(self._tts.sample_rate * resp.audio_duration + 0.5) * self._tts.num_channels
             )
             while pushed_samples < max_samples:
                 num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
                 output_emitter.push(b"\x00\x00" * num_samples)
                 pushed_samples += num_samples
 
+            delay = resp.duration - (time.perf_counter() - start_time)
+            if delay > 0.0:
+                await asyncio.sleep(delay)
+
+            output_emitter.flush()
+
         if self._tts._fake_exception is not None:
             raise self._tts._fake_exception
-
-        output_emitter.end_input()
