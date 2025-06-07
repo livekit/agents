@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents[codecs, images]>=1.0.22",
-    "openai[realtime]>=1.68.2",
+    "openai[realtime]>=1.84.0",
 ]
 
 
