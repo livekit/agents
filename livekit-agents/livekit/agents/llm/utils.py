@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 import sys
@@ -37,6 +38,9 @@ from .tool_context import (
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
+
+THINK_TAG_START = "<think>"
+THINK_TAG_END = "</think>"
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -400,3 +404,23 @@ def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str
         key = field.alias if by_alias and field.alias else name
         result[key] = getattr(model, name)
     return result
+
+
+def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str | None:
+    if content is None:
+        return None
+
+    if thinking.is_set():
+        idx = content.find(THINK_TAG_END)
+        if idx >= 0:
+            thinking.clear()
+            content = content[idx + len(THINK_TAG_END) :]
+        else:
+            content = None
+    else:
+        idx = content.find(THINK_TAG_START)
+        if idx >= 0:
+            thinking.set()
+            content = content[idx + len(THINK_TAG_START) :]
+
+    return content
