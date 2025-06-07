@@ -194,13 +194,13 @@ class LLM(llm.LLM):
         Create a new instance of Cerebras LLM.
 
         ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
-        the ``CEREBRAS_API_KEY`` environmental variable.
+        the ``CEREBRAS_API_KEY`` environment variable.
         """
 
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
         if api_key is None:
             raise ValueError(
-                "Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable"  # noqa: E501
+                "Cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable"  # noqa: E501
             )
 
         return LLM(
