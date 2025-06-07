@@ -522,6 +522,10 @@ async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float
 def check_timestamp(
     t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.5
 ) -> None:
+    """
+    Check if the event timestamp is within the target timestamp +/- max_abs_diff.
+    The event timestamp is scaled by the speed factor.
+    """
     t_event = t_event * speed_factor
     print(
         f"check_timestamp: t_event: {t_event}, t_target: {t_target}, max_abs_diff: {max_abs_diff}"
