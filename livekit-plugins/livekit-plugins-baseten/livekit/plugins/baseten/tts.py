@@ -106,7 +106,7 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
@@ -125,20 +125,20 @@ class TTS(tts.TTS):
             api_key=self._api_key,
             input_text=text,
             model_endpoint=self._model_endpoint,
-            conn_options=conn_options
+            conn_options=conn_options,
         )
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-    self,
-    *,
-    tts: TTS,
-    api_key: str,
-    model_endpoint: str,
-    input_text: str,
-    conn_options: APIConnectOptions,
-) -> None:
+        self,
+        *,
+        tts: TTS,
+        api_key: str,
+        model_endpoint: str,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(
             tts=tts,
             input_text=input_text,
@@ -153,13 +153,13 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._tts._ensure_session().post(
                 self._model_endpoint,
-                headers = {
+                headers={
                     "Authorization": f"Api-Key {self._api_key}",
                 },
                 json={
                     "prompt": self._input_text,
                     "voice": self._opts.voice,
-                    "temperature": self._opts.temperature
+                    "temperature": self._opts.temperature,
                 },
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
                 ssl=ssl_context,
@@ -170,7 +170,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=24000,
                     num_channels=1,
-                    mime_type="audio/pcm", # TODO: This needs to change to audio/wav I think.
+                    mime_type="audio/pcm",  # TODO: This needs to change to audio/wav I think.
                 )
 
                 async for data, _ in resp.content.iter_chunks():

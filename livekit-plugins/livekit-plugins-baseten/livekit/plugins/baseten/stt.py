@@ -54,6 +54,7 @@ bytes_per_frame = {
 
 ssl_context = ssl._create_unverified_context()
 
+
 @dataclass
 class STTOptions:
     sample_rate: int
@@ -73,19 +74,19 @@ class STTOptions:
 
 class STT(stt.STT):
     def __init__(
-    self,
-    *,
-    api_key: NotGivenOr[str] = NOT_GIVEN,
-    model_endpoint: NotGivenOr[str] = NOT_GIVEN,
-    sample_rate: int = 16000,
-    encoding: NotGivenOr[Literal["pcm_s16le", "pcm_mulaw"]] = NOT_GIVEN,
-    buffer_size_seconds: float = 0.032,
-    vad_threshold: float = 0.5,
-    vad_min_silence_duration_ms: int = 300,
-    vad_speech_pad_ms: int = 30,
-    whisper_audio_language: str = "en",
-    http_session: aiohttp.ClientSession | None = None,
-):
+        self,
+        *,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        model_endpoint: NotGivenOr[str] = NOT_GIVEN,
+        sample_rate: int = 16000,
+        encoding: NotGivenOr[Literal["pcm_s16le", "pcm_mulaw"]] = NOT_GIVEN,
+        buffer_size_seconds: float = 0.032,
+        vad_threshold: float = 0.5,
+        vad_min_silence_duration_ms: int = 300,
+        vad_speech_pad_ms: int = 30,
+        whisper_audio_language: str = "en",
+        http_session: aiohttp.ClientSession | None = None,
+    ):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -125,14 +126,13 @@ class STT(stt.STT):
             self._session = utils.http_context.http_session()
         return self._session
 
-
     async def _recognize_impl(
-    self,
-    buffer: AudioBuffer,
-    *,
-    language: NotGivenOr[str] = NOT_GIVEN,
-    conn_options: APIConnectOptions,
-) -> stt.SpeechEvent:
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ) -> stt.SpeechEvent:
         raise NotImplementedError("Not implemented")
 
     def stream(
@@ -154,14 +154,14 @@ class STT(stt.STT):
         return stream
 
     def update_options(
-    self,
-    *,
-    vad_threshold: NotGivenOr[float] = NOT_GIVEN,
-    vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
-    vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
-    whisper_audio_language: NotGivenOr[str] = NOT_GIVEN,
-    buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
-):
+        self,
+        *,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
+        whisper_audio_language: NotGivenOr[str] = NOT_GIVEN,
+        buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
+    ):
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(vad_min_silence_duration_ms):
@@ -210,14 +210,14 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
 
     def update_options(
-    self,
-    *,
-    vad_threshold: NotGivenOr[float] = NOT_GIVEN,
-    vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
-    vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
-    whisper_audio_language: NotGivenOr[str] = NOT_GIVEN,
-    buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
-):
+        self,
+        *,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
+        whisper_audio_language: NotGivenOr[str] = NOT_GIVEN,
+        buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
+    ):
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(vad_min_silence_duration_ms):
@@ -230,7 +230,6 @@ class SpeechStream(stt.SpeechStream):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
         self._reconnect_event.set()
-
 
     async def _run(self) -> None:
         """
@@ -261,7 +260,6 @@ class SpeechStream(stt.SpeechStream):
 
                     int16_array = np.frombuffer(frame.data, dtype=np.int16)
                     await ws.send_bytes(int16_array.tobytes())
-
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
@@ -309,7 +307,7 @@ class SpeechStream(stt.SpeechStream):
                                         start_time=start_time,
                                         end_time=end_time,
                                     )
-                                ]
+                                ],
                             )
                             self._event_ch.send_nowait(event)
 
@@ -320,8 +318,8 @@ class SpeechStream(stt.SpeechStream):
                         language = data.get("language", "")
 
                         if text:
-                            start_time=segments[0].get("start", 0.0) if segments else 0.0
-                            end_time=segments[-1].get("end", 0.0) if segments else 0.0
+                            start_time = segments[0].get("start", 0.0) if segments else 0.0
+                            end_time = segments[-1].get("end", 0.0) if segments else 0.0
 
                             event = stt.SpeechEvent(
                                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -333,7 +331,7 @@ class SpeechStream(stt.SpeechStream):
                                         start_time=start_time,
                                         end_time=end_time,
                                     )
-                                ]
+                                ],
                             )
                             self._final_events.append(event)
                             self._event_ch.send_nowait(event)
@@ -343,7 +341,6 @@ class SpeechStream(stt.SpeechStream):
 
                 except Exception:
                     logger.exception("Failed to process message from Baseten")
-
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
@@ -392,8 +389,8 @@ class SpeechStream(stt.SpeechStream):
             "streaming_whisper_params": {
                 "encoding": "pcm_s16le",
                 "sample_rate": 16000,
-                "enable_partial_transcripts": False
-            }
+                "enable_partial_transcripts": False,
+            },
         }
 
         await ws.send_str(json.dumps(metadata))
