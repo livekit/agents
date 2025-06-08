@@ -24,7 +24,7 @@ import base64
 import io
 import os
 import wave
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -210,27 +210,13 @@ class TTS(tts.TTS):
         return self._session
 
     # Implement the abstract synthesize method
-    async def synthesize(
+    def synthesize(
         self, text: str, *, conn_options: APIConnectOptions | None = None
-    ) -> AsyncIterator[tts.SynthesizedAudio]:
-        """Synthesize text to audio using Sarvam.ai TTS API.
-
-        Args:
-            text: The text to synthesize
-            conn_options: Connection options for the API request (for interface compatibility)
-
-        Returns:
-            An async iterator yielding audio frames
-
-        Raises:
-            APIConnectionError: On network connection errors
-            APIStatusError: On API errors (non-200 status)
-            APITimeoutError: On API timeout
-        """
+    ) -> ChunkedStream:
+        """Synthesize text to audio using Sarvam.ai TTS API."""
         if conn_options is None:
             conn_options = DEFAULT_API_CONNECT_OPTIONS
-        async for audio_event in self._synthesize_impl(text, conn_options=conn_options):
-            yield audio_event
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     async def _synthesize_impl(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -342,3 +328,16 @@ class TTS(tts.TTS):
         except Exception as e:
             self._logger.error(f"Error during Sarvam TTS synthesis: {e}")
             raise APIConnectionError(f"Unexpected error in Sarvam TTS: {e}") from e
+
+
+class ChunkedStream(tts.ChunkedStream):
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._tts = tts
+
+    async def _run(self) -> None:
+        # Forward events from the TTS implementation into the base event channel
+        async for audio_event in self._tts._synthesize_impl(
+            self._input_text, conn_options=self._conn_options
+        ):
+            self._event_ch.send_nowait(audio_event)
