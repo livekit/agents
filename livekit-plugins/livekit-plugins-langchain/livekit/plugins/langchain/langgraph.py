@@ -57,7 +57,7 @@ class LLMAdapter(llm.LLM):
         return LangGraphStream(
             self,
             chat_ctx=chat_ctx,
-            tools=tools if utils.is_given(tools) else [],
+            tools=tools or [],
             graph=self._graph,
             conn_options=conn_options,
             config=self._config,
