@@ -32,6 +32,7 @@ load_dotenv()
 # - langgraph
 # - livekit-agents[openai,silero,langchain,deepgram,turn_detector]
 
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 

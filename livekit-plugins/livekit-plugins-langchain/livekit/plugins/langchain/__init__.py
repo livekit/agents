@@ -20,7 +20,7 @@ See https://docs.livekit.io/agents/integrations/llm/langchain/ for more informat
 from .langgraph import LangGraphStream, LLMAdapter
 from .version import __version__
 
-__all__ = ["__version__", LLMAdapter, LangGraphStream]
+__all__ = ["__version__", "LLMAdapter", "LangGraphStream"]
 
 from livekit.agents import Plugin
 

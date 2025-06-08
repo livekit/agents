@@ -17,7 +17,8 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
-from langgraph.pregel import PregelProtocol, RunnableConfig
+from langchain_core.runnables import RunnableConfig
+from langgraph.pregel.protocol import PregelProtocol
 
 from livekit.agents import llm, utils
 from livekit.agents.llm import ToolChoice
@@ -56,7 +57,7 @@ class LLMAdapter(llm.LLM):
         return LangGraphStream(
             self,
             chat_ctx=chat_ctx,
-            tools=tools,
+            tools=tools if utils.is_given(tools) else [],
             graph=self._graph,
             conn_options=conn_options,
             config=self._config,
@@ -83,7 +84,7 @@ class LangGraphStream(llm.LLMStream):
         self._graph = graph
         self._config = config
 
-    async def _run(self):
+    async def _run(self) -> None:
         state = self._chat_ctx_to_state()
 
         async for message_chunk, _ in self._graph.astream(
@@ -116,7 +117,7 @@ class LangGraphStream(llm.LLMStream):
         }
 
 
-def _to_chat_chunk(msg: BaseMessageChunk | None) -> llm.ChatChunk | None:
+def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
     message_id = utils.shortuuid("LC_")
     content: str | None = None
 
