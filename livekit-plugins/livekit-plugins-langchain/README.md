@@ -1,15 +1,37 @@
-# LLMNT plugin for LiveKit Agents
+# LangChain plugin for LiveKit Agents
 
-Support for voice synthesis with [LMNT](https://app.lmnt.com/).
-
-See [https://docs.livekit.io/agents/integrations/tts/lmnt/]https://docs.livekit.io/agents/integrations/tts/lmnt/ for more information.
+This plugin integrates capabilites from LangChain within LiveKit Agents
 
 ## Installation
 
 ```bash
-pip install livekit-plugins-lmnt
+pip install livekit-plugins-langchain
 ```
 
-## Pre-requisites
+## Usage
 
-You'll need an API key from LMNT. It can be set as an environment variable: `LMNT_API_KEY`. You can get it from [here](https://app.lmnt.com/account#api-keys)
+### Using LangGraph workflows
+
+You can bring over any existing workflow in LangGraph as an Agents LLM with `langchain.LLMAdapter`. For example:
+
+```python
+from langgraph.graph import StateGraph
+from livekit.agents import Agent, AgentSession, JobContext
+from livekit.plugins import langchain
+
+...
+
+def entrypoint(ctx: JobContext):
+    graph = StateGraph(...).build()
+
+    session = AgentSession(
+        vad=...,
+        stt=...,
+        tts=...,
+    )
+
+    await session.start(
+        agent=Agent(llm=langchain.LLMAdapter(graph)),
+    )
+    ...
+```
