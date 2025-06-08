@@ -97,7 +97,7 @@ class LangGraphStream(llm.LLMStream):
 
     def _chat_ctx_to_state(self) -> dict[str, Any]:
         """Convert chat context to langgraph input"""
-        print(f"chat_ctx: {self._chat_ctx.items}")
+
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
         for item in self._chat_ctx.items:
             # only support chat messages, ignoring tool calls

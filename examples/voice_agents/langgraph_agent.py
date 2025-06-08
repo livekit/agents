@@ -27,7 +27,10 @@ load_dotenv()
 # adapter.
 # In this example, instructions and tool calls are handled in LangGraph, while
 # voice orchestration (turns, interruptions, etc) are handled by Agents framework
-
+# In order to run this example, you need the following dependencies
+# - langchain[openai]
+# - langgraph
+# - livekit-agents[openai,silero,langchain,deepgram,turn_detector]
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -37,6 +40,7 @@ class State(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
+# a simple StateGraph with a single GPT-4o node
 def create_graph() -> StateGraph:
     openai_llm = init_chat_model(
         model="openai:gpt-4o",
@@ -52,11 +56,6 @@ def create_graph() -> StateGraph:
 
 
 async def entrypoint(ctx: JobContext):
-    # each log entry will include these fields
-    ctx.log_context_fields = {
-        "room": ctx.room.name,
-    }
-
     graph = create_graph()
 
     agent = Agent(
