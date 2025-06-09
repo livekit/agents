@@ -163,6 +163,15 @@ class STT(stt.STT):
             self._session = utils.http_context.http_session()
         return self._session
 
+    async def _recognize_impl(
+        self,
+        buffer: utils.AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ) -> stt.SpeechEvent:
+        raise NotImplementedError("Cartesia STT does not support batch recognition, use stream() instead")
+
     def stream(
         self,
         *,
