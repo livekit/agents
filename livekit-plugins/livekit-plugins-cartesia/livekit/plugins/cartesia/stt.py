@@ -170,7 +170,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError("Cartesia STT does not support batch recognition, use stream() instead")
+        raise NotImplementedError(
+            "Cartesia STT does not support batch recognition, use stream() instead"
+        )
 
     def stream(
         self,
