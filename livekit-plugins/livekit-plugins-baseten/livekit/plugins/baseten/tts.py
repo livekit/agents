@@ -160,6 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "prompt": self._input_text,
                     "voice": self._opts.voice,
                     "temperature": self._opts.temperature,
+                    "language": self._opts.language,
                 },
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
                 ssl=ssl_context,
@@ -170,7 +171,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=24000,
                     num_channels=1,
-                    mime_type="audio/pcm",  # TODO: This needs to change to audio/wav I think.
+                    mime_type="audio/pcm",
                 )
 
                 async for data, _ in resp.content.iter_chunks():

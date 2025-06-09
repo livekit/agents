@@ -43,7 +43,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 
-ENGLISH = "en"
+DEFAULT_LANGUAGE = "en"
 DEFAULT_ENCODING = "pcm_s16le"
 
 # Define bytes per frame for different encoding types
@@ -65,11 +65,16 @@ class STTOptions:
     vad_threshold: float = 0.5
     vad_min_silence_duration_ms: int = 300
     vad_speech_pad_ms: int = 30
-    whisper_audio_language: str = "en"
+    language: str = "en"
 
     def __post_init__(self):
-        if self.encoding not in (NOT_GIVEN, "pcm_s16le", "pcm_mulaw"):
+        if self.encoding is NOT_GIVEN:
+            self.encoding = DEFAULT_ENCODING
+        elif self.encoding not in ("pcm_s16le", "pcm_mulaw"):
             raise ValueError(f"Invalid encoding: {self.encoding}")
+
+        if not self.language:
+            self.language = DEFAULT_LANGUAGE
 
 
 class STT(stt.STT):
@@ -84,7 +89,7 @@ class STT(stt.STT):
         vad_threshold: float = 0.5,
         vad_min_silence_duration_ms: int = 300,
         vad_speech_pad_ms: int = 30,
-        whisper_audio_language: str = "en",
+        language: str = "en",
         http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(
@@ -115,7 +120,7 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             vad_min_silence_duration_ms=vad_min_silence_duration_ms,
             vad_speech_pad_ms=vad_speech_pad_ms,
-            whisper_audio_language=whisper_audio_language,
+            language=language,
         )
         self._session = http_session
         self._streams = weakref.WeakSet()
@@ -159,7 +164,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
-        whisper_audio_language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ):
         if is_given(vad_threshold):
@@ -168,8 +173,8 @@ class STT(stt.STT):
             self._opts.vad_min_silence_duration_ms = vad_min_silence_duration_ms
         if is_given(vad_speech_pad_ms):
             self._opts.vad_speech_pad_ms = vad_speech_pad_ms
-        if is_given(whisper_audio_language):
-            self._opts.whisper_audio_language = whisper_audio_language
+        if is_given(language):
+            self._opts.language = language
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -178,7 +183,7 @@ class STT(stt.STT):
                 vad_threshold=vad_threshold,
                 vad_min_silence_duration_ms=vad_min_silence_duration_ms,
                 vad_speech_pad_ms=vad_speech_pad_ms,
-                whisper_audio_language=whisper_audio_language,
+                language=language,
                 buffer_size_seconds=buffer_size_seconds,
             )
 
@@ -215,7 +220,7 @@ class SpeechStream(stt.SpeechStream):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
-        whisper_audio_language: NotGivenOr[str] = NOT_GIVEN,
+        langauge: NotGivenOr[str] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ):
         if is_given(vad_threshold):
@@ -224,8 +229,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.vad_min_silence_duration_ms = vad_min_silence_duration_ms
         if is_given(vad_speech_pad_ms):
             self._opts.vad_speech_pad_ms = vad_speech_pad_ms
-        if is_given(whisper_audio_language):
-            self._opts.whisper_audio_language = whisper_audio_language
+        if is_given(langauge):
+            self._opts.langauge = langauge
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -387,9 +392,10 @@ class SpeechStream(stt.SpeechStream):
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
             "streaming_whisper_params": {
-                "encoding": "pcm_s16le",
+                "encoding": self._opts.encoding,
                 "sample_rate": 16000,
                 "enable_partial_transcripts": False,
+                "audio_language": self._opts.language,
             },
         }
 
