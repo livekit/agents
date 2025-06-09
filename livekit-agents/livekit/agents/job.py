@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Any, Callable
 
+import jwt
+
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
@@ -413,6 +415,9 @@ class JobContext:
             task.add_done_callback(
                 lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
             )
+
+    def decode_token(self, api_secret: str) -> dict[str, Any]:
+        return jwt.decode(self._info.token, api_secret, algorithms=["HS256"])  # type: ignore
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
