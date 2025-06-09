@@ -80,7 +80,7 @@ class AvatarSession:
 
         try:
             job_ctx = get_job_context()
-            decoded = job_ctx.decode_token(livekit_api_secret)
+            decoded = job_ctx.decode_token()
             local_participant_identity = decoded["sub"]
         except (RuntimeError, KeyError):
             if not room.isconnected():

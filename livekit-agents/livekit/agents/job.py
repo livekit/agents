@@ -32,7 +32,7 @@ from livekit.protocol import agent, models
 
 from .ipc.inference_executor import InferenceExecutor
 from .log import logger
-from .types import NotGivenOr
+from .types import NOT_GIVEN, NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -416,8 +416,12 @@ class JobContext:
                 lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
             )
 
-    def decode_token(self, api_secret: str) -> dict[str, Any]:
-        return jwt.decode(self._info.token, api_secret, algorithms=["HS256"])  # type: ignore
+    def decode_token(self, api_secret: NotGivenOr[str] = NOT_GIVEN) -> dict[str, Any]:
+        options = {}
+        if not is_given(api_secret):
+            options["verify_signature"] = False
+            api_secret = ""
+        return jwt.decode(self._info.token, api_secret, options=options, algorithms=["HS256"])  # type: ignore
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
