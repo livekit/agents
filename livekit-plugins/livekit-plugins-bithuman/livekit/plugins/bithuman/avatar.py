@@ -10,7 +10,7 @@ from loguru import logger as _logger
 
 from bithuman import AsyncBithuman  # type: ignore
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, utils
+from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, get_job_context, utils
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -69,9 +69,20 @@ class AvatarSession:
                 kwargs["api_url"] = self._api_url
 
             runtime = await AsyncBithuman.create(**kwargs)
+            self._runtime = runtime
             await runtime.start()
 
         video_generator = BithumanGenerator(runtime)
+
+        try:
+            job_ctx = get_job_context()
+
+            async def _on_shutdown() -> None:
+                runtime.cleanup()
+
+            job_ctx.add_shutdown_callback(_on_shutdown)
+        except RuntimeError:
+            pass
 
         output_width, output_height = video_generator.video_resolution
         avatar_options = AvatarOptions(
@@ -93,6 +104,12 @@ class AvatarSession:
         await self._avatar_runner.start()
 
         agent_session.output.audio = audio_buffer
+
+    @property
+    def runtime(self) -> AsyncBithuman:
+        if self._runtime is None:
+            raise BitHumanException("Runtime not initialized")
+        return self._runtime
 
 
 class BithumanGenerator(VideoGenerator):
