@@ -13,7 +13,7 @@ from google import genai
 from google.genai import types
 from google.genai.live import AsyncSession
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import APIConnectionError, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import audio as audio_utils, images, is_given
@@ -66,6 +66,7 @@ class _RealtimeOptions:
     proactivity: NotGivenOr[bool] = NOT_GIVEN
     realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
     context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN
+    api_version: NotGivenOr[str] = NOT_GIVEN
     gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN
 
 
@@ -127,6 +128,7 @@ class RealtimeModel(llm.RealtimeModel):
         proactivity: NotGivenOr[bool] = NOT_GIVEN,
         realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN,
         context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN,
+        api_version: NotGivenOr[str] = NOT_GIVEN,
         _gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> None:
         """
@@ -246,6 +248,7 @@ class RealtimeModel(llm.RealtimeModel):
             proactivity=proactivity,
             realtime_input_config=realtime_input_config,
             context_window_compression=context_window_compression,
+            api_version=api_version,
             gemini_tools=_gemini_tools,
         )
 
@@ -303,11 +306,16 @@ class RealtimeSession(llm.RealtimeSession):
             samples_per_channel=INPUT_AUDIO_SAMPLE_RATE // 20,
         )
 
+        api_version = self._opts.api_version
+        if not api_version and (self._opts.enable_affective_dialog or self._opts.proactivity):
+            api_version = "v1alpha"
+
         self._client = genai.Client(
             api_key=self._opts.api_key,
             vertexai=self._opts.vertexai,
             project=self._opts.project,
             location=self._opts.location,
+            http_options=types.HttpOptions(api_version=api_version) if api_version else None,
         )
 
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
@@ -560,7 +568,6 @@ class RealtimeSession(llm.RealtimeSession):
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
-
                     # queue up existing chat context
                     send_task = asyncio.create_task(
                         self._send_task(session), name="gemini-realtime-send"
@@ -593,6 +600,22 @@ class RealtimeSession(llm.RealtimeSession):
             except Exception as e:
                 logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
                 if not self._msg_ch.closed:
+                    # we shouldn't retry when it's not connected, usually this means incorrect
+                    # parameters or setup
+                    if not session:
+                        self.emit(
+                            "error",
+                            llm.RealtimeModelError(
+                                timestamp=time.time(),
+                                label=self._realtime_model._label,
+                                error=APIConnectionError(
+                                    message=("Failed to connect to Gemini Live"),
+                                ),
+                                recoverable=False,
+                            ),
+                        )
+                        raise e
+
                     logger.info("attempting to reconnect after 1 seconds...")
                     await asyncio.sleep(1)
             finally:

@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2025 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,27 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Silero VAD plugin for LiveKit Agents
+"""LMNT plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/build/turns/vad/ for more information.
+See https://docs.livekit.io/agents/integrations/llm/langchain/ for more information.
 """
 
-from .vad import VAD, VADStream
+from .langgraph import LangGraphStream, LLMAdapter
 from .version import __version__
 
-__all__ = ["VAD", "VADStream", "__version__"]
+__all__ = ["__version__", "LLMAdapter", "LangGraphStream"]
 
 from livekit.agents import Plugin
 
-from .log import logger
 
-
-class SileroPlugin(Plugin):
+class LangChainPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __package__)
 
 
-Plugin.register_plugin(SileroPlugin())
+Plugin.register_plugin(LangChainPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()

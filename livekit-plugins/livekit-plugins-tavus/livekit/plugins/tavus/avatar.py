@@ -41,7 +41,7 @@ class AvatarSession:
     ) -> None:
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
-
+        self.conversation_id: str | None = None
         self._persona_id = persona_id
         self._replica_id = replica_id
         self._api = TavusAPI(
@@ -101,7 +101,7 @@ class AvatarSession:
         )
 
         logger.debug("starting avatar session")
-        await self._api.create_conversation(
+        self.conversation_id = await self._api.create_conversation(
             persona_id=self._persona_id,
             replica_id=self._replica_id,
             properties={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},
