@@ -20,7 +20,6 @@ import os
 import uuid
 import weakref
 from dataclasses import dataclass
-from typing import Any
 from enum import Enum
 
 import aiohttp
@@ -29,15 +28,13 @@ import numpy as np
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     stt,
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import STTEncoding, STTLanguages, STTModels
@@ -132,10 +129,13 @@ class STT(stt.STT):
             language: The language code for recognition. Defaults to "en".
             encoding: The audio encoding format. Defaults to "pcm_s16le".
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
-            api_key: The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
+            api_key: The Cartesia API key. If not provided, it will be read from
+                the CARTESIA_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
-            base_url: The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
-            energy_filter: The energy filter to use for local voice activity detection. Defaults to False.
+            base_url: The base URL for the Cartesia API.
+                Defaults to "https://api.cartesia.ai".
+            energy_filter: The energy filter to use for local voice activity
+                detection. Defaults to False.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -460,4 +460,4 @@ class SpeechStream(stt.SpeechStream):
             logger.error("Cartesia STT error: %s", error_msg)
             # We could emit an error event here if needed
         else:
-            logger.warning("received unexpected message from Cartesia STT: %s", data) 
+            logger.warning("received unexpected message from Cartesia STT: %s", data)
