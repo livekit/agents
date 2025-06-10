@@ -43,9 +43,6 @@ from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 
-DEFAULT_LANGUAGE = "en"
-DEFAULT_ENCODING = "pcm_s16le"
-
 STTEncoding = Literal["pcm_s16le", "pcm_mulaw"]
 
 # Define bytes per frame for different encoding types
@@ -61,22 +58,13 @@ ssl_context = ssl._create_unverified_context()
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float = 0.032
-    encoding: NotGivenOr[STTEncoding] = NOT_GIVEN
+    encoding: STTEncoding = "pcm_s16le"
 
     # Optional metadata fields specific to Baseten
     vad_threshold: float = 0.5
     vad_min_silence_duration_ms: int = 300
     vad_speech_pad_ms: int = 30
     language: str = "en"
-
-    def __post_init__(self) -> None:
-        if not is_given(self.encoding):
-            self.encoding = DEFAULT_ENCODING
-        elif self.encoding not in ("pcm_s16le", "pcm_mulaw"):
-            raise ValueError(f"Invalid encoding: {self.encoding}")
-
-        if not self.language:
-            self.language = DEFAULT_LANGUAGE
 
 
 class STT(stt.STT):
@@ -112,23 +100,24 @@ class STT(stt.STT):
             )
         self._api_key = api_key
 
+        model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
         if not model_endpoint:
             raise ValueError(
                 "The model endpoint is required, you can find it in the Baseten dashboard"
             )
-        model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
-
         self._model_endpoint = model_endpoint
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
-            encoding=encoding,
             buffer_size_seconds=buffer_size_seconds,
             vad_threshold=vad_threshold,
             vad_min_silence_duration_ms=vad_min_silence_duration_ms,
             vad_speech_pad_ms=vad_speech_pad_ms,
             language=language,
         )
+        if is_given(encoding):
+            self._opts.encoding = encoding
+
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
