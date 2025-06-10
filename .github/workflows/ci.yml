@@ -88,3 +88,5 @@ jobs:
               -p livekit.plugins.turn_detector
               -p livekit.plugins.hedra
               -p livekit.plugins.langchain
+              -p livekit.plugins.baseten
+              -p livekit.plugins.sarvam

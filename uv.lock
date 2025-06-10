@@ -29,6 +29,7 @@ members = [
     "livekit-plugins-assemblyai",
     "livekit-plugins-aws",
     "livekit-plugins-azure",
+    "livekit-plugins-baseten",
     "livekit-plugins-bey",
     "livekit-plugins-bithuman",
     "livekit-plugins-cartesia",
@@ -50,6 +51,7 @@ members = [
     "livekit-plugins-playai",
     "livekit-plugins-resemble",
     "livekit-plugins-rime",
+    "livekit-plugins-sarvam",
     "livekit-plugins-silero",
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
@@ -1768,6 +1770,22 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-baseten"
+source = { editable = "livekit-plugins/livekit-plugins-baseten" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp" },
+    { name = "livekit" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+]
+
+[[package]]
 name = "livekit-plugins-bey"
 source = { editable = "livekit-plugins/livekit-plugins-bey" }
 dependencies = [
@@ -2049,6 +2067,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-sarvam"
+source = { editable = "livekit-plugins/livekit-plugins-sarvam" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "numpy", version = "2.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
+]
 
 [[package]]
 name = "livekit-plugins-silero"

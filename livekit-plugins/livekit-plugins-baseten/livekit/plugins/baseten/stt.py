@@ -320,7 +320,7 @@ class SpeechStream(stt.SpeechStream):
                         text = data.get("transcript", "")
                         confidence = data.get("confidence", 0.0)
                         segments = data.get("segments", [])
-                        language = data.get("language", "")
+                        language = data.get("language", self._opts.language)
 
                         if text:
                             start_time = segments[0].get("start", 0.0) if segments else 0.0

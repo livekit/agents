@@ -61,7 +61,8 @@ class TTS(tts.TTS):
         Initialize the Baseten TTS.
 
         Args:
-            api_key (str): Baseten API key.
+            api_key (str): Baseten API key, or `BASETEN_API_KEY` env var.
+            model_endpoint (str): Baseten model endpoint, or `BASETEN_MODEL_ENDPOINT` env var.
             model (TTSModel): TTS model, defaults to "Orpheus".
             voice (str): Speaker voice.
             language (str): language, defaults to "english".
@@ -80,6 +81,8 @@ class TTS(tts.TTS):
                 "Pass one in via the `api_key` parameter, "
                 "or set it as the `BASETEN_API_KEY` environment variable"
             )
+
+        model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
 
         if not model_endpoint:
             raise ValueError(
