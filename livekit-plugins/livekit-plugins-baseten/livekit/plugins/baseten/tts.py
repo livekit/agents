@@ -147,6 +147,8 @@ class ChunkedStream(tts.ChunkedStream):
             input_text=input_text,
             conn_options=conn_options,
         )
+
+        self._tts: TTS = tts
         self._api_key = api_key
         self._model_endpoint = model_endpoint
         self._opts = replace(tts._opts)

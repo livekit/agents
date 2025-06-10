@@ -46,6 +46,8 @@ from .log import logger
 DEFAULT_LANGUAGE = "en"
 DEFAULT_ENCODING = "pcm_s16le"
 
+STTEncoding = Literal["pcm_s16le", "pcm_mulaw"]
+
 # Define bytes per frame for different encoding types
 bytes_per_frame = {
     "pcm_s16le": 2,
@@ -59,7 +61,7 @@ ssl_context = ssl._create_unverified_context()
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float = 0.032
-    encoding: NotGivenOr[Literal["pcm_s16le", "pcm_mulaw"]] = NOT_GIVEN
+    encoding: NotGivenOr[STTEncoding] = NOT_GIVEN
 
     # Optional metadata fields specific to Baseten
     vad_threshold: float = 0.5
@@ -84,7 +86,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         model_endpoint: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 16000,
-        encoding: NotGivenOr[Literal["pcm_s16le", "pcm_mulaw"]] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
         buffer_size_seconds: float = 0.032,
         vad_threshold: float = 0.5,
         vad_min_silence_duration_ms: int = 300,
