@@ -33,11 +33,17 @@ async def entrypoint(ctx: JobContext):
     )
 
     logger.info("starting bithuman runtime")
-    bithuman_avatar = bithuman.AvatarSession(
-        model_path=bithuman_model_path,
-        api_secret=bithuman_api_secret,
-        runtime=ctx.proc.userdata.get("bithuman_runtime"),
-    )
+    runtime: AsyncBithuman | None = ctx.proc.userdata.get("bithuman_runtime")
+    if runtime:
+        # refresh token if runtime is already initialized
+        await runtime._initialize_token()
+    else:
+        runtime = await AsyncBithuman.create(
+            model_path=bithuman_model_path,
+            api_secret=bithuman_api_secret,
+        )
+
+    bithuman_avatar = bithuman.AvatarSession(model_path=bithuman_model_path, runtime=runtime)
     await bithuman_avatar.start(session, room=ctx.room)
 
     await session.start(
