@@ -15,7 +15,12 @@ from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from livekit.agents.utils import audio as audio_utils, images, is_given
 from livekit.plugins.google.beta.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
@@ -62,6 +67,7 @@ class _RealtimeOptions:
     input_audio_transcription: types.AudioTranscriptionConfig | None
     output_audio_transcription: types.AudioTranscriptionConfig | None
     image_encode_options: NotGivenOr[images.EncodeOptions]
+    conn_options: APIConnectOptions
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
     realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
@@ -129,6 +135,7 @@ class RealtimeModel(llm.RealtimeModel):
         realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN,
         context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         _gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> None:
         """
@@ -164,6 +171,7 @@ class RealtimeModel(llm.RealtimeModel):
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
+            conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
             _gemini_tools (list[LLMTool], optional): Gemini-specific tools to use for the session. This parameter is experimental and may change.
 
         Raises:
@@ -250,6 +258,7 @@ class RealtimeModel(llm.RealtimeModel):
             context_window_compression=context_window_compression,
             api_version=api_version,
             gemini_tools=_gemini_tools,
+            conn_options=conn_options,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -310,12 +319,16 @@ class RealtimeSession(llm.RealtimeSession):
         if not api_version and (self._opts.enable_affective_dialog or self._opts.proactivity):
             api_version = "v1alpha"
 
+        http_options = types.HttpOptions(timeout=int(self._opts.conn_options.timeout * 1000))
+        if api_version:
+            http_options.api_version = api_version
+
         self._client = genai.Client(
             api_key=self._opts.api_key,
             vertexai=self._opts.vertexai,
             project=self._opts.project,
             location=self._opts.location,
-            http_options=types.HttpOptions(api_version=api_version) if api_version else None,
+            http_options=http_options,
         )
 
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
@@ -330,6 +343,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_resumption_handle: str | None = None
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
+        self._num_retries = 0
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -545,6 +559,8 @@ class RealtimeSession(llm.RealtimeSession):
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        max_retries = self._opts.conn_options.max_retry
+
         while not self._msg_ch.closed:
             # previous session might not be closed yet, we'll do it here.
             await self._close_active_session()
@@ -602,22 +618,24 @@ class RealtimeSession(llm.RealtimeSession):
                 if not self._msg_ch.closed:
                     # we shouldn't retry when it's not connected, usually this means incorrect
                     # parameters or setup
-                    if not session:
-                        self.emit(
-                            "error",
-                            llm.RealtimeModelError(
-                                timestamp=time.time(),
-                                label=self._realtime_model._label,
-                                error=APIConnectionError(
-                                    message=("Failed to connect to Gemini Live"),
-                                ),
-                                recoverable=False,
-                            ),
-                        )
-                        raise e
+                    if not session or max_retries == 0:
+                        self._emit_error(e, recoverable=False)
+                        raise APIConnectionError(message="Failed to connect to Gemini Live") from e
 
-                    logger.info("attempting to reconnect after 1 seconds...")
-                    await asyncio.sleep(1)
+                    if self._num_retries == max_retries:
+                        self._emit_error(e, recoverable=False)
+                        raise APIConnectionError(
+                            message=f"Failed to connect to Gemini Live after {max_retries} attempts"
+                        ) from e
+
+                    retry_interval = self._opts.conn_options._interval_for_retry(self._num_retries)
+                    logger.warning(
+                        f"Gemini Realtime API connection failed, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={"attempt": self._num_retries, "max_retries": max_retries},
+                    )
+                    await asyncio.sleep(retry_interval)
+                    self._num_retries += 1
             finally:
                 await self._close_active_session()
 
@@ -689,6 +707,9 @@ class RealtimeSession(llm.RealtimeSession):
                         self._handle_usage_metadata(response.usage_metadata)
                     if response.go_away:
                         self._handle_go_away(response.go_away)
+
+                    if self._num_retries > 0:
+                        self._num_retries = 0  # reset the retry counter
 
                 # TODO(dz): a server-side turn is complete
         except Exception as e:
@@ -1025,3 +1046,14 @@ class RealtimeSession(llm.RealtimeSession):
             yield from self._input_resampler.push(frame)
         else:
             yield frame
+
+    def _emit_error(self, error: Exception, recoverable: bool) -> None:
+        self.emit(
+            "error",
+            llm.RealtimeModelError(
+                timestamp=time.time(),
+                label=self._realtime_model._label,
+                error=error,
+                recoverable=recoverable,
+            ),
+        )
