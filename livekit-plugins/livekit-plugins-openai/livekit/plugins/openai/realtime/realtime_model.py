@@ -68,6 +68,7 @@ from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
     Tracing,
+    TracingTracingConfiguration,
     TurnDetection,
 )
 
@@ -852,6 +853,20 @@ class RealtimeSession(
             if turn_detection_opts
             else None
         )
+
+        tracing = self._realtime_model._opts.tracing
+        if isinstance(tracing, TracingTracingConfiguration):
+            tracing = (
+                session_update_event.SessionTracingTracingConfiguration.model_validate(
+                    tracing.model_dump(
+                        by_alias=True,
+                        exclude_unset=True,
+                        exclude_defaults=True,
+                    )
+                )
+                if turn_detection_opts
+                else None
+            )
 
         kwargs = {
             "model": self._realtime_model._opts.model,
