@@ -420,7 +420,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # it is ok to await it directly, there is no previous task to drain
             tasks.append(asyncio.create_task(self._update_activity_task(self._agent)))
 
-            await asyncio.gather(*tasks)
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.cancel_and_wait(*tasks)
 
             # important: no await should be done after this!
 
