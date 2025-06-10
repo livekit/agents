@@ -194,8 +194,11 @@ OctoChatModels = Literal[
 
 
 XAIChatModels = Literal[
-    "grok-2",
-    "grok-2-mini",
-    "grok-2-mini-public",
-    "grok-2-public",
+    "grok-3",
+    "grok-3-fast",
+    "grok-3-mini",
+    "grok-3-mini-fast",
+    "grok-2-vision-1212",
+    "grok-2-image-1212",
+    "grok-2-1212",
 ]
