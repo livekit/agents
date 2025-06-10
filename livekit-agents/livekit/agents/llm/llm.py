@@ -97,6 +97,10 @@ class LLM(
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream: ...
 
+    def prewarm(self) -> None:
+        """Pre-warm connection to the LLM service"""
+        pass
+
     async def aclose(self) -> None: ...
 
     async def __aenter__(self) -> LLM:
