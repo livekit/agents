@@ -5,7 +5,7 @@ from collections.abc import AsyncIterable
 from typing import Any
 
 from .. import tokenize, utils
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .tts import (
     TTS,
     AudioEmitter,
@@ -26,7 +26,7 @@ class StreamAdapter(TTS):
         self,
         *,
         tts: TTS,
-        sentence_tokenizer: tokenize.SentenceTokenizer,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
         super().__init__(
             capabilities=TTSCapabilities(
@@ -36,7 +36,7 @@ class StreamAdapter(TTS):
             num_channels=tts.num_channels,
         )
         self._wrapped_tts = tts
-        self._sentence_tokenizer = sentence_tokenizer
+        self._sentence_tokenizer = sentence_tokenizer or tokenize.basic.SentenceTokenizer()
 
         @self._wrapped_tts.on("metrics_collected")
         def _forward_metrics(*args: Any, **kwargs: Any) -> None:

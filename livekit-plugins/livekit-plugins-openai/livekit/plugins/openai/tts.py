@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from typing import Literal, Union
 
@@ -28,7 +29,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import aio, is_given
 
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
@@ -96,6 +97,8 @@ class TTS(tts.TTS):
                 ),
             ),
         )
+
+        self._prewarm_task: asyncio.Task | None = None
 
     def update_options(
         self,
@@ -176,6 +179,19 @@ class TTS(tts.TTS):
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
+    def prewarm(self) -> None:
+        async def _prewarm() -> None:
+            try:
+                await self._client.get("/", cast_to=str)
+            except Exception:
+                pass
+
+        self._prewarm_task = asyncio.create_task(_prewarm())
+
+    async def aclose(self) -> None:
+        if self._prewarm_task:
+            await aio.cancel_and_wait(self._prewarm_task)
+
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
@@ -187,7 +203,7 @@ class ChunkedStream(tts.ChunkedStream):
         oai_stream = self._tts._client.audio.speech.with_streaming_response.create(
             input=self.input_text,
             model=self._opts.model,
-            voice=self._opts.voice,  # type: ignore
+            voice=self._opts.voice,
             response_format=self._opts.response_format,  # type: ignore
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.NOT_GIVEN,

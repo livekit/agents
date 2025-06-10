@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import asdict
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from livekit import rtc
 
 from ... import utils
+from ...types import NOT_GIVEN, NotGivenOr
 from ..io import AudioOutput, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
@@ -35,31 +37,32 @@ class DataStreamAudioOutput(AudioOutput):
         self._pushed_duration: float = 0.0
         self._tasks: set[asyncio.Task[Any]] = set()
 
-        # playback finished handler
-        def _handle_playback_finished(data: rtc.RpcInvocationData) -> str:
-            if data.caller_identity != self._destination_identity:
-                logger.warning(
-                    "playback finished event received from unexpected participant",
-                    extra={
-                        "caller_identity": data.caller_identity,
-                        "expected_identity": self._destination_identity,
-                    },
-                )
-                return "reject"
+        self._room_connected_fut = asyncio.Future[None]()
+        self._room.on("connection_state_changed", self._handle_connection_state_changed)
+        if self._room.isconnected():
+            self._room_connected_fut.set_result(None)
+        self._started = False
+        self._lock = asyncio.Lock()
 
-            event = PlaybackFinishedEvent(**json.loads(data.payload))
-            self.on_playback_finished(
-                playback_position=event.playback_position,
-                interrupted=event.interrupted,
+    async def start(self) -> None:
+        async with self._lock:
+            if self._started:
+                return
+
+            await self._room_connected_fut
+
+            self._room.local_participant.register_rpc_method(
+                RPC_PLAYBACK_FINISHED, self._handle_playback_finished
             )
-            return "ok"
+            await utils.wait_for_participant(room=self._room, identity=self._destination_identity)
 
-        self._room.local_participant.register_rpc_method(
-            RPC_PLAYBACK_FINISHED, _handle_playback_finished
-        )
+            self._started = True
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and stream audio frame to remote worker"""
+        if not self._started:
+            await self.start()
+
         await super().capture_frame(frame)
 
         if not self._stream_writer:
@@ -79,7 +82,7 @@ class DataStreamAudioOutput(AudioOutput):
     def flush(self) -> None:
         """Mark end of current audio segment"""
         super().flush()
-        if self._stream_writer is None:
+        if self._stream_writer is None or not self._started:
             return
 
         # close the stream marking the end of the segment
@@ -90,6 +93,9 @@ class DataStreamAudioOutput(AudioOutput):
         self._stream_writer = None
 
     def clear_buffer(self) -> None:
+        if not self._started:
+            return
+
         task = asyncio.create_task(
             self._room.local_participant.perform_rpc(
                 destination_identity=self._destination_identity,
@@ -100,6 +106,28 @@ class DataStreamAudioOutput(AudioOutput):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
+        if data.caller_identity != self._destination_identity:
+            logger.warning(
+                "playback finished event received from unexpected participant",
+                extra={
+                    "caller_identity": data.caller_identity,
+                    "expected_identity": self._destination_identity,
+                },
+            )
+            return "reject"
+
+        event = PlaybackFinishedEvent(**json.loads(data.payload))
+        self.on_playback_finished(
+            playback_position=event.playback_position,
+            interrupted=event.interrupted,
+        )
+        return "ok"
+
+    def _handle_connection_state_changed(self, state: rtc.ConnectionState) -> None:
+        if self._room.isconnected() and not self._room_connected_fut.done():
+            self._room_connected_fut.set_result(None)
+
 
 class DataStreamAudioReceiver(AudioReceiver):
     """
@@ -108,11 +136,18 @@ class DataStreamAudioReceiver(AudioReceiver):
     subscribe to the first agent participant in the room.
     """
 
-    def __init__(self, room: rtc.Room, *, sender_identity: str | None = None):
+    def __init__(
+        self,
+        room: rtc.Room,
+        *,
+        sender_identity: str | None = None,
+        frame_size_ms: NotGivenOr[int] = NOT_GIVEN,
+    ):
         super().__init__()
         self._room = room
         self._sender_identity = sender_identity
         self._remote_participant: rtc.RemoteParticipant | None = None
+        self._frame_size_ms = frame_size_ms or 100
 
         self._stream_readers: list[rtc.ByteStreamReader] = []
         self._stream_reader_changed: asyncio.Event = asyncio.Event()
@@ -201,7 +236,9 @@ class DataStreamAudioReceiver(AudioReceiver):
                 sample_rate = int(attrs["sample_rate"])
                 num_channels = int(attrs["num_channels"])
                 bstream = utils.audio.AudioByteStream(
-                    sample_rate=sample_rate, num_channels=num_channels
+                    sample_rate=sample_rate,
+                    num_channels=num_channels,
+                    samples_per_channel=int(math.ceil(sample_rate * self._frame_size_ms / 1000)),
                 )
                 async for data in self._current_reader:
                     if self._current_reader_cleared:

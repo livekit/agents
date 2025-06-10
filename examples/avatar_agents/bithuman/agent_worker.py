@@ -9,7 +9,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    RoomOutputOptions,
     WorkerOptions,
     WorkerType,
     cli,
@@ -26,8 +25,6 @@ bithuman_api_secret = os.getenv("BITHUMAN_API_SECRET")
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="ash"),
     )
@@ -43,8 +40,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=Agent(instructions="Your are Einstein, talk to me!"),
         room=ctx.room,
-        # audio is forwarded to the avatar, so we disable room audio output
-        room_output_options=RoomOutputOptions(audio_enabled=False),
     )
 
 

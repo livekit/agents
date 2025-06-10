@@ -14,7 +14,7 @@ from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent
@@ -38,6 +38,15 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class SessionConnectOptions:
+    stt_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    llm_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    tts_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    max_unrecoverable_errors: int = 3
+    """Maximum number of consecutive unrecoverable errors from llm or tts."""
+
+
+@dataclass
 class VoiceOptions:
     allow_interruptions: bool
     discard_audio_if_uninterruptible: bool
@@ -47,6 +56,7 @@ class VoiceOptions:
     max_endpointing_delay: float
     max_tool_steps: int
     user_away_timeout: float | None
+    min_consecutive_speech_delay: float
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -119,6 +129,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         max_tool_steps: int = 3,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
+        min_consecutive_speech_delay: float = 0.0,
+        conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
@@ -176,6 +188,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Default ``15.0`` s, set to ``None`` to disable.
+            min_consecutive_speech_delay (float, optional): The minimum delay between
+                consecutive speech. Default ``0.0`` s.
+            conn_options (SessionConnectOptions, optional): Connection options for
+                stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
         """
@@ -198,7 +214,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay=max_endpointing_delay,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            min_consecutive_speech_delay=min_consecutive_speech_delay,
         )
+        self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
         self._turn_detection = turn_detection or None
         self._stt = stt or None
@@ -206,6 +224,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
         self._mcp_servers = mcp_servers or None
+
+        # unrecoverable error counts, reset after agent speaking
+        self._llm_error_counts = 0
+        self._tts_error_counts = 0
 
         # configurable IO
         self._input = io.AgentInput(self._on_video_input_changed, self._on_audio_input_changed)
@@ -268,6 +290,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._opts
 
     @property
+    def conn_options(self) -> SessionConnectOptions:
+        return self._conn_options
+
+    @property
     def history(self) -> llm.ChatContext:
         return self._chat_ctx
 
@@ -315,6 +341,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._agent = agent
             self._update_agent_state("initializing")
 
+            tasks: list[asyncio.Task[None]] = []
             if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
                 from .chat_cli import ChatCLI
 
@@ -329,7 +356,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
 
                 chat_cli = ChatCLI(self)
-                await chat_cli.start()
+                tasks.append(asyncio.create_task(chat_cli.start(), name="_chat_cli_start"))
 
             elif is_given(room) and not self._room_io:
                 room_input_options = copy.copy(
@@ -339,25 +366,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
                 )
 
-                if self.input.audio is not None and room_input_options.audio_enabled:
-                    logger.warning(
-                        "RoomIO audio input is enabled but input.audio is already set, ignoring.."
-                    )
+                if self.input.audio is not None:
+                    if room_input_options.audio_enabled:
+                        logger.warning(
+                            "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
+                        )
                     room_input_options.audio_enabled = False
 
-                if self.output.audio is not None and room_output_options.audio_enabled:
-                    logger.warning(
-                        "RoomIO audio output is enabled but output.audio is already set, ignoring.."
-                    )
+                if self.output.audio is not None:
+                    if room_output_options.audio_enabled:
+                        logger.warning(
+                            "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
+                        )
                     room_output_options.audio_enabled = False
 
-                if (
-                    self.output.transcription is not None
-                    and room_output_options.transcription_enabled
-                ):
-                    logger.warning(
-                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
-                    )
+                if self.output.transcription is not None:
+                    if room_output_options.transcription_enabled:
+                        logger.warning(
+                            "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
+                        )
                     room_output_options.transcription_enabled = False
 
                 self._room_io = room_io.RoomIO(
@@ -366,7 +393,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     input_options=room_input_options,
                     output_options=room_output_options,
                 )
-                await self._room_io.start()
+                tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
 
             else:
                 if not self._room_io and not self.output.audio and not self.output.transcription:
@@ -374,20 +401,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
 
-            if not self._job_context_cb_registered:
-                # session can be restarted, register the callbacks only once
-                try:
-                    job_ctx = get_job_context()
+            # session can be restarted, register the callbacks only once
+            try:
+                job_ctx = get_job_context()
+                if self._room_io:
+                    # automatically connect to the room when room io is used
+                    tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
+
+                if not self._job_context_cb_registered:
                     job_ctx.add_tracing_callback(self._trace_chat_ctx)
                     job_ctx.add_shutdown_callback(
                         lambda: self._aclose_impl(reason=CloseReason.JOB_SHUTDOWN)
                     )
                     self._job_context_cb_registered = True
-                except RuntimeError:
-                    pass  # ignore
+            except RuntimeError:
+                pass  # ignore
 
             # it is ok to await it directly, there is no previous task to drain
-            await self._update_activity_task(self._agent)
+            tasks.append(asyncio.create_task(self._update_activity_task(self._agent)))
+
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.cancel_and_wait(*tasks)
 
             # important: no await should be done after this!
 
@@ -461,6 +497,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = False
             self.emit("close", CloseEvent(error=error, reason=reason))
+
+        logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
@@ -598,6 +636,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
+        if error.type == "llm_error":
+            self._llm_error_counts += 1
+            if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
+                return
+        elif error.type == "tts_error":
+            self._tts_error_counts += 1
+            if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
+                return
+
         logger.error("AgentSession is closing due to unrecoverable error", exc_info=error.error)
 
         def on_close_done(_: asyncio.Task[None]) -> None:
@@ -661,6 +708,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_agent_state(self, state: AgentState) -> None:
         if self._agent_state == state:
             return
+
+        if state == "speaking":
+            self._llm_error_counts = 0
+            self._tts_error_counts = 0
 
         if state == "listening" and self._user_state == "listening":
             self._set_user_away_timer()
