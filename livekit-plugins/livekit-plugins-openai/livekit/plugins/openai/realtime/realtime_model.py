@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import copy
 import json
 import os
 import time
@@ -24,7 +25,12 @@ from livekit.agents.llm.tool_context import (
     is_raw_function_tool,
 )
 from livekit.agents.metrics import RealtimeModelMetrics
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from livekit.agents.utils import is_given
 from openai.types.beta.realtime import (
     ConversationItem,
@@ -105,6 +111,7 @@ class _RealtimeOptions:
     api_version: str | None
     max_session_duration: float | None
     """reset the connection after this many seconds if provided"""
+    conn_options: APIConnectOptions
 
 
 @dataclass
@@ -200,6 +207,7 @@ class RealtimeModel(llm.RealtimeModel):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None: ...
 
     @overload
@@ -219,6 +227,7 @@ class RealtimeModel(llm.RealtimeModel):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None: ...
 
     def __init__(
@@ -238,6 +247,7 @@ class RealtimeModel(llm.RealtimeModel):
         entra_token: str | None = None,
         api_version: str | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -293,6 +303,7 @@ class RealtimeModel(llm.RealtimeModel):
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
             else DEFAULT_MAX_SESSION_DURATION,
+            conn_options=conn_options,
         )
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -525,63 +536,88 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        num_retries: int = 0
+        max_retries = self._realtime_model._opts.conn_options.max_retry
+
+        async def _reconnect() -> None:
+            logger.debug(
+                "reconnecting to OpenAI Realtime API",
+                extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
+            )
+
+            events: list[RealtimeClientEvent] = []
+
+            # options and instructions
+            events.append(self._create_session_update_event())
+
+            # tools
+            tools = list(self._tools.function_tools.values())
+            if tools:
+                events.append(self._create_tools_update_event(tools))
+
+            # chat context
+            chat_ctx = self.chat_ctx.copy(
+                exclude_function_call=True,
+                exclude_instructions=True,
+                exclude_empty_message=True,
+            )
+            old_chat_ctx_copy = copy.deepcopy(self._remote_chat_ctx)
+            self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+            events.extend(self._create_update_chat_ctx_events(chat_ctx))
+
+            try:
+                for ev in events:
+                    msg = ev.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+                    self.emit("openai_client_event_queued", msg)
+                    await ws_conn.send_str(json.dumps(msg))
+            except Exception as e:
+                self._remote_chat_ctx = old_chat_ctx_copy  # restore the old chat context
+                raise APIConnectionError(
+                    message=(
+                        "Failed to send message to OpenAI Realtime API during session re-connection"
+                    ),
+                ) from e
+
+            logger.debug("reconnected to OpenAI Realtime API")
+            self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
+
         reconnecting = False
         while not self._msg_ch.closed:
             ws_conn = await self._create_ws_conn()
 
-            if reconnecting:
-                logger.debug(
-                    "reconnecting to OpenAI Realtime API",
-                    extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
-                )
+            try:
+                if reconnecting:
+                    await _reconnect()
+                    num_retries = 0  # reset the retry counter
+                await self._run_ws(ws_conn)
 
-                events: list[RealtimeClientEvent] = []
+            except APIError as e:
+                if max_retries == 0 or not e.retryable:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif num_retries == max_retries:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f"OpenAI Realtime API connection failed after {num_retries} attempts",
+                    ) from e
+                else:
+                    self._emit_error(e, recoverable=True)
 
-                # options and instructions
-                events.append(self._create_session_update_event())
-
-                # tools
-                tools = list(self._tools.function_tools.values())
-                if tools:
-                    events.append(self._create_tools_update_event(tools))
-
-                # chat context
-                chat_ctx = self.chat_ctx.copy(
-                    exclude_function_call=True,
-                    exclude_instructions=True,
-                    exclude_empty_message=True,
-                )
-                self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-                events.extend(self._create_update_chat_ctx_events(chat_ctx))
-
-                try:
-                    for ev in events:
-                        msg = ev.model_dump(
-                            by_alias=True, exclude_unset=True, exclude_defaults=False
-                        )
-                        self.emit("openai_client_event_queued", msg)
-                        await ws_conn.send_str(json.dumps(msg))
-                except Exception as e:
-                    self.emit(
-                        "error",
-                        llm.RealtimeModelError(
-                            timestamp=time.time(),
-                            label=self._realtime_model._label,
-                            error=APIConnectionError(
-                                message=(
-                                    "Failed to send message to OpenAI Realtime API during "
-                                    "session re-connection"
-                                ),
-                            ),
-                            recoverable=False,
-                        ),
+                    retry_interval = self._realtime_model._opts.conn_options._interval_for_retry(
+                        num_retries
                     )
-                    raise e
+                    logger.warning(
+                        f"OpenAI Realtime API connection failed, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={"attempt": num_retries, "max_retries": max_retries},
+                    )
+                    await asyncio.sleep(retry_interval)
+                num_retries += 1
 
-                logger.debug("reconnected to OpenAI Realtime API")
-                self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
 
-            await self._run_ws(ws_conn)
             reconnecting = True
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
@@ -608,7 +644,11 @@ class RealtimeSession(
             logger.debug(f"connecting to Realtime API: {url}")
 
         return await self._realtime_model._ensure_http_session().ws_connect(
-            url=url, headers=headers
+            url=url,
+            headers=headers,
+            timeout=aiohttp.ClientWSTimeout(
+                ws_close=self._realtime_model._opts.conn_options.timeout
+            ),
         )
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
@@ -643,24 +683,18 @@ class RealtimeSession(
         async def _recv_task() -> None:
             while True:
                 msg = await ws_conn.receive()
-                if msg.type == aiohttp.WSMsgType.CLOSED:
-                    if not closing:
-                        error = Exception("OpenAI S2S connection closed unexpectedly")
-                        self.emit(
-                            "error",
-                            llm.RealtimeModelError(
-                                timestamp=time.time(),
-                                label=self._realtime_model._label,
-                                error=APIConnectionError(
-                                    message="OpenAI S2S connection closed unexpectedly",
-                                ),
-                                recoverable=False,
-                            ),
-                        )
-                        raise error
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if closing:  # closing is expected, see _send_task
+                        return
 
-                    return
-                elif msg.type != aiohttp.WSMsgType.TEXT:
+                    # this will trigger a reconnection
+                    raise APIConnectionError(message="OpenAI S2S connection closed unexpectedly")
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
                 event = json.loads(msg.data)
@@ -1457,24 +1491,25 @@ class RealtimeSession(
             "OpenAI Realtime API returned an error",
             extra={"error": event.error},
         )
+        self._emit_error(
+            APIError(
+                message="OpenAI Realtime API returned an error",
+                body=event.error,
+                retryable=True,
+            ),
+            recoverable=True,
+        )
+
+    def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(
             "error",
             llm.RealtimeModelError(
                 timestamp=time.time(),
                 label=self._realtime_model._label,
-                error=APIError(
-                    message="OpenAI Realtime API returned an error",
-                    body=event.error,
-                    retryable=True,
-                ),
-                recoverable=True,
+                error=error,
+                recoverable=recoverable,
             ),
         )
-
-        # if event.error.event_id:
-        #     fut = self._response_futures.pop(event.error.event_id, None)
-        #     if fut is not None and not fut.done():
-        #         fut.set_exception(multimodal.RealtimeError(event.error.message))
 
 
 def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
