@@ -83,8 +83,8 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        model_endpoint: NotGivenOr[str] = NOT_GIVEN,
+        api_key: str | None = None,
+        model_endpoint: str | None = None,
         sample_rate: int = 16000,
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
         buffer_size_seconds: float = 0.032,
@@ -116,6 +116,7 @@ class STT(stt.STT):
             raise ValueError(
                 "The model endpoint is required, you can find it in the Baseten dashboard"
             )
+        model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
 
         self._model_endpoint = model_endpoint
 
