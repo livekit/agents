@@ -33,6 +33,8 @@ livekit-plugins-tavus = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-hedra = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
+livekit-plugins-langchain = { workspace = true }
+livekit-plugins-sarvam = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
