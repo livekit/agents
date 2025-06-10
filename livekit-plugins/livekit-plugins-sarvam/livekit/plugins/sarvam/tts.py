@@ -198,7 +198,6 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
-        self._logger = logger.getChild(self.__class__.__name__)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -247,12 +246,7 @@ class ChunkedStream(tts.ChunkedStream):
                     sock_connect=self._conn_options.timeout,
                 ),
             ) as res:
-                if res.status != 200:
-                    error_text = await res.text()
-                    self._tts._logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
-                    raise APIStatusError(
-                        message=f"Sarvam TTS API Error: {error_text}", status_code=res.status
-                    )
+                res.raise_for_status()
 
                 response_json = await res.json()
                 request_id = response_json.get("request_id", "")
