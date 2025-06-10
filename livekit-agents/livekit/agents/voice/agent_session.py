@@ -365,25 +365,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
                 )
 
-                if self.input.audio is not None and room_input_options.audio_enabled:
-                    logger.warning(
-                        "RoomIO audio input is enabled but input.audio is already set, ignoring.."
-                    )
+                if self.input.audio is not None:
+                    if room_input_options.audio_enabled:
+                        logger.warning(
+                            "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
+                        )
                     room_input_options.audio_enabled = False
 
-                if self.output.audio is not None and room_output_options.audio_enabled:
-                    logger.warning(
-                        "RoomIO audio output is enabled but output.audio is already set, ignoring.."
-                    )
+                if self.output.audio is not None:
+                    if room_output_options.audio_enabled:
+                        logger.warning(
+                            "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
+                        )
                     room_output_options.audio_enabled = False
 
-                if (
-                    self.output.transcription is not None
-                    and room_output_options.transcription_enabled
-                ):
-                    logger.warning(
-                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
-                    )
+                if self.output.transcription is not None:
+                    if room_output_options.transcription_enabled:
+                        logger.warning(
+                            "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
+                        )
                     room_output_options.transcription_enabled = False
 
                 self._room_io = room_io.RoomIO(

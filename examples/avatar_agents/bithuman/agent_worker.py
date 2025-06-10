@@ -9,7 +9,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    RoomOutputOptions,
     WorkerOptions,
     WorkerType,
     cli,
@@ -43,8 +42,6 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=Agent(instructions="Your are Einstein, talk to me!"),
         room=ctx.room,
-        # audio is forwarded to the avatar, so we disable room audio output
-        room_output_options=RoomOutputOptions(audio_enabled=False),
     )
 
 
