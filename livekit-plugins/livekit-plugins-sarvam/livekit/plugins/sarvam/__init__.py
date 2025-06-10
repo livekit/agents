@@ -21,8 +21,8 @@ Sarvam.ai provides high-quality STT and TTS for Indian languages.
 For API access, visit https://sarvam.ai/
 """
 
-from .stt import STT as STT
-from .tts import TTS as TTS
+from .stt import STT
+from .tts import TTS
 from .version import __version__
 
 __all__ = ["STT", "TTS", "__version__"]
@@ -34,7 +34,7 @@ from .log import logger
 
 
 class SarvamPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 

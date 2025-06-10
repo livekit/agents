@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import aiohttp
@@ -198,7 +198,6 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
-        self._logger = logger.getChild(self.__class__.__name__)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -218,28 +217,29 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the Sarvam.ai TTS request and emit audio via the output emitter."""
         payload = {
-            "target_language_code": self._tts._opts.target_language_code,
+            "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
-            "speaker": self._tts._opts.speaker,
-            "pitch": self._tts._opts.pitch,
-            "pace": self._tts._opts.pace,
-            "loudness": self._tts._opts.loudness,
-            "speech_sample_rate": self._tts._opts.speech_sample_rate,
-            "enable_preprocessing": self._tts._opts.enable_preprocessing,
-            "model": self._tts._opts.model,
+            "speaker": self._opts.speaker,
+            "pitch": self._opts.pitch,
+            "pace": self._opts.pace,
+            "loudness": self._opts.loudness,
+            "speech_sample_rate": self._opts.speech_sample_rate,
+            "enable_preprocessing": self._opts.enable_preprocessing,
+            "model": self._opts.model,
         }
         headers = {
-            "api-subscription-key": self._tts._opts.api_key,
+            "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
         }
         try:
             async with self._tts._ensure_session().post(
-                url=self._tts._opts.base_url,
+                url=self._opts.base_url,
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(
@@ -249,7 +249,7 @@ class ChunkedStream(tts.ChunkedStream):
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
-                    self._tts._logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
+                    logger.error(f"Sarvam TTS API error: {res.status} - {error_text}")
                     raise APIStatusError(
                         message=f"Sarvam TTS API Error: {error_text}", status_code=res.status
                     )
