@@ -57,6 +57,7 @@ services:
       - RESEMBLE_API_KEY
       - SPEECHIFY_API_KEY
       - HUME_API_KEY
+      - SPITCH_API_KEY
       - LMNT_API_KEY
 
     extra_hosts:
