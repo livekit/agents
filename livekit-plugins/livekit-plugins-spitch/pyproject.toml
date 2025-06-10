@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.1.0", "spitch"]
+dependencies = ["livekit-agents[codecs]>=1.1.1", "spitch"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
