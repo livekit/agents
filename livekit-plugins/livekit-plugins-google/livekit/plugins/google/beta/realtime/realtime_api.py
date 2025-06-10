@@ -869,7 +869,7 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_current_generation_done()
 
     def _mark_current_generation_done(self) -> None:
-        if not self._current_generation:
+        if not self._current_generation or self._current_generation._done:
             return
 
         gen = self._current_generation
