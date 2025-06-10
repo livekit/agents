@@ -57,6 +57,7 @@ class AvatarSession:
     async def start(self, agent_session: AgentSession, room: rtc.Room) -> None:
         if self._runtime:
             runtime = self._runtime
+            await runtime._initialize_token()  # refresh the token
         else:
             kwargs = {
                 "model_path": self._model_path,
