@@ -1500,6 +1500,8 @@ class RealtimeSession(
             recoverable=True,
         )
 
+        # TODO: set exception for the response future if it exists
+
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(
             "error",
