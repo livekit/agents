@@ -864,7 +864,7 @@ class RealtimeSession(
                         exclude_defaults=True,
                     )
                 )
-                if turn_detection_opts
+                if tracing_opts
                 else None
             )
         else:
