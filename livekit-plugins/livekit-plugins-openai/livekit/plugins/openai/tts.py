@@ -203,7 +203,7 @@ class ChunkedStream(tts.ChunkedStream):
         oai_stream = self._tts._client.audio.speech.with_streaming_response.create(
             input=self.input_text,
             model=self._opts.model,
-            voice=self._opts.voice,  # type: ignore
+            voice=self._opts.voice,
             response_format=self._opts.response_format,  # type: ignore
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.NOT_GIVEN,

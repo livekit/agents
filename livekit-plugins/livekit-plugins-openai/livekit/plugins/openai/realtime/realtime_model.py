@@ -856,7 +856,7 @@ class RealtimeSession(
 
         tracing_opts = self._realtime_model._opts.tracing
         if isinstance(tracing_opts, TracingTracingConfiguration):
-            tracing = (
+            tracing: session_update_event.SessionTracing | None = (
                 session_update_event.SessionTracingTracingConfiguration.model_validate(
                     tracing_opts.model_dump(
                         by_alias=True,
@@ -864,8 +864,6 @@ class RealtimeSession(
                         exclude_defaults=True,
                     )
                 )
-                if tracing_opts
-                else None
             )
         else:
             tracing = tracing_opts
