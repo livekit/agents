@@ -31,7 +31,6 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio, is_given
 
-from .log import logger
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
 
