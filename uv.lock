@@ -1561,6 +1561,9 @@ aws = [
 azure = [
     { name = "livekit-plugins-azure" },
 ]
+baseten = [
+    { name = "livekit-plugins-baseten" },
+]
 bey = [
     { name = "livekit-plugins-bey" },
 ]
@@ -1601,6 +1604,9 @@ hume = [
 ]
 images = [
     { name = "pillow" },
+]
+langchain = [
+    { name = "livekit-plugins-langchain" },
 ]
 lmnt = [
     { name = "livekit-plugins-lmnt" },
@@ -1657,6 +1663,7 @@ requires-dist = [
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
     { name = "livekit-plugins-azure", marker = "extra == 'azure'", editable = "livekit-plugins/livekit-plugins-azure" },
+    { name = "livekit-plugins-baseten", marker = "extra == 'baseten'", editable = "livekit-plugins/livekit-plugins-baseten" },
     { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/livekit-plugins-bey" },
     { name = "livekit-plugins-bithuman", marker = "extra == 'bithuman'", editable = "livekit-plugins/livekit-plugins-bithuman" },
     { name = "livekit-plugins-cartesia", marker = "extra == 'cartesia'", editable = "livekit-plugins/livekit-plugins-cartesia" },
@@ -1668,6 +1675,7 @@ requires-dist = [
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
     { name = "livekit-plugins-hume", marker = "extra == 'hume'", editable = "livekit-plugins/livekit-plugins-hume" },
+    { name = "livekit-plugins-langchain", marker = "extra == 'langchain'", editable = "livekit-plugins/livekit-plugins-langchain" },
     { name = "livekit-plugins-lmnt", marker = "extra == 'lmnt'", editable = "livekit-plugins/livekit-plugins-lmnt" },
     { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
@@ -1695,7 +1703,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "assemblyai", "aws", "azure", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hume", "images", "lmnt", "mcp", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechify", "speechmatics", "tavus", "turn-detector"]
+provides-extras = ["anthropic", "assemblyai", "aws", "azure", "baseten", "bey", "bithuman", "cartesia", "clova", "codecs", "deepgram", "elevenlabs", "fal", "gladia", "google", "groq", "hume", "images", "langchain", "lmnt", "mcp", "neuphonic", "nltk", "openai", "playai", "resemble", "rime", "silero", "speechify", "speechmatics", "tavus", "turn-detector"]
 
 [[package]]
 name = "livekit-api"
