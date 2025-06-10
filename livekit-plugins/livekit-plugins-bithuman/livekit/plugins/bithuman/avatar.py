@@ -1,28 +1,55 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import io
 import os
+import platform
+import socket
 import sys
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
+from typing import TYPE_CHECKING, Literal
 
+import aiohttp
 import cv2
 import numpy as np
 from loguru import logger as _logger
+from PIL import Image
 
-from bithuman import AsyncBithuman  # type: ignore
-from livekit import rtc
-from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, get_job_context, utils
+from livekit import api, rtc
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    AgentSession,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    NotGivenOr,
+    get_job_context,
+    utils,
+)
+from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
     AvatarRunner,
+    DataStreamAudioOutput,
     QueueAudioOutput,
     VideoGenerator,
 )
 
 from .log import logger
 
+if TYPE_CHECKING:
+    from bithuman import AsyncBithuman  # type: ignore
+
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")
+
+
+_AVATAR_AGENT_IDENTITY = "bithuman-avatar-agent"
+_AVATAR_AGENT_NAME = "bithuman-avatar-agent"
 
 
 class BitHumanException(Exception):
@@ -35,26 +62,90 @@ class AvatarSession:
     def __init__(
         self,
         *,
-        model_path: NotGivenOr[str | None] = NOT_GIVEN,
+        mode: NotGivenOr[Literal["local", "cloud_gpu", "cloud_cpu", "cloud"]] = "local",
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         api_token: NotGivenOr[str] = NOT_GIVEN,
+        model_path: NotGivenOr[str | None] = NOT_GIVEN,
         runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
+        avatar_image: NotGivenOr[Image.Image | str] = NOT_GIVEN,
+        avatar_id: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        self._api_url = api_url or (os.getenv("BITHUMAN_API_URL") or NOT_GIVEN)
-        self._api_secret = api_secret or (os.getenv("BITHUMAN_API_SECRET") or NOT_GIVEN)
-        self._api_token = api_token or (os.getenv("BITHUMAN_API_TOKEN") or NOT_GIVEN)
-        self._model_path = model_path or (os.getenv("BITHUMAN_MODEL_PATH") or NOT_GIVEN)
+        self._api_url = api_url or os.getenv("BITHUMAN_API_URL")
+        self._api_secret = api_secret or os.getenv("BITHUMAN_API_SECRET")
+        self._api_token = api_token or os.getenv("BITHUMAN_API_TOKEN")
+        self._model_path = model_path or os.getenv("BITHUMAN_MODEL_PATH")
+        self._avatar_id = avatar_id
+        self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
+        self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
 
-        if self._api_secret is None and self._api_token is None:
-            raise BitHumanException("BITHUMAN_API_SECRET or BITHUMAN_API_TOKEN must be set")
-        if self._model_path is None:
-            raise BitHumanException("BITHUMAN_MODEL_PATH must be set")
+        # set default mode based on avatar image presence
+        self._mode = (
+            mode if utils.is_given(mode) else "cloud" if utils.is_given(avatar_image) else "local"
+        )
 
+        # validate mode-specific requirements
+        if self._mode == "local":
+            if self._model_path is None:
+                raise BitHumanException(
+                    "`model_path` or BITHUMAN_MODEL_PATH env must be set for local mode"
+                )
+            if self._api_secret is None and self._api_token is None:
+                raise BitHumanException(
+                    "BITHUMAN_API_SECRET or BITHUMAN_API_TOKEN are required for local mode"
+                )
+        elif self._mode == "cloud_gpu" or self._mode == "cloud_cpu" or self._mode == "cloud":
+            if not utils.is_given(avatar_image) and not utils.is_given(avatar_id):
+                raise BitHumanException("`avatar_image` or `avatar_id` must be set for cloud mode")
+            if self._api_secret is None:
+                raise BitHumanException("BITHUMAN_API_SECRET are required for cloud mode")
+            if self._api_url is None:
+                raise BitHumanException("BITHUMAN_API_URL are required for cloud mode")
+
+        self._avatar_image: Image.Image | str | None = None
+        if isinstance(avatar_image, Image.Image):
+            self._avatar_image = avatar_image
+        elif isinstance(avatar_image, str):
+            if os.path.exists(avatar_image):
+                self._avatar_image = Image.open(avatar_image)
+            elif avatar_image.startswith("http"):
+                self._avatar_image = avatar_image
+            else:
+                raise BitHumanException(f"Invalid avatar image: {avatar_image}")
+
+        self._conn_options = conn_options
+        self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
         self._runtime = runtime
 
-    async def start(self, agent_session: AgentSession, room: rtc.Room) -> None:
+    async def start(
+        self,
+        agent_session: AgentSession,
+        room: rtc.Room,
+        *,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        if self._mode == "local":
+            await self._start_local(agent_session, room)
+        elif self._mode == "cloud_gpu" or self._mode == "cloud_cpu" or self._mode == "cloud":
+            await self._start_cloud(
+                agent_session,
+                room,
+                livekit_url=livekit_url,
+                livekit_api_key=livekit_api_key,
+                livekit_api_secret=livekit_api_secret,
+            )
+        else:
+            raise BitHumanException(f"Invalid mode: {self._mode}")
+
+    async def _start_local(self, agent_session: AgentSession, room: rtc.Room) -> None:
+        from bithuman import AsyncBithuman
+
         if self._runtime:
             runtime = self._runtime
             await runtime._initialize_token()  # refresh the token
@@ -106,6 +197,119 @@ class AvatarSession:
 
         agent_session.output.audio = audio_buffer
 
+    async def _start_cloud(
+        self,
+        agent_session: AgentSession,
+        room: rtc.Room,
+        *,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        from bithuman.lib.generator import BithumanGenerator as LibBithumanGenerator
+        self.__fingerprint = LibBithumanGenerator().fingerprint
+        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
+        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
+        if not livekit_url or not livekit_api_key or not livekit_api_secret:
+            raise BitHumanException(
+                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
+                "by arguments or environment variables"
+            )
+
+        livekit_token = (
+            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
+            .with_kind("agent")
+            .with_identity(self._avatar_participant_identity)
+            .with_name(self._avatar_participant_name)
+            .with_grants(api.VideoGrants(room_join=True, room=room.name))
+            # allow the avatar agent to publish audio and video on behalf of your local agent
+            .with_attributes({
+                ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity,
+                "agent_id": self._avatar_id,
+                "image": self._avatar_image,
+                "api_secret": self._api_secret,
+                "fingerprint": self.__fingerprint,
+            })
+            .to_jwt()
+        )
+
+        logger.debug("starting avatar session")
+        await self._start_cloud_agent(livekit_url, livekit_token, room.name)
+
+        logger.debug("waiting for avatar agent to join the room")
+        await utils.wait_for_participant(room=room, identity=self._avatar_participant_identity)
+
+        agent_session.output.audio = DataStreamAudioOutput(
+            room=room,
+            destination_identity=self._avatar_participant_identity,
+        )
+
+    async def _start_cloud_agent(
+        self, livekit_url: str, livekit_token: str, room_name: str
+    ) -> None:
+        assert self._api_url is not None, "api_url is not set"
+        assert self._api_secret is not None, "api_secret is not set"
+
+        # Prepare JSON data
+        json_data = {
+            "livekit_url": livekit_url,
+            "livekit_token": livekit_token,
+            "room_name": room_name,
+            "fingerprint": self.__fingerprint,
+            "mode": "gpu" if self._mode == 'cloud_gpu' else "cpu",
+        }
+
+        # Handle avatar image
+        if isinstance(self._avatar_image, Image.Image):
+            img_byte_arr = io.BytesIO()
+            self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
+            img_byte_arr.seek(0)
+            # Convert image to base64 string for JSON
+            import base64
+            img_base64 = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+            json_data["image"] = img_base64
+        elif isinstance(self._avatar_image, str):
+            json_data["image"] = self._avatar_image
+
+        if utils.is_given(self._avatar_id):
+            json_data["agent_id"] = self._avatar_id
+
+        for i in range(self._conn_options.max_retry):
+            try:
+                async with self._ensure_http_session().post(
+                    self._api_url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "api-secret": self._api_secret,
+                    },
+                    json=json_data,
+                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                ) as response:
+                    if not response.ok:
+                        text = await response.text()
+                        raise APIStatusError(
+                            "Server returned an error", status_code=response.status, body=text
+                        )
+                    return
+
+            except Exception as e:
+                if isinstance(e, APIConnectionError):
+                    logger.warning("failed to call bithuman avatar api", extra={"error": str(e)})
+                else:
+                    logger.exception("failed to call bithuman avatar api")
+
+                if i < self._conn_options.max_retry - 1:
+                    await asyncio.sleep(self._conn_options.retry_interval)
+
+        raise APIConnectionError("Failed to start Bithuman Avatar Session after all retries")
+
+    def _ensure_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is None:
+            self._http_session = utils.http_context.http_session()
+
+        return self._http_session
+
     @property
     def runtime(self) -> AsyncBithuman:
         if self._runtime is None:
@@ -149,11 +353,11 @@ class BithumanGenerator(VideoGenerator):
         self,
     ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
         def create_video_frame(image: np.ndarray) -> rtc.VideoFrame:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             return rtc.VideoFrame(
                 width=image.shape[1],
                 height=image.shape[0],
-                type=rtc.VideoBufferType.RGBA,
+                type=rtc.VideoBufferType.RGB24,
                 data=image.tobytes(),
             )
 
