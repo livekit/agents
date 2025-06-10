@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from typing import Literal, Union
 
@@ -27,14 +28,12 @@ from livekit.agents import (
     APITimeoutError,
     tts,
 )
-import asyncio
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given, aio
-
-from .models import TTSModels, TTSVoices
-from .utils import AsyncAzureADTokenProvider
+from livekit.agents.utils import aio, is_given
 
 from .log import logger
+from .models import TTSModels, TTSVoices
+from .utils import AsyncAzureADTokenProvider
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1

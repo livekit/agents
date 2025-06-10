@@ -14,8 +14,8 @@
 
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -24,7 +24,6 @@ import httpx
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
-from livekit.agents.utils import aio
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
@@ -34,7 +33,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import aio, is_given
 from openai.types.chat import (
     ChatCompletionChunk,
     ChatCompletionMessageParam,
