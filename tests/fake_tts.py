@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
-from livekit import rtc
-from livekit.agents import NOT_GIVEN, NotGivenOr, tts, utils
+from livekit.agents import NOT_GIVEN, APIConnectionError, NotGivenOr, tts, utils
 from livekit.agents.tts import (
     TTS,
     ChunkedStream,
-    SynthesizedAudio,
     SynthesizeStream,
     TTSCapabilities,
 )
@@ -101,6 +99,10 @@ class FakeChunkedStream(ChunkedStream):
         )
 
         if self._tts._fake_timeout is not None:
+            if self._tts._fake_timeout > self._conn_options.timeout:
+                await asyncio.sleep(self._conn_options.timeout)
+                raise APIConnectionError("timeout")
+
             await asyncio.sleep(self._tts._fake_timeout)
 
         if self._tts._fake_audio_duration is not None:
@@ -134,13 +136,25 @@ class FakeSynthesizeStream(SynthesizeStream):
     def attempt(self) -> int:
         return self._attempt
 
-    async def _run(self) -> None:
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         self._attempt += 1
 
         assert isinstance(self._tts, FakeTTS)
 
         if self._tts._fake_timeout is not None:
+            if self._tts._fake_timeout > self._conn_options.timeout:
+                await asyncio.sleep(self._conn_options.timeout)
+                raise APIConnectionError("timeout")
+
             await asyncio.sleep(self._tts._fake_timeout)
+
+        output_emitter.initialize(
+            request_id=utils.shortuuid("fake_tts_"),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type="audio/pcm",
+            stream=True,
+        )
 
         has_data = False
         async for data in self._input_ch:
@@ -155,8 +169,7 @@ class FakeSynthesizeStream(SynthesizeStream):
             if self._tts._fake_audio_duration is None:
                 continue
 
-            request_id = utils.shortuuid("fake_tts_")
-            segment_id = utils.shortuuid("fake_segment_")
+            output_emitter.start_segment(segment_id=utils.shortuuid("fake_segment_"))
 
             pushed_samples = 0
             max_samples = (
@@ -165,20 +178,10 @@ class FakeSynthesizeStream(SynthesizeStream):
             )
             while pushed_samples < max_samples:
                 num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
-                self._event_ch.send_nowait(
-                    SynthesizedAudio(
-                        request_id=request_id,
-                        segment_id=segment_id,
-                        is_final=(pushed_samples + num_samples >= max_samples),
-                        frame=rtc.AudioFrame(
-                            data=b"\x00\x00" * num_samples,
-                            samples_per_channel=num_samples // self._tts.num_channels,
-                            sample_rate=self._tts.sample_rate,
-                            num_channels=self._tts.num_channels,
-                        ),
-                    )
-                )
+                output_emitter.push(b"\x00\x00" * num_samples)
                 pushed_samples += num_samples
 
         if self._tts._fake_exception is not None:
             raise self._tts._fake_exception
+
+        output_emitter.end_input()

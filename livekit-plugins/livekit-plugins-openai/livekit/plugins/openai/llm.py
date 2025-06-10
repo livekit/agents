@@ -1,6 +1,5 @@
 # Copyright 2023 LiveKit, Inc.
 #
-
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,9 +14,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -26,16 +26,17 @@ import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.llm.tool_context import FunctionTool
+from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import aio, is_given
 from openai.types.chat import (
     ChatCompletionChunk,
+    ChatCompletionMessageParam,
     ChatCompletionToolChoiceOptionParam,
     completion_create_params,
 )
@@ -122,6 +123,8 @@ class LLM(llm.LLM):
             ),
         )
 
+        self._prewarm_task: asyncio.Task | None = None
+
     @staticmethod
     def with_azure(
         *,
@@ -192,13 +195,13 @@ class LLM(llm.LLM):
         Create a new instance of Cerebras LLM.
 
         ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
-        the ``CEREBRAS_API_KEY`` environmental variable.
+        the ``CEREBRAS_API_KEY`` environment variable.
         """
 
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
         if api_key is None:
             raise ValueError(
-                "Cerebras API key is required, either as argument or set CEREBAAS_API_KEY environmental variable"  # noqa: E501
+                "Cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable"  # noqa: E501
             )
 
         return LLM(
@@ -251,7 +254,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_x_ai(
         *,
-        model: str | XAIChatModels = "grok-2-public",
+        model: str | XAIChatModels = "grok-3-fast",
         api_key: str | None = None,
         base_url: str = "https://api.x.ai/v1",
         client: openai.AsyncClient | None = None,
@@ -259,7 +262,7 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
-    ):
+    ) -> LLM:
         """
         Create a new instance of XAI LLM.
 
@@ -516,8 +519,7 @@ class LLM(llm.LLM):
             raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
 
         api_key = api_key or os.environ.get("LETTA_API_KEY")
-        # Might not be necessary if self-hosted Letta instance
-        if base_url.startswith("https://api.letta.com/v1/") and api_key is None:
+        if api_key is None:
             raise ValueError(
                 "Letta API key is required, either as argument or set LETTA_API_KEY environmental variable"  # noqa: E501
             )
@@ -537,7 +539,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -582,7 +584,7 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         if is_given(response_format):
-            extra["response_format"] = llm_utils.to_openai_response_format(response_format)
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         return LLMStream(
             self,
@@ -595,6 +597,19 @@ class LLM(llm.LLM):
             extra_kwargs=extra,
         )
 
+    def prewarm(self) -> None:
+        async def _prewarm() -> None:
+            try:
+                await self._client.get("/", cast_to=str)
+            except Exception:
+                pass
+
+        self._prewarm_task = asyncio.create_task(_prewarm())
+
+    async def aclose(self) -> None:
+        if self._prewarm_task:
+            await aio.cancel_and_wait(self._prewarm_task)
+
 
 class LLMStream(llm.LLMStream):
     def __init__(
@@ -605,7 +620,7 @@ class LLMStream(llm.LLMStream):
         provider_fmt: str,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
     ) -> None:
@@ -641,18 +656,20 @@ class LLMStream(llm.LLMStream):
                 )
 
             self._oai_stream = stream = await self._client.chat.completions.create(
-                messages=chat_ctx,
+                messages=cast(list[ChatCompletionMessageParam], chat_ctx),
                 tools=fnc_ctx,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,
+                timeout=httpx.Timeout(self._conn_options.timeout),
                 **self._extra_kwargs,
             )
 
+            thinking = asyncio.Event()
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
-                        chat_chunk = self._parse_choice(chunk.id, choice)
+                        chat_chunk = self._parse_choice(chunk.id, choice, thinking)
                         if chat_chunk is not None:
                             retryable = False
                             self._event_ch.send_nowait(chat_chunk)
@@ -685,7 +702,9 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_choice(self, id: str, choice: Choice) -> llm.ChatChunk | None:
+    def _parse_choice(
+        self, id: str, choice: Choice, thinking: asyncio.Event
+    ) -> llm.ChatChunk | None:
         delta = choice.delta
 
         # https://github.com/livekit/agents/issues/688
@@ -744,6 +763,11 @@ class LLMStream(llm.LLMStream):
             )
             self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
             return call_chunk
+
+        delta.content = llm_utils.strip_thinking_tokens(delta.content, thinking)
+
+        if not delta.content:
+            return None
 
         return llm.ChatChunk(
             id=id,

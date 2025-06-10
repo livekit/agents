@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
 
 from google.api_core.client_options import ClientOptions
@@ -59,7 +60,7 @@ class TTS(tts.TTS):
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
         location: str = "global",
-        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.LINEAR16,
+        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.OGG_OPUS,  # type: ignore
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -195,10 +196,10 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
                 input=texttospeech.SynthesisInput(text=self._input_text),
@@ -230,11 +231,11 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         encoding = self._opts.encoding
         if encoding not in (texttospeech.AudioEncoding.OGG_OPUS, texttospeech.AudioEncoding.PCM):
             enc_name = texttospeech.AudioEncoding._member_names_[encoding]
@@ -242,7 +243,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 f"encoding {enc_name} isn't supported by the streaming_synthesize, "
                 "fallbacking to PCM"
             )
-            encoding = texttospeech.AudioEncoding.PCM
+            encoding = texttospeech.AudioEncoding.PCM  # type: ignore
 
         output_emitter.initialize(
             request_id=utils.shortuuid(),
@@ -259,7 +260,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             ),
         )
 
-        async def _tokenize_input():
+        async def _tokenize_input() -> None:
             input_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
@@ -274,7 +275,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             self._segments_ch.close()
 
-        async def _run_segments():
+        async def _run_segments() -> None:
             async for input_stream in self._segments_ch:
                 await self._run_stream(input_stream, output_emitter, streaming_config)
 
@@ -289,12 +290,14 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_stream(
         self,
-        input_stream,
+        input_stream: tokenize.SentenceStream,
         output_emitter: tts.AudioEmitter,
         streaming_config: texttospeech.StreamingSynthesizeConfig,
-    ):
+    ) -> None:
         @utils.log_exceptions(logger=logger)
-        async def input_generator():
+        async def input_generator() -> AsyncGenerator[
+            texttospeech.StreamingSynthesizeRequest, None
+        ]:
             try:
                 yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
 
@@ -337,7 +340,7 @@ def _gender_from_str(gender: str) -> SsmlVoiceGender:
     return ssml_gender  # type: ignore
 
 
-def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding):
+def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding) -> str:
     if encoding == texttospeech.AudioEncoding.PCM:
         return "audio/pcm"
     elif encoding == texttospeech.AudioEncoding.LINEAR16:

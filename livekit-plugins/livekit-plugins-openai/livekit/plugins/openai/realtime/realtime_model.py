@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import copy
 import json
 import os
 import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, Union, overload
+from typing import Any, Literal, Optional, Union, cast, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -18,12 +19,18 @@ from pydantic import BaseModel, ValidationError
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
 from livekit.agents.llm.tool_context import (
+    get_function_info,
     get_raw_function_info,
     is_function_tool,
     is_raw_function_tool,
 )
 from livekit.agents.metrics import RealtimeModelMetrics
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from livekit.agents.utils import is_given
 from openai.types.beta.realtime import (
     ConversationItem,
@@ -60,6 +67,8 @@ from openai.types.beta.realtime.response_create_event import Response
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
+    Tracing,
+    TracingTracingConfiguration,
     TurnDetection,
 )
 
@@ -96,12 +105,17 @@ class _RealtimeOptions:
     input_audio_noise_reduction: InputAudioNoiseReduction | None
     turn_detection: TurnDetection | None
     max_response_output_tokens: int | Literal["inf"] | None
-    api_key: str
+    speed: float | None
+    tracing: Tracing | None
+    api_key: str | None
     base_url: str
     is_azure: bool
     azure_deployment: str | None
     entra_token: str | None
     api_version: str | None
+    max_session_duration: float | None
+    """reset the connection after this many seconds if provided"""
+    conn_options: APIConnectOptions
 
 
 @dataclass
@@ -109,6 +123,7 @@ class _MessageGeneration:
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
+    audio_transcript: str = ""
 
 
 @dataclass
@@ -118,6 +133,7 @@ class _ResponseGeneration:
 
     messages: dict[str, _MessageGeneration]
 
+    _done_fut: asyncio.Future[None]
     _created_timestamp: float
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
@@ -138,8 +154,12 @@ class _CreateResponseHandle:
             if not self.done_fut.done():
                 self.done_fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
+        def _on_done(_: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            if self.timeout:
+                self.timeout.cancel()
+
         self.timeout = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        self.done_fut.add_done_callback(lambda _: self.timeout.cancel())
+        self.done_fut.add_done_callback(_on_done)
 
 
 _MOCK_AUDIO_ID_PREFIX = "lk_mock_audio_item_"
@@ -172,6 +192,8 @@ AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = InputAudioTranscription(
     model="whisper-1",
 )
 
+DEFAULT_MAX_SESSION_DURATION = 20 * 60  # 20 minutes
+
 
 class RealtimeModel(llm.RealtimeModel):
     @overload
@@ -185,9 +207,13 @@ class RealtimeModel(llm.RealtimeModel):
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         api_key: str | None = None,
-        base_url: str | None = None,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None: ...
 
     @overload
@@ -198,14 +224,18 @@ class RealtimeModel(llm.RealtimeModel):
         entra_token: str | None = None,
         api_key: str | None = None,
         api_version: str | None = None,
-        base_url: str | None = None,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         voice: str = "alloy",
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
+        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None: ...
 
     def __init__(
@@ -219,11 +249,15 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         azure_deployment: str | None = None,
         entra_token: str | None = None,
         api_version: str | None = None,
+        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -275,7 +309,13 @@ class RealtimeModel(llm.RealtimeModel):
             azure_deployment=azure_deployment,
             entra_token=entra_token,
             api_version=api_version,
-            max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
+            max_response_output_tokens=DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,  # type: ignore
+            speed=speed if is_given(speed) else None,
+            tracing=cast(Union[Tracing, None], tracing) if is_given(tracing) else None,
+            max_session_duration=max_session_duration
+            if is_given(max_session_duration)
+            else DEFAULT_MAX_SESSION_DURATION,
+            conn_options=conn_options,
         )
         self._http_session = http_session
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -295,8 +335,10 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
         temperature: float = 0.8,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-    ):
+    ) -> RealtimeModel:
         """
         Create a RealtimeClient instance configured for Azure OpenAI Service.
 
@@ -359,6 +401,8 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_noise_reduction=input_audio_noise_reduction,
             turn_detection=turn_detection,
             temperature=temperature,
+            speed=speed,
+            tracing=tracing,
             api_key=api_key,
             http_session=http_session,
             azure_deployment=azure_deployment,
@@ -377,6 +421,8 @@ class RealtimeModel(llm.RealtimeModel):
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
@@ -388,7 +434,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.turn_detection = turn_detection
 
         if is_given(tool_choice):
-            self._opts.tool_choice = tool_choice
+            self._opts.tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = input_audio_transcription
@@ -397,7 +443,13 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(max_response_output_tokens):
-            self._opts.max_response_output_tokens = max_response_output_tokens
+            self._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
+
+        if is_given(speed):
+            self._opts.speed = speed
+
+        if is_given(tracing):
+            self._opts.tracing = cast(Union[Tracing, None], tracing)
 
         for sess in self._sessions:
             sess.update_options(
@@ -407,6 +459,8 @@ class RealtimeModel(llm.RealtimeModel):
                 tool_choice=tool_choice,
                 input_audio_transcription=input_audio_transcription,
                 max_response_output_tokens=max_response_output_tokens,
+                speed=speed,
+                tracing=tracing,
             )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -474,20 +528,21 @@ class RealtimeSession(
 
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
-        self._realtime_model = realtime_model
+        self._realtime_model: RealtimeModel = realtime_model
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict]]()
+        self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict[str, Any]]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
+        self._instructions: str | None = None
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
-        self._initial_session_update()
+        self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, _CreateResponseHandle] = {}
-        self._text_mode_recovery_atask: asyncio.Task | None = None
+        self._text_mode_recovery_atask: asyncio.Task[None] | None = None
         self._text_mode_recovery_retries: int = 0
 
-        self._item_delete_future: dict[str, asyncio.Future] = {}
-        self._item_create_future: dict[str, asyncio.Future] = {}
+        self._item_delete_future: dict[str, asyncio.Future[None]] = {}
+        self._item_create_future: dict[str, asyncio.Future[None]] = {}
 
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -499,14 +554,99 @@ class RealtimeSession(
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
-        self._pushed_duration_s = 0  # duration of audio pushed to the OpenAI Realtime API
+        self._pushed_duration_s: float = 0  # duration of audio pushed to the OpenAI Realtime API
 
-    def send_event(self, event: RealtimeClientEvent | dict) -> None:
+    def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
+        num_retries: int = 0
+        max_retries = self._realtime_model._opts.conn_options.max_retry
+
+        async def _reconnect() -> None:
+            logger.debug(
+                "reconnecting to OpenAI Realtime API",
+                extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
+            )
+
+            events: list[RealtimeClientEvent] = []
+
+            # options and instructions
+            events.append(self._create_session_update_event())
+
+            # tools
+            tools = list(self._tools.function_tools.values())
+            if tools:
+                events.append(self._create_tools_update_event(tools))
+
+            # chat context
+            chat_ctx = self.chat_ctx.copy(
+                exclude_function_call=True,
+                exclude_instructions=True,
+                exclude_empty_message=True,
+            )
+            old_chat_ctx_copy = copy.deepcopy(self._remote_chat_ctx)
+            self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+            events.extend(self._create_update_chat_ctx_events(chat_ctx))
+
+            try:
+                for ev in events:
+                    msg = ev.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+                    self.emit("openai_client_event_queued", msg)
+                    await ws_conn.send_str(json.dumps(msg))
+            except Exception as e:
+                self._remote_chat_ctx = old_chat_ctx_copy  # restore the old chat context
+                raise APIConnectionError(
+                    message=(
+                        "Failed to send message to OpenAI Realtime API during session re-connection"
+                    ),
+                ) from e
+
+            logger.debug("reconnected to OpenAI Realtime API")
+            self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
+
+        reconnecting = False
+        while not self._msg_ch.closed:
+            ws_conn = await self._create_ws_conn()
+
+            try:
+                if reconnecting:
+                    await _reconnect()
+                    num_retries = 0  # reset the retry counter
+                await self._run_ws(ws_conn)
+
+            except APIError as e:
+                if max_retries == 0 or not e.retryable:
+                    self._emit_error(e, recoverable=False)
+                    raise
+                elif num_retries == max_retries:
+                    self._emit_error(e, recoverable=False)
+                    raise APIConnectionError(
+                        f"OpenAI Realtime API connection failed after {num_retries} attempts",
+                    ) from e
+                else:
+                    self._emit_error(e, recoverable=True)
+
+                    retry_interval = self._realtime_model._opts.conn_options._interval_for_retry(
+                        num_retries
+                    )
+                    logger.warning(
+                        f"OpenAI Realtime API connection failed, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={"attempt": num_retries, "max_retries": max_retries},
+                    )
+                    await asyncio.sleep(retry_interval)
+                num_retries += 1
+
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+
+            reconnecting = True
+
+    async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"User-Agent": "LiveKit Agents"}
         if self._realtime_model._opts.is_azure:
             if self._realtime_model._opts.entra_token:
@@ -529,10 +669,15 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
-        ws_conn = await self._realtime_model._ensure_http_session().ws_connect(
-            url=url, headers=headers
+        return await self._realtime_model._ensure_http_session().ws_connect(
+            url=url,
+            headers=headers,
+            timeout=aiohttp.ClientWSTimeout(
+                ws_close=self._realtime_model._opts.conn_options.timeout
+            ),
         )
 
+    async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
 
         @utils.log_exceptions(logger=logger)
@@ -564,24 +709,18 @@ class RealtimeSession(
         async def _recv_task() -> None:
             while True:
                 msg = await ws_conn.receive()
-                if msg.type == aiohttp.WSMsgType.CLOSED:
-                    if not closing:
-                        error = Exception("OpenAI S2S connection closed unexpectedly")
-                        self.emit(
-                            "error",
-                            llm.RealtimeModelError(
-                                timestamp=time.time(),
-                                label=self._realtime_model._label,
-                                error=APIConnectionError(
-                                    message="OpenAI S2S connection closed unexpectedly",
-                                ),
-                                recoverable=False,
-                            ),
-                        )
-                        raise error
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if closing:  # closing is expected, see _send_task
+                        return
 
-                    return
-                elif msg.type != aiohttp.WSMsgType.TEXT:
+                    # this will trigger a reconnection
+                    raise APIConnectionError(message="OpenAI S2S connection closed unexpectedly")
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
                 event = json.loads(msg.data)
@@ -665,61 +804,96 @@ class RealtimeSession(
             asyncio.create_task(_recv_task(), name="_recv_task"),
             asyncio.create_task(_send_task(), name="_send_task"),
         ]
+        wait_reconnect_task: asyncio.Task | None = None
+        if self._realtime_model._opts.max_session_duration is not None:
+            wait_reconnect_task = asyncio.create_task(
+                asyncio.sleep(self._realtime_model._opts.max_session_duration),
+                name="_timeout_task",
+            )
+            tasks.append(wait_reconnect_task)
         try:
-            await asyncio.gather(*tasks)
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+            # propagate exceptions from completed tasks
+            for task in done:
+                if task != wait_reconnect_task:
+                    task.result()
+
+            if wait_reconnect_task and wait_reconnect_task in done and self._current_generation:
+                # wait for the current generation to complete before reconnecting
+                await self._current_generation._done_fut
+
         finally:
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
 
-    def _initial_session_update(self) -> None:
-        input_audio_transcription = self._realtime_model._opts.input_audio_transcription
+    def _create_session_update_event(self) -> SessionUpdateEvent:
+        input_audio_transcription_opts = self._realtime_model._opts.input_audio_transcription
         input_audio_transcription = (
             session_update_event.SessionInputAudioTranscription.model_validate(
-                input_audio_transcription.model_dump(
+                input_audio_transcription_opts.model_dump(
                     by_alias=True,
                     exclude_unset=True,
                     exclude_defaults=True,
                 )
             )
-            if input_audio_transcription
+            if input_audio_transcription_opts
             else None
         )
 
-        turn_detection = self._realtime_model._opts.turn_detection
+        turn_detection_opts = self._realtime_model._opts.turn_detection
         turn_detection = (
             session_update_event.SessionTurnDetection.model_validate(
-                turn_detection.model_dump(
+                turn_detection_opts.model_dump(
                     by_alias=True,
                     exclude_unset=True,
                     exclude_defaults=True,
                 )
             )
-            if turn_detection
+            if turn_detection_opts
             else None
         )
 
-        # initial session update
-        self.send_event(
-            SessionUpdateEvent(
-                type="session.update",
-                # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
-                # Other providers support different voices, so we need to accommodate that.
-                session=session_update_event.Session.model_construct(
-                    model=self._realtime_model._opts.model,
-                    voice=self._realtime_model._opts.voice,
-                    input_audio_format="pcm16",
-                    output_audio_format="pcm16",
-                    modalities=["text", "audio"],
-                    turn_detection=turn_detection,
-                    input_audio_transcription=input_audio_transcription,
-                    input_audio_noise_reduction=(
-                        self._realtime_model._opts.input_audio_noise_reduction
-                    ),
-                    temperature=self._realtime_model._opts.temperature,
-                    tool_choice=_to_oai_tool_choice(self._realtime_model._opts.tool_choice),
-                ),
-                event_id=utils.shortuuid("session_update_"),
+        tracing_opts = self._realtime_model._opts.tracing
+        if isinstance(tracing_opts, TracingTracingConfiguration):
+            tracing: session_update_event.SessionTracing | None = (
+                session_update_event.SessionTracingTracingConfiguration.model_validate(
+                    tracing_opts.model_dump(
+                        by_alias=True,
+                        exclude_unset=True,
+                        exclude_defaults=True,
+                    )
+                )
             )
+        else:
+            tracing = tracing_opts
+
+        kwargs = {
+            "model": self._realtime_model._opts.model,
+            "voice": self._realtime_model._opts.voice,
+            "input_audio_format": "pcm16",
+            "output_audio_format": "pcm16",
+            "modalities": ["text", "audio"],
+            "turn_detection": turn_detection,
+            "input_audio_transcription": input_audio_transcription,
+            "input_audio_noise_reduction": self._realtime_model._opts.input_audio_noise_reduction,
+            "temperature": self._realtime_model._opts.temperature,
+            "tool_choice": _to_oai_tool_choice(self._realtime_model._opts.tool_choice),
+            "tracing": tracing,
+        }
+        if self._instructions is not None:
+            kwargs["instructions"] = self._instructions
+
+        if self._realtime_model._opts.speed is not None:
+            kwargs["speed"] = self._realtime_model._opts.speed
+
+        # initial session update
+        return SessionUpdateEvent(
+            type="session.update",
+            # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
+            # Other providers support different voices, so we need to accommodate that.
+            session=session_update_event.Session.model_construct(**kwargs),  # type: ignore
+            event_id=utils.shortuuid("session_update_"),
         )
 
     @property
@@ -740,10 +914,13 @@ class RealtimeSession(
         max_response_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[InputAudioNoiseReduction | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
     ) -> None:
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
 
         if is_given(tool_choice):
+            tool_choice = cast(Optional[llm.ToolChoice], tool_choice)
             self._realtime_model._opts.tool_choice = tool_choice
             kwargs["tool_choice"] = _to_oai_tool_choice(tool_choice)
 
@@ -760,7 +937,7 @@ class RealtimeSession(
             kwargs["turn_detection"] = turn_detection
 
         if is_given(max_response_output_tokens):
-            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
+            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens  # type: ignore
             kwargs["max_response_output_tokens"] = max_response_output_tokens
 
         if is_given(input_audio_transcription):
@@ -770,6 +947,14 @@ class RealtimeSession(
         if is_given(input_audio_noise_reduction):
             self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
             kwargs["input_audio_noise_reduction"] = input_audio_noise_reduction
+
+        if is_given(speed):
+            self._realtime_model._opts.speed = speed
+            kwargs["speed"] = speed
+
+        if is_given(tracing):
+            self._realtime_model._opts.tracing = cast(Union[Tracing, None], tracing)
+            kwargs["tracing"] = cast(Union[Tracing, None], tracing)
 
         if kwargs:
             self.send_event(
@@ -783,6 +968,29 @@ class RealtimeSession(
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, _add_mock_audio: bool = False
     ) -> None:
+        async with self._update_chat_ctx_lock:
+            events = self._create_update_chat_ctx_events(chat_ctx, _add_mock_audio=_add_mock_audio)
+            futs: list[asyncio.Future[None]] = []
+
+            for ev in events:
+                futs.append(f := asyncio.Future[None]())
+                if isinstance(ev, ConversationItemDeleteEvent):
+                    self._item_delete_future[ev.item_id] = f
+                elif isinstance(ev, ConversationItemCreateEvent):
+                    assert ev.item.id is not None
+                    self._item_create_future[ev.item.id] = f
+                self.send_event(ev)
+
+            if not futs:
+                return
+            try:
+                await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
+            except asyncio.TimeoutError:
+                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+
+    def _create_update_chat_ctx_events(
+        self, chat_ctx: llm.ChatContext, *, _add_mock_audio: bool = False
+    ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
         chat_ctx = chat_ctx.copy()
         if _add_mock_audio:
             chat_ctx.items.append(_create_mock_audio_item())
@@ -792,90 +1000,88 @@ class RealtimeSession(
                 item for item in chat_ctx.items if not item.id.startswith(_MOCK_AUDIO_ID_PREFIX)
             ]
 
-        async with self._update_chat_ctx_lock:
-            diff_ops = llm.utils.compute_chat_ctx_diff(
-                self._remote_chat_ctx.to_chat_ctx(), chat_ctx
+        events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
+        diff_ops = llm.utils.compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
+
+        for msg_id in diff_ops.to_remove:
+            events.append(
+                ConversationItemDeleteEvent(
+                    type="conversation.item.delete",
+                    item_id=msg_id,
+                    event_id=utils.shortuuid("chat_ctx_delete_"),
+                )
             )
 
-            futs = []
-
-            for msg_id in diff_ops.to_remove:
-                event_id = utils.shortuuid("chat_ctx_delete_")
-                self.send_event(
-                    ConversationItemDeleteEvent(
-                        type="conversation.item.delete",
-                        item_id=msg_id,
-                        event_id=event_id,
-                    )
+        for previous_msg_id, msg_id in diff_ops.to_create:
+            chat_item = chat_ctx.get_by_id(msg_id)
+            assert chat_item is not None
+            events.append(
+                ConversationItemCreateEvent(
+                    type="conversation.item.create",
+                    item=_livekit_item_to_openai_item(chat_item),
+                    previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
+                    event_id=utils.shortuuid("chat_ctx_create_"),
                 )
-                futs.append(f := asyncio.Future())
-                self._item_delete_future[msg_id] = f
+            )
 
-            for previous_msg_id, msg_id in diff_ops.to_create:
-                event_id = utils.shortuuid("chat_ctx_create_")
-                chat_item = chat_ctx.get_by_id(msg_id)
-                assert chat_item is not None
-
-                self.send_event(
-                    ConversationItemCreateEvent(
-                        type="conversation.item.create",
-                        item=_livekit_item_to_openai_item(chat_item),
-                        previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
-                        event_id=event_id,
-                    )
-                )
-                futs.append(f := asyncio.Future())
-                self._item_create_future[msg_id] = f
-
-            try:
-                await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
-            except asyncio.TimeoutError:
-                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+        return events
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> None:
         async with self._update_fnc_ctx_lock:
-            oai_tools: list[session_update_event.SessionTool] = []
-            retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+            ev = self._create_tools_update_event(tools)
+            self.send_event(ev)
 
-            for tool in tools:
-                if is_function_tool(tool):
-                    tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-                elif is_raw_function_tool(tool):
-                    tool_info = get_raw_function_info(tool)
-                    tool_desc = tool_info.raw_schema
-                    tool_desc["type"] = "function"  # internally tagged
-                else:
-                    logger.error(
-                        "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
-                    )
-                    continue
-
-                try:
-                    session_tool = session_update_event.SessionTool.model_validate(tool_desc)
-                    oai_tools.append(session_tool)
-                    retained_tools.append(tool)
-                except ValidationError:
-                    logger.error(
-                        "OpenAI Realtime API doesn't support this tool",
-                        extra={"tool": tool_desc},
-                    )
-                    continue
-
-            event_id = utils.shortuuid("tools_update_")
-            # f = asyncio.Future()
-            # self._response_futures[event_id] = f
-            self.send_event(
-                SessionUpdateEvent(
-                    type="session.update",
-                    session=session_update_event.Session.model_construct(
-                        model=self._realtime_model._opts.model,
-                        tools=oai_tools,
-                    ),
-                    event_id=event_id,
+            assert ev.session.tools is not None
+            retained_tool_names = {name for t in ev.session.tools if (name := t.name) is not None}
+            retained_tools = [
+                tool
+                for tool in tools
+                if (is_function_tool(tool) and get_function_info(tool).name in retained_tool_names)
+                or (
+                    is_raw_function_tool(tool)
+                    and get_raw_function_info(tool).name in retained_tool_names
                 )
-            )
-
+            ]
             self._tools = llm.ToolContext(retained_tools)
+
+    def _create_tools_update_event(
+        self, tools: list[llm.FunctionTool | llm.RawFunctionTool]
+    ) -> SessionUpdateEvent:
+        oai_tools: list[session_update_event.SessionTool] = []
+        retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
+
+        for tool in tools:
+            if is_function_tool(tool):
+                tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
+            elif is_raw_function_tool(tool):
+                tool_info = get_raw_function_info(tool)
+                tool_desc = tool_info.raw_schema
+                tool_desc["type"] = "function"  # internally tagged
+            else:
+                logger.error(
+                    "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
+                )
+                continue
+
+            try:
+                session_tool = session_update_event.SessionTool.model_validate(tool_desc)
+                oai_tools.append(session_tool)
+                retained_tools.append(tool)
+            except ValidationError:
+                logger.error(
+                    "OpenAI Realtime API doesn't support this tool",
+                    extra={"tool": tool_desc},
+                )
+                continue
+
+        return SessionUpdateEvent(
+            type="session.update",
+            session=session_update_event.Session.model_construct(
+                model=self._realtime_model._opts.model,
+                tools=oai_tools,
+            ),
+            event_id=utils.shortuuid("tools_update_"),
+        )
 
     async def update_instructions(self, instructions: str) -> None:
         event_id = utils.shortuuid("instructions_update_")
@@ -888,6 +1094,7 @@ class RealtimeSession(
                 event_id=event_id,
             )
         )
+        self._instructions = instructions
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
@@ -991,6 +1198,8 @@ class RealtimeSession(
 
     def _emit_generation_event(self, response_id: str) -> None:
         # called when the generation is a function call or a audio message
+        assert self._current_generation is not None, "current_generation is None"
+
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
@@ -1033,6 +1242,7 @@ class RealtimeSession(
             function_ch=utils.aio.Chan(),
             messages={},
             _created_timestamp=time.time(),
+            _done_fut=asyncio.Future(),
         )
 
         if (
@@ -1209,7 +1419,7 @@ class RealtimeSession(
             extra={"error": event.error},
         )
 
-    def _handle_response_audio_transcript_delta(self, event: dict) -> None:
+    def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
         assert self._current_generation is not None, "current_generation is None"
 
         item_id = event["item_id"]
@@ -1220,6 +1430,7 @@ class RealtimeSession(
 
         item_generation = self._current_generation.messages[item_id]
         item_generation.text_ch.send_nowait(delta)
+        item_generation.audio_transcript += delta
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -1284,6 +1495,14 @@ class RealtimeSession(
 
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
+        for item_id, item_generation in self._current_generation.messages.items():
+            if (remote_item := self._remote_chat_ctx.get(item_id)) and isinstance(
+                remote_item.item, llm.ChatMessage
+            ):
+                remote_item.item.content.append(item_generation.audio_transcript)
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._current_generation._done_fut.set_result(None)
         self._current_generation = None
 
         # calculate metrics
@@ -1294,7 +1513,7 @@ class RealtimeSession(
         duration = time.time() - created_timestamp
         metrics = RealtimeModelMetrics(
             timestamp=created_timestamp,
-            request_id=event.response.id,
+            request_id=event.response.id or "",
             ttft=ttft,
             duration=duration,
             cancelled=event.response.status == "cancelled",
@@ -1326,24 +1545,27 @@ class RealtimeSession(
             "OpenAI Realtime API returned an error",
             extra={"error": event.error},
         )
+        self._emit_error(
+            APIError(
+                message="OpenAI Realtime API returned an error",
+                body=event.error,
+                retryable=True,
+            ),
+            recoverable=True,
+        )
+
+        # TODO: set exception for the response future if it exists
+
+    def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(
             "error",
             llm.RealtimeModelError(
                 timestamp=time.time(),
                 label=self._realtime_model._label,
-                error=APIError(
-                    message="OpenAI Realtime API returned an error",
-                    body=event.error,
-                    retryable=True,
-                ),
-                recoverable=True,
+                error=error,
+                recoverable=recoverable,
             ),
         )
-
-        # if event.error.event_id:
-        #     fut = self._response_futures.pop(event.error.event_id, None)
-        #     if fut is not None and not fut.done():
-        #         fut.set_exception(multimodal.RealtimeError(event.error.message))
 
 
 def _livekit_item_to_openai_item(item: llm.ChatItem) -> ConversationItem:
@@ -1445,7 +1667,7 @@ def _openai_item_to_livekit_item(item: ConversationItem) -> llm.ChatItem:
 
 
 def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
-    audio_data = b"\x00\x00" * (SAMPLE_RATE * duration)
+    audio_data = b"\x00\x00" * int(SAMPLE_RATE * duration)
     return llm.ChatMessage(
         id=utils.shortuuid(_MOCK_AUDIO_ID_PREFIX),
         role="user",
@@ -1464,8 +1686,8 @@ def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
     )
 
 
-def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
-    oai_tool_choice: str | None = None
+def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str | llm.tool_context.Function:
+    oai_tool_choice: str | llm.tool_context.Function | None = None
     if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
         oai_tool_choice = tool_choice["function"]
     else:

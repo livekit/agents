@@ -20,6 +20,7 @@ import struct
 import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 
 import av
 import av.container
@@ -185,8 +186,8 @@ class AudioStreamDecoder:
                 },
             )
             # explicitly disable internal buffering flags on the FFmpeg container
-            container.flags |= (
-                av.container.Flags.no_buffer.value | av.container.Flags.flush_packets.value
+            container.flags |= cast(
+                int, av.container.Flags.no_buffer.value | av.container.Flags.flush_packets.value
             )
 
             if len(container.streams.audio) == 0:
@@ -286,11 +287,19 @@ class AudioStreamDecoder:
 
             # now ready to decode
             bstream = AudioByteStream(sample_rate=wave_rate, num_channels=wave_channels)
-            resampler = rtc.AudioResampler(
-                input_rate=wave_rate, output_rate=self._sample_rate, num_channels=wave_channels
+            resampler = (
+                rtc.AudioResampler(
+                    input_rate=wave_rate, output_rate=self._sample_rate, num_channels=wave_channels
+                )
+                if self._sample_rate is not None
+                else None
             )
 
             def resample_and_push(frame: rtc.AudioFrame) -> None:
+                if not resampler:
+                    self._loop.call_soon_threadsafe(self._output_ch.send_nowait, frame)
+                    return
+
                 for resampled_frame in resampler.push(frame):
                     self._loop.call_soon_threadsafe(
                         self._output_ch.send_nowait,

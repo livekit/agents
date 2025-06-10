@@ -24,7 +24,7 @@ class PeriodicCollector(Generic[T]):
         if self._total is None:
             self._total = value
         else:
-            self._total += value
+            self._total += value  # type: ignore
         if time.monotonic() - self._last_flush_time >= self._duration:
             self.flush()
 

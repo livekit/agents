@@ -294,6 +294,7 @@ class SynthesizeStream(ABC):
         self._metrics_task: asyncio.Task[None] | None = None  # started on first push
         self._current_attempt_has_error = False
         self._started_time: float = 0
+        self._pushed_text: str = ""
 
         # used to track metrics
         self._mtc_pending_texts: list[str] = []
@@ -309,19 +310,19 @@ class SynthesizeStream(ABC):
             try:
                 await self._run(output_emitter)
 
-                output_emitter.flush()
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
-                if output_emitter.pushed_duration(idx=-1) <= 0.0:
-                    raise APIError("no audio frames were pushed on all segments")
+                if self._pushed_text.strip():
+                    if output_emitter.pushed_duration(idx=-1) <= 0.0:
+                        raise APIError(f"no audio frames were pushed for text: {self._pushed_text}")
 
-                if self._num_segments != output_emitter.num_segments:
-                    raise APIError(
-                        f"number of segments mismatch: expected {self._num_segments}, "
-                        f"but got {output_emitter.num_segments}"
-                    )
+                    if self._num_segments != output_emitter.num_segments:
+                        raise APIError(
+                            f"number of segments mismatch: expected {self._num_segments}, "
+                            f"but got {output_emitter.num_segments}"
+                        )
 
                 return
             except APIError as e:
@@ -362,13 +363,12 @@ class SynthesizeStream(ABC):
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
-        print("STARTED")
         audio_duration = 0.0
         ttfb = -1.0
         request_id = ""
         segment_id = ""
 
-        def _emit_metrics():
+        def _emit_metrics() -> None:
             nonlocal audio_duration, ttfb, request_id, segment_id
 
             if not self._started_time or self._current_attempt_has_error:
@@ -415,8 +415,10 @@ class SynthesizeStream(ABC):
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
-        if not token:
+        if not token or self._input_ch.closed:
             return
+
+        self._pushed_text += token
 
         if self._metrics_task is None:
             self._metrics_task = asyncio.create_task(
@@ -424,21 +426,28 @@ class SynthesizeStream(ABC):
             )
 
         if not self._mtc_text:
+            if self._num_segments >= 1:
+                logger.warning(
+                    "SynthesizeStream: handling multiple segments in a single instance is "
+                    "deprecated. Please create a new SynthesizeStream instance for each segment. "
+                    "Most TTS plugins now use pooled WebSocket connections via ConnectionPool."
+                )
+                return
+
             self._num_segments += 1
 
         self._mtc_text += token
-        self._check_input_not_ended()
-        self._check_not_closed()
         self._input_ch.send_nowait(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
+        if self._input_ch.closed:
+            return
+
         if self._mtc_text:
             self._mtc_pending_texts.append(self._mtc_text)
             self._mtc_text = ""
 
-        self._check_input_not_ended()
-        self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
@@ -450,21 +459,12 @@ class SynthesizeStream(ABC):
         """Close ths stream immediately"""
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
+        self._input_ch.close()
 
         if self._metrics_task is not None:
             await self._metrics_task
 
         await self._tee.aclose()
-
-    def _check_not_closed(self) -> None:
-        if self._event_ch.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
-
-    def _check_input_not_ended(self) -> None:
-        if self._input_ch.closed:
-            cls = type(self)
-            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
@@ -674,6 +674,8 @@ class AudioEmitter:
                     return
                 elif segment_ctx.audio_duration > 0:
                     if frame is None:
+                        # NOTE: if end_input called after flush with no new audio frames pushed,
+                        # it will create a 0.01s empty frame to indicate the end of the segment
                         frame = rtc.AudioFrame(
                             data=b"\0\0" * (self._sample_rate // 100 * self._num_channels),
                             sample_rate=self._sample_rate,

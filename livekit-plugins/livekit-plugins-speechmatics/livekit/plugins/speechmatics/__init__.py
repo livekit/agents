@@ -30,7 +30,7 @@ from livekit.agents import Plugin
 
 
 class SpeechmaticsPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__)
 
 

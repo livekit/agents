@@ -14,6 +14,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
+    get_job_context,
     utils,
 )
 from livekit.agents.voice.avatar import DataStreamAudioOutput
@@ -74,14 +75,25 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        livekit_url = livekit_url or os.getenv("LIVEKIT_URL")
-        livekit_api_key = livekit_api_key or os.getenv("LIVEKIT_API_KEY")
-        livekit_api_secret = livekit_api_secret or os.getenv("LIVEKIT_API_SECRET")
+        livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
+        livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
+        livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise BeyException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
                 "by arguments or environment variables"
             )
+
+        try:
+            job_ctx = get_job_context()
+            decoded = job_ctx.decode_token()
+            local_participant_identity = decoded["sub"]
+        except (RuntimeError, KeyError):
+            if not room.isconnected():
+                raise BeyException(
+                    "local participant identity not found in token, and room is not connected"
+                ) from None
+            local_participant_identity = room.local_participant.identity
 
         livekit_token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
@@ -90,15 +102,12 @@ class AvatarSession:
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
             # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity})
+            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
             .to_jwt()
         )
 
         logger.debug("starting avatar session")
         await self._start_agent(livekit_url, livekit_token)
-
-        logger.debug("waiting for avatar agent to join the room")
-        await utils.wait_for_participant(room=room, identity=self._avatar_participant_identity)
 
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
@@ -120,7 +129,7 @@ class AvatarSession:
                         "livekit_url": livekit_url,
                         "livekit_token": livekit_token,
                     },
-                    timeout=self._conn_options.timeout,
+                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
                 ) as response:
                     if not response.ok:
                         text = await response.text()
