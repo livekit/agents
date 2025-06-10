@@ -99,6 +99,8 @@ class TTS(tts.TTS):
             ),
         )
 
+        self._prewarm_task: asyncio.Task | None = None
+
     def update_options(
         self,
         *,
@@ -182,13 +184,14 @@ class TTS(tts.TTS):
         async def _prewarm() -> None:
             try:
                 await self._client.get("/", cast_to=str)
-            except Exception as e:
-                logger.warning("failed to prewarm openai tts", exc_info=e)
+            except Exception:
+                pass
 
         self._prewarm_task = asyncio.create_task(_prewarm())
 
     async def aclose(self) -> None:
-        await aio.cancel_and_wait(self._prewarm_task)
+        if self._prewarm_task:
+            await aio.cancel_and_wait(self._prewarm_task)
 
 
 class ChunkedStream(tts.ChunkedStream):

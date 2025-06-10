@@ -123,6 +123,8 @@ class LLM(llm.LLM):
             ),
         )
 
+        self._prewarm_task: asyncio.Task | None = None
+
     @staticmethod
     def with_azure(
         *,
@@ -599,13 +601,14 @@ class LLM(llm.LLM):
         async def _prewarm() -> None:
             try:
                 await self._client.get("/", cast_to=str)
-            except Exception as e:
-                logger.warning("failed to prewarm openai llm", exc_info=e)
+            except Exception:
+                pass
 
         self._prewarm_task = asyncio.create_task(_prewarm())
 
     async def aclose(self) -> None:
-        await aio.cancel_and_wait(self._prewarm_task)
+        if self._prewarm_task:
+            await aio.cancel_and_wait(self._prewarm_task)
 
 
 class LLMStream(llm.LLMStream):
