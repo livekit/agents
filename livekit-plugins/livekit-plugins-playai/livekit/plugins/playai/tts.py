@@ -35,10 +35,10 @@ class TTS(tts.TTS):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         user_id: NotGivenOr[str] = NOT_GIVEN,
-        voice: str = "s3://voice-cloning-zero-shot/d9ff78ba-d016-47f6-b0ef-dd630f59414e/female-cs/manifest.json",
+        voice: str = "s3://voice-cloning-zero-shot/baf1ef41-36b6-428c-9bdf-50ba54682bd8/original/manifest.json",
         language: str = "english",
         sample_rate: int = 24000,
-        model: TTSModel | str = "Play3.0-mini",
+        model: TTSModel | str = "PlayDialog",
         word_tokenizer: tokenize.WordTokenizer | None = None,
         **kwargs,
     ) -> None:
