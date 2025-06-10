@@ -856,7 +856,7 @@ class RealtimeSession(
 
         tracing_opts = self._realtime_model._opts.tracing
         if isinstance(tracing_opts, TracingTracingConfiguration):
-            tracing = (
+            tracing: session_update_event.SessionTracing | None = (
                 session_update_event.SessionTracingTracingConfiguration.model_validate(
                     tracing_opts.model_dump(
                         by_alias=True,
@@ -864,8 +864,6 @@ class RealtimeSession(
                         exclude_defaults=True,
                     )
                 )
-                if tracing_opts
-                else None
             )
         else:
             tracing = tracing_opts
@@ -881,11 +879,13 @@ class RealtimeSession(
             "input_audio_noise_reduction": self._realtime_model._opts.input_audio_noise_reduction,
             "temperature": self._realtime_model._opts.temperature,
             "tool_choice": _to_oai_tool_choice(self._realtime_model._opts.tool_choice),
-            "speed": self._realtime_model._opts.speed,
             "tracing": tracing,
         }
         if self._instructions is not None:
             kwargs["instructions"] = self._instructions
+
+        if self._realtime_model._opts.speed is not None:
+            kwargs["speed"] = self._realtime_model._opts.speed
 
         # initial session update
         return SessionUpdateEvent(
