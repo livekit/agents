@@ -254,7 +254,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_x_ai(
         *,
-        model: str | XAIChatModels = "grok-2-public",
+        model: str | XAIChatModels = "grok-3-fast",
         api_key: str | None = None,
         base_url: str = "https://api.x.ai/v1",
         client: openai.AsyncClient | None = None,
