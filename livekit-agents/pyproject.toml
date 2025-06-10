@@ -77,6 +77,7 @@ hume = ["livekit-plugins-hume>=1.0.22"]
 lmnt = ["livekit-plugins-lmnt>=1.0.22"]
 baseten = ["livekit-plugins-baseten>=1.0.22"]
 langchain = ["livekit-plugins-langchain>=1.0.22"]
+sarvam = ["livekit-plugins-sarvam>=1.0.22"]
 
 
 [project.urls]

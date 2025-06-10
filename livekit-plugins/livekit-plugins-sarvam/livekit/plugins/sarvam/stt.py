@@ -176,7 +176,9 @@ class STT(stt.STT):
 
                 transcript_text = response_json.get("transcript", "")
                 request_id = response_json.get("request_id", "")
-                detected_language = response_json.get("language_code", opts_language)
+                detected_language = response_json.get("language_code")
+                if not isinstance(detected_language, str):
+                    detected_language = opts_language or ""
 
                 start_time = 0.0
                 end_time = 0.0
@@ -217,7 +219,7 @@ class STT(stt.STT):
 
                 alternatives = [
                     stt.SpeechData(
-                        language=detected_language or opts_language,
+                        language=detected_language,
                         text=transcript_text,
                         start_time=start_time,
                         end_time=end_time,

@@ -147,12 +147,11 @@ class ChunkedStream(tts.ChunkedStream):
             input_text=input_text,
             conn_options=conn_options,
         )
-        self._tts = tts
         self._api_key = api_key
         self._model_endpoint = model_endpoint
         self._opts = replace(tts._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with self._tts._ensure_session().post(
                 self._model_endpoint,
