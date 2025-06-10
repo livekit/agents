@@ -58,7 +58,7 @@ ssl_context = ssl._create_unverified_context()
 class STTOptions:
     sample_rate: int
     buffer_size_seconds: float = 0.032
-    encoding: STTEncoding = "pcm_s16le"
+    encoding: str = "pcm_s16le"
 
     # Optional metadata fields specific to Baseten
     vad_threshold: float = 0.5
