@@ -151,7 +151,6 @@ def perform_tts_inference(
                     audio_ch.send_nowait(data)
                 elif isinstance(data, io.TimedString):
                     timed_text_ch.send_nowait(data)
-                    logger.info(f"timed transcript: {data}, {data.start_time}, {data.end_time}")
 
             return True
 

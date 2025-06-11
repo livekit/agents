@@ -74,9 +74,6 @@ class _SpeakingRateData:
             self.speaking_rate.append(rate)
             self.speak_integrals.append(integral)
             self._text_buffer.clear()
-            logger.info(
-                f"ANNOTATED: {self.timestamps}, {self.speaking_rate}, {self.speak_integrals}"
-            )
 
         self._text_buffer.append(text)
 
