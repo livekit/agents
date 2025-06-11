@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import math
 from abc import ABC, abstractmethod
 from typing import Any
 
 from livekit.agents import llm
+from livekit.agents.utils import hw
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
@@ -65,8 +67,13 @@ class _EUORunnerBase(_InferenceRunner):
                 revision=self._model_revision,
                 local_files_only=True,
             )
+            sess_options = ort.SessionOptions()
+            sess_options.intra_op_num_threads = max(
+                1, math.ceil(hw.get_cpu_monitor().cpu_count()) // 2
+            )
+            sess_options.inter_op_num_threads = 1
             self._session = ort.InferenceSession(
-                local_path_onnx, providers=["CPUExecutionProvider"]
+                local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
 
             self._tokenizer = AutoTokenizer.from_pretrained(
