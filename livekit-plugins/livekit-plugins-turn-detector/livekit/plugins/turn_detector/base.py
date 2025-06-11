@@ -72,6 +72,7 @@ class _EUORunnerBase(_InferenceRunner):
                 1, math.ceil(hw.get_cpu_monitor().cpu_count()) // 2
             )
             sess_options.inter_op_num_threads = 1
+            sess_options.add_session_config_entry("session.dynamic_block_base", "4")
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
