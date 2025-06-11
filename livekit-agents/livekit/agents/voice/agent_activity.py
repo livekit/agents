@@ -1179,7 +1179,7 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
         )
         tasks.append(llm_task)
-        tts_text_input, llm_output = utils.aio.itertools.tee(llm_gen_data.text_ch)
+        tts_text_input, tr_input = utils.aio.itertools.tee(llm_gen_data.text_ch)
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -1190,6 +1190,11 @@ class AgentActivity(RecognitionHooks):
                 model_settings=model_settings,
             )
             tasks.append(tts_task)
+            if self.tts and (
+                self.tts.capabilities.timed_transcript or not self.tts.capabilities.streaming
+            ):
+                # use timed text if supported by the TTS
+                tr_input = tts_gen_data.timed_text_ch
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
@@ -1201,7 +1206,7 @@ class AgentActivity(RecognitionHooks):
 
         reply_started_at = time.time()
 
-        tr_node = self._agent.transcription_node(llm_output, model_settings)
+        tr_node = self._agent.transcription_node(tr_input, model_settings)
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
         text_out: _TextOutput | None = None
         if tr_node_result is not None:

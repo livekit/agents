@@ -83,6 +83,7 @@ class FallbackAdapter(
         super().__init__(
             capabilities=TTSCapabilities(
                 streaming=all(t.capabilities.streaming for t in tts),
+                timed_transcript=all(t.capabilities.timed_transcript for t in tts),
             ),
             sample_rate=sample_rate,
             num_channels=num_channels,

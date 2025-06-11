@@ -13,6 +13,23 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .agent import ModelSettings
 
+
+class TimedString(str):
+    start_time: NotGivenOr[float]
+    end_time: NotGivenOr[float]
+
+    def __new__(
+        cls,
+        text: str,
+        start_time: NotGivenOr[float] = NOT_GIVEN,
+        end_time: NotGivenOr[float] = NOT_GIVEN,
+    ) -> TimedString:
+        obj = super().__new__(cls, text)
+        obj.start_time = start_time
+        obj.end_time = end_time
+        return obj
+
+
 # TODO(theomonnom): can those types be simplified?
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame], ModelSettings],
@@ -31,26 +48,10 @@ LLMNode = Callable[
 TTSNode = Callable[
     [AsyncIterable[str], ModelSettings],
     Union[
-        Optional[AsyncIterable[rtc.AudioFrame]],
-        Awaitable[Optional[AsyncIterable[rtc.AudioFrame]]],
+        Optional[AsyncIterable[rtc.AudioFrame | TimedString]],
+        Awaitable[Optional[AsyncIterable[rtc.AudioFrame | TimedString]]],
     ],
 ]
-
-
-class TimedString(str):
-    start_time: NotGivenOr[float]
-    end_time: NotGivenOr[float]
-
-    def __new__(
-        cls,
-        text: str,
-        start_time: NotGivenOr[float] = NOT_GIVEN,
-        end_time: NotGivenOr[float] = NOT_GIVEN,
-    ) -> TimedString:
-        obj = super().__new__(cls, text)
-        obj.start_time = start_time
-        obj.end_time = end_time
-        return obj
 
 
 class AudioInput:

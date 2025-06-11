@@ -130,12 +130,14 @@ def perform_llm_inference(
 @dataclass
 class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
+    timed_text_ch: aio.Chan[io.TimedString]
 
 
 def perform_tts_inference(
     *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
+    timed_text_ch = aio.Chan[io.TimedString]()
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task() -> bool:
@@ -144,17 +146,26 @@ def perform_tts_inference(
             tts_node = await tts_node
 
         if isinstance(tts_node, AsyncIterable):
-            async for audio_frame in tts_node:
-                audio_ch.send_nowait(audio_frame)
+            async for data in tts_node:
+                if isinstance(data, rtc.AudioFrame):
+                    audio_ch.send_nowait(data)
+                elif isinstance(data, io.TimedString):
+                    timed_text_ch.send_nowait(data)
+                    logger.info(f"timed transcript: {data}, {data.start_time}, {data.end_time}")
 
             return True
 
         return False
 
     tts_task = asyncio.create_task(_inference_task())
-    tts_task.add_done_callback(lambda _: audio_ch.close())
 
-    return tts_task, _TTSGenerationData(audio_ch=audio_ch)
+    def _inference_done(_: asyncio.Task[bool]) -> None:
+        timed_text_ch.close()
+        audio_ch.close()
+
+    tts_task.add_done_callback(_inference_done)
+
+    return tts_task, _TTSGenerationData(audio_ch=audio_ch, timed_text_ch=timed_text_ch)
 
 
 @dataclass

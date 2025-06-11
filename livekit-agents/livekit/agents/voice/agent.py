@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, TurnDetectionMode
+    from .io import TimedString
 
 
 @dataclass
@@ -256,8 +257,8 @@ class Agent:
     def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> (
-        AsyncGenerator[rtc.AudioFrame, None]
-        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
+        AsyncGenerator[rtc.AudioFrame | TimedString, None]
+        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame | TimedString]]
         | Coroutine[Any, Any, None]
     ):
         """
@@ -359,7 +360,7 @@ class Agent:
         @staticmethod
         async def tts_node(
             agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
-        ) -> AsyncGenerator[rtc.AudioFrame, None]:
+        ) -> AsyncGenerator[rtc.AudioFrame | TimedString, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent._get_activity_or_raise()
             assert activity.tts is not None, "tts_node called but no TTS node is available"
@@ -368,7 +369,8 @@ class Agent:
 
             if not activity.tts.capabilities.streaming:
                 wrapped_tts = tts.StreamAdapter(
-                    tts=wrapped_tts, sentence_tokenizer=tokenize.basic.SentenceTokenizer()
+                    tts=wrapped_tts,
+                    sentence_tokenizer=tokenize.basic.SentenceTokenizer(retain_format=True),
                 )
 
             conn_options = activity.session.conn_options.tts_conn_options
@@ -384,6 +386,8 @@ class Agent:
                 try:
                     async for ev in stream:
                         yield ev.frame
+                        for timed_transcript in ev.timed_transcripts:
+                            yield timed_transcript
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
 
