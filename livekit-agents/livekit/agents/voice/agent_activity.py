@@ -163,6 +163,13 @@ class AgentActivity(RecognitionHooks):
 
         self._mcp_tools: list[mcp.MCPTool] = []
 
+    def set_vad_variable(self, speech_duration: float, silence_duration: float):
+        try:
+            self._session.speech_duration = speech_duration
+            self._session.silence_duration = silence_duration
+        except Exception as e:
+            logger.error(f"Error in set_vad_variable: {e}")
+    
     @property
     def draining(self) -> bool:
         return self._draining
@@ -817,6 +824,11 @@ class AgentActivity(RecognitionHooks):
         self._session._update_user_state("listening")
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
+        try:
+            self.set_vad_variable(round(ev.speech_duration, 3), round(ev.silence_duration, 3))
+        except Exception as e:
+            logger.error(f"Error in set_vad_variable: {e}")
+
         if self._turn_detection_mode in ("manual", "realtime_llm"):
             # ignore vad inference done event if turn_detection is manual or realtime_llm
             return

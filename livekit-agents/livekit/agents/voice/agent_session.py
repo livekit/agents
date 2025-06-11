@@ -257,6 +257,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
         self._job_context_cb_registered: bool = False
+        
+        self.speech_duration: float = 0.0
+        self.silence_duration: float = 0.0
 
     @property
     def userdata(self) -> Userdata_T:
