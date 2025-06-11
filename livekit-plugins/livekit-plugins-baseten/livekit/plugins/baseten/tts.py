@@ -39,7 +39,6 @@ ssl_context.verify_mode = ssl.CERT_NONE
 
 @dataclass
 class _TTSOptions:
-    model: str
     language: str
     voice: str
     temperature: float
@@ -51,7 +50,6 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         model_endpoint: str | None = None,
-        model: str = "Orpheus",
         voice: str = "tara",
         language: str = "en",
         temperature: float = 0.6,
@@ -63,7 +61,6 @@ class TTS(tts.TTS):
         Args:
             api_key (str): Baseten API key, or `BASETEN_API_KEY` env var.
             model_endpoint (str): Baseten model endpoint, or `BASETEN_MODEL_ENDPOINT` env var.
-            model (TTSModel): TTS model, defaults to "Orpheus".
             voice (str): Speaker voice.
             language (str): language, defaults to "english".
         """
@@ -93,7 +90,7 @@ class TTS(tts.TTS):
         self._model_endpoint = model_endpoint
 
         self._opts = _TTSOptions(
-            voice=voice, model=model, language=language, temperature=temperature
+            voice=voice, language=language, temperature=temperature
         )
         self._session = http_session
 
@@ -107,14 +104,11 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
-        if is_given(model):
-            self._opts.model = model
         if is_given(language):
             self._opts.language = language
         if is_given(temperature):
