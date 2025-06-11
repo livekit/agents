@@ -243,6 +243,7 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
         self._speaking = False
+        self._speech_duration: float = 0
 
         # Set up audio energy filter for local VAD
         self._audio_energy_filter: AudioEnergyFilter | None = None
@@ -330,6 +331,7 @@ class SpeechStream(stt.SpeechStream):
                     has_ended = True
 
                 for frame in frames:
+                    self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
                 if has_ended:
@@ -420,7 +422,7 @@ class SpeechStream(stt.SpeechStream):
         return ws
 
     def _process_stream_event(self, data: dict) -> None:
-        """Process incoming WebSocket messages."""
+        """Process incoming WebSocket messages. See https://docs.cartesia.ai/2025-04-16/api-reference/stt/stt"""
         message_type = data.get("type")
 
         if message_type == "transcript":
@@ -435,12 +437,24 @@ class SpeechStream(stt.SpeechStream):
             speech_data = stt.SpeechData(
                 language=language,
                 start_time=0,  # Cartesia doesn't provide word-level timestamps in this version
-                end_time=data.get("duration", 0),
+                end_time=data.get("duration", 0),  # This is the duration transcribed so far
                 confidence=data.get("probability", 1.0),
                 text=text,
             )
 
             if is_final:
+                if self._speech_duration > 0:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            request_id=request_id,
+                            recognition_usage=stt.RecognitionUsage(
+                                audio_duration=self._speech_duration,
+                            ),
+                        )
+                    )
+                    self._speech_duration = 0
+
                 event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     request_id=request_id,
