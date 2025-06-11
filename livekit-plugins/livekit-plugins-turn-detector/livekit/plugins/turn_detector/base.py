@@ -73,7 +73,6 @@ class _EUORunnerBase(_InferenceRunner):
             )
             sess_options.inter_op_num_threads = 1
             sess_options.add_session_config_entry("session.dynamic_block_base", "4")
-            print(sess_options)
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
