@@ -74,6 +74,9 @@ class _SpeakingRateData:
             self.speaking_rate.append(rate)
             self.speak_integrals.append(integral)
             self._text_buffer.clear()
+            logger.info(
+                f"ANNOTATED: {self.timestamps}, {self.speaking_rate}, {self.speak_integrals}"
+            )
 
         self._text_buffer.append(text)
 
@@ -199,8 +202,8 @@ class _SegmentSynchronizerImpl:
 
         start_time, end_time = None, None
         if isinstance(text, io.TimedString):
-            start_time = text.start_time or None
-            end_time = text.end_time or None
+            start_time = text.start_time if utils.is_given(text.start_time) else None
+            end_time = text.end_time if utils.is_given(text.end_time) else None
             if not self._audio_data.sr_data_annotated:
                 self._audio_data.sr_data_annotated = _SpeakingRateData()
 
@@ -312,9 +315,11 @@ class _SegmentSynchronizerImpl:
                 elapsed = time.time() - self._start_wall_time
 
                 target_hyphens: float | None = None
-                if self._audio_data.sr_data_annotated:
+                if (annotated := self._audio_data.sr_data_annotated) and (
+                    annotated.pushed_duration >= elapsed
+                ):
                     # use the actual speaking rate
-                    target_hyphens = self._audio_data.sr_data_annotated.accumulate_to(elapsed)
+                    target_hyphens = annotated.accumulate_to(elapsed)
                 elif self._speed_on_speaking_unit:
                     # use the estimated speed from speaking rate
                     target_speaking_units = self._audio_data.sr_data_est.accumulate_to(elapsed)
