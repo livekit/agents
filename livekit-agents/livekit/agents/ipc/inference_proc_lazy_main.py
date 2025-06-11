@@ -22,18 +22,18 @@ if current_process().name == "inference_proc":
 
 
 import asyncio
+import math
 import socket
 import time
-import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from ..inference_runner import _RunnersDict
 from ..log import logger
-from ..utils import aio, log_exceptions, hw
+from ..utils import aio, hw, log_exceptions
 from . import proto
 from .channel import Message
 from .proc_client import _ProcClient
-from concurrent.futures import ThreadPoolExecutor
 
 
 @dataclass
