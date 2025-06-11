@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 import math
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
 from livekit.agents import llm
-from livekit.agents.utils import hw
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
+from livekit.agents.utils import hw
 
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
