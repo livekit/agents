@@ -24,14 +24,16 @@ if current_process().name == "inference_proc":
 import asyncio
 import socket
 import time
+import math
 from dataclasses import dataclass
 
 from ..inference_runner import _RunnersDict
 from ..log import logger
-from ..utils import aio, log_exceptions
+from ..utils import aio, log_exceptions, hw
 from . import proto
 from .channel import Message
 from .proc_client import _ProcClient
+from concurrent.futures import ThreadPoolExecutor
 
 
 @dataclass
@@ -65,6 +67,7 @@ class _InferenceProc:
     def __init__(self, runners: _RunnersDict) -> None:
         # create an instance of each runner (the ctor must not requires any argument)
         self._runners = {name: runner() for name, runner in runners.items()}
+        self._executor = ThreadPoolExecutor(max_workers=math.ceil(hw.get_cpu_monitor().cpu_count()))
 
     def initialize(self, init_req: proto.InitializeRequest, client: _ProcClient) -> None:
         self._client = client
@@ -107,7 +110,9 @@ class _InferenceProc:
             logger.warning("unknown inference method", extra={"method": msg.method})
 
         try:
-            data = await loop.run_in_executor(None, self._runners[msg.method].run, msg.data)
+            data = await loop.run_in_executor(
+                self._executor, self._runners[msg.method].run, msg.data
+            )
             await self._client.send(
                 proto.InferenceResponse(
                     request_id=msg.request_id,
