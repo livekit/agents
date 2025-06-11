@@ -1,8 +1,8 @@
 # Deepgram plugin for LiveKit Agents
 
-Support for speech-to-text with [Deepgram](https://deepgram.com/).
+Support for [Deepgram](https://deepgram.com/)'s voice AI services in LiveKit Agents.
 
-See [https://docs.livekit.io/agents/integrations/stt/deepgram/](https://docs.livekit.io/agents/integrations/stt/deepgram/) for more information.
+More information is available in the docs for the [STT](https://docs.livekit.io/agents/integrations/stt/deepgram/) and [TTS](https://docs.livekit.io/agents/integrations/tts/deepgram/) integrations.
 
 ## Installation
 
