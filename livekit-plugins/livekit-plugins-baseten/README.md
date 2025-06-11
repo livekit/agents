@@ -2,7 +2,7 @@
 
 Support for [Baseten](https://baseten.co/)-hosted models in LiveKit Agents.
 
-More information is available in the docs for the [STT](https://docs.livekit.io/agents/integrations/stt/baseten/) and [TTS](https://docs.livekit.io/agents/integrations/tts/baseten/) integrations.
+More information is available in the docs for the [TTS](https://docs.livekit.io/agents/integrations/tts/baseten/)integration.
 
 ## Installation
 
