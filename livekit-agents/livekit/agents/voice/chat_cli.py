@@ -213,21 +213,24 @@ class ChatCLI:
 
             self._win_read_task = asyncio.create_task(win_reader())
         else:
-            import termios
-            import tty
+            try:
+                import termios
+                import tty
 
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            tty.setcbreak(fd)
+                fd = sys.stdin.fileno()
+                old_settings = termios.tcgetattr(fd)
+                tty.setcbreak(fd)
 
-            def on_input() -> None:
-                try:
-                    ch = sys.stdin.read(1)
-                    stdin_ch.send_nowait(ch)
-                except Exception:
-                    stdin_ch.close()
+                def on_input() -> None:
+                    try:
+                        ch = sys.stdin.read(1)
+                        stdin_ch.send_nowait(ch)
+                    except Exception:
+                        stdin_ch.close()
 
-            self._loop.add_reader(fd, on_input)
+                self._loop.add_reader(fd, on_input)
+            except Exception as e:
+                pass
 
         self._update_microphone(enable=True)
         self._update_speaker(enable=True)
@@ -246,59 +249,68 @@ class ChatCLI:
             self._update_speaker(enable=False)
         finally:
             if sys.platform != "win32":
-                import termios
+                try:
+                    import termios
 
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                self._loop.remove_reader(fd)
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    self._loop.remove_reader(fd)
+                except Exception as e:
+                    pass
 
     def _update_microphone(self, *, enable: bool) -> None:
-        import sounddevice as sd
+        try:
+            import sounddevice as sd
 
-        input_device, _ = sd.default.device
-        if input_device is not None and enable:
-            device_info = sd.query_devices(input_device)
-            assert isinstance(device_info, dict)
+            input_device, _ = sd.default.device
+            if input_device is not None and enable:
+                device_info = sd.query_devices(input_device)
+                assert isinstance(device_info, dict)
 
-            self._input_device_name: str = device_info.get("name", "Microphone")
-            self._input_stream = sd.InputStream(
-                callback=self._sd_input_callback,
-                dtype="int16",
-                channels=1,
-                device=input_device,
-                samplerate=24000,
-                blocksize=2400,
-            )
-            self._input_stream.start()
-            self._session.input.audio = _AudioInput(self)
-        elif self._input_stream is not None:
-            self._input_stream.stop()
-            self._input_stream.close()
-            self._input_stream = None
-            self._session.input.audio = None
+                self._input_device_name: str = device_info.get("name", "Microphone")
+                self._input_stream = sd.InputStream(
+                    callback=self._sd_input_callback,
+                    dtype="int16",
+                    channels=1,
+                    device=input_device,
+                    samplerate=24000,
+                    blocksize=2400,
+                )
+                self._input_stream.start()
+                self._session.input.audio = _AudioInput(self)
+            elif self._input_stream is not None:
+                self._input_stream.stop()
+                self._input_stream.close()
+                self._input_stream = None
+                self._session.input.audio = None
+        except Exception as e:
+            pass
 
     def _update_speaker(self, *, enable: bool) -> None:
-        import sounddevice as sd
+        try:
+            import sounddevice as sd
 
-        _, output_device = sd.default.device
-        if output_device is not None and enable:
-            self._output_stream = sd.OutputStream(
-                callback=self._sd_output_callback,
-                dtype="int16",
-                channels=1,
-                device=output_device,
-                samplerate=24000,
-                blocksize=2400,  # 100ms
-            )
-            self._output_stream.start()
-            self._session.output.audio = (
-                self._transcript_syncer.audio_output
-                if self._transcript_syncer
-                else self._audio_sink
-            )
-        elif self._output_stream is not None:
-            self._output_stream.close()
-            self._output_stream = None
-            self._session.output.audio = None
+            _, output_device = sd.default.device
+            if output_device is not None and enable:
+                self._output_stream = sd.OutputStream(
+                    callback=self._sd_output_callback,
+                    dtype="int16",
+                    channels=1,
+                    device=output_device,
+                    samplerate=24000,
+                    blocksize=2400,  # 100ms
+                )
+                self._output_stream.start()
+                self._session.output.audio = (
+                    self._transcript_syncer.audio_output
+                    if self._transcript_syncer
+                    else self._audio_sink
+                )
+            elif self._output_stream is not None:
+                self._output_stream.close()
+                self._output_stream = None
+                self._session.output.audio = None
+        except Exception as e:
+            pass
 
     def _update_text_output(self, *, enable: bool, stdout_enable: bool) -> None:
         if enable:
