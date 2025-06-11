@@ -89,9 +89,7 @@ class TTS(tts.TTS):
         self._api_key = api_key
         self._model_endpoint = model_endpoint
 
-        self._opts = _TTSOptions(
-            voice=voice, language=language, temperature=temperature
-        )
+        self._opts = _TTSOptions(voice=voice, language=language, temperature=temperature)
         self._session = http_session
 
     def _ensure_session(self) -> aiohttp.ClientSession:
