@@ -58,8 +58,8 @@ class FallbackAdapter(
                 labels = ", ".join(t.label for t in non_streaming_stt)
                 raise ValueError(
                     f"STTs do not support streaming: {labels}. "
-                    "Wrap them with stt.StreamAdapter to enable streaming "
-                    "or provide a VAD to enable StreamAdapter."
+                    "Provide a VAD to enable stt.StreamAdapter automatically "
+                    "or wrap them with stt.StreamAdapter before using this adapter."
                 )
             stt = [
                 StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
