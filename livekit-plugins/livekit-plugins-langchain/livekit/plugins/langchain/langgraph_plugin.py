@@ -28,7 +28,8 @@ filters out chunks from other nodes if :pyattr:`langgraph_node` is specified.
 
 from __future__ import annotations
 
-from typing import Any, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -44,9 +45,9 @@ from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool
 from livekit.agents.types import (
-    APIConnectOptions,
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
+    APIConnectOptions,
     NotGivenOr,
 )
 
@@ -100,7 +101,7 @@ class LLMAdapter(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "LangGraphStream":
+    ) -> LangGraphStream:
         return LangGraphStream(
             llm_adapter=self,
             chat_ctx=chat_ctx,
@@ -275,7 +276,7 @@ def _should_process_chunk(
 
     # Node-based filtering – if enabled, drop chunks from other nodes.
     if allowed_langgraph_nodes is not None:
-        allowed: List[str] = (
+        allowed: list[str] = (
             [allowed_langgraph_nodes]
             if isinstance(allowed_langgraph_nodes, str)
             else list(allowed_langgraph_nodes)
@@ -292,11 +293,7 @@ def _should_process_chunk(
             return False
 
     # Universal tool call filtering.
-    if (
-        chunk.get("tool_calls")
-        or chunk.get("tool_call_chunks")
-        or chunk.get("invalid_tool_calls")
-    ):
+    if chunk.get("tool_calls") or chunk.get("tool_call_chunks") or chunk.get("invalid_tool_calls"):
         return False
 
     # Type-based heuristics.
@@ -306,9 +303,7 @@ def _should_process_chunk(
 
     # Additional kwargs may contain tool metadata.
     additional = chunk.get("additional_kwargs", {})
-    if any(
-        key in additional for key in ("tool_calls", "function_call", "tool_call_id")
-    ):
+    if any(key in additional for key in ("tool_calls", "function_call", "tool_call_id")):
         return False
 
     return True

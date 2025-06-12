@@ -24,30 +24,44 @@ Usage:
 """
 
 import logging
+import sys
+
 from dotenv import load_dotenv
+from langgraph.pregel.remote import RemoteGraph
+
 from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
     JobProcess,
+    RoomInputOptions,
     WorkerOptions,
     cli,
-    RoomInputOptions,
 )
 from livekit.plugins import deepgram, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from langgraph.pregel.remote import RemoteGraph
 
-# new import
-import sys
-import os
+# Prefer normal import. Fallback to editable-install path in dev environments
+try:
+    from livekit.plugins.langchain import langgraph_plugin  # type: ignore
+except ImportError:  # pragma: no cover – dev fallback
+    import pathlib
 
-# Append the actual path to the package manually
-plugin_path = os.path.abspath("livekit-plugins/livekit-plugins-langchain")
-sys.path.insert(0, plugin_path)
+    logging.getLogger(__name__).warning(
+        "livekit.plugins.langchain not found. Adding local path for dev usage. "
+        "Consider running 'uv pip install -e livekit-plugins/livekit-plugins-langchain'."
+    )
 
-from livekit.plugins.langchain import langgraph_plugin
+    plugin_path = (
+        pathlib.Path(__file__)
+        .resolve()
+        .parent.parent.parent  # examples/voice_agents/ -> project root
+        / "livekit-plugins"
+        / "livekit-plugins-langchain"
+    )
+    sys.path.insert(0, str(plugin_path))
 
+    from livekit.plugins.langchain import langgraph_plugin  # type: ignore
 
 # Configure logging
 logger = logging.getLogger("langgraph-voice-agent")
@@ -126,7 +140,8 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],  # Voice Activity Detection
         # Speech-to-Text: Convert user speech to text
         stt=deepgram.STT(
-            model="nova-2", language="en"  # High-quality model  # English language
+            model="nova-2",
+            language="en",  # High-quality model  # English language
         ),
         # Text-to-Speech: Convert agent responses to speech
         tts=deepgram.TTS(model="aura-asteria-en"),  # Natural-sounding voice
