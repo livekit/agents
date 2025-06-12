@@ -53,15 +53,18 @@ class FallbackAdapter(
             raise ValueError("At least one STT instance must be provided.")
 
         non_streaming_stt = [t for t in stt if not t.capabilities.streaming]
-        if non_streaming_stt and vad is None:
-            labels = ", ".join(t.label for t in non_streaming_stt)
-            raise ValueError(
-                f"STTs do not support streaming: {labels}. "
-                "Wrap them with stt.StreamAdapter to enable streaming "
-                "or provide a VAD to enable StreamAdapter."
-            )
+        if non_streaming_stt:
+            if vad is None:
+                labels = ", ".join(t.label for t in non_streaming_stt)
+                raise ValueError(
+                    f"STTs do not support streaming: {labels}. "
+                    "Wrap them with stt.StreamAdapter to enable streaming "
+                    "or provide a VAD to enable StreamAdapter."
+                )
+            stt = [
+                StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
+            ]
 
-        stt = [StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt]
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=True,
