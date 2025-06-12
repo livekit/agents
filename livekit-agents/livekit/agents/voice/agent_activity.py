@@ -1062,24 +1062,11 @@ class AgentActivity(RecognitionHooks):
 
         tasks: list[asyncio.Task[Any]] = []
 
-        tr_node = self._agent.transcription_node(text_source, model_settings)
-        tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
-        text_out: _TextOutput | None = None
-        if tr_node_result is not None:
-            forward_text, text_out = perform_text_forwarding(
-                text_output=tr_output,
-                source=tr_node_result,
-            )
-            tasks.append(forward_text)
-
         def _on_first_frame(_: asyncio.Future[None]) -> None:
             self._session._update_agent_state("speaking")
 
-        if audio_output is None:
-            # update the agent state based on text if no audio output
-            if text_out is not None:
-                text_out.first_text_fut.add_done_callback(_on_first_frame)
-        else:
+        # audio output
+        if audio_output is not None:
             if audio is None:
                 # generate audio using TTS
                 tts_task, tts_gen_data = perform_tts_inference(
@@ -1088,6 +1075,8 @@ class AgentActivity(RecognitionHooks):
                     model_settings=model_settings,
                 )
                 tasks.append(tts_task)
+                if timed_texts := await tts_gen_data.timed_texts_fut:
+                    text_source = timed_texts
 
                 forward_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output, tts_output=tts_gen_data.audio_ch
@@ -1101,6 +1090,20 @@ class AgentActivity(RecognitionHooks):
                 tasks.append(forward_task)
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
+
+        # text output
+        tr_node = self._agent.transcription_node(text_source, model_settings)
+        tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
+        text_out: _TextOutput | None = None
+        if tr_node_result is not None:
+            forward_text, text_out = perform_text_forwarding(
+                text_output=tr_output,
+                source=tr_node_result,
+            )
+            tasks.append(forward_text)
+            if audio_output is None:
+                # update the agent state based on text if no audio output
+                text_out.first_text_fut.add_done_callback(_on_first_frame)
 
         await speech_handle.wait_if_not_interrupted([*tasks])
 
