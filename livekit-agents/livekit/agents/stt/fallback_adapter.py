@@ -11,9 +11,11 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
+from ..stt import StreamAdapter
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from ..utils.audio import AudioBuffer
+from ..vad import VAD
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 # don't retry when using the fallback adapter
@@ -42,6 +44,7 @@ class FallbackAdapter(
         self,
         stt: list[STT],
         *,
+        vad: VAD | None = None,
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
         retry_interval: float = 5,
@@ -51,11 +54,16 @@ class FallbackAdapter(
 
         non_streaming_stt = [t for t in stt if not t.capabilities.streaming]
         if non_streaming_stt:
-            labels = ", ".join(t.label for t in non_streaming_stt)
-            raise ValueError(
-                f"STTs do not support streaming: {labels}. "
-                "Wrap them with stt.StreamAdapter to enable streaming."
-            )
+            if vad is None:
+                labels = ", ".join(t.label for t in non_streaming_stt)
+                raise ValueError(
+                    f"STTs do not support streaming: {labels}. "
+                    "Provide a VAD to enable stt.StreamAdapter automatically "
+                    "or wrap them with stt.StreamAdapter before using this adapter."
+                )
+            stt = [
+                StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
+            ]
 
         super().__init__(
             capabilities=STTCapabilities(
