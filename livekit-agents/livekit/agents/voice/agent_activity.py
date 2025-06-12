@@ -1190,11 +1190,9 @@ class AgentActivity(RecognitionHooks):
                 model_settings=model_settings,
             )
             tasks.append(tts_task)
-            if self.tts and (
-                self.tts.capabilities.timed_transcript or not self.tts.capabilities.streaming
-            ):
+            if timed_texts := await tts_gen_data.timed_texts_fut:
                 # use timed text if supported by the TTS
-                tr_input = tts_gen_data.timed_text_ch
+                tr_input = timed_texts.__aiter__()
 
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]

@@ -234,8 +234,12 @@ class Agent:
         return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
     def transcription_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[str] | Coroutine[Any, Any, AsyncIterable[str]] | Coroutine[Any, Any, None]:
+        self, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
+    ) -> (
+        AsyncIterable[str | TimedString]
+        | Coroutine[Any, Any, AsyncIterable[str | TimedString]]
+        | Coroutine[Any, Any, None]
+    ):
         """
         A node in the processing pipeline that finalizes transcriptions from text segments.
 
@@ -246,7 +250,7 @@ class Agent:
         You can override this node to customize post-processing logic according to your needs.
 
         Args:
-            text (AsyncIterable[str]): An asynchronous stream of text segments.
+            text (AsyncIterable[str | TimedString]): An asynchronous stream of text segments.
             model_settings (ModelSettings): Configuration and parameters for model execution.
 
         Yields:
@@ -257,8 +261,12 @@ class Agent:
     def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> (
-        AsyncGenerator[rtc.AudioFrame | TimedString, None]
-        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame | TimedString]]
+        AsyncIterable[rtc.AudioFrame]
+        | tuple[AsyncIterable[rtc.AudioFrame], AsyncIterable[TimedString] | None]
+        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
+        | Coroutine[
+            Any, Any, tuple[AsyncIterable[rtc.AudioFrame], AsyncIterable[TimedString] | None]
+        ]
         | Coroutine[Any, Any, None]
     ):
         """
@@ -276,8 +284,9 @@ class Agent:
             text (AsyncIterable[str]): An asynchronous stream of text segments to be synthesized.
             model_settings (ModelSettings): Configuration and parameters for model execution.
 
-        Yields:
-            rtc.AudioFrame: Audio frames synthesized from the provided text.
+        Returns:
+            AsyncIterable[rtc.AudioFrame]: An asynchronous iterable of audio frames.
+            AsyncIterable[TimedString] | None: An asynchronous iterable of timed transcripts.
         """
         return Agent.default.tts_node(self, text, model_settings)
 
@@ -360,8 +369,10 @@ class Agent:
         @staticmethod
         async def tts_node(
             agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
-        ) -> AsyncGenerator[rtc.AudioFrame | TimedString, None]:
+        ) -> tuple[AsyncGenerator[rtc.AudioFrame, None], AsyncIterable[TimedString] | None]:
             """Default implementation for `Agent.tts_node`"""
+            from .io import TimedString
+
             activity = agent._get_activity_or_raise()
             assert activity.tts is not None, "tts_node called but no TTS node is available"
 
@@ -374,27 +385,39 @@ class Agent:
                 )
 
             conn_options = activity.session.conn_options.tts_conn_options
-            async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
-                async def _forward_input() -> None:
-                    async for chunk in text:
-                        stream.push_text(chunk)
+            timed_transcript_ch = (
+                utils.aio.Chan[TimedString]() if wrapped_tts.capabilities.timed_transcript else None
+            )
 
-                    stream.end_input()
+            async def _impl() -> AsyncGenerator[rtc.AudioFrame, None]:
+                async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for ev in stream:
-                        yield ev.frame
-                        for timed_transcript in ev.timed_transcripts:
-                            yield timed_transcript
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    async def _forward_input() -> None:
+                        async for chunk in text:
+                            stream.push_text(chunk)
+
+                        stream.end_input()
+
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for ev in stream:
+                            if timed_transcript_ch is not None:
+                                for timed_transcript in ev.timed_transcripts:
+                                    timed_transcript_ch.send_nowait(timed_transcript)
+
+                            yield ev.frame
+                    finally:
+                        await utils.aio.cancel_and_wait(forward_task)
+                        if timed_transcript_ch is not None:
+                            timed_transcript_ch.close()
+
+            return _impl(), timed_transcript_ch
 
         @staticmethod
         async def transcription_node(
-            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
-        ) -> AsyncGenerator[str, None]:
+            agent: Agent, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
+        ) -> AsyncGenerator[str | TimedString, None]:
             """Default implementation for `Agent.transcription_node`"""
             async for delta in text:
                 yield delta

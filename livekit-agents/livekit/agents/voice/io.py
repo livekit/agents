@@ -48,8 +48,20 @@ LLMNode = Callable[
 TTSNode = Callable[
     [AsyncIterable[str], ModelSettings],
     Union[
-        Optional[AsyncIterable[Union[rtc.AudioFrame, TimedString]]],
-        Awaitable[Optional[AsyncIterable[Union[rtc.AudioFrame, TimedString]]]],
+        Optional[
+            Union[
+                AsyncIterable[rtc.AudioFrame],
+                tuple[AsyncIterable[rtc.AudioFrame], Optional[AsyncIterable[TimedString]]],
+            ]
+        ],
+        Awaitable[
+            Optional[
+                Union[
+                    AsyncIterable[rtc.AudioFrame],
+                    tuple[AsyncIterable[rtc.AudioFrame], Optional[AsyncIterable[TimedString]]],
+                ]
+            ]
+        ],
     ],
 ]
 
