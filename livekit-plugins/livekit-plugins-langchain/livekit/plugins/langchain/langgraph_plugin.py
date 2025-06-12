@@ -22,7 +22,8 @@ LangGraph workflows. It preserves backwards-compatibility with ``CompiledStateGr
 A universal filtering mechanism ensures that only user-facing conversational
 responses are spoken by the voice agent.  Tool calls, intermediate workflow
 outputs, and other non-conversational chunks are filtered out.  The behaviour
-can be toggled with :pyattr:`filter_messages` – enabled by default.
+can be toggled with :pyattr:`filter_messages` – enabled by default. It also
+filters out chunks from other nodes if :pyattr:`langgraph_node` is specified.
 """
 
 from __future__ import annotations
