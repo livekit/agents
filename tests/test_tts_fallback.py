@@ -212,7 +212,7 @@ async def test_audio_resampled() -> None:
         assert fake2.stream_ch.recv_nowait()
 
         combined_frame = rtc.combine_audio_frames(frames)
-        assert combined_frame.duration == 5.0
+        assert combined_frame.duration == 5.01  # 5.0 + 0.01 final flag
         assert combined_frame.sample_rate == 48000
 
     await fallback_adapter.aclose()
