@@ -19,7 +19,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 import aiohttp
 
@@ -51,7 +51,7 @@ class PostedContextWithUtterances(TypedDict, total=False):
 
 PostedContext = Union[
     PostedContextWithGenerationId, 
-    PostedContextWithUtterances
+    PostedContextWithUtterances,
 ]
 
 
@@ -78,6 +78,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
+        context: NotGivenOr[PostedContext] = NOT_GIVEN,
         split_utterances: bool = True,
         instant_mode: bool = True,
         audio_format: AudioFormat = "mp3"
@@ -103,7 +104,7 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             api_key=key,
             utterance_options=default_utterance,
-            context=None,
+            context=context,
             split_utterances=split_utterances,
             instant_mode=instant_mode,
             audio_format=audio_format,
