@@ -98,16 +98,13 @@ class TTS(tts.TTS):
         if not key:
             raise ValueError("Hume API key is required via api_key or HUME_API_KEY env var")
 
-        default_utterance: PostedUtterance = {
-            "speed": 1.0,
-            "trailing_silence": 0.35,
-        }
-        if is_given(utterance_options):
-            default_utterance.update(utterance_options)
+        base_utterance: PostedUtterance = (
+            dict(utterance_options) if is_given(utterance_options) else {}
+        )
 
         self._opts = _TTSOptions(
             api_key=key,
-            utterance_options=default_utterance,
+            utterance_options=base_utterance,
             context=context,
             split_utterances=split_utterances,
             instant_mode=instant_mode,
@@ -132,7 +129,7 @@ class TTS(tts.TTS):
         audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
     ) -> None:
         if is_given(utterance_options):
-            self._opts.utterance_options = utterance_options
+            self._opts.utterance_options = dict(utterance_options)
         if is_given(context):
             self._opts.context = context
         if is_given(split_utterances):
