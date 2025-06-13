@@ -61,7 +61,11 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.local_participant.register_rpc_method("end_turn")
     async def end_turn(data: rtc.RpcInvocationData):
         session.input.set_audio_enabled(False)
-        session.commit_user_turn()
+        session.commit_user_turn(
+            # the timeout for the final transcript to be received after committing the user turn
+            # increase this value if the STT is slow to respond
+            final_transcript_timeout=10.0,
+        )
 
     @ctx.room.local_participant.register_rpc_method("cancel_turn")
     async def cancel_turn(data: rtc.RpcInvocationData):

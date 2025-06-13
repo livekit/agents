@@ -69,26 +69,27 @@ class StreamAdapterWrapper(RecognizeStream):
         self._vad = vad
         self._wrapped_stt = wrapped_stt
         self._wrapped_stt_conn_options = conn_options
-        self._vad_stream = self._vad.stream()
         self._language = language
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
         pass  # do nothing
 
     async def _run(self) -> None:
+        vad_stream = self._vad.stream()
+
         async def _forward_input() -> None:
             """forward input to vad"""
             async for input in self._input_ch:
                 if isinstance(input, self._FlushSentinel):
-                    self._vad_stream.flush()
+                    vad_stream.flush()
                     continue
-                self._vad_stream.push_frame(input)
+                vad_stream.push_frame(input)
 
-            self._vad_stream.end_input()
+            vad_stream.end_input()
 
         async def _recognize() -> None:
             """recognize speech from vad"""
-            async for event in self._vad_stream:
+            async for event in vad_stream:
                 if event.type == VADEventType.START_OF_SPEECH:
                     self._event_ch.send_nowait(SpeechEvent(SpeechEventType.START_OF_SPEECH))
                 elif event.type == VADEventType.END_OF_SPEECH:
@@ -125,3 +126,4 @@ class StreamAdapterWrapper(RecognizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.cancel_and_wait(*tasks)
+            await vad_stream.aclose()

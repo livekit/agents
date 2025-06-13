@@ -614,12 +614,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
-    def commit_user_turn(self) -> None:
+    def commit_user_turn(self, *, final_transcript_timeout: float = 2.0) -> None:
         # commit the user turn and generate a reply
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn()
+        self._activity.commit_user_turn(final_transcript_timeout=final_transcript_timeout)
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
