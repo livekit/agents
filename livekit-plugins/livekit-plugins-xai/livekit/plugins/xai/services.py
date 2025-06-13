@@ -61,6 +61,9 @@ class LLM(OpenAILLM):
 
 DEFAULT_XAI_REALTIME_BASE_URL = "https://us-east-4.api.x.ai/voice-api/v1/chat/voice"
 
+# TODO: set to actual limit
+DEFAULT_MAX_SESSION_DURATION = None  # no limit
+
 
 class RealtimeModel(oai_realtime.RealtimeModel):
     def __init__(
@@ -83,10 +86,10 @@ class RealtimeModel(oai_realtime.RealtimeModel):
         super().__init__(
             model=model,
             voice=voice,
-            max_session_duration=max_session_duration,
-            conn_options=conn_options,
             base_url=base_url,
             api_key=api_key,
+            max_session_duration=max_session_duration or DEFAULT_MAX_SESSION_DURATION,
+            conn_options=conn_options,
         )
 
     def session(self) -> RealtimeSession:
