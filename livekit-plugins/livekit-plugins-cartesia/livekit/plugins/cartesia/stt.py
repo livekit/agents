@@ -41,10 +41,6 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2025-04-16"
 
-# Audio energy threshold for speech detection
-MAGIC_NUMBER_THRESHOLD = 0.004**2
-
-
 @dataclass
 class STTOptions:
     model: STTModels | str
@@ -173,7 +169,6 @@ class STT(stt.STT):
             sample_rate=self._opts.sample_rate,
             api_key=self._opts.api_key,
             base_url=self._opts.base_url,
-            energy_filter=self._opts.energy_filter,
         )
 
         if is_given(language):
