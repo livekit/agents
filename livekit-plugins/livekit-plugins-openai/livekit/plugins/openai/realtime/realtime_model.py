@@ -483,7 +483,7 @@ def process_base_url(
     is_azure: bool = False,
     azure_deployment: str | None = None,
     api_version: str | None = None,
-    extra_query_params: dict[str, str] | None = None,
+    extra_query_params: dict[str, str | list[str]] | None = None,
 ) -> str:
     if url.startswith("http"):
         url = url.replace("http", "ws", 1)
@@ -508,7 +508,7 @@ def process_base_url(
             query_params["model"] = [model]
 
     if extra_query_params:
-        query_params.update(extra_query_params)
+        query_params.update(extra_query_params)  # type: ignore
 
     new_query = urlencode(query_params, doseq=True)
     new_url = urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", new_query, ""))

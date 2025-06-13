@@ -38,6 +38,6 @@ def to_fnc_ctx(
             tools.append(
                 llm.utils.build_strict_openai_schema(fnc)
                 if strict
-                else llm.utils.build_legacy_openai_schema(fnc)
+                else llm.utils.build_legacy_openai_schema(fnc)  # type: ignore
             )
     return tools
