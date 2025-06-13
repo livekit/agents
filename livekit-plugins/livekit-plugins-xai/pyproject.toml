@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-plugins-openai>=1.0.22",
+    "livekit-plugins-openai>=1.1.1",
     "aiohttp",
     "livekit",
 ]

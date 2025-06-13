@@ -17,10 +17,10 @@
 from livekit.agents import Plugin
 
 from .log import logger
-from .services import LLM
+from .services import LLM, RealtimeModel
 from .version import __version__
 
-__all__ = ["LLM", "__version__"]
+__all__ = ["LLM", "RealtimeModel", "__version__"]
 
 
 class XAIPlugin(Plugin):
