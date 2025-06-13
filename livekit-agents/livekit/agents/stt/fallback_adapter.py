@@ -11,7 +11,6 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..stt import StreamAdapter
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from ..utils.audio import AudioBuffer
@@ -61,6 +60,8 @@ class FallbackAdapter(
                     "Provide a VAD to enable stt.StreamAdapter automatically "
                     "or wrap them with stt.StreamAdapter before using this adapter."
                 )
+            from ..stt import StreamAdapter
+
             stt = [
                 StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
             ]
