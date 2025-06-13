@@ -19,7 +19,8 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, TypedDict
+from enum import Enum
+from typing import Any, TypedDict, Union, cast
 
 import aiohttp
 
@@ -30,6 +31,7 @@ from livekit.agents.utils import is_given
 API_AUTH_HEADER = "X-Hume-Api-Key"
 STREAM_PATH = "/v0/tts/stream/json"
 DEFAULT_BASE_URL = "https://api.hume.ai"
+SUPPORTED_SAMPLE_RATE = 48000
 
 
 class PostedUtterance(TypedDict, total=False):
@@ -40,8 +42,24 @@ class PostedUtterance(TypedDict, total=False):
     trailing_silence: float
 
 
-class PostedContext(TypedDict, total=False):
+class PostedContextWithGenerationId(TypedDict, total=False):
+    generation_id: str
+
+
+class PostedContextWithUtterances(TypedDict, total=False):
     utterances: list[PostedUtterance]
+
+
+PostedContext = Union[
+    PostedContextWithGenerationId,
+    PostedContextWithUtterances,
+]
+
+
+class AudioFormat(str, Enum):
+    mp3 = "mp3"
+    wav = "wav"
+    pcm = "pcm"
 
 
 @dataclass
@@ -49,9 +67,9 @@ class _TTSOptions:
     api_key: str
     utterance_options: PostedUtterance
     context: PostedContext | None
-    sample_rate: int
     split_utterances: bool
     instant_mode: bool
+    audio_format: AudioFormat
     base_url: str
 
     def http_url(self, path: str) -> str:
@@ -64,35 +82,33 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
+        context: PostedContext | None = None,
         split_utterances: bool = True,
         instant_mode: bool = True,
-        sample_rate: int = 24000,
+        audio_format: AudioFormat = AudioFormat.mp3,
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=sample_rate,
+            sample_rate=SUPPORTED_SAMPLE_RATE,
             num_channels=1,
         )
         key = api_key or os.environ.get("HUME_API_KEY")
         if not key:
             raise ValueError("Hume API key is required via api_key or HUME_API_KEY env var")
 
-        default_utterance: PostedUtterance = {
-            "speed": 1.0,
-            "trailing_silence": 0.35,
-        }
-        if is_given(utterance_options):
-            default_utterance.update(utterance_options)
+        base_utterance: PostedUtterance = (
+            cast(PostedUtterance, dict(utterance_options)) if is_given(utterance_options) else {}
+        )
 
         self._opts = _TTSOptions(
             api_key=key,
-            utterance_options=default_utterance,
-            context=None,
-            sample_rate=sample_rate,
+            utterance_options=base_utterance,
+            context=context,
             split_utterances=split_utterances,
             instant_mode=instant_mode,
+            audio_format=audio_format,
             base_url=base_url,
         )
         self._session = http_session
@@ -110,15 +126,18 @@ class TTS(tts.TTS):
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         split_utterances: NotGivenOr[bool] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
+        audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
     ) -> None:
         if is_given(utterance_options):
-            self._opts.utterance_options = utterance_options
-        if is_given(context):  #
-            self._opts.context = context
+            self._opts.utterance_options = cast(PostedUtterance, dict(utterance_options))
+        if is_given(context):
+            self._opts.context = cast(PostedContext, context)
         if is_given(split_utterances):
             self._opts.split_utterances = split_utterances
         if is_given(instant_mode):
             self._opts.instant_mode = instant_mode
+        if is_given(audio_format):
+            self._opts.audio_format = audio_format
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -141,7 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
             "split_utterances": self._opts.split_utterances,
             "strip_headers": True,
             "instant_mode": self._opts.instant_mode,
-            "format": {"type": "mp3"},
+            "format": {"type": self._opts.audio_format.value},
         }
         if self._opts.context:
             payload["context"] = self._opts.context
@@ -158,9 +177,9 @@ class ChunkedStream(tts.ChunkedStream):
                 resp.raise_for_status()
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
-                    sample_rate=self._opts.sample_rate,
+                    sample_rate=SUPPORTED_SAMPLE_RATE,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/mp3",
+                    mime_type=f"audio/{self._opts.audio_format.value}",
                 )
 
                 async for raw_line in resp.content:
