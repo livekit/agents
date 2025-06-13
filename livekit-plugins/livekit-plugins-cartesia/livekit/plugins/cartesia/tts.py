@@ -35,6 +35,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .models import (
@@ -60,6 +61,7 @@ class _TTSOptions:
     voice: str | list[float]
     speed: TTSVoiceSpeed | float | None
     emotion: list[TTSVoiceEmotion | str] | None
+    word_timestamps: bool
     api_key: str
     language: str
     base_url: str
@@ -83,6 +85,7 @@ class TTS(tts.TTS):
         speed: TTSVoiceSpeed | float | None = None,
         emotion: list[TTSVoiceEmotion | str] | None = None,
         sample_rate: int = 24000,
+        word_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
     ) -> None:
@@ -99,13 +102,14 @@ class TTS(tts.TTS):
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
+            word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to False.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """  # noqa: E501
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, timed_transcript=word_timestamps),
             sample_rate=sample_rate,
             num_channels=1,
         )
@@ -123,6 +127,7 @@ class TTS(tts.TTS):
             emotion=emotion,
             api_key=cartesia_api_key,
             base_url=base_url,
+            word_timestamps=word_timestamps,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -322,6 +327,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("done"):
                     output_emitter.end_input()
                     break
+                elif word_timestamps := data.get("word_timestamps"):
+                    for word, start, end in zip(
+                        word_timestamps["words"], word_timestamps["start"], word_timestamps["end"]
+                    ):
+                        word = f"{word} "  # TODO(long): any better way to format the words?
+                        output_emitter.push_timed_transcript(
+                            TimedString(text=word, start_time=start, end_time=end)
+                        )
                 else:
                     logger.warning("unexpected message %s", data)
 
@@ -375,4 +388,5 @@ def _to_cartesia_options(opts: _TTSOptions) -> dict[str, Any]:
             "sample_rate": opts.sample_rate,
         },
         "language": opts.language,
+        "add_timestamps": opts.word_timestamps,
     }

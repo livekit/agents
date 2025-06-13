@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Optional, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -130,12 +130,14 @@ def perform_llm_inference(
 @dataclass
 class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
+    timed_texts_fut: asyncio.Future[AsyncIterable[io.TimedString] | None]
 
 
 def perform_tts_inference(
     *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
+    timed_texts_fut = asyncio.Future[Optional[AsyncIterable[io.TimedString]]]()
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task() -> bool:
@@ -143,18 +145,27 @@ def perform_tts_inference(
         if asyncio.iscoroutine(tts_node):
             tts_node = await tts_node
 
-        if isinstance(tts_node, AsyncIterable):
-            async for audio_frame in tts_node:
-                audio_ch.send_nowait(audio_frame)
+        timed_texts: AsyncIterable[io.TimedString] | None = None
+        if isinstance(tts_node, tuple):
+            tts_node, timed_texts = tts_node
+        timed_texts_fut.set_result(timed_texts)
 
+        if isinstance(tts_node, AsyncIterable):
+            async for data in tts_node:
+                if isinstance(data, rtc.AudioFrame):
+                    audio_ch.send_nowait(data)
             return True
 
         return False
 
     tts_task = asyncio.create_task(_inference_task())
-    tts_task.add_done_callback(lambda _: audio_ch.close())
 
-    return tts_task, _TTSGenerationData(audio_ch=audio_ch)
+    def _inference_done(_: asyncio.Task[bool]) -> None:
+        audio_ch.close()
+
+    tts_task.add_done_callback(_inference_done)
+
+    return tts_task, _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
 
 @dataclass
