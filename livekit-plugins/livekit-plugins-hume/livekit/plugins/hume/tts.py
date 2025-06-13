@@ -20,7 +20,7 @@ import json
 import os
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, TypedDict, Union
+from typing import Any, TypedDict, Union, cast
 
 import aiohttp
 
@@ -99,7 +99,7 @@ class TTS(tts.TTS):
             raise ValueError("Hume API key is required via api_key or HUME_API_KEY env var")
 
         base_utterance: PostedUtterance = (
-            dict(utterance_options) if is_given(utterance_options) else {}
+            cast(PostedUtterance, dict(utterance_options)) if is_given(utterance_options) else {}
         )
 
         self._opts = _TTSOptions(
@@ -129,9 +129,9 @@ class TTS(tts.TTS):
         audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
     ) -> None:
         if is_given(utterance_options):
-            self._opts.utterance_options = dict(utterance_options)
+            self._opts.utterance_options = cast(PostedUtterance, dict(utterance_options))
         if is_given(context):
-            self._opts.context = context
+            self._opts.context = cast(PostedContext, context)
         if is_given(split_utterances):
             self._opts.split_utterances = split_utterances
         if is_given(instant_mode):
