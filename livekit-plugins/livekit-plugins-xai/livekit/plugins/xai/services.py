@@ -100,7 +100,7 @@ class RealtimeModel(oai_realtime.RealtimeModel):
 
 class RealtimeSession(oai_realtime.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
-        super().__init__(realtime_model)
+        super().__init__(realtime_model, label="xAI Realtime API")
         self._realtime_model: RealtimeModel = realtime_model
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:

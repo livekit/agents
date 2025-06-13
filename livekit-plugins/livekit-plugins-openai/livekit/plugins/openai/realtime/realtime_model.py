@@ -530,8 +530,11 @@ class RealtimeSession(
     - openai_client_event_queued: expose the raw client events sent to the OpenAI Realtime API
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self, realtime_model: RealtimeModel, *, label: str = "Openai Realtime API"
+    ) -> None:
         super().__init__(realtime_model)
+        self._label = label
         self._realtime_model: RealtimeModel = realtime_model
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[Union[RealtimeClientEvent, dict[str, Any]]]()
@@ -571,7 +574,7 @@ class RealtimeSession(
 
         async def _reconnect() -> None:
             logger.debug(
-                "reconnecting to OpenAI Realtime API",
+                f"reconnecting to {self._label}",
                 extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
             )
 
@@ -604,11 +607,11 @@ class RealtimeSession(
                 self._remote_chat_ctx = old_chat_ctx_copy  # restore the old chat context
                 raise APIConnectionError(
                     message=(
-                        "Failed to send message to OpenAI Realtime API during session re-connection"
+                        f"Failed to send message to {self._label} during session re-connection"
                     ),
                 ) from e
 
-            logger.debug("reconnected to OpenAI Realtime API")
+            logger.debug(f"reconnected to {self._label}")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
         reconnecting = False
@@ -628,7 +631,7 @@ class RealtimeSession(
                 elif num_retries == max_retries:
                     self._emit_error(e, recoverable=False)
                     raise APIConnectionError(
-                        f"OpenAI Realtime API connection failed after {num_retries} attempts",
+                        f"{self._label} connection failed after {num_retries} attempts",
                     ) from e
                 else:
                     self._emit_error(e, recoverable=True)
@@ -637,7 +640,7 @@ class RealtimeSession(
                         num_retries
                     )
                     logger.warning(
-                        f"OpenAI Realtime API connection failed, retrying in {retry_interval}s",
+                        f"{self._label} connection failed, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={"attempt": num_retries, "max_retries": max_retries},
                     )
@@ -722,7 +725,9 @@ class RealtimeSession(
                         return
 
                     # this will trigger a reconnection
-                    raise APIConnectionError(message="OpenAI S2S connection closed unexpectedly")
+                    raise APIConnectionError(
+                        message=f"{self._label} connection closed unexpectedly"
+                    )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -1062,9 +1067,7 @@ class RealtimeSession(
                 tool_desc = tool_info.raw_schema
                 tool_desc["type"] = "function"  # internally tagged
             else:
-                logger.error(
-                    "OpenAI Realtime API doesn't support this tool type", extra={"tool": tool}
-                )
+                logger.error(f"{self._label} doesn't support this tool type", extra={"tool": tool})
                 continue
 
             try:
@@ -1073,7 +1076,7 @@ class RealtimeSession(
                 retained_tools.append(tool)
             except ValidationError:
                 logger.error(
-                    "OpenAI Realtime API doesn't support this tool",
+                    f"{self._label} doesn't support this tool",
                     extra={"tool": tool_desc},
                 )
                 continue
@@ -1419,7 +1422,7 @@ class RealtimeSession(
         self, event: ConversationItemInputAudioTranscriptionFailedEvent
     ) -> None:
         logger.error(
-            "OpenAI Realtime API failed to transcribe input audio",
+            f"{self._label} failed to transcribe input audio",
             extra={"error": event.error},
         )
 
@@ -1546,12 +1549,12 @@ class RealtimeSession(
             return
 
         logger.error(
-            "OpenAI Realtime API returned an error",
+            f"{self._label} returned an error",
             extra={"error": event.error},
         )
         self._emit_error(
             APIError(
-                message="OpenAI Realtime API returned an error",
+                message=f"{self._label} returned an error",
                 body=event.error,
                 retryable=True,
             ),
