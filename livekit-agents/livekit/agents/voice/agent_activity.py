@@ -396,7 +396,6 @@ class AgentActivity(RecognitionHooks):
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
                 turn_detection_mode=self._turn_detection_mode,
-                commit_user_turn_timeout=self._session.options.commit_user_turn_timeout,
             )
             self._audio_recognition.start()
             self._started = True
@@ -669,10 +668,11 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.clear_audio()
 
-    def commit_user_turn(self) -> None:
+    def commit_user_turn(self, *, final_transcript_timeout: float) -> None:
         assert self._audio_recognition is not None
         self._audio_recognition.commit_user_turn(
-            audio_detached=not self._session.input.audio_enabled
+            audio_detached=not self._session.input.audio_enabled,
+            final_transcript_timeout=final_transcript_timeout,
         )
 
     def _schedule_speech(

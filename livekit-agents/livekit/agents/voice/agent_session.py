@@ -57,7 +57,6 @@ class VoiceOptions:
     max_tool_steps: int
     user_away_timeout: float | None
     min_consecutive_speech_delay: float
-    commit_user_turn_timeout: float
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -131,7 +130,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
         user_away_timeout: float | None = 15.0,
         min_consecutive_speech_delay: float = 0.0,
-        commit_user_turn_timeout: float = 2.0,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -192,9 +190,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Default ``15.0`` s, set to ``None`` to disable.
             min_consecutive_speech_delay (float, optional): The minimum delay between
                 consecutive speech. Default ``0.0`` s.
-            commit_user_turn_timeout (float, optional): The timeout for the final
-                transcript to be received when committing the user turn manually.
-                Default ``2.0`` s.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
@@ -220,7 +215,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
-            commit_user_turn_timeout=commit_user_turn_timeout,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -620,12 +614,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
-    def commit_user_turn(self) -> None:
+    def commit_user_turn(self, *, final_transcript_timeout: float = 2.0) -> None:
         # commit the user turn and generate a reply
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn()
+        self._activity.commit_user_turn(final_transcript_timeout=final_transcript_timeout)
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent

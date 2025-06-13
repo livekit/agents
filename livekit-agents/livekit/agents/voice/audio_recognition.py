@@ -58,7 +58,6 @@ class AudioRecognition:
         min_endpointing_delay: float,
         max_endpointing_delay: float,
         turn_detection_mode: TurnDetectionMode | None,
-        commit_user_turn_timeout: float,
     ) -> None:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
@@ -75,7 +74,6 @@ class AudioRecognition:
         self._vad_base_turn_detection = turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
         self._sample_rate: int | None = None
-        self._commit_user_turn_timeout = commit_user_turn_timeout
 
         self._speaking = False
         self._last_speaking_time: float = 0
@@ -165,7 +163,7 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_stt(stt)
 
-    def commit_user_turn(self, *, audio_detached: bool) -> None:
+    def commit_user_turn(self, *, audio_detached: bool, final_transcript_timeout: float) -> None:
         async def _commit_user_turn() -> None:
             if time.time() - self._last_final_transcript_time > 0.5:
                 # if the last final transcript is received more than 0.5s ago
@@ -189,7 +187,7 @@ class AudioRecognition:
                 try:
                     await asyncio.wait_for(
                         self._final_transcript_received.wait(),
-                        timeout=self._commit_user_turn_timeout,
+                        timeout=final_transcript_timeout,
                     )
                 except asyncio.TimeoutError:
                     pass
