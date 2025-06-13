@@ -396,6 +396,7 @@ class AgentActivity(RecognitionHooks):
                 min_endpointing_delay=self._session.options.min_endpointing_delay,
                 max_endpointing_delay=self._session.options.max_endpointing_delay,
                 turn_detection_mode=self._turn_detection_mode,
+                commit_user_turn_timeout=self._session.options.commit_user_turn_timeout,
             )
             self._audio_recognition.start()
             self._started = True

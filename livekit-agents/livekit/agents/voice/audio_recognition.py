@@ -58,6 +58,7 @@ class AudioRecognition:
         min_endpointing_delay: float,
         max_endpointing_delay: float,
         turn_detection_mode: TurnDetectionMode | None,
+        commit_user_turn_timeout: float,
     ) -> None:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
@@ -74,10 +75,12 @@ class AudioRecognition:
         self._vad_base_turn_detection = turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
         self._sample_rate: int | None = None
+        self._commit_user_turn_timeout = commit_user_turn_timeout
 
         self._speaking = False
         self._last_speaking_time: float = 0
         self._last_final_transcript_time: float = 0
+        self._final_transcript_received = asyncio.Event()
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._last_language: str | None = None
@@ -163,22 +166,33 @@ class AudioRecognition:
         self.update_stt(stt)
 
     def commit_user_turn(self, *, audio_detached: bool) -> None:
-        async def _commit_user_turn(delay: float = 0.5) -> None:
-            if time.time() - self._last_final_transcript_time > delay:
+        async def _commit_user_turn() -> None:
+            if time.time() - self._last_final_transcript_time > 0.5:
+                # if the last final transcript is received more than 0.5s ago
+                # append a silence frame to the stt to flush the buffer
+
+                self._final_transcript_received.clear()
+
                 # flush the stt by pushing silence
                 if audio_detached and self._sample_rate:
-                    num_samples = int(self._sample_rate * 0.5)
-                    self.push_audio(
-                        rtc.AudioFrame(
-                            b"\x00\x00" * num_samples,
-                            sample_rate=self._sample_rate,
-                            num_channels=1,
-                            samples_per_channel=num_samples,
-                        )
+                    num_samples = int(self._sample_rate * 0.2)
+                    silence_frame = rtc.AudioFrame(
+                        b"\x00\x00" * num_samples,
+                        sample_rate=self._sample_rate,
+                        num_channels=1,
+                        samples_per_channel=num_samples,
                     )
+                    for _ in range(5):  # 5 * 0.2s = 1s
+                        self.push_audio(silence_frame)
 
                 # wait for the final transcript to be available
-                await asyncio.sleep(delay)
+                try:
+                    await asyncio.wait_for(
+                        self._final_transcript_received.wait(),
+                        timeout=self._commit_user_turn_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    pass
 
             if self._audio_interim_transcript:
                 # append interim transcript in case the final transcript is not ready
@@ -248,6 +262,7 @@ class AudioRecognition:
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
             self._audio_interim_transcript = ""
+            self._final_transcript_received.set()
 
             if not self._speaking:
                 if not self._vad:
