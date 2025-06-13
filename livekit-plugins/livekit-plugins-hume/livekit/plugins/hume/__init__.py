@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from livekit.agents import Plugin
 
-from .tts import TTS, PostedContext, PostedUtterance, AudioFormat
+from .tts import TTS, AudioFormat, PostedContext, PostedUtterance
 from .version import __version__
 
 __all__ = ["TTS", "PostedContext", "PostedUtterance", "AudioFormat"]

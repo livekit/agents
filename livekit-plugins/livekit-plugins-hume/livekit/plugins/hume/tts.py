@@ -19,7 +19,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, Union
 
 import aiohttp
 
@@ -50,7 +50,7 @@ class PostedContextWithUtterances(TypedDict, total=False):
 
 
 PostedContext = Union[
-    PostedContextWithGenerationId, 
+    PostedContextWithGenerationId,
     PostedContextWithUtterances,
 ]
 
@@ -81,7 +81,7 @@ class TTS(tts.TTS):
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         split_utterances: bool = True,
         instant_mode: bool = True,
-        audio_format: AudioFormat = "mp3"
+        audio_format: AudioFormat = "mp3",
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ):
@@ -178,7 +178,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=SUPPORTED_SAMPLE_RATE,
                     num_channels=self._tts.num_channels,
-                    mime_type=f"audio/{audio_format}",
+                    mime_type=f"audio/{self._opts.audio_format}",
                 )
 
                 async for raw_line in resp.content:
