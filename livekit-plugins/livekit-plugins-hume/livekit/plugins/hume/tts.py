@@ -30,6 +30,7 @@ from livekit.agents.utils import is_given
 API_AUTH_HEADER = "X-Hume-Api-Key"
 STREAM_PATH = "/v0/tts/stream/json"
 DEFAULT_BASE_URL = "https://api.hume.ai"
+SUPPORTED_SAMPLE_RATE = 48000
 
 
 class PostedUtterance(TypedDict, total=False):
@@ -59,7 +60,6 @@ class _TTSOptions:
     api_key: str
     utterance_options: PostedUtterance
     context: PostedContext | None
-    sample_rate: int
     split_utterances: bool
     instant_mode: bool
     base_url: str
@@ -76,13 +76,12 @@ class TTS(tts.TTS):
         utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
         split_utterances: bool = True,
         instant_mode: bool = True,
-        sample_rate: int = 24000,
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=sample_rate,
+            sample_rate=SUPPORTED_SAMPLE_RATE,
             num_channels=1,
         )
         key = api_key or os.environ.get("HUME_API_KEY")
@@ -100,7 +99,6 @@ class TTS(tts.TTS):
             api_key=key,
             utterance_options=default_utterance,
             context=None,
-            sample_rate=sample_rate,
             split_utterances=split_utterances,
             instant_mode=instant_mode,
             base_url=base_url,
@@ -168,7 +166,7 @@ class ChunkedStream(tts.ChunkedStream):
                 resp.raise_for_status()
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
-                    sample_rate=self._opts.sample_rate,
+                    sample_rate=SUPPORTED_SAMPLE_RATE,
                     num_channels=self._tts.num_channels,
                     mime_type="audio/mp3",
                 )
