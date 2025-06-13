@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LMNT plugin for LiveKit Agents
-
-See https://docs.livekit.io/agents/integrations/llm/langchain/ for more information.
-"""
+"""LangChain plugin for LiveKit Agents."""
 
 from .langgraph import LangGraphStream, LLMAdapter
 from .version import __version__
