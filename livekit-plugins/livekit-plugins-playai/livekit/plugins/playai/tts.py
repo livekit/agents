@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, fields, replace
+from typing import Any
 
-from pyht import AsyncClient as PlayAsyncClient
-from pyht.client import Format, Language, TTSOptions as PlayOptions
+from pyht import AsyncClient as PlayAsyncClient  # type: ignore
+from pyht.client import Format, Language, TTSOptions as PlayOptions  # type: ignore
 
 from livekit.agents import APIConnectionError, APIConnectOptions, tokenize, tts, utils
 from livekit.agents.types import (
@@ -40,7 +42,7 @@ class TTS(tts.TTS):
         sample_rate: int = 24000,
         model: TTSModel | str = "PlayDialog",
         word_tokenizer: tokenize.WordTokenizer | None = None,
-        **kwargs,
+        **kwargs: dict[str, Any],
     ) -> None:
         """
         Initialize the PlayAI TTS engine.
@@ -101,12 +103,12 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[TTSModel | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
-        **kwargs,
+        **kwargs: dict[str, Any],
     ) -> None:
         """
         Update the TTS options.
         """
-        updates = {}
+        updates: dict[str, Any] = {}
         if is_given(voice):
             updates["voice"] = voice
         if is_given(language):
@@ -141,13 +143,13 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(self._tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         output_emitter.initialize(
             request_id=utils.shortuuid(),
-            sample_rate=self._opts.play_options.sample_rate,  # type: ignore
+            sample_rate=self._opts.play_options.sample_rate,
             num_channels=1,
             mime_type="audio/ogg",
         )
@@ -174,7 +176,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
     ):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts = tts
+        self._tts: TTS = tts
         self._opts = replace(self._tts._opts)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
 
@@ -186,7 +188,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         output_emitter.initialize(
             request_id=utils.shortuuid(),
-            sample_rate=self._opts.play_options.sample_rate,  # type: ignore
+            sample_rate=self._opts.play_options.sample_rate,
             num_channels=1,
             mime_type="audio/ogg",
             stream=True,
@@ -195,7 +197,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         input_task = asyncio.create_task(self._tokenize_input())
 
-        async def _text_stream():
+        async def _text_stream() -> AsyncGenerator[str, None]:
             async for word_stream in self._segments_ch:
                 async for word in word_stream:
                     self._mark_started()
@@ -219,7 +221,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(input_task)
 
     @utils.log_exceptions(logger=logger)
-    async def _tokenize_input(self):
+    async def _tokenize_input(self) -> None:
         word_stream = None
         async for input in self._input_ch:
             if isinstance(input, str):
@@ -234,7 +236,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._segments_ch.close()
 
 
-def _validate_kwargs(kwargs: dict) -> None:
+def _validate_kwargs(kwargs: dict[str, Any]) -> None:
     valid_keys = {field.name for field in fields(PlayOptions)}
     invalid_keys = set(kwargs.keys()) - valid_keys
     if invalid_keys:
