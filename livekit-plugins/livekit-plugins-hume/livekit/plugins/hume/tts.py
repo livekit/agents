@@ -40,8 +40,18 @@ class PostedUtterance(TypedDict, total=False):
     trailing_silence: float
 
 
-class PostedContext(TypedDict, total=False):
+class PostedContextWithGenerationId(TypedDict, total=False):
+    generation_id: str
+
+
+class PostedContextWithUtterances(TypedDict, total=False):
     utterances: list[PostedUtterance]
+
+
+PostedContext = Union[
+    PostedContextWithGenerationId, 
+    PostedContextWithUtterances
+]
 
 
 @dataclass
