@@ -19,7 +19,8 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, Union
+from enum import Enum
+from typing import Any, TypedDict, Union
 
 import aiohttp
 
@@ -55,7 +56,10 @@ PostedContext = Union[
 ]
 
 
-AudioFormat = Literal["mp3", "wav", "pcm"]
+class AudioFormat(str, Enum):
+    mp3 = "mp3"
+    wav = "wav"
+    pcm = "pcm"
 
 
 @dataclass
@@ -78,10 +82,10 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
-        context: NotGivenOr[PostedContext] = NOT_GIVEN,
+        context: PostedContext | None = None,
         split_utterances: bool = True,
         instant_mode: bool = True,
-        audio_format: AudioFormat = "mp3",
+        audio_format: AudioFormat = AudioFormat.mp3,
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ):
@@ -159,7 +163,7 @@ class ChunkedStream(tts.ChunkedStream):
             "split_utterances": self._opts.split_utterances,
             "strip_headers": True,
             "instant_mode": self._opts.instant_mode,
-            "format": {"type": self._opts.audio_format},
+            "format": {"type": self._opts.audio_format.value},
         }
         if self._opts.context:
             payload["context"] = self._opts.context
@@ -178,7 +182,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=SUPPORTED_SAMPLE_RATE,
                     num_channels=self._tts.num_channels,
-                    mime_type=f"audio/{self._opts.audio_format}",
+                    mime_type=f"audio/{self._opts.audio_format.value}",
                 )
 
                 async for raw_line in resp.content:
