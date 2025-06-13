@@ -21,10 +21,10 @@ from __future__ import annotations
 
 from livekit.agents import Plugin
 
-from .tts import TTS, PostedContext, PostedUtterance
+from .tts import TTS, PostedContext, PostedUtterance, AudioFormat
 from .version import __version__
 
-__all__ = ["TTS", "PostedContext", "PostedUtterance"]
+__all__ = ["TTS", "PostedContext", "PostedUtterance", "AudioFormat"]
 
 
 class HumeAIPlugin(Plugin):

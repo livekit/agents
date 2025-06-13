@@ -55,6 +55,9 @@ PostedContext = Union[
 ]
 
 
+AudioFormat = Literal["mp3", "wav", "pcm"]
+
+
 @dataclass
 class _TTSOptions:
     api_key: str
@@ -62,6 +65,7 @@ class _TTSOptions:
     context: PostedContext | None
     split_utterances: bool
     instant_mode: bool
+    audio_format: AudioFormat
     base_url: str
 
     def http_url(self, path: str) -> str:
@@ -76,6 +80,7 @@ class TTS(tts.TTS):
         utterance_options: NotGivenOr[PostedUtterance] = NOT_GIVEN,
         split_utterances: bool = True,
         instant_mode: bool = True,
+        audio_format: AudioFormat = "mp3"
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ):
@@ -101,6 +106,7 @@ class TTS(tts.TTS):
             context=None,
             split_utterances=split_utterances,
             instant_mode=instant_mode,
+            audio_format=audio_format,
             base_url=base_url,
         )
         self._session = http_session
@@ -118,15 +124,18 @@ class TTS(tts.TTS):
         context: NotGivenOr[PostedContext] = NOT_GIVEN,
         split_utterances: NotGivenOr[bool] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
+        audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
     ) -> None:
         if is_given(utterance_options):
             self._opts.utterance_options = utterance_options
-        if is_given(context):  #
+        if is_given(context):
             self._opts.context = context
         if is_given(split_utterances):
             self._opts.split_utterances = split_utterances
         if is_given(instant_mode):
             self._opts.instant_mode = instant_mode
+        if is_given(audio_format):
+            self._opts.audio_format = audio_format
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -149,7 +158,7 @@ class ChunkedStream(tts.ChunkedStream):
             "split_utterances": self._opts.split_utterances,
             "strip_headers": True,
             "instant_mode": self._opts.instant_mode,
-            "format": {"type": "mp3"},
+            "format": {"type": self._opts.audio_format},
         }
         if self._opts.context:
             payload["context"] = self._opts.context
@@ -168,7 +177,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=SUPPORTED_SAMPLE_RATE,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/mp3",
+                    mime_type=f"audio/{audio_format}",
                 )
 
                 async for raw_line in resp.content:
