@@ -167,11 +167,16 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
 
                 return candidate
 
-            # Fallback: first candidate that is not in the future w.r.t final transcript.
-            for start_time in reversed(self._audio_stream_start_time_history):
-                candidate = start_time + self._last_transcript_end_time
-                if candidate <= self._last_final_transcript_time:
-                    return candidate
+        # Log candidates and fallback decision.
+        if self._audio_stream_start_time_history and self._last_transcript_end_time > 0:
+            failed_candidates: list[float] = [
+                start + self._last_transcript_end_time
+                for start in self._audio_stream_start_time_history
+            ]
+            logger.info(
+                "STT candidates failed plausibility checks, falling back to VAD. candidates=%s",
+                failed_candidates,
+            )
 
         # Absolute fallback to VAD measurement.
         return self._last_speaking_time
