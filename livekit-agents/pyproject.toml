@@ -79,6 +79,7 @@ baseten = ["livekit-plugins-baseten>=1.1.1"]
 langchain = ["livekit-plugins-langchain>=1.1.1"]
 sarvam = ["livekit-plugins-sarvam>=1.1.1"]
 spitch = ["livekit-plugins-spitch>=1.1.1"]
+xai = ["livekit-plugins-xai>=1.1.1"]
 
 
 [project.urls]

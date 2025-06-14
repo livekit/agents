@@ -191,14 +191,3 @@ OctoChatModels = Literal[
     "mixtral-8x7b-instruct",
     "wizardlm-2-8x22bllamaguard-2-7b",
 ]
-
-
-XAIChatModels = Literal[
-    "grok-3",
-    "grok-3-fast",
-    "grok-3-mini",
-    "grok-3-mini-fast",
-    "grok-2-vision-1212",
-    "grok-2-image-1212",
-    "grok-2-1212",
-]
