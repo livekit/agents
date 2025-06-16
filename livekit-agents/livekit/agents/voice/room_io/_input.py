@@ -224,6 +224,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             sample_rate=self._sample_rate,
             num_channels=self._num_channels,
             noise_cancellation=self._noise_cancellation,
+            frame_size_ms=50,
         )
 
     @override
