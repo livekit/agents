@@ -41,6 +41,7 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2025-04-16"
 
+
 @dataclass
 class STTOptions:
     model: STTModels | str
