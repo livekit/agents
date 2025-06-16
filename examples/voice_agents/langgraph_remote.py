@@ -15,17 +15,15 @@ Features demonstrated:
 - Real-time voice interaction with RemoteGraph AI systems
 
 Prerequisites:
-1. LangGraph server running on localhost:2024 with "multi_agent_workflow" graph
-2. OpenAI API key in .env file
+1. A deployed LangGraph, either running on localhost or on Langgraph platform
+2. OPENAI_API_KEY, DEEPGRAM_API_KEY, CARTESIA_API_KEY in .env file
 3. LiveKit room credentials (if connecting to specific room)
 
 Usage:
-    python examples/multi_agent_voice.py dev
+    python examples/langgraph_remote.py dev
 """
 
 import logging
-import sys
-
 from dotenv import load_dotenv
 from langgraph.pregel.remote import RemoteGraph
 
@@ -106,9 +104,6 @@ async def entrypoint(ctx: JobContext):
     agent = Agent(
         instructions="""
         You are a helpful AI assistant.
-        You can answer questions, perform analysis, and help with various tasks.
-        The system will handle complex queries by coordinating between specialized agents,
-        but you'll only hear the final, polished responses.
         """,
         llm=llm_adapter,
     )
