@@ -1686,14 +1686,11 @@ def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
     )
 
 
-def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str | llm.tool_context.Function:
-    oai_tool_choice: str | llm.tool_context.Function | None = None
-    if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
-        oai_tool_choice = tool_choice["function"]
-    else:
-        oai_tool_choice = tool_choice
+def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
+    if isinstance(tool_choice, str):
+        return tool_choice
 
-    if oai_tool_choice is None:
-        oai_tool_choice = "auto"
+    elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
+        return tool_choice["function"]["name"]
 
-    return oai_tool_choice
+    return "auto"
