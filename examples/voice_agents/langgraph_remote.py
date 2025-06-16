@@ -40,28 +40,7 @@ from livekit.agents import (
 )
 from livekit.plugins import deepgram, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
-# Prefer normal import. Fallback to editable-install path in dev environments
-try:
-    from livekit.plugins.langchain import langgraph_plugin  # type: ignore
-except ImportError:  # pragma: no cover – dev fallback
-    import pathlib
-
-    logging.getLogger(__name__).warning(
-        "livekit.plugins.langchain not found. Adding local path for dev usage. "
-        "Consider running 'uv pip install -e livekit-plugins/livekit-plugins-langchain'."
-    )
-
-    plugin_path = (
-        pathlib.Path(__file__)
-        .resolve()
-        .parent.parent.parent  # examples/voice_agents/ -> project root
-        / "livekit-plugins"
-        / "livekit-plugins-langchain"
-    )
-    sys.path.insert(0, str(plugin_path))
-
-    from livekit.plugins.langchain import langgraph_plugin  # type: ignore
+from livekit.plugins.langchain import langgraph_plugin
 
 # Configure logging
 logger = logging.getLogger("langgraph-voice-agent")
@@ -70,8 +49,8 @@ logger = logging.getLogger("langgraph-voice-agent")
 load_dotenv()
 
 # LangGraph server configuration
-LANGGRAPH_SERVER_URL = "http://localhost:2024"  # could be a deployed LangGraph
-GRAPH_ID = "multi_agent_workflow"
+LANGGRAPH_SERVER_URL = "http://localhost:2024"  # could be the URL of any deployed LangGraph (localhost or on Langgraph platform)
+GRAPH_ID = "multi_agent_workflow"  # Replace with your actual graph ID
 
 
 def prewarm(proc: JobProcess):
@@ -95,8 +74,7 @@ async def entrypoint(ctx: JobContext):
 
     # Connect to LangGraph RemoteGraph
     # This connects to your deployed RemoteGraph workflow
-    # Remember to set LANGCHAIN_API_KEY in .env file
-    graph = RemoteGraph(GRAPH_ID, url=LANGGRAPH_SERVER_URL)
+    graph = RemoteGraph(GRAPH_ID, api_key=LANGCHAIN_API_KEY, url=LANGGRAPH_SERVER_URL)
 
     # Generate a unique thread ID for each session to avoid conflicts
     # Each voice session gets its own conversation thread
