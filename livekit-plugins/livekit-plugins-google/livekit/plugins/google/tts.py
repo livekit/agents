@@ -48,6 +48,7 @@ class _TTSOptions:
     tokenizer: tokenize.SentenceTokenizer
     volume_gain_db: float
 
+
 class TTS(tts.TTS):
     def __init__(
         self,
