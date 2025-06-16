@@ -16,7 +16,7 @@ load_dotenv()
 
 
 # This example shows how to obtain the timed transcript from the TTS.
-# Right now, it's supported for Cartesia TTS (word level timestamps)
+# Right now, it's supported for Cartesia and ElevenLabs TTS (word level timestamps)
 # and non-streaming TTS with StreamAdapter (sentence level timestamps).
 
 
