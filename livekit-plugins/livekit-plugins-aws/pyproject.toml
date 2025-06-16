@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "video", "livekit", "aws"]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "aws", "nova", "sonic"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -26,6 +26,12 @@ dependencies = [
     "livekit-agents>=1.1.1",
     "aioboto3>=14.1.0",
     "amazon-transcribe>=0.6.2",
+]
+
+[project.optional-dependencies]
+realtime = [
+    "aws-sdk-bedrock-runtime==0.0.2; python_version >= '3.12'",
+    "boto3>1.35.10",
 ]
 
 [project.urls]
