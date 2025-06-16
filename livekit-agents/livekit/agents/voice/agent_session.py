@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import time
 from collections.abc import AsyncIterable
@@ -16,6 +17,7 @@ from typing import (
 )
 
 from livekit import rtc
+from livekit.agents.llm.chat_context import ChatItem
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
@@ -44,7 +46,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
-from .speech_handle import RunResult, SpeechHandle
+from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -73,6 +75,7 @@ class VoiceOptions:
 
 
 Userdata_T = TypeVar("Userdata_T")
+Run_T = TypeVar("Run_T")
 
 TurnDetectionMode = Union[
     Literal["stt", "vad", "realtime_llm", "manual"], _TurnDetector
@@ -90,6 +93,18 @@ The mode of turn detection to use.
     available models (realtime_llm -> vad -> stt -> manual)
 If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
 """
+
+
+@dataclass
+class _RunState:
+    # TODO(theomonnom): verify AgentSession is always the same
+    # session: "AgentSession"
+    speech_handles: list[SpeechHandle]
+    new_items: list[ChatItem]
+    fut: asyncio.Future[None]
+
+
+_RunContextVar = contextvars.ContextVar["_RunState"]("agents_run_state")
 
 
 @runtime_checkable
@@ -332,6 +347,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             raise RuntimeError("VoiceAgent isn't running")
 
         return self._agent
+
+    async def run(
+        self,
+        *,
+        user_input: str,
+        output_type: Run_T,
+    ) -> Run_T:
+        run_state = _RunContextVar.get(None)
+        if run_state is not None:
+            raise RuntimeError("nested runs are not supported")
+
+        run_state = _RunState(
+            speech_handles=[],
+            new_items=[],
+            fut=self._loop.create_future(),
+        )
+
+        tk = _RunContextVar.set(run_state)
+        try:
+            await run_state.fut
+        finally:
+            _RunContextVar.reset(tk)
 
     async def start(
         self,

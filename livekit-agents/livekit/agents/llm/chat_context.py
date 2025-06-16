@@ -294,6 +294,11 @@ class ChatContext:
         self._items[:] = new_items
         return self
 
+    def merge(self, other_chat_ctx: ChatContext) -> None:
+        """add messages from the other_chat_ctx inside this one if not present"""
+
+        pass
+
     def to_dict(
         self,
         *,
@@ -304,10 +309,7 @@ class ChatContext:
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
-            if exclude_function_call and item.type in [
-                "function_call",
-                "function_call_output",
-            ]:
+            if exclude_function_call and item.type in ["function_call", "function_call_output"]:
                 continue
 
             if item.type == "message":

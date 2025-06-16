@@ -8,11 +8,11 @@ from livekit.agents import (
     JobContext,
     RunContext,
     WorkerOptions,
-    workflows,
     cli,
+    workflows,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, openai, cartesia, silero
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 logger = logging.getLogger("get-email-agent")
 

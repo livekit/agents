@@ -1,8 +1,8 @@
-from ..agent import AgentTask
-from ...llm.tool_context import function_tool, ToolError
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
+from ...llm.tool_context import ToolError, function_tool
+from ..agent import AgentTask
 
 EMAIL_REGEX = (
     r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"

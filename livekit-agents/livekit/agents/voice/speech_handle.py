@@ -3,9 +3,24 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Generator
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any, Callable, Generic, TypeVar
 
 from .. import llm, utils
+
+
+Run_T = TypeVar("Run_T")
+
+
+@dataclass
+class RunResult(Generic[Run_T]):
+    final_output: Run_T
+
+    def __init__(self) -> None:
+        pass
+
+    def __await__(self) -> None:
+        pass
 
 
 class SpeechHandle:
@@ -33,6 +48,7 @@ class SpeechHandle:
         self._parent = parent
 
         self._chat_message: llm.ChatMessage | None = None
+        self._chat_items: list[llm.ChatItem] = []
 
     @staticmethod
     def create(
@@ -63,16 +79,28 @@ class SpeechHandle:
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 
-    @property
-    def chat_message(self) -> llm.ChatMessage | None:
-        """
-        Returns the assistant's generated chat message associated with this speech handle.
+    def result(self) -> RunResult:
+        raise
 
-        Only available once the speech playout is complete.
-        """
-        return self._chat_message
+    # -> User: What is the weather?
+    # -> Assistant: Let me check that for you
+    # -> Tool: get_weather
+    # -> Assistant: The weather in San Francisco is ...
+
+    # @property
+    # def chat_message(self) -> llm.ChatMessage | None:
+    #     """
+    #     Returns the assistant's generated chat message associated with this speech handle.
+
+    #     Only available once the speech playout is complete.
+    #     """
+    #     return self._chat_message
 
     # TODO(theomonnom): should we introduce chat_items property as well for generated tools?
+
+    @property
+    def chat_items(self) -> list[llm.ChatItem]:
+        return self._chat_items
 
     @property
     def parent(self) -> SpeechHandle | None:

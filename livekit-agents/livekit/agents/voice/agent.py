@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
 
@@ -12,9 +12,7 @@ from ..llm import (
     ChatContext,
     FunctionTool,
     RawFunctionTool,
-    ToolError,
     find_function_tools,
-    function_tool,
 )
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..log import logger
@@ -627,6 +625,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         from .agent_activity import _AgentActivityContextVar
 
+        # TODO(theomonnom): add a global lock for inline tasks
+        # This may currently break in the case we use parallel tool calls.
+
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
@@ -637,10 +638,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         if session.current_agent != self:
             logger.warning(
-                (
-                    f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
-                    "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
-                )
+                f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
+                "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
             )
             await old_activity.aclose()
             return task_result
