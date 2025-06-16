@@ -62,6 +62,7 @@ CerebrasChatModels = Literal[
     "llama3.1-8b",
     "llama-3.3-70b",
     "llama-4-scout-17b-16e-instruct",
+    "qwen-3-32b",
     "deepseek-r1-distill-llama-70b",
 ]
 
@@ -193,8 +194,11 @@ OctoChatModels = Literal[
 
 
 XAIChatModels = Literal[
-    "grok-2",
-    "grok-2-mini",
-    "grok-2-mini-public",
-    "grok-2-public",
+    "grok-3",
+    "grok-3-fast",
+    "grok-3-mini",
+    "grok-3-mini-fast",
+    "grok-2-vision-1212",
+    "grok-2-image-1212",
+    "grok-2-1212",
 ]

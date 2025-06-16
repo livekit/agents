@@ -1,4 +1,5 @@
 import logging
+import random
 from enum import Enum
 from typing import Annotated, Literal  # noqa: F401
 
@@ -70,6 +71,19 @@ class MyAgent(Agent):
 
         logger.info(f"Turning light to {switch_to} in {room}")
         return f"The light in the {room.value} is now {switch_to}."
+
+    @function_tool
+    async def get_number(
+        self,
+        value: Annotated[int | None, Field(description="The number value")],
+    ) -> str:
+        """
+        Called when the user wants to get a number value, None if user want a random value
+        """
+        logger.info(f"Getting number value for {value}")
+        if value is None:
+            value = random.randint(0, 100)
+        return f"The number value is {value}."
 
 
 async def entrypoint(ctx: JobContext):

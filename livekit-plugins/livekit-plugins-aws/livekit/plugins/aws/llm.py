@@ -254,6 +254,11 @@ class LLMStream(llm.LLMStream):
                     completion_tokens=metadata["usage"]["outputTokens"],
                     prompt_tokens=metadata["usage"]["inputTokens"],
                     total_tokens=metadata["usage"]["totalTokens"],
+                    prompt_cached_tokens=(
+                        metadata["usage"]["cacheReadInputTokens"]
+                        if "cacheReadInputTokens" in metadata["usage"]
+                        else 0
+                    ),
                 ),
             )
         elif "contentBlockStop" in chunk:

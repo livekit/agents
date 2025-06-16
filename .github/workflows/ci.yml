@@ -86,3 +86,7 @@ jobs:
               -p livekit.plugins.speechmatics
               -p livekit.plugins.tavus
               -p livekit.plugins.turn_detector
+              -p livekit.plugins.hedra
+              -p livekit.plugins.langchain
+              -p livekit.plugins.baseten
+              -p livekit.plugins.sarvam

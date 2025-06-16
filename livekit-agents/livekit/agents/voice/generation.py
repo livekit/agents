@@ -322,7 +322,9 @@ async def _execute_tools_task(
                 )
                 continue
 
-            if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
+            if not is_function_tool(function_tool) and not is_raw_function_tool(
+                function_tool
+            ):
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",
                     extra={
@@ -332,17 +334,20 @@ async def _execute_tools_task(
                 )
                 continue
 
+            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 json_args = fnc_call.arguments or "{}"
                 fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
                     fnc=function_tool,
                     json_arguments=json_args,
                     call_ctx=RunContext(
-                        session=session, speech_handle=speech_handle, function_call=fnc_call
+                        session=session,
+                        speech_handle=speech_handle,
+                        function_call=fnc_call,
                     ),
                 )
 
-            except (ValidationError, ValueError):
+            except (ValidationError, ValueError) as e:
                 logger.exception(
                     f"tried to call AI function `{fnc_call.name}` with invalid arguments",
                     extra={
@@ -351,6 +356,8 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                py_out.exception = e
+                tool_output.output.append(py_out)
                 continue
 
             if not tool_output.first_tool_fut.done():
@@ -365,7 +372,6 @@ async def _execute_tools_task(
                 },
             )
 
-            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 task = asyncio.create_task(
                     function_tool(*fnc_args, **fnc_kwargs),
@@ -374,9 +380,12 @@ async def _execute_tools_task(
 
                 tasks.append(task)
                 _set_activity_task_info(
-                    task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
+                    task,
+                    speech_handle=speech_handle,
+                    function_call=fnc_call,
+                    inline_task=True,
                 )
-            except Exception:
+            except Exception as e:
                 # catching exceptions here because even though the function is asynchronous,
                 # errors such as missing or incompatible arguments can still occur at
                 # invocation time.
@@ -387,6 +396,8 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
+                py_out.exception = e
+                tool_output.output.append(py_out)
                 continue
 
             def _log_exceptions(
@@ -412,7 +423,9 @@ async def _execute_tools_task(
                 tool_output.output.append(py_out)
                 tasks.remove(task)
 
-            task.add_done_callback(partial(_log_exceptions, py_out=py_out, fnc_call=fnc_call))
+            task.add_done_callback(
+                partial(_log_exceptions, py_out=py_out, fnc_call=fnc_call)
+            )
 
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
@@ -525,7 +538,9 @@ class _PythonOutput:
             or isinstance(self.output, tuple)
         ):
             agent_tasks = [item for item in self.output if isinstance(item, Agent)]
-            other_outputs = [item for item in self.output if not isinstance(item, Agent)]
+            other_outputs = [
+                item for item in self.output if not isinstance(item, Agent)
+            ]
             if len(agent_tasks) > 1:
                 logger.error(
                     f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
@@ -576,11 +591,14 @@ class _PythonOutput:
                 llm.FunctionCallOutput(
                     name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
-                    output=str(fnc_out or ""),  # take the string representation of the output
+                    output=str(
+                        fnc_out or ""
+                    ),  # take the string representation of the output
                     is_error=False,
                 )
             ),
-            reply_required=fnc_out is not None,  # require a reply if the tool returned an output
+            reply_required=fnc_out
+            is not None,  # require a reply if the tool returned an output
             agent_task=task,
         )
 
@@ -591,7 +609,9 @@ The ID of the instructions message in the chat context. (only for stateless LLMs
 """
 
 
-def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool) -> None:
+def update_instructions(
+    chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool
+) -> None:
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
@@ -615,7 +635,10 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
     elif add_if_missing:
         # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
-            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions])
+            0,
+            llm.ChatMessage(
+                id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]
+            ),
         )
 
 

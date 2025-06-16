@@ -14,7 +14,7 @@
 
 """Silero VAD plugin for LiveKit Agents
 
-See https://docs.livekit.io/build/turns/vad/ for more information.
+See https://docs.livekit.io/agents/build/turns/vad/ for more information.
 """
 
 from .vad import VAD, VADStream
