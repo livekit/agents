@@ -713,7 +713,7 @@ class AudioEmitter:
                         if lk_dump_tts:
                             debug_frames.append(frame)
 
-                    frame.user_data["timed_transcripts"] = timed_transcripts
+                    frame.userdata["timed_transcripts"] = timed_transcripts
                     self._dst_ch.send_nowait(
                         SynthesizedAudio(
                             frame=frame,
@@ -726,7 +726,7 @@ class AudioEmitter:
                     return
 
             if last_frame is not None:
-                last_frame.user_data["timed_transcripts"] = timed_transcripts
+                last_frame.userdata["timed_transcripts"] = timed_transcripts
                 self._dst_ch.send_nowait(
                     SynthesizedAudio(
                         frame=last_frame,
@@ -751,7 +751,7 @@ class AudioEmitter:
             if last_frame is None:
                 return
 
-            last_frame.user_data["timed_transcripts"] = timed_transcripts
+            last_frame.userdata["timed_transcripts"] = timed_transcripts
             self._dst_ch.send_nowait(
                 SynthesizedAudio(
                     frame=last_frame,

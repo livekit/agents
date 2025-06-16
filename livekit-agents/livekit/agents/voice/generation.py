@@ -150,7 +150,7 @@ def perform_tts_inference(
             timed_texts_fut.set_result(timed_text_ch)
 
             async for audio_frame in tts_node:
-                for text in audio_frame.user_data.get("timed_transcripts", []):
+                for text in audio_frame.userdata.get("timed_transcripts", []):
                     timed_text_ch.send_nowait(text)
 
                 audio_ch.send_nowait(audio_frame)
