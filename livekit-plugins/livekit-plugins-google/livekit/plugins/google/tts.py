@@ -47,6 +47,8 @@ class _TTSOptions:
     speaking_rate: float
     tokenizer: tokenize.SentenceTokenizer
     volume_gain_db: float
+    enable_ssml: bool
+
 
 class TTS(tts.TTS):
     def __init__(
@@ -66,6 +68,7 @@ class TTS(tts.TTS):
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         use_streaming: bool = True,
+        enable_ssml: bool = False,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -88,12 +91,16 @@ class TTS(tts.TTS):
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
             tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
+            enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
             num_channels=1,
         )
+
+        if enable_ssml and use_streaming:
+            raise ValueError("SSML support is not available for streaming synthesis")
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
         self._credentials_info = credentials_info
@@ -121,6 +128,7 @@ class TTS(tts.TTS):
             speaking_rate=speaking_rate,
             tokenizer=tokenizer,
             volume_gain_db=volume_gain_db,
+            enable_ssml=enable_ssml,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -206,10 +214,21 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
+    def _build_ssml(self) -> str:
+        ssml = "<speak>"
+        ssml += self._input_text
+        ssml += "</speak>"
+        return ssml
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            input = (
+                texttospeech.SynthesisInput(ssml=self._build_ssml())
+                if self._opts.enable_ssml
+                else texttospeech.SynthesisInput(text=self._input_text)
+            )
             response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
-                input=texttospeech.SynthesisInput(text=self._input_text),
+                input=input,
                 voice=self._opts.voice,
                 audio_config=texttospeech.AudioConfig(
                     audio_encoding=self._opts.encoding,
