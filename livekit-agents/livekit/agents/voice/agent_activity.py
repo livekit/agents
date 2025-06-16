@@ -668,11 +668,10 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.clear_audio()
 
-    def commit_user_turn(self, *, transcript_timeout: float) -> None:
+    def commit_user_turn(self) -> None:
         assert self._audio_recognition is not None
         self._audio_recognition.commit_user_turn(
-            audio_detached=not self._session.input.audio_enabled,
-            transcript_timeout=transcript_timeout,
+            audio_detached=not self._session.input.audio_enabled
         )
 
     def _schedule_speech(
@@ -1073,7 +1072,12 @@ class AgentActivity(RecognitionHooks):
             )
             tasks.append(forward_text)
 
+
+        first_frame_ts = 0.0
+        
         def _on_first_frame(_: asyncio.Future[None]) -> None:
+            nonlocal first_frame_ts
+            first_frame_ts = time.time()
             self._session._update_agent_state("speaking")
 
         if audio_output is None:
@@ -1211,7 +1215,11 @@ class AgentActivity(RecognitionHooks):
             )
             tasks.append(forward_task)
 
+        first_frame_ts = 0.0
+        
         def _on_first_frame(_: asyncio.Future[None]) -> None:
+            nonlocal first_frame_ts
+            first_frame_ts = time.time()
             self._session._update_agent_state("speaking")
 
         audio_out: _AudioOutput | None = None
@@ -1238,11 +1246,12 @@ class AgentActivity(RecognitionHooks):
 
         await speech_handle.wait_if_not_interrupted([*tasks])
 
-        # wait for the end of the playout if the audio is enabled
+        playback_ev = None
         if audio_output is not None:
-            await speech_handle.wait_if_not_interrupted(
-                [asyncio.ensure_future(audio_output.wait_for_playout())]
-            )
+            playout_task = asyncio.create_task(audio_output.wait_for_playout())
+            await speech_handle.wait_if_not_interrupted([playout_task])
+            if not speech_handle.interrupted:
+                playback_ev = await playout_task
 
         # add the tools messages that triggers this reply to the chat context
         if _tools_messages:
@@ -1251,6 +1260,18 @@ class AgentActivity(RecognitionHooks):
                 msg.created_at = reply_started_at
             self._agent._chat_ctx.insert(_tools_messages)
 
+        if (
+            playback_ev is not None
+            and self._session._latency_tracker is not None
+            and first_frame_ts > 0
+        ):
+            self._session._latency_tracker.on_playback_finished(
+                speech_handle.id,
+                first_frame_ts,
+                time.time(),
+                playback_ev.playback_position,
+            )
+            
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
 
@@ -1267,6 +1288,13 @@ class AgentActivity(RecognitionHooks):
                         playback_position=playback_ev.playback_position,
                         speech_id=speech_handle.id,
                     )
+                    if self._session._latency_tracker is not None and first_frame_ts > 0:
+                        self._session._latency_tracker.on_playback_finished(
+                            speech_handle.id,
+                            first_frame_ts,
+                            time.time(),
+                            playback_ev.playback_position,
+                        )
                     if playback_ev.synchronized_transcript is not None:
                         forwarded_text = playback_ev.synchronized_transcript
                 else:

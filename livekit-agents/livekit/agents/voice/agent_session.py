@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Generic, Literal, Protocol, TypeVar, Union, ru
 
 from livekit import rtc
 
-from .. import debug, llm, stt, tts, utils, vad
+from .. import debug, llm, stt, tts, utils, vad, metrics
 from ..cli import cli
 from ..job import get_job_context
 from ..llm import ChatContext
@@ -132,6 +132,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_consecutive_speech_delay: float = 0.0,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
+        enable_latency_logs: bool = True,
     ) -> None:
         """`AgentSession` is the LiveKit Agents runtime that glues together
         media streams, speech/LLM components, and tool orchestration into a
@@ -194,6 +195,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
+            enable_latency_logs (bool, optional): When ``True`` log latency
+                statistics for each user turn. Defaults to ``True``.
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
@@ -249,6 +252,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
+        self._latency_tracker = metrics.LatencyCollector() if enable_latency_logs else None
+        if self._latency_tracker:
+            self.on(
+                "metrics_collected",
+                lambda ev: self._latency_tracker.on_metrics(ev.metrics),
+            )
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
@@ -614,21 +623,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
-    def commit_user_turn(self, *, transcript_timeout: float = 2.0) -> None:
-        """Commit the user turn and generate a reply.
-
-        Args:
-            transcript_timeout (float, optional): The timeout for the final transcript
-                to be received after committing the user turn.
-                Increase this value if the STT is slow to respond.
-
-        Raises:
-            RuntimeError: If the AgentSession isn't running.
-        """
+    def commit_user_turn(self) -> None:
+        # commit the user turn and generate a reply
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn(transcript_timeout=transcript_timeout)
+        self._activity.commit_user_turn()
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent

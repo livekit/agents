@@ -8,6 +8,7 @@ from .base import (
     VADMetrics,
 )
 from .usage_collector import UsageCollector, UsageSummary
+from .latency_collector import LatencyCollector
 from .utils import log_metrics
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "RealtimeModelMetrics",
     "UsageSummary",
     "UsageCollector",
+    "LatencyCollector",
     "log_metrics",
 ]
 
