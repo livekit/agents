@@ -322,7 +322,9 @@ async def _execute_tools_task(
                 )
                 continue
 
-            if not is_function_tool(function_tool) and not is_raw_function_tool(function_tool):
+            if not is_function_tool(function_tool) and not is_raw_function_tool(
+                function_tool
+            ):
                 logger.error(
                     f"unknown tool type: {type(function_tool)}",
                     extra={
@@ -421,7 +423,9 @@ async def _execute_tools_task(
                 tool_output.output.append(py_out)
                 tasks.remove(task)
 
-            task.add_done_callback(partial(_log_exceptions, py_out=py_out, fnc_call=fnc_call))
+            task.add_done_callback(
+                partial(_log_exceptions, py_out=py_out, fnc_call=fnc_call)
+            )
 
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
@@ -534,7 +538,9 @@ class _PythonOutput:
             or isinstance(self.output, tuple)
         ):
             agent_tasks = [item for item in self.output if isinstance(item, Agent)]
-            other_outputs = [item for item in self.output if not isinstance(item, Agent)]
+            other_outputs = [
+                item for item in self.output if not isinstance(item, Agent)
+            ]
             if len(agent_tasks) > 1:
                 logger.error(
                     f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
@@ -585,11 +591,14 @@ class _PythonOutput:
                 llm.FunctionCallOutput(
                     name=self.fnc_call.name,
                     call_id=self.fnc_call.call_id,
-                    output=str(fnc_out or ""),  # take the string representation of the output
+                    output=str(
+                        fnc_out or ""
+                    ),  # take the string representation of the output
                     is_error=False,
                 )
             ),
-            reply_required=fnc_out is not None,  # require a reply if the tool returned an output
+            reply_required=fnc_out
+            is not None,  # require a reply if the tool returned an output
             agent_task=task,
         )
 
@@ -600,7 +609,9 @@ The ID of the instructions message in the chat context. (only for stateless LLMs
 """
 
 
-def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool) -> None:
+def update_instructions(
+    chat_ctx: ChatContext, *, instructions: str, add_if_missing: bool
+) -> None:
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
@@ -625,7 +636,9 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
         # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
             0,
-            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]),
+            llm.ChatMessage(
+                id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]
+            ),
         )
 
 
