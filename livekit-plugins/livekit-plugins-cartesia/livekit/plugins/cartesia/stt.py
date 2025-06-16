@@ -173,7 +173,6 @@ class STT(stt.STT):
             sample_rate=self._opts.sample_rate,
             api_key=self._opts.api_key,
             base_url=self._opts.base_url,
-            energy_filter=self._opts.energy_filter,
         )
 
         if is_given(language):
