@@ -118,7 +118,7 @@ class SarvamTTSOptions:
     target_language_code: SarvamTTSLanguages | str  # BCP-47 for supported Indian languages
     api_key: str  # Sarvam.ai API key
     text: str | None = None  # Will be provided by the stream adapter
-    speaker: SarvamTTSSpeakers | str = "manisha"  # Default speaker compatible with v2
+    speaker: SarvamTTSSpeakers | str = "anushka"  # Default speaker compatible with v2
     pitch: float = 0.0
     pace: float = 1.0
     loudness: float = 1.0
@@ -154,7 +154,7 @@ class TTS(tts.TTS):
         *,
         target_language_code: SarvamTTSLanguages | str,
         model: SarvamTTSModels | str = "bulbul:v2",
-        speaker: SarvamTTSSpeakers | str = "manisha",
+        speaker: SarvamTTSSpeakers | str = "anushka",
         speech_sample_rate: int = 22050,
         num_channels: int = 1,  # Sarvam output is mono WAV
         pitch: float = 0.0,
