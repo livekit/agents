@@ -669,12 +669,9 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
-        return await self._realtime_model._ensure_http_session().ws_connect(
-            url=url,
-            headers=headers,
-            timeout=aiohttp.ClientWSTimeout(
-                ws_close=self._realtime_model._opts.conn_options.timeout
-            ),
+        return await asyncio.wait_for(
+            self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
+            self._realtime_model._opts.conn_options.timeout,
         )
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
