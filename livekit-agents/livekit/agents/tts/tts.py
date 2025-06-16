@@ -6,7 +6,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
 
@@ -38,8 +38,6 @@ class SynthesizedAudio:
     """Segment ID, each segment is separated by a flush (streaming only)"""
     delta_text: str = ""
     """Current segment of the synthesized audio (streaming only)"""
-    timed_transcripts: list[TimedString] = field(default_factory=list)
-    """Timed delta transcripts, if supported by the TTS"""
 
 
 @dataclass
@@ -632,14 +630,18 @@ class AudioEmitter:
 
         self._write_ch.send_nowait(data)
 
-    def push_timed_transcript(self, delta_text: TimedString) -> None:
+    def push_timed_transcript(self, delta_text: TimedString | list[TimedString]) -> None:
         if not self._started:
             raise RuntimeError("AudioEmitter isn't started")
 
         if self._write_ch.closed:
             return
 
-        self._write_ch.send_nowait(delta_text)
+        if isinstance(delta_text, list):
+            for text in delta_text:
+                self._write_ch.send_nowait(text)
+        else:
+            self._write_ch.send_nowait(delta_text)
 
     def flush(self) -> None:
         if not self._started:
@@ -711,26 +713,26 @@ class AudioEmitter:
                         if lk_dump_tts:
                             debug_frames.append(frame)
 
+                    frame.user_data["timed_transcripts"] = timed_transcripts
                     self._dst_ch.send_nowait(
                         SynthesizedAudio(
                             frame=frame,
                             request_id=self._request_id,
                             segment_id=segment_ctx.segment_id,
                             is_final=True,
-                            timed_transcripts=timed_transcripts,
                         )
                     )
                     timed_transcripts = []
                     return
 
             if last_frame is not None:
+                last_frame.user_data["timed_transcripts"] = timed_transcripts
                 self._dst_ch.send_nowait(
                     SynthesizedAudio(
                         frame=last_frame,
                         request_id=self._request_id,
                         segment_id=segment_ctx.segment_id,
                         is_final=is_final,
-                        timed_transcripts=timed_transcripts,
                     )
                 )
                 timed_transcripts = []
@@ -749,13 +751,13 @@ class AudioEmitter:
             if last_frame is None:
                 return
 
+            last_frame.user_data["timed_transcripts"] = timed_transcripts
             self._dst_ch.send_nowait(
                 SynthesizedAudio(
                     frame=last_frame,
                     request_id=self._request_id,
                     segment_id=segment_ctx.segment_id,
                     is_final=False,  # flush isn't final
-                    timed_transcripts=timed_transcripts,
                 )
             )
             timed_transcripts = []

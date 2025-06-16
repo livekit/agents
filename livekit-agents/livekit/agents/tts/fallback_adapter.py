@@ -203,6 +203,9 @@ class FallbackChunkedStream(ChunkedStream):
                 try:
                     resampler = tts_status.resampler
                     async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
+                        if texts := synthesized_audio.frame.user_data.get("timed_transcripts"):
+                            output_emitter.push_timed_transcript(texts)
+
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
                                 output_emitter.push(rf.data.tobytes())
@@ -342,6 +345,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             ),
                             recovering=False,
                         ):
+                            if texts := synthesized_audio.frame.user_data.get("timed_transcripts"):
+                                output_emitter.push_timed_transcript(texts)
+
                             if resampler is not None:
                                 for resampled_frame in resampler.push(synthesized_audio.frame):
                                     output_emitter.push(resampled_frame.data.tobytes())
