@@ -440,6 +440,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 data = json.loads(msg.data)
 
                 if alignment := data.get("alignment"):
+                    # 11labs aligns timestamps at the character level
                     text_buffer += "".join(alignment["chars"])
                     start_times_ms += alignment["charStartTimesMs"]
                     durations_ms += alignment["charDurationsMs"]
@@ -537,7 +538,7 @@ def _to_timed_words(
     timed_words = []
     _, start_indices, _ = zip(*words)
     end = 0
-    # we don't know if the last word is complete
+    # we don't know if the last word is complete, always leave it as remaining
     for start, end in zip(start_indices[:-1], start_indices[1:]):
         start_t = timestamps[start] / 1000
         end_t = timestamps[end] / 1000
