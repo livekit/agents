@@ -155,16 +155,6 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
                 if candidate > self._last_final_transcript_time:
                     continue
 
-                # The latency between speech end and transcript arrival should
-                # be reasonable.
-                if (self._last_final_transcript_time - candidate) > 1.2:
-                    continue
-
-                # Candidate should not be significantly earlier than VAD-based
-                # estimate (>1 s difference).
-                if abs(candidate - self._last_speaking_time) > 1.0:
-                    continue
-
                 return candidate
 
         # Log candidates and fallback decision.
@@ -178,7 +168,6 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
                 failed_candidates,
             )
 
-        # Absolute fallback to VAD measurement.
         return self._last_speaking_time
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
