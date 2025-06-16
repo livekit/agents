@@ -161,7 +161,7 @@ class TTS(tts.TTS):
         pace: float = 1.0,
         loudness: float = 1.0,
         enable_preprocessing: bool = False,
-        api_key: str,
+        api_key: str | None = None,
         base_url: str = SARVAM_TTS_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
