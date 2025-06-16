@@ -163,7 +163,7 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_stt(stt)
 
-    def commit_user_turn(self, *, audio_detached: bool, final_transcript_timeout: float) -> None:
+    def commit_user_turn(self, *, audio_detached: bool, transcript_timeout: float) -> None:
         async def _commit_user_turn() -> None:
             if time.time() - self._last_final_transcript_time > 0.5:
                 # if the last final transcript is received more than 0.5s ago
@@ -187,7 +187,7 @@ class AudioRecognition:
                 try:
                     await asyncio.wait_for(
                         self._final_transcript_received.wait(),
-                        timeout=final_transcript_timeout,
+                        timeout=transcript_timeout,
                     )
                 except asyncio.TimeoutError:
                     pass
