@@ -358,7 +358,7 @@ class AudioRecognition:
                 else 0
             )
 
-            if last_speaking_time <= 0 :
+            if last_speaking_time <= 0:
                 transcription_delay = -1.0
                 end_of_utterance_delay = -1.0
             else:
