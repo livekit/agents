@@ -967,7 +967,11 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.interrupt()
 
         # id is generated
-        user_message: llm.ChatMessage = llm.ChatMessage(role="user", content=[info.new_transcript])
+        user_message: llm.ChatMessage = llm.ChatMessage(
+            role="user",
+            content=[info.new_transcript],
+            transcript_confidence=info.transcript_confidence,
+        )
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
         # the user can edit it for the current generation, but changes will not be kept inside the

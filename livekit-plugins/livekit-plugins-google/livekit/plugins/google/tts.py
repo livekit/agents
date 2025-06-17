@@ -46,6 +46,9 @@ class _TTSOptions:
     effects_profile_id: str
     speaking_rate: float
     tokenizer: tokenize.SentenceTokenizer
+    volume_gain_db: float
+    enable_ssml: bool
+
 
 
 class TTS(tts.TTS):
@@ -59,12 +62,14 @@ class TTS(tts.TTS):
         pitch: int = 0,
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
+        volume_gain_db: float = 0.0,
         location: str = "global",
         audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.OGG_OPUS,  # type: ignore
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         use_streaming: bool = True,
+        enable_ssml: bool = False,
     ) -> None:
         """
         Create a new instance of Google TTS.
@@ -82,16 +87,21 @@ class TTS(tts.TTS):
             pitch (float, optional): Speaking pitch, ranging from -20.0 to 20.0 semitones relative to the original pitch. Default is 0.
             effects_profile_id (str): Optional identifier for selecting audio effects profiles to apply to the synthesized speech.
             speaking_rate (float, optional): Speed of speech. Default is 1.0.
+            volume_gain_db (float, optional): Volume gain in decibels. Default is 0.0. In the range [-96.0, 16.0]. Strongly recommended not to exceed +10 (dB).
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
             tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Default is a basic sentence tokenizer.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
+            enable_ssml (bool, optional): Whether to enable SSML support. Default is False.
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=use_streaming),
             sample_rate=sample_rate,
             num_channels=1,
         )
+
+        if enable_ssml and use_streaming:
+            raise ValueError("SSML support is not available for streaming synthesis")
 
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
         self._credentials_info = credentials_info
@@ -118,6 +128,8 @@ class TTS(tts.TTS):
             effects_profile_id=effects_profile_id,
             speaking_rate=speaking_rate,
             tokenizer=tokenizer,
+            volume_gain_db=volume_gain_db,
+            enable_ssml=enable_ssml,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
@@ -128,6 +140,7 @@ class TTS(tts.TTS):
         gender: NotGivenOr[Gender | str] = NOT_GIVEN,
         voice_name: NotGivenOr[str] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
+        volume_gain_db: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -137,6 +150,7 @@ class TTS(tts.TTS):
             gender (Gender | str, optional): Voice gender ("male", "female", "neutral").
             voice_name (str, optional): Specific voice name.
             speaking_rate (float, optional): Speed of speech.
+            volume_gain_db (float, optional): Volume gain in decibels.
         """
         params = {}
         if is_given(language):
@@ -151,6 +165,8 @@ class TTS(tts.TTS):
 
         if is_given(speaking_rate):
             self._opts.speaking_rate = speaking_rate
+        if is_given(volume_gain_db):
+            self._opts.volume_gain_db = volume_gain_db
 
     def _ensure_client(self) -> texttospeech.TextToSpeechAsyncClient:
         api_endpoint = "texttospeech.googleapis.com"
@@ -199,10 +215,21 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
+    def _build_ssml(self) -> str:
+        ssml = "<speak>"
+        ssml += self._input_text
+        ssml += "</speak>"
+        return ssml
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            input = (
+                texttospeech.SynthesisInput(ssml=self._build_ssml())
+                if self._opts.enable_ssml
+                else texttospeech.SynthesisInput(text=self._input_text)
+            )
             response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
-                input=texttospeech.SynthesisInput(text=self._input_text),
+                input=input,
                 voice=self._opts.voice,
                 audio_config=texttospeech.AudioConfig(
                     audio_encoding=self._opts.encoding,
@@ -210,6 +237,7 @@ class ChunkedStream(tts.ChunkedStream):
                     pitch=self._opts.pitch,
                     effects_profile_id=self._opts.effects_profile_id,
                     speaking_rate=self._opts.speaking_rate,
+                    volume_gain_db=self._opts.volume_gain_db,
                 ),
                 timeout=self._conn_options.timeout,
             )
