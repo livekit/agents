@@ -518,6 +518,10 @@ class SpeechStream(stt.RecognizeStream):
         _speech_data list. As new final data is added, all partials are removed from
         the list.
 
+        Note: If a known speaker is `__[A-Z0-9]{2,}__`, then the words are skipped,
+        as this is used to protect against self-interruption by the assistant or to
+        block out specific voices.
+
         Returns:
             bool: True if the speech data was updated, False otherwise.
         """
