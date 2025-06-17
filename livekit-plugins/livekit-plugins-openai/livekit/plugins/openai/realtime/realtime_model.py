@@ -1524,11 +1524,13 @@ class RealtimeSession(
                 cached_tokens=usage.get("input_token_details", {}).get("cached_tokens", 0),
                 text_tokens=usage.get("input_token_details", {}).get("text_tokens", 0),
                 cached_tokens_details=RealtimeModelMetrics.CachedTokenDetails(
-                    text_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("text_tokens", 0),
-                    audio_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("audio_tokens", 0),
-                    image_tokens=usage.get("input_token_details", {}).get("cached_tokens_details", {}).get("image_tokens", 0),
+                    text_tokens=usage.get("input_token_details", {})
+                        .get("cached_tokens_details", {}).get("text_tokens", 0),
+                    audio_tokens=usage.get("input_token_details", {})
+                        .get("cached_tokens_details", {}).get("audio_tokens", 0),
+                    image_tokens=usage.get("input_token_details", {})
+                        .get("cached_tokens_details", {}).get("image_tokens", 0),
                 ),
-                image_tokens=0,
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
