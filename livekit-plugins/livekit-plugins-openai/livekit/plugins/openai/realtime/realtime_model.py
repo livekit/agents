@@ -1534,6 +1534,7 @@ class RealtimeSession(
                     .get("cached_tokens_details", {})
                     .get("image_tokens", 0),
                 ),
+                image_tokens=0,
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
                 text_tokens=usage.get("output_token_details", {}).get("text_tokens", 0),
