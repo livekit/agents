@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import re
 from dataclasses import dataclass
 
 import aiohttp
@@ -531,19 +532,25 @@ class SpeechStream(stt.RecognizeStream):
         for result in data.get("results", []):
             alt = result.get("alternatives", [{}])[0]
             if alt.get("content", None):
-                fragments.append(
-                    SpeechFragment(
-                        start_time=result.get("start_time", 0),
-                        end_time=result.get("end_time", 0),
-                        language=alt.get("language", "en"),
-                        is_eos=alt.get("is_eos", False),
-                        is_final=is_final,
-                        attaches_to=result.get("attaches_to", ""),
-                        content=alt.get("content", ""),
-                        speaker=alt.get("speaker", None),
-                        confidence=alt.get("confidence", 1.0),
-                    )
+                # Create the new fragment
+                fragment = SpeechFragment(
+                    start_time=result.get("start_time", 0),
+                    end_time=result.get("end_time", 0),
+                    language=alt.get("language", "en"),
+                    is_eos=alt.get("is_eos", False),
+                    is_final=is_final,
+                    attaches_to=result.get("attaches_to", ""),
+                    content=alt.get("content", ""),
+                    speaker=alt.get("speaker", None),
+                    confidence=alt.get("confidence", 1.0),
                 )
+
+                # Drop `__XX__` speakers
+                if fragment.speaker and re.match(r"^__[A-Z0-9]{2,}__$", fragment.speaker):
+                    continue
+
+                # Add the fragment
+                fragments.append(fragment)
 
         # Remove existing partials, as new partials and finals are provided
         self._speech_fragments = [frag for frag in self._speech_fragments if frag.is_final]
