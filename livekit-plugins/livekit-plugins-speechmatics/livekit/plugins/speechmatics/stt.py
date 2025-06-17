@@ -201,7 +201,7 @@ class SpeechStream(stt.RecognizeStream):
         self._seq_no = 0
 
         # Current utterance speech data
-        self._speech_data: list[SpeechFragment] = []
+        self._speech_fragments: list[SpeechFragment] = []
 
     async def _run(self) -> None:
         """Run the STT stream."""
@@ -479,7 +479,7 @@ class SpeechStream(stt.RecognizeStream):
         # Reset the accumulator and update LiveKit with timing info
         if is_final:
             # Reset the data
-            self._speech_data.clear()
+            self._speech_fragments.clear()
 
             # Send the recognition usage event
             if self._speech_duration > 0:
@@ -505,7 +505,7 @@ class SpeechStream(stt.RecognizeStream):
         fragments: list[SpeechFragment] = []
 
         # Current length of the speech data
-        current_length = len(self._speech_data)
+        current_length = len(self._speech_fragments)
 
         # Iterate over the results in the payload
         for result in data.get("results", []):
@@ -526,14 +526,14 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
         # Remove existing partials, as new partials and finals are provided
-        self._speech_data = [frag for frag in self._speech_data if frag.is_final]
+        self._speech_fragments = [frag for frag in self._speech_fragments if frag.is_final]
 
         # Return if no new fragments and length of the existing data is unchanged
-        if not fragments and len(self._speech_data) == current_length:
+        if not fragments and len(self._speech_fragments) == current_length:
             return False
 
         # Add the fragments to the speech data
-        self._speech_data.extend(fragments)
+        self._speech_fragments.extend(fragments)
 
         # Data was updated
         return True
@@ -557,7 +557,7 @@ class SpeechStream(stt.RecognizeStream):
         speaker_groups: list[list[SpeechFragment]] = [[]]
 
         # Group by speakers
-        for frag in self._speech_data:
+        for frag in self._speech_fragments:
             if frag.speaker != current_speaker:
                 current_speaker = frag.speaker
                 if speaker_groups[-1]:
