@@ -20,10 +20,8 @@ import os
 import uuid
 import weakref
 from dataclasses import dataclass
-from enum import Enum
 
 import aiohttp
-import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -43,49 +41,6 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2025-04-16"
 
-# Audio energy threshold for speech detection
-MAGIC_NUMBER_THRESHOLD = 0.004**2
-
-
-class AudioEnergyFilter:
-    """Local voice activity detection based on audio energy levels."""
-
-    class State(Enum):
-        START = 0
-        SPEAKING = 1
-        SILENCE = 2
-        END = 3
-
-    def __init__(self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD):
-        self._cooldown_seconds = min_silence
-        self._cooldown = min_silence
-        self._state = self.State.SILENCE
-        self._rms_threshold = rms_threshold
-
-    def update(self, frame: rtc.AudioFrame) -> State:
-        arr = np.frombuffer(frame.data, dtype=np.int16)
-        float_arr = arr.astype(np.float32) / 32768.0
-        rms = np.mean(np.square(float_arr))
-
-        if rms > self._rms_threshold:
-            self._cooldown = self._cooldown_seconds
-            if self._state in (self.State.SILENCE, self.State.END):
-                self._state = self.State.START
-            else:
-                self._state = self.State.SPEAKING
-        else:
-            if self._cooldown <= 0:
-                if self._state in (self.State.SPEAKING, self.State.START):
-                    self._state = self.State.END
-                elif self._state == self.State.END:
-                    self._state = self.State.SILENCE
-            else:
-                # keep speaking during cooldown
-                self._cooldown -= frame.duration
-                self._state = self.State.SPEAKING
-
-        return self._state
-
 
 @dataclass
 class STTOptions:
@@ -95,7 +50,6 @@ class STTOptions:
     sample_rate: int
     api_key: str
     base_url: str
-    energy_filter: AudioEnergyFilter | bool
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -119,7 +73,6 @@ class STT(stt.STT):
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
-        energy_filter: AudioEnergyFilter | bool = False,
     ) -> None:
         """
         Create a new instance of Cartesia STT.
@@ -134,8 +87,6 @@ class STT(stt.STT):
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for the Cartesia API.
                 Defaults to "https://api.cartesia.ai".
-            energy_filter: The energy filter to use for local voice activity
-                detection. Defaults to False.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -153,7 +104,6 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             api_key=cartesia_api_key,
             base_url=base_url,
-            energy_filter=AudioEnergyFilter() if energy_filter is True else energy_filter,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -220,7 +170,6 @@ class STT(stt.STT):
             sample_rate=self._opts.sample_rate,
             api_key=self._opts.api_key,
             base_url=self._opts.base_url,
-            energy_filter=self._opts.energy_filter,
         )
 
         if is_given(language):
@@ -245,14 +194,6 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
         self._speech_duration: float = 0
 
-        # Set up audio energy filter for local VAD
-        self._audio_energy_filter: AudioEnergyFilter | None = None
-        if opts.energy_filter:
-            if isinstance(opts.energy_filter, AudioEnergyFilter):
-                self._audio_energy_filter = opts.energy_filter
-            else:
-                self._audio_energy_filter = AudioEnergyFilter()
-
     def update_options(
         self,
         *,
@@ -266,12 +207,6 @@ class SpeechStream(stt.SpeechStream):
             self._opts.language = language
 
         self._reconnect_event.set()
-
-    def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
-        """Check the energy state of an audio frame for voice activity detection."""
-        if self._audio_energy_filter:
-            return self._audio_energy_filter.update(frame)
-        return AudioEnergyFilter.State.SPEAKING
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
@@ -297,45 +232,16 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_50ms,
             )
 
-            has_ended = False
-            last_frame: rtc.AudioFrame | None = None
             async for data in self._input_ch:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
-                    state = self._check_energy_state(data)
-                    if state in (
-                        AudioEnergyFilter.State.START,
-                        AudioEnergyFilter.State.SPEAKING,
-                    ):
-                        # Send buffered silence frame if we have one
-                        if last_frame:
-                            frames.extend(audio_bstream.write(last_frame.data.tobytes()))
-                            last_frame = None
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
-
-                        # Emit START_OF_SPEECH event if we just started speaking
-                        if state == AudioEnergyFilter.State.START and not self._speaking:
-                            self._speaking = True
-                            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                            self._event_ch.send_nowait(start_event)
-
-                    elif state == AudioEnergyFilter.State.END:
-                        # Flush remaining audio and mark as ended
-                        frames.extend(audio_bstream.flush())
-                        has_ended = True
-                    elif state == AudioEnergyFilter.State.SILENCE:
-                        # Buffer the last silence frame in case it contains speech beginning
-                        last_frame = data
+                    frames.extend(audio_bstream.write(data.data.tobytes()))
                 elif isinstance(data, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
-                    has_ended = True
 
                 for frame in frames:
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
-
-                if has_ended:
-                    has_ended = False
 
             closing_ws = True
             await ws.send_str("finalize")
@@ -433,6 +339,14 @@ class SpeechStream(stt.SpeechStream):
 
             if not text and not is_final:
                 return
+
+            # we don't have a super accurate way of detecting when speech started.
+            # this is typically the job of the VAD, but perfoming it here just in case something's
+            # relying on STT to perform this task.
+            if not self._speaking:
+                self._speaking = True
+                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                self._event_ch.send_nowait(start_event)
 
             speech_data = stt.SpeechData(
                 language=language,
