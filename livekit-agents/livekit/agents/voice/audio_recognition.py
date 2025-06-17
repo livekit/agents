@@ -357,13 +357,19 @@ class AudioRecognition:
                 if self._final_transcript_confidence
                 else 0
             )
+
+            if last_speaking_time <= 0:
+                transcription_delay = 0.0
+                end_of_utterance_delay = 0.0
+            else:
+                transcription_delay = max(self._last_final_transcript_time - last_speaking_time, 0)
+                end_of_utterance_delay = time.time() - last_speaking_time
+
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     new_transcript=self._audio_transcript,
-                    transcription_delay=max(
-                        self._last_final_transcript_time - last_speaking_time, 0
-                    ),
-                    end_of_utterance_delay=time.time() - last_speaking_time,
+                    transcription_delay=transcription_delay,
+                    end_of_utterance_delay=end_of_utterance_delay,
                     transcript_confidence=confidence_avg,
                 )
             )

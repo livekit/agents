@@ -50,7 +50,6 @@ class _TTSOptions:
     enable_ssml: bool
 
 
-
 class TTS(tts.TTS):
     def __init__(
         self,
