@@ -5,6 +5,69 @@ from typing import Any, Optional
 
 
 @dataclass
+class SpeechFragment:
+    """Fragment of an utterance."""
+
+    start_time: float
+    """Start time of the fragment in seconds."""
+
+    end_time: float
+    """End time of the fragment in seconds."""
+
+    language: str = "en"
+    """Language of the fragment."""
+
+    is_eos: bool = False
+    """Whether the fragment is the end of a sentence."""
+
+    is_final: bool = False
+    """Whether the fragment is the final fragment."""
+
+    attaches_to: str = ""
+    """Whether the fragment attaches to the previous or next fragment (punctuation)."""
+
+    content: str = ""
+    """Content of the fragment."""
+
+    speaker: Optional[str] = None
+    """Speaker of the fragment."""
+
+    confidence: float = 1.0
+    """Confidence of the fragment."""
+
+
+@dataclass
+class ConversationConfig:
+    """Conversation config."""
+
+    end_of_utterance_silence_trigger: Optional[float] = None
+    """How much silence in seconds is required to trigger end of utterance detection."""
+
+
+@dataclass
+class RTSpeakerDiarizationConfig:
+    """Real-time mode: Speaker diarization config."""
+
+    max_speakers: Optional[int] = None
+    """This enforces the maximum number of speakers allowed in a single audio stream."""
+
+    speaker_sensitivity: Optional[float] = None
+    """The sensitivity of the speaker detection.
+    This is a number between 0 and 1, where 0 means least sensitive and 1 means
+    most sensitive."""
+
+    prefer_current_speaker: Optional[bool] = None
+    """Whether to prefer the current speaker when assigning speaker labels.
+    If true, the algorithm will prefer to stay with the current active speaker if it
+    is a close enough match, even if other speakers may be closer.  This is useful
+    for cases where we can flip incorrectly between similar speakers during a single
+    speaker section."""
+
+    speakers: Optional[dict[str, list[str]]] = None
+    """The list of speakers detected in the audio stream."""
+
+
+@dataclass
 class TranscriptionConfig:
     """Real-time: Defines transcription parameters. See https://docs.speechmatics.com/rt-api-ref#transcription-config"""
 
@@ -49,8 +112,11 @@ class TranscriptionConfig:
     transcript_filtering_config: Optional[dict] = None
     """Removes disfluencies with the remove_disfluencies setting."""
 
-    speaker_diarization_config: Optional[dict] = None
+    speaker_diarization_config: Optional[RTSpeakerDiarizationConfig] = None
     """Options for speaker diarization such as ``max_speakers``."""
+
+    conversation_config: Optional[ConversationConfig] = None
+    """Optional configuration for end-of-utterance detection."""
 
     def asdict(self) -> dict[Any, Any]:
         """Returns model as a dict while excluding None values recursively."""
@@ -129,6 +195,9 @@ class ServerMessageType(str, Enum):
 
     AddTranscript = "AddTranscript"
     """Indicates the final transcript of a part of the audio."""
+
+    EndOfUtterance = "EndOfUtterance"
+    """Indicates the end of an utterance (defined with `end_of_utterance_silence_trigger`)."""
 
     EndOfTranscript = "EndOfTranscript"
     """Server response to :py:attr:`ClientMessageType.EndOfStream`,
