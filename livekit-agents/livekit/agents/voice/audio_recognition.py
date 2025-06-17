@@ -134,41 +134,13 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             self._vad_atask = None
             self._vad_ch = None
 
-    # Heuristically compute the absolute speech end timestamp using STT data
     def _estimate_actual_speech_end_time(self) -> float:
-        """Return the wall-clock time when the user stopped speaking.
-
-        Preference order:
-        1) Use STT end-word timestamps combined with the correct audio stream
-           start time.
-        2) Fall back to VAD-based timestamp when STT data is insufficient.
-        """
-
-        # Require both an STT timestamp and at least one stream start time.
-        if self._last_transcript_end_time > 0 and self._audio_stream_start_time_history:
-            # Iterate from the most recent stream start backwards so that we
-            # pick the latest plausible one.
-            for start_time in reversed(self._audio_stream_start_time_history):
-                candidate = start_time + self._last_transcript_end_time
-
-                # The transcript must finish before it is emitted.
-                if candidate > self._last_final_transcript_time:
-                    continue
-
-                return candidate
-
-        # Log candidates and fallback decision.
-        if self._audio_stream_start_time_history and self._last_transcript_end_time > 0:
-            failed_candidates: list[float] = [
-                start + self._last_transcript_end_time
-                for start in self._audio_stream_start_time_history
-            ]
-            logger.info(
-                "STT candidates failed plausibility checks, falling back to VAD. candidates=%s",
-                failed_candidates,
-            )
-
-        return self._last_speaking_time
+        # This is the wall clock time in epoch seconds when the user stopped speaking.
+        # This is calculated by adding the time of the last transcript end time(DG clock) with the
+        # audio stream start time (wall clock).
+        # Ex: 8s + 1750184202.385735 = 1750184210.385735
+        # _audio_stream_start_time is set by us above when we receive the first audio frame, it's reset on a Language switch.
+        return self._last_transcript_end_time + self._audio_stream_start_time
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
@@ -266,18 +238,22 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
 
             actual_speech_end_time = self._estimate_actual_speech_end_time()
+            # _last_final_transcript_time is set by us above when we receive the final transcript from DG
             transcription_delay = max(self._last_final_transcript_time - actual_speech_end_time, 0)
             end_of_utterance_delay = max(time.time() - actual_speech_end_time, 0)
 
+            # These are just debugging logs to help us understand the flow of the code. Not used anywhere.
             logger.info(
                 f"Debug transcription delay calculation: "
-                f"audio_stream_start={self._audio_stream_start_time}, "
+                f"audio_stream_start={self._audio_stream_start_time},"
                 f"last_transcript_end_time={self._last_transcript_end_time}, "
                 f"actual_speech_end_time={actual_speech_end_time}, "
                 f"last_final_transcript_time={self._last_final_transcript_time}, "
                 f"last_speaking_time_vad={self._last_speaking_time}"
+                f"stream history: {self._audio_stream_start_time_history}"
             )
 
+            # These numbers are emitted to taylor fresh and used to calculate the turn latency.
             eou_metrics = metrics.EOUMetrics(
                 timestamp=time.time(),
                 end_of_utterance_delay=end_of_utterance_delay,
