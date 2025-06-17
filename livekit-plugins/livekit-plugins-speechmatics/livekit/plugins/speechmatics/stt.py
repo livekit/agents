@@ -67,7 +67,7 @@ DEFAULT_TRANSCRIPTION_CONFIG = TranscriptionConfig(
 @dataclass
 class SpeakerSpeechData(stt.SpeechData):
     def text_formatted(self) -> str:
-        """Add in speaker ID."""
+        """Wrap with speaker id XML tags."""
 
         # Wrap in XML tags
         if self.speaker_id:
@@ -201,7 +201,7 @@ class SpeechStream(stt.RecognizeStream):
         self._seq_no = 0
 
         # Current utterance speech data
-        self._speech_data: list[SpeakerSpeechData] = []
+        self._speech_data: list[SpeechFragment] = []
 
     async def _run(self) -> None:
         """Run the STT stream."""
@@ -418,7 +418,7 @@ class SpeechStream(stt.RecognizeStream):
                 return
 
             # Get the speech data
-            speech_data = self._get_speech_data()
+            speech_data = self._get_speech_data_from_fragments()
             if speech_data:
                 self._send_result(speech_data, is_final=False)
 
@@ -426,7 +426,7 @@ class SpeechStream(stt.RecognizeStream):
             """End of utterance message from the STT engine."""
 
             # Get the speech data
-            speech_data = self._get_speech_data()
+            speech_data = self._get_speech_data_from_fragments()
             if speech_data:
                 self._send_result(speech_data, is_final=True, is_eou=True)
 
@@ -538,7 +538,7 @@ class SpeechStream(stt.RecognizeStream):
         # Data was updated
         return True
 
-    def _get_speech_data(self) -> list[SpeakerSpeechData]:
+    def _get_speech_data_from_fragments(self) -> list[SpeakerSpeechData]:
         """
         Get speech data objects for the current fragment list.
 
@@ -567,14 +567,17 @@ class SpeechStream(stt.RecognizeStream):
         # Create SpeechData objects
         speech_data: list[SpeakerSpeechData] = []
         for group in speaker_groups:
-            sd = self._get_speech_data_for_group(group)
+            sd = self._get_speech_data_from_fragment_group(group)
             if sd:
                 speech_data.append(sd)
 
         # Return the grouped SpeechData objects
         return speech_data
 
-    def _get_speech_data_for_group(self, group: list[SpeechFragment]) -> SpeakerSpeechData:
+    def _get_speech_data_from_fragment_group(
+        self,
+        group: list[SpeechFragment],
+    ) -> SpeakerSpeechData | None:
         """
         Take a group of fragments and piece together into SpeakerSpeechData.
 
