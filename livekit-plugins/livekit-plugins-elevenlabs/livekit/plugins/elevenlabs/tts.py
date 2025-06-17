@@ -110,7 +110,7 @@ class TTS(tts.TTS):
         chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
         language: NotGivenOr[str] = NOT_GIVEN,
-        sync_alignment: bool = False,
+        sync_alignment: bool = True,
     ) -> None:
         """
         Create a new instance of ElevenLabs TTS.
@@ -128,7 +128,7 @@ class TTS(tts.TTS):
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
-            sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to False.
+            sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
         """  # noqa: E501
 
         if not is_given(encoding):

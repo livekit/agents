@@ -85,7 +85,7 @@ class TTS(tts.TTS):
         speed: TTSVoiceSpeed | float | None = None,
         emotion: list[TTSVoiceEmotion | str] | None = None,
         sample_rate: int = 24000,
-        word_timestamps: bool = False,
+        word_timestamps: bool = True,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
     ) -> None:
@@ -102,7 +102,7 @@ class TTS(tts.TTS):
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
-            word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to False.
+            word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
