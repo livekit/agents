@@ -11,7 +11,7 @@ from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.plugins import openai, silero, speechmatics
 
 # Load environment variables from .env file
-# Required: OPENAI_API_KEY, ELEVENLABS_API_KEY, SPEECHMATICS_API_KEY
+# Required: SPEECHMATICS_API_KEY, OPENAI_API_KEY
 load_dotenv()
 
 
