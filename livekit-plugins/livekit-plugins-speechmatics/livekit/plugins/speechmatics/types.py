@@ -37,7 +37,7 @@ class SpeechFragment:
 
 
 @dataclass
-class ConversationConfig:
+class RTConversationConfig:
     """Conversation config."""
 
     end_of_utterance_silence_trigger: Optional[float] = None
@@ -115,7 +115,7 @@ class TranscriptionConfig:
     speaker_diarization_config: Optional[RTSpeakerDiarizationConfig] = None
     """Options for speaker diarization such as ``max_speakers``."""
 
-    conversation_config: Optional[ConversationConfig] = None
+    conversation_config: Optional[RTConversationConfig] = None
     """Optional configuration for end-of-utterance detection."""
 
     def asdict(self) -> dict[Any, Any]:

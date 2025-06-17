@@ -40,7 +40,7 @@ from .types import (
     AudioSettings,
     ClientMessageType,
     ConnectionSettings,
-    ConversationConfig,
+    RTConversationConfig,
     RTSpeakerDiarizationConfig,
     ServerMessageType,
     SpeechFragment,
@@ -58,9 +58,6 @@ DEFAULT_TRANSCRIPTION_CONFIG = TranscriptionConfig(
     max_delay_mode="fixed",
     diarization="speaker",
     speaker_diarization_config=RTSpeakerDiarizationConfig(max_speakers=4),
-    conversation_config=ConversationConfig(
-        end_of_utterance_silence_trigger=0.7,
-    ),
 )
 
 
@@ -98,9 +95,26 @@ class STT(stt.STT):
         if not is_given(transcription_config):
             transcription_config = DEFAULT_TRANSCRIPTION_CONFIG
         else:
-            transcription_config = TranscriptionConfig(
-                **{**DEFAULT_TRANSCRIPTION_CONFIG.asdict(), **transcription_config.asdict()}
-            )
+            # Merge the default and given transcription config
+            merged_config = {
+                **DEFAULT_TRANSCRIPTION_CONFIG.asdict(),
+                **transcription_config.asdict(),
+            }
+
+            # Convert nested RTSpeakerDiarizationConfig if present
+            if "speaker_diarization_config" in merged_config:
+                merged_config["speaker_diarization_config"] = RTSpeakerDiarizationConfig(
+                    **merged_config["speaker_diarization_config"]
+                )
+
+            # Convert nested RTConversationConfig if present
+            if "conversation_config" in merged_config:
+                merged_config["conversation_config"] = RTConversationConfig(
+                    **merged_config["conversation_config"]
+                )
+
+            # Create the transcription config
+            transcription_config = TranscriptionConfig(**merged_config)
 
         # Set the connection settings
         if not is_given(connection_settings):
@@ -188,6 +202,12 @@ class SpeechStream(stt.RecognizeStream):
         self._audio_settings = audio_settings
         self._connection_settings = connection_settings
         self._extra_headers = extra_headers
+
+        # Uses EndOfUtterance detection
+        self._uses_eou_detection = (
+            transcription_config.conversation_config
+            and transcription_config.conversation_config.end_of_utterance_silence_trigger
+        )
 
         # Session
         self._session = http_session
