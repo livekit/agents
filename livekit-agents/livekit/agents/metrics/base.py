@@ -63,12 +63,12 @@ class EOUMetrics(BaseModel):
     timestamp: float
     end_of_utterance_delay: float
     """Amount of time between the end of speech from VAD and the decision to end the user's turn.
-    Negative value if the end of speech was not detected.
+    Set to 0.0 if the end of speech was not detected.
     """
 
     transcription_delay: float
     """Time taken to obtain the transcript after the end of the user's speech.
-    Negative value if the end of speech was not detected.
+    Set to 0.0 if the end of speech was not detected.
     """
 
     on_user_turn_completed_delay: float

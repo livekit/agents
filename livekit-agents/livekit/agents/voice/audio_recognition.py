@@ -359,8 +359,8 @@ class AudioRecognition:
             )
 
             if last_speaking_time <= 0:
-                transcription_delay = -1.0
-                end_of_utterance_delay = -1.0
+                transcription_delay = 0.0
+                end_of_utterance_delay = 0.0
             else:
                 transcription_delay = max(self._last_final_transcript_time - last_speaking_time, 0)
                 end_of_utterance_delay = time.time() - last_speaking_time
