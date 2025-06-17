@@ -143,7 +143,7 @@ class JsonFormatter(logging.Formatter):
 
         log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
-        return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=False)
+        return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
 
 class ColoredFormatter(logging.Formatter):
@@ -191,7 +191,7 @@ class ColoredFormatter(logging.Formatter):
         args.update(self._esc_codes)
 
         if extra:
-            args["extra"] = json.dumps(extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=False)
+            args["extra"] = json.dumps(extra, cls=JsonFormatter.JsonEncoder, ensure_ascii=True)
 
         for field in self._required_fields:
             if field in extra:
