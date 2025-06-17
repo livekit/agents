@@ -48,7 +48,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     session = AgentSession(
         stt=speechmatics.STT(
             transcription_config=speechmatics.types.TranscriptionConfig(
-                max_delay=0.7,
+                max_delay=2.0,
                 max_delay_mode="fixed",
                 diarization="speaker",
                 speaker_diarization_config=speechmatics.types.RTSpeakerDiarizationConfig(
@@ -58,7 +58,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     {"content": "LiveKit", "sounds_like": ["live kit"]},
                 ],
                 conversation_config=speechmatics.types.ConversationConfig(
-                    end_of_utterance_silence_trigger=0.5,
+                    end_of_utterance_silence_trigger=0.7,
                 ),
             ),
         ),

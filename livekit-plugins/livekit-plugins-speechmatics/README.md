@@ -34,6 +34,8 @@ agent = AgentSession(
 
 Note: Using the `end_of_utterance_silence_trigger` parameter will tell the STT engine to wait for this period of time from the last detected speech and then emit the full utterance to LiveKit. This may conflict with LiveKit's end of turn detection, so you may need to adjust the `min_endpointing_delay` and `max_endpointing_delay` parameters accordingly.
 
+Note: The `EndOfUtterance` messages are currently in preview.
+
 ## Usage (LiveKit Turn Detection)
 
 Usage:
