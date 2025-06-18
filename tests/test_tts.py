@@ -436,6 +436,13 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": hume.TTS(),
+            "proxy-upstream": "api.hume.ai:443",
+        },
+        id="hume",
+    ),
+    pytest.param(
+        lambda: {
             "tts": tts.StreamAdapter(
                 tts=openai.TTS(), sentence_tokenizer=tokenize.basic.SentenceTokenizer()
             ),
