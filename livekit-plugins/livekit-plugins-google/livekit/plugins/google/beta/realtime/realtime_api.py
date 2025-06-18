@@ -52,7 +52,7 @@ class _RealtimeOptions:
     api_key: str | None
     voice: Voice | str
     language: NotGivenOr[str]
-    response_modalities: NotGivenOr[list[types.Modality]]
+    response_modalities: list[types.Modality]
     vertexai: bool
     project: str | None
     location: str | None
@@ -190,12 +190,15 @@ class RealtimeModel(llm.RealtimeModel):
         ):
             server_turn_detection = False
 
+        modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
+
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
                 turn_detection=server_turn_detection,
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=True,
+                audio_output=types.Modality.AUDIO in modalities,
             )
         )
 
@@ -727,9 +730,7 @@ class RealtimeSession(llm.RealtimeSession):
             gemini_tools=self._opts.gemini_tools if is_given(self._opts.gemini_tools) else None,
         )
         conf = types.LiveConnectConfig(
-            response_modalities=self._opts.response_modalities
-            if is_given(self._opts.response_modalities)
-            else [types.Modality.AUDIO],
+            response_modalities=self._opts.response_modalities,
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,
@@ -788,6 +789,8 @@ class RealtimeSession(llm.RealtimeSession):
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
             _created_timestamp=time.time(),
         )
+        if not self._realtime_model.capabilities.audio_output:
+            self._current_generation.audio_ch.close()
 
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
