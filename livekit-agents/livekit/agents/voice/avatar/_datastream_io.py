@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import asdict
@@ -11,11 +10,10 @@ from typing import Any
 from livekit import rtc
 
 from ... import utils
+from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ..io import AudioOutput, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
-
-logger = logging.getLogger(__name__)
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
@@ -28,11 +26,17 @@ class DataStreamAudioOutput(AudioOutput):
     """  # noqa: E501
 
     def __init__(
-        self, room: rtc.Room, *, destination_identity: str, sample_rate: int | None = None
+        self,
+        room: rtc.Room,
+        *,
+        destination_identity: str,
+        sample_rate: int | None = None,
+        wait_remote_track: rtc.TrackKind.ValueType | None = None,
     ):
         super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._room = room
         self._destination_identity = destination_identity
+        self._wait_remote_track = wait_remote_track
         self._stream_writer: rtc.ByteStreamWriter | None = None
         self._pushed_duration: float = 0.0
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -54,7 +58,25 @@ class DataStreamAudioOutput(AudioOutput):
             self._room.local_participant.register_rpc_method(
                 RPC_PLAYBACK_FINISHED, self._handle_playback_finished
             )
+            logger.debug(
+                "waiting for the remote participant",
+                extra={"identity": self._destination_identity},
+            )
             await utils.wait_for_participant(room=self._room, identity=self._destination_identity)
+            if self._wait_remote_track:
+                logger.debug(
+                    "waiting for the remote track",
+                    extra={
+                        "identity": self._destination_identity,
+                        "kind": rtc.TrackKind.Name(self._wait_remote_track),
+                    },
+                )
+                await utils.wait_for_track_subscribed(
+                    room=self._room,
+                    identity=self._destination_identity,
+                    kind=self._wait_remote_track,
+                )
+            logger.debug("remote participant ready", extra={"identity": self._destination_identity})
 
             self._started = True
 

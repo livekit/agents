@@ -7,7 +7,7 @@ from .exp_filter import ExpFilter
 from .log import log_exceptions
 from .misc import is_given, shortuuid, time_ms
 from .moving_average import MovingAverage
-from .participant import wait_for_participant
+from .participant import wait_for_participant, wait_for_track_subscribed
 
 EventEmitter = rtc.EventEmitter
 
@@ -30,6 +30,7 @@ __all__ = [
     "is_given",
     "ConnectionPool",
     "wait_for_participant",
+    "wait_for_track_subscribed",
 ]
 
 # Cleanup docs of unexported modules
