@@ -299,14 +299,6 @@ For more examples and detailed setup instructions, see the [examples directory](
 
 </table>
 
-For more examples and detailed setup instructions, see the [examples directory](examples/). Each subdirectory contains specific types of examples:
-
-- **[Voice Agents](examples/voice_agents/)** - Voice-based AI agents with various capabilities
-- **[Avatar Agents](examples/avatar_agents/)** - Agents with video avatars
-- **[Other Examples](examples/other/)** - Text-only agents, transcription, and utilities
-- **[Primitives](examples/primitives/)** - Basic building blocks and components
-- **[Voice Pipeline Agents](examples/voice-pipeline-agent/)** - Voice pipeline processing examples
-
 ## Running your agent
 
 ### Testing in terminal
