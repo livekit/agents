@@ -129,6 +129,9 @@ class TestSpeakerIdGrouping:
             ("Three Four", "__ASSISTANT__"),
             ("Five Six", "USER_123"),
             ("Seven Eight", "__IGNORE_ME__"),
+            ("Nine Ten", "__But_Not_Me__"),
         ]
         result = self._process_fragments(fragments)
-        assert result == ("[1]One Two[/1] [USER_123]Five Six[/USER_123]")
+        assert result == (
+            "[1]One Two[/1] [USER_123]Five Six[/USER_123] [__But_Not_Me__]Nine Ten[/__But_Not_Me__]"
+        )
