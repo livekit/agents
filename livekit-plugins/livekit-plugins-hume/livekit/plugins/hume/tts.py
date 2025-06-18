@@ -80,7 +80,6 @@ class _TTSOptions:
     base_url: str
     utterance_options: Utterance
     context: ContextGenerationId | ContextUtterances | None
-    split_utterances: bool | None
     instant_mode: bool | None
     audio_format: AudioFormat
 
@@ -95,7 +94,6 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         utterance_options: NotGivenOr[UtteranceOptions] = NOT_GIVEN,
         context: ContextGenerationId | ContextUtterances | None = None,
-        split_utterances: bool = True,
         instant_mode: bool = True,
         audio_format: AudioFormat = AudioFormat.mp3,
         base_url: str = DEFAULT_BASE_URL,
@@ -114,7 +112,6 @@ class TTS(tts.TTS):
             api_key=key,
             utterance_options=utterance_options if is_given(utterance_options) else {},
             context=context,
-            split_utterances=split_utterances,
             instant_mode=instant_mode,
             audio_format=audio_format,
             base_url=base_url,
@@ -132,7 +129,6 @@ class TTS(tts.TTS):
         *,
         utterance_options: NotGivenOr[UtteranceOptions] = NOT_GIVEN,
         context: NotGivenOr[ContextGenerationId | ContextUtterances] = NOT_GIVEN,
-        split_utterances: NotGivenOr[bool] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
     ) -> None:
@@ -140,8 +136,6 @@ class TTS(tts.TTS):
             self._opts.utterance_options = utterance_options
         if is_given(context):
             self._opts.context = context
-        if is_given(split_utterances):
-            self._opts.split_utterances = split_utterances
         if is_given(instant_mode):
             self._opts.instant_mode = instant_mode
         if is_given(audio_format):
@@ -165,7 +159,6 @@ class ChunkedStream(tts.ChunkedStream):
 
         payload: dict[str, Any] = {
             "utterances": [utterance],
-            "split_utterances": self._opts.split_utterances,
             "strip_headers": True,
             "instant_mode": self._opts.instant_mode,
             "format": {"type": self._opts.audio_format.value},
