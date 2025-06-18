@@ -699,12 +699,12 @@ class RealtimeSession(
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
 
-                    # if lk_oai_debug:
-                    #     msg_copy = msg.copy()
-                    #     if msg_copy["type"] == "input_audio_buffer.append":
-                    #         msg_copy = {**msg_copy, "audio": "..."}
+                    if lk_oai_debug:
+                        msg_copy = msg.copy()
+                        if msg_copy["type"] == "input_audio_buffer.append":
+                            msg_copy = {**msg_copy, "audio": "..."}
 
-                    #     logger.debug(f">>> {msg_copy}")
+                        logger.debug(f">>> {msg_copy}")
                 except Exception:
                     break
 
