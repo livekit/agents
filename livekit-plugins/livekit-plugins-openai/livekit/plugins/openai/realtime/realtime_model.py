@@ -60,6 +60,8 @@ from openai.types.beta.realtime import (
     ResponseDoneEvent,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
+    ResponseTextDoneEvent,
     SessionUpdateEvent,
     session_update_event,
 )
@@ -113,6 +115,7 @@ class _RealtimeOptions:
     azure_deployment: str | None
     entra_token: str | None
     api_version: str | None
+    modalities: list[Literal["text", "audio"]]
     max_session_duration: float | None
     """reset the connection after this many seconds if provided"""
     conn_options: APIConnectOptions
@@ -202,6 +205,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
+        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
@@ -226,6 +230,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_version: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         voice: str = "alloy",
+        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[InputAudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: InputAudioNoiseReduction | None = None,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
@@ -243,6 +248,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: str = "gpt-4o-realtime-preview",
         voice: str = "alloy",
+        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -259,12 +265,14 @@ class RealtimeModel(llm.RealtimeModel):
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        modalities = modalities if is_given(modalities) else ["text", "audio"]
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
                 turn_detection=turn_detection is not None,
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=False,
+                audio_output="audio" in modalities,
             )
         )
 
@@ -298,6 +306,7 @@ class RealtimeModel(llm.RealtimeModel):
             voice=voice,
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             tool_choice=tool_choice or None,
+            modalities=modalities,
             input_audio_transcription=input_audio_transcription
             if is_given(input_audio_transcription)
             else DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
@@ -690,12 +699,12 @@ class RealtimeSession(
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
 
-                    if lk_oai_debug:
-                        msg_copy = msg.copy()
-                        if msg_copy["type"] == "input_audio_buffer.append":
-                            msg_copy = {**msg_copy, "audio": "..."}
+                    # if lk_oai_debug:
+                    #     msg_copy = msg.copy()
+                    #     if msg_copy["type"] == "input_audio_buffer.append":
+                    #         msg_copy = {**msg_copy, "audio": "..."}
 
-                        logger.debug(f">>> {msg_copy}")
+                    #     logger.debug(f">>> {msg_copy}")
                 except Exception:
                     break
 
@@ -772,6 +781,10 @@ class RealtimeSession(
                         self._handle_response_content_part_done(
                             ResponseContentPartDoneEvent.construct(**event)
                         )
+                    elif event["type"] == "response.text.delta":
+                        self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
+                    elif event["type"] == "response.text.done":
+                        self._handle_response_text_done(ResponseTextDoneEvent.construct(**event))
                     elif event["type"] == "response.audio_transcript.delta":
                         self._handle_response_audio_transcript_delta(event)
                     elif event["type"] == "response.audio.delta":
@@ -870,7 +883,7 @@ class RealtimeSession(
             "voice": self._realtime_model._opts.voice,
             "input_audio_format": "pcm16",
             "output_audio_format": "pcm16",
-            "modalities": ["text", "audio"],
+            "modalities": self._realtime_model._opts.modalities,
             "turn_detection": turn_detection,
             "input_audio_transcription": input_audio_transcription,
             "input_audio_noise_reduction": self._realtime_model._opts.input_audio_noise_reduction,
@@ -1271,7 +1284,7 @@ class RealtimeSession(
         assert (item_type := event.part.type) is not None, "part.type is None"
         assert (response_id := event.response_id) is not None, "response_id is None"
 
-        if item_type == "audio":
+        if item_type == "audio" or not self._realtime_model.capabilities.audio_output:
             self._emit_generation_event(response_id)
             if self._text_mode_recovery_retries > 0:
                 logger.info(
@@ -1285,6 +1298,9 @@ class RealtimeSession(
                 text_ch=utils.aio.Chan(),
                 audio_ch=utils.aio.Chan(),
             )
+            if not self._realtime_model.capabilities.audio_output:
+                item_generation.audio_ch.close()
+
             self._current_generation.message_ch.send_nowait(
                 llm.MessageGeneration(
                     message_id=item_id,
@@ -1300,7 +1316,7 @@ class RealtimeSession(
                 logger.warning("received text-only response from realtime API")
 
     def _handle_response_content_part_done(self, event: ResponseContentPartDoneEvent) -> None:
-        if event.part.type != "text":
+        if event.part.type != "text" or not self._realtime_model.capabilities.audio_output:
             return
 
         # try to recover from text-only response on response.content_part_done event
@@ -1415,6 +1431,16 @@ class RealtimeSession(
             "OpenAI Realtime API failed to transcribe input audio",
             extra={"error": event.error},
         )
+
+    def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
+        item_generation = self._current_generation.messages[event.item_id]
+
+        item_generation.text_ch.send_nowait(event.delta)
+        item_generation.audio_transcript += event.delta
+
+    def _handle_response_text_done(self, event: ResponseTextDoneEvent) -> None:
+        assert self._current_generation is not None, "current_generation is None"
 
     def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
         assert self._current_generation is not None, "current_generation is None"

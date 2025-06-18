@@ -356,6 +356,17 @@ class AgentActivity(RecognitionHooks):
                 except llm.RealtimeError:
                     logger.exception("failed to update the tools")
 
+                if (
+                    not self.llm.capabilities.audio_output
+                    and not self.tts
+                    and self._session.output.audio
+                ):
+                    logger.error(
+                        "audio output is enabled but RealtimeModel has no audio modality "
+                        "and no TTS is set. Either enable audio modality in the RealtimeModel "
+                        "or set a TTS model."
+                    )
+
             elif isinstance(self.llm, llm.LLM):
                 try:
                     update_instructions(
@@ -1496,10 +1507,14 @@ class AgentActivity(RecognitionHooks):
         def _on_first_frame(_: asyncio.Future[None]) -> None:
             self._session._update_agent_state("speaking")
 
+        tasks: list[asyncio.Task[Any]] = []
+
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
             outputs: list[tuple[str, _TextOutput | None, _AudioOutput | None]],
         ) -> None:
+            assert isinstance(self.llm, llm.RealtimeModel)
+
             forward_tasks: list[asyncio.Task[Any]] = []
             try:
                 async for msg in generation_ev.message_stream:
@@ -1509,7 +1524,14 @@ class AgentActivity(RecognitionHooks):
                         )
                         break
 
-                    tr_node = self._agent.transcription_node(msg.text_stream, model_settings)
+                    tts_text_input: AsyncIterable[str] | None = None
+                    if not self.llm.capabilities.audio_output and self.tts:
+                        tts_text_input, tr_text_input = utils.aio.itertools.tee(msg.text_stream)
+                    else:
+                        tr_text_input = msg.text_stream.__aiter__()
+
+                    # text output
+                    tr_node = self._agent.transcription_node(tr_text_input, model_settings)
                     tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
                     text_out: _TextOutput | None = None
                     if tr_node_result is not None:
@@ -1519,16 +1541,28 @@ class AgentActivity(RecognitionHooks):
                         )
                         forward_tasks.append(forward_task)
 
+                    # audio output
                     audio_out = None
                     if audio_output is not None:
-                        realtime_audio = self._agent.realtime_audio_output_node(
-                            msg.audio_stream, model_settings
-                        )
-                        realtime_audio_result = (
-                            await realtime_audio
-                            if asyncio.iscoroutine(realtime_audio)
-                            else realtime_audio
-                        )
+                        realtime_audio_result: AsyncIterable[rtc.AudioFrame] | None = None
+                        if tts_text_input is not None:
+                            tts_task, tts_gen_data = perform_tts_inference(
+                                node=self._agent.tts_node,
+                                input=tts_text_input,
+                                model_settings=model_settings,
+                            )
+                            tasks.append(tts_task)
+                            realtime_audio_result = tts_gen_data.audio_ch
+                        else:
+                            realtime_audio = self._agent.realtime_audio_output_node(
+                                msg.audio_stream, model_settings
+                            )
+                            realtime_audio_result = (
+                                await realtime_audio
+                                if asyncio.iscoroutine(realtime_audio)
+                                else realtime_audio
+                            )
+
                         if realtime_audio_result is not None:
                             forward_task, audio_out = perform_audio_forwarding(
                                 audio_output=audio_output, tts_output=realtime_audio_result
@@ -1545,12 +1579,12 @@ class AgentActivity(RecognitionHooks):
                 await utils.aio.cancel_and_wait(*forward_tasks)
 
         message_outputs: list[tuple[str, _TextOutput | None, _AudioOutput | None]] = []
-        tasks = [
+        tasks.append(
             asyncio.create_task(
                 _read_messages(message_outputs),
                 name="AgentActivity.realtime_generation.read_messages",
             )
-        ]
+        )
 
         exe_task, tool_output = perform_tool_executions(
             session=self._session,

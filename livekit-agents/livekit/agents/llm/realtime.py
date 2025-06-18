@@ -55,6 +55,7 @@ class RealtimeCapabilities:
     turn_detection: bool
     user_transcription: bool
     auto_tool_reply_generation: bool
+    audio_output: bool
 
 
 class RealtimeError(Exception):
