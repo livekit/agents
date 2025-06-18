@@ -16,20 +16,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from dataclasses import dataclass, replace
 import os
-from typing import Literal
+from collections.abc import AsyncGenerator
+from dataclasses import dataclass, replace
+from typing import Literal, cast
 
-from inworld_sdk import InworldClient
+from inworld_sdk import InworldClient, models
+
 from livekit.agents import tokenize, tts, utils
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils import shortuuid
-
-from .models import (
-    TTSLanguageCodes,
-    TTSVoices,
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
 )
-
+from livekit.agents.utils import shortuuid
 
 AUDIO_ENCODING = "LINEAR16"
 INWORLD_API_BASE_URL = "https://api.inworld.ai/tts/v1alpha"
@@ -51,9 +50,9 @@ def strip_wav_header(audio_data: bytes) -> bytes:
 
 @dataclass
 class _TTSOptions:
-    modelId: str
-    languageCode: TTSLanguageCodes
-    voice: TTSVoices
+    modelId: models.TTSModelIds | str | None
+    languageCode: models.TTSLanguageCodes | str | None
+    voice: models.TTSVoices | str | None
     speed: float
     sampleRateHertz: int
     tokenizer: tokenize.basic.SentenceTokenizer
@@ -64,9 +63,9 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: str | None = None,
-        language: TTSLanguageCodes | str | None = None,
-        voice: TTSVoices | str | None = None,
+        model: models.TTSModelIds | str | None = None,
+        language: models.TTSLanguageCodes | str | None = None,
+        voice: models.TTSVoices | str | None = None,
         speed: float = SPEED,
         sample_rate: int = SAMPLE_RATE,
         base_url: str = INWORLD_API_BASE_URL,
@@ -84,7 +83,8 @@ class TTS(tts.TTS):
             speed (float, optional): The speed of the voice. Defaults to 1.0.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             base_url (str, optional): The base URL for the Inworld AI API.
-            auth_type (Literal["basic", "bearer"], optional): The authentication type to use. Defaults to "basic".
+            auth_type (Literal["basic", "bearer"], optional): The authentication type to use.
+                Defaults to "basic".
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -119,9 +119,9 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: str | None = None,
-        language: TTSLanguageCodes | str | None = None,
-        voice: TTSVoices | str | None = None,
+        model: models.TTSModelIds | str | None = None,
+        language: models.TTSLanguageCodes | str | None = None,
+        voice: models.TTSVoices | str | None = None,
         speed: float | None = None,
         sample_rate: int | None = None,
     ) -> None:
@@ -150,17 +150,17 @@ class TTS(tts.TTS):
         self,
         text: str,
         *,
-        conn_options: tts.APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> tts.SynthesizeStream:
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> tts.ChunkedStream:
         stream = self.stream(conn_options=conn_options)
         stream.push_text(text)
         stream.end_input()
-        return stream
+        return cast(tts.ChunkedStream, stream)
 
     def stream(
         self,
         *,
-        conn_options: tts.APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.SynthesizeStream:
         return SynthesizeStream(tts=self, conn_options=conn_options)
 
@@ -170,7 +170,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self,
         *,
         tts: TTS,
-        conn_options: tts.APIConnectOptions,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
@@ -228,7 +228,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
 
     async def _synthesize_sentence(
-        self, sentence: tokenize.Sentence, output_emitter: tts.AudioEmitter
+        self, sentence: tokenize.TokenData, output_emitter: tts.AudioEmitter
     ) -> None:
         """Synthesize a single sentence to audio."""
         try:
@@ -242,22 +242,29 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             print(f"Error calling Inworld API: {e}")
 
-    def _create_synthesis_stream(self, sentence: tokenize.Sentence):
+    def _create_synthesis_stream(
+        self, sentence: tokenize.TokenData
+    ) -> AsyncGenerator[models.SynthesizeSpeechResponse, None]:
         """Synthesize a stream for a sentence."""
         return self._tts._client.tts.synthesizeSpeechStream(
             input=sentence.token,
             voice=self._opts.voice,
             languageCode=self._opts.languageCode,
             modelId=self._opts.modelId,
-            audioConfig={
-                "audioEncoding": AUDIO_ENCODING,
-                "speakingRate": self._opts.speed,
-                "sampleRateHertz": self._opts.sampleRateHertz,
-            },
+            audioConfig=cast(
+                models.AudioConfig,
+                {
+                    "audioEncoding": AUDIO_ENCODING,
+                    "speakingRate": self._opts.speed,
+                    "sampleRateHertz": self._opts.sampleRateHertz,
+                },
+            ),
         )
 
     async def _process_audio_stream(
-        self, stream, output_emitter: tts.AudioEmitter
+        self,
+        stream: AsyncGenerator[models.SynthesizeSpeechResponse, None],
+        output_emitter: tts.AudioEmitter,
     ) -> None:
         """Process audio chunks from the synthesized stream."""
         async for chunk in stream:
