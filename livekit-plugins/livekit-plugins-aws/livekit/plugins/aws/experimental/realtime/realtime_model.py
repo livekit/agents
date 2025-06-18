@@ -29,7 +29,7 @@ from livekit.agents.utils.aio.channel import ChanEmpty
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_core.aio.interfaces.identity import IdentityResolver
 import boto3
-from ...log import logger
+from ..log import logger
 from .events import SonicEventBuilder as seb, VOICE_ID
 
 
@@ -229,7 +229,20 @@ class RealtimeSession(
                 speculative_messages={},
                 _created_timestamp=datetime.now().isoformat(),
             )
-        self._emit_generation_event()
+            msg_gen = _MessageGeneration(
+                    message_id=self._current_generation.response_id,
+                    text_ch=utils.aio.Chan(),
+                    audio_ch=utils.aio.Chan(),
+                )
+            self._current_generation.message_ch.send_nowait(
+            llm.MessageGeneration(
+                        message_id=msg_gen.message_id,
+                        text_stream=msg_gen.text_ch,
+                        audio_stream=msg_gen.audio_ch,
+                    )
+                )
+            self._current_generation.messages[self._current_generation.response_id] = msg_gen
+            self._emit_generation_event()
 
     async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
         logger.debug(f"AUDIO OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
@@ -239,11 +252,11 @@ class RealtimeSession(
         )
 
     async def _handle_audio_output_content_event(self, event_data: dict) -> None:
+        audio_content_id = event_data["event"]["audioOutput"]["contentId"]
         if self._current_generation.speculative_messages.get(audio_content_id) == self._current_generation.response_id:
-            audio_content_id = event_data["event"]["audioOutput"]["contentId"]
             audio_content = event_data["event"]["audioOutput"]["content"]
             audio_bytes = base64.b64decode(audio_content)
-            logger.debug(f"SENDING AUDIO CONTENT TO MESSAGE CH: {audio_content_id}")
+            logger.debug(f"SENDING AUDIO CONTENT TO MESSAGE CH: {len(audio_bytes)} bytes")
             curr_gen = self._current_generation.messages[self._current_generation.response_id]
             curr_gen.audio_ch.send_nowait(
                 rtc.AudioFrame(
@@ -256,23 +269,34 @@ class RealtimeSession(
 
     async def _handle_audio_output_content_end_event(self, event_data: dict) -> None:
         logger.debug(f"AUDIO OUTPUT CONTENT END EVENT: {json.dumps(event_data, indent=2)}")
+        audio_content_id = event_data["event"]["contentEnd"]["contentId"]
+        stop_reason = event_data["event"]["contentEnd"]["stopReason"]
         if (
-            event_data["event"]["contentEnd"]["stopReason"] == "END_TURN"
-            and event_data["event"]["contentEnd"]["contentId"] in self._current_generation.messages
+            stop_reason == "END_TURN"
+            and audio_content_id in self._current_generation.speculative_messages
         ):
-            # TODO: fix this logic...
-            # for curr_msg in self._current_generation.messages.values():
-            #     if not curr_msg.audio_ch.closed:
-            #         curr_msg.audio_ch.close()
-            #     if not curr_msg.text_ch.closed:
-            #         curr_msg.text_ch.close()
-            # self._current_generation.message_ch.close()
+            # response_id = self._current_generation.speculative_messages[audio_content_id]
+            # if response_id in self._current_generation.messages:
+            #     curr_gen = self._current_generation.messages[response_id]
+            #     if not curr_gen.audio_ch.closed:
+            #         curr_gen.audio_ch.close()
+            #     if not curr_gen.text_ch.closed:
+            #         curr_gen.text_ch.close()
+            
+            # if not self._current_generation.message_ch.closed:
+            #     self._current_generation.message_ch.close()
+            
             # self._current_generation = None
             pass
 
+
     async def _handle_text_output_content_start_event(self, event_data: dict) -> None:
+        role = event_data["event"]["contentStart"]["role"]
         logger.debug(f"TEXT OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
-        if (role := event_data["event"]["contentStart"]["role"]) == "USER":
+        if role == 'ASSISTANT' and 'FINAL' in event_data['event']['contentStart']['additionalModelFields']:
+            return
+
+        if role == "USER":
             self.emit("input_speech_started", llm.InputSpeechStartedEvent())
             content_id = event_data["event"]["contentStart"]["contentId"]
             self._current_generation.user_messages[content_id] = self._current_generation.input_id
@@ -309,21 +333,6 @@ class RealtimeSession(
             self._current_generation.speculative_messages[text_content_id] = (
                 self._current_generation.response_id
             )
-            if self._current_generation.message_ch.empty():
-                logger.debug(f"MESSAGE GENERATION CREATED: {self._current_generation}")
-                msg_gen = _MessageGeneration(
-                    message_id=self._current_generation.response_id,
-                    text_ch=utils.aio.Chan(),
-                    audio_ch=utils.aio.Chan(),
-                )
-                self._current_generation.message_ch.send_nowait(
-                    llm.MessageGeneration(
-                        message_id=msg_gen.message_id,
-                        text_stream=msg_gen.text_ch,
-                        audio_stream=msg_gen.audio_ch,
-                    )
-                )
-                self._current_generation.messages[self._current_generation.response_id] = msg_gen
 
         # TODO: ignore for now
         # elif role == 'ASSISTANT' and 'FINAL' in event_data['event']['contentStart']['additionalModelFields']:
