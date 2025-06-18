@@ -220,6 +220,14 @@ class AgentActivity(RecognitionHooks):
             else self._session.options.min_consecutive_speech_delay
         )
 
+    @property
+    def use_tts_aligned_transcript(self) -> bool:
+        return (
+            self._agent.use_tts_aligned_transcript
+            if is_given(self._agent.use_tts_aligned_transcript)
+            else self._session.options.use_tts_aligned_transcript
+        )
+
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
 
@@ -1081,7 +1089,8 @@ class AgentActivity(RecognitionHooks):
                 )
                 tasks.append(tts_task)
                 if (
-                    (tts := self.tts)
+                    self.use_tts_aligned_transcript
+                    and (tts := self.tts)
                     and (tts.capabilities.timed_transcript or not tts.capabilities.streaming)
                     and (timed_texts := await tts_gen_data.timed_texts_fut)
                 ):
@@ -1203,7 +1212,8 @@ class AgentActivity(RecognitionHooks):
             )
             tasks.append(tts_task)
             if (
-                (tts := self.tts)
+                self.use_tts_aligned_transcript
+                and (tts := self.tts)
                 and (tts.capabilities.timed_transcript or not tts.capabilities.streaming)
                 and (timed_texts := await tts_gen_data.timed_texts_fut)
             ):

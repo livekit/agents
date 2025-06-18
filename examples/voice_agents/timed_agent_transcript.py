@@ -39,8 +39,10 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
         llm=openai.LLM(),
-        tts=cartesia.TTS(word_timestamps=True),
+        tts=cartesia.TTS(),
         vad=silero.VAD.load(),
+        # enable TTS-aligned transcript, can be configured at the Agent level as well
+        use_tts_aligned_transcript=True,
     )
 
     await session.start(agent=MyAgent(), room=ctx.room)
