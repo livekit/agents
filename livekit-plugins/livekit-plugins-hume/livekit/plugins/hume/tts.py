@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -183,20 +184,13 @@ class ChunkedStream(tts.ChunkedStream):
                     num_channels=self._tts.num_channels,
                     mime_type=f"audio/{self._opts.audio_format.value}",
                 )
-                
-                print(f"Hume API response: {resp}")
 
                 async for raw_line in resp.content:
-                    print(f"Hume API response: {raw_line}")
                     line = raw_line.strip()
                     if not line:
                         continue
 
-                    try:
-                        data = json.loads(line.decode())
-                    except json.JSONDecodeError as e:
-                        continue
-
+                    data = json.loads(line.decode())
                     audio_b64 = data.get("audio")
                     if audio_b64:
                         output_emitter.push(base64.b64decode(audio_b64))
