@@ -518,7 +518,7 @@ class SpeechStream(stt.RecognizeStream):
         _speech_data list. As new final data is added, all partials are removed from
         the list.
 
-        Note: If a known speaker is `__[A-Z0-9]{2,}__`, then the words are skipped,
+        Note: If a known speaker is `__[A-Z0-9_]{2,}__`, then the words are skipped,
         as this is used to protect against self-interruption by the assistant or to
         block out specific voices.
 
@@ -550,7 +550,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
                 # Drop `__XX__` speakers
-                if fragment.speaker and re.match(r"^__[A-Z0-9]{2,}__$", fragment.speaker):
+                if fragment.speaker and re.match(r"^__[A-Z0-9_]{2,}__$", fragment.speaker):
                     continue
 
                 # Add the fragment
