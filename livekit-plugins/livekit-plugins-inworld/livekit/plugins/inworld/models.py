@@ -1,7 +1,11 @@
-from inworld_sdk import (
-    TTSLanguageCodes as inworld_tts_language_codes,
-    TTSVoices as inworld_tts_voices,
-)
+from inworld_sdk import models
 
-TTSVoices = inworld_tts_voices
-TTSLanguageCodes = inworld_tts_language_codes
+TTSModelIds = models.TTSModelIds
+TTSLanguageCodes = models.TTSLanguageCodes
+TTSVoices = models.TTSVoices
+
+__all__ = [
+    "TTSModelIds",
+    "TTSLanguageCodes",
+    "TTSVoices",
+]

@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "inworld-sdk==0.3.0",
+    "inworld-sdk==0.6.0",
     "livekit-agents>=1.1.1",
 ]
 
