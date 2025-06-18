@@ -43,7 +43,12 @@ THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
 
 
-def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
+def _compute_lcs(
+    old_ids: list[str],
+    new_ids: list[str],
+    *,
+    equal: Callable[[str, str], bool] = lambda x, y: x == y,
+) -> list[str]:
     """
     Standard dynamic-programming LCS to get the common subsequence
     of IDs (in order) that appear in both old_ids and new_ids.
@@ -54,7 +59,7 @@ def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
     # Fill DP table
     for i in range(1, n + 1):
         for j in range(1, m + 1):
-            if old_ids[i - 1] == new_ids[j - 1]:
+            if equal(old_ids[i - 1], new_ids[j - 1]):
                 dp[i][j] = dp[i - 1][j - 1] + 1
             else:
                 dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
@@ -63,7 +68,7 @@ def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
     lcs_ids = []
     i, j = n, m
     while i > 0 and j > 0:
-        if old_ids[i - 1] == new_ids[j - 1]:
+        if equal(old_ids[i - 1], new_ids[j - 1]):
             lcs_ids.append(old_ids[i - 1])
             i -= 1
             j -= 1
@@ -89,7 +94,30 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
 
     old_ids = [m.id for m in old_ctx.items]
     new_ids = [m.id for m in new_ctx.items]
-    lcs_ids = set(_compute_lcs(old_ids, new_ids))
+
+    old_ctx_by_id = {item.id: item for item in old_ctx.items}
+    new_ctx_by_id = {item.id: item for item in new_ctx.items}
+    checked: dict[tuple[str, str], bool] = {}
+
+    def equal(old_id: str, new_id: str) -> bool:
+        if old_id != new_id:
+            return False
+
+        if (old_id, new_id) in checked:
+            return checked[(old_id, new_id)]
+
+        old_item = old_ctx_by_id[old_id]
+        new_item = new_ctx_by_id[new_id]
+
+        if old_item.type == "message" and new_item.type == "message":
+            is_same = old_item.text_content == new_item.text_content
+        else:
+            is_same = True
+
+        checked[(old_id, new_id)] = is_same
+        return is_same
+
+    lcs_ids = set(_compute_lcs(old_ids, new_ids, equal=equal))
 
     to_remove = [msg.id for msg in old_ctx.items if msg.id not in lcs_ids]
     to_create: list[tuple[str | None, str]] = []

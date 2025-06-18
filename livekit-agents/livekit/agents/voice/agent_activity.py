@@ -1629,7 +1629,9 @@ class AgentActivity(RecognitionHooks):
 
                     # truncate server-side message
                     self._rt_session.truncate(
-                        message_id=msg_id, audio_end_ms=int(playback_position * 1000)
+                        message_id=msg_id,
+                        audio_end_ms=int(playback_position * 1000),
+                        forwarded_text=forwarded_text,
                     )
 
                 if forwarded_text:
