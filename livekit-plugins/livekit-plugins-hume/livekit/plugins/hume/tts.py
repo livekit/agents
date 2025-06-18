@@ -170,7 +170,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._tts._ensure_session().post(
                 self._opts.http_url(STREAM_PATH),
-                headers={API_AUTH_HEADER: self._opts.api_key, "Content-Type": "application/json"},
+                headers={API_AUTH_HEADER: self._opts.api_key},
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=None, sock_connect=self._conn_options.timeout),
                 # large read_bufsize to avoid `ValueError: Chunk too big`
