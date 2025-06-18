@@ -71,7 +71,7 @@ class DataStreamAudioOutput(AudioOutput):
                         "kind": rtc.TrackKind.Name(self._wait_remote_track),
                     },
                 )
-                await utils.wait_for_track_subscribed(
+                await utils.wait_for_track_publication(
                     room=self._room,
                     identity=self._destination_identity,
                     kind=self._wait_remote_track,

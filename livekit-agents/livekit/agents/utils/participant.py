@@ -48,12 +48,12 @@ async def wait_for_participant(
         room.off("participant_connected", _on_participant_connected)
 
 
-async def wait_for_track_subscribed(
+async def wait_for_track_publication(
     room: rtc.Room,
     *,
     identity: str | None = None,
     kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
-) -> rtc.Track:
+) -> rtc.RemoteTrackPublication:
     """Returns a remote track matching the given identity and kind.
     If identity is None, the first track matching the kind will be returned.
     If the track has already been published, the function will return immediately.
@@ -61,38 +61,36 @@ async def wait_for_track_subscribed(
     if not room.isconnected():
         raise RuntimeError("room is not connected")
 
-    fut = asyncio.Future[rtc.Track]()
+    fut = asyncio.Future[rtc.RemoteTrackPublication]()
 
-    def kind_match(t: rtc.Track) -> bool:
+    def kind_match(k: rtc.TrackKind.ValueType) -> bool:
         if kind is None:
             return True
 
         if isinstance(kind, list):
-            return t.kind in kind
+            return k in kind
 
-        return t.kind == kind
+        return k == kind
 
-    def _on_track_subscribed(
-        track: rtc.Track | None,
-        publication: rtc.RemoteTrackPublication,
-        participant: rtc.RemoteParticipant,
+    def _on_track_published(
+        publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
         if fut.done():
             return
 
-        if (identity is None or participant.identity == identity) and track and kind_match(track):
-            fut.set_result(track)
+        if (identity is None or participant.identity == identity) and kind_match(publication.kind):
+            fut.set_result(publication)
 
-    room.on("track_subscribed", _on_track_subscribed)
+    # room.on("track_subscribed", _on_track_subscribed)
+    room.on("track_published", _on_track_published)
 
     try:
         for p in room.remote_participants.values():
             for publication in p.track_publications.values():
-                if publication.subscribed:
-                    _on_track_subscribed(publication.track, publication, p)
+                _on_track_published(publication, p)
                 if fut.done():
                     break
 
         return await fut
     finally:
-        room.off("track_subscribed", _on_track_subscribed)
+        room.off("track_published", _on_track_published)
