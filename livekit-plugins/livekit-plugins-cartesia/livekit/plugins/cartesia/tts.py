@@ -276,13 +276,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["transcript"] = ev.token + " "
                 token_pkt["continue"] = True
                 self._mark_started()
-                await ws.send_str(json.dumps(token_pkt))
+                try:
+                    await ws.send_str(json.dumps(token_pkt))
+                except aiohttp.ClientConnectionError as e:
+                    raise APIConnectionError("Failed to send token packet to Cartesia TTS") from e
 
             end_pkt = base_pkt.copy()
             end_pkt["context_id"] = context_id
             end_pkt["transcript"] = " "
             end_pkt["continue"] = False
-            await ws.send_str(json.dumps(end_pkt))
+            try:
+                await ws.send_str(json.dumps(end_pkt))
+            except aiohttp.ClientConnectionError as e:
+                raise APIConnectionError("Failed to send end packet to Cartesia TTS") from e
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -292,7 +298,12 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 self._sent_tokenizer_stream.push_text(data)
 
-            self._sent_tokenizer_stream.end_input()
+            try:
+                self._sent_tokenizer_stream.end_input()
+            except Exception as e:
+                # end_input can raise if the stream is already closed
+                # this is fine, we just want to ensure the stream is closed
+                logger.warning("Error ending input stream", exc_info=e)
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             current_segment_id: str | None = None
