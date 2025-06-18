@@ -41,7 +41,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession()
     agent = Agent(
         instructions="You are a helpful travel planner.",
-        llm=openai.realtime.RealtimeModel(),
+        llm=openai.realtime.RealtimeModel(modalities=["text"]),
+        tts=openai.TTS(voice="alloy"),
         chat_ctx=chat_ctx,
     )
 
