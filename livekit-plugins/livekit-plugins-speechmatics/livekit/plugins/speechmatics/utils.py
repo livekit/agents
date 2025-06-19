@@ -34,6 +34,11 @@ def get_sdk_version() -> str:
     return f"livekit-plugins-{version}"
 
 
+def get_app_version() -> str:
+    version = importlib.metadata.version("livekit-plugins-speechmatics")
+    return f"LiveKit/{version}"
+
+
 def sanitize_url(url: str, language: str) -> str:
     from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -41,6 +46,7 @@ def sanitize_url(url: str, language: str) -> str:
 
     query_params = dict(parse_qsl(parsed_url.query))
     query_params["sm-sdk"] = get_sdk_version()
+    query_params["sm-app"] = get_app_version()
     updated_query = urlencode(query_params)
 
     url_path = parsed_url.path

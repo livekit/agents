@@ -46,6 +46,10 @@ class SpeechData:
     confidence: float = 0.0  # [0, 1]
     speaker_id: str | None = None
 
+    def text_formatted(self) -> str:
+        """Format the speech according to the STT provider's format."""
+        return self.text
+
 
 @dataclass
 class RecognitionUsage:

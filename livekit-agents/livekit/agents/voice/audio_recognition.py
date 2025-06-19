@@ -235,7 +235,7 @@ class AudioRecognition:
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             self._hooks.on_final_transcript(ev)
-            transcript = ev.alternatives[0].text
+            transcript = ev.alternatives[0].text_formatted()
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
@@ -282,7 +282,7 @@ class AudioRecognition:
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
             self._hooks.on_interim_transcript(ev)
-            self._audio_interim_transcript = ev.alternatives[0].text
+            self._audio_interim_transcript = ev.alternatives[0].text_formatted()
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             self._user_turn_committed = True
