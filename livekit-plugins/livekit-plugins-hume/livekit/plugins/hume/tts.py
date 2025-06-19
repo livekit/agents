@@ -30,22 +30,12 @@ from livekit.agents.utils import is_given
 
 from .version import __version__
 
-DEFAULT_HEADERS = {
-    "X-Hume-Client-Name": "LiveKit",
-    "X-Hume-Client-Version": __version__,
-}
-API_AUTH_HEADER = "X-Hume-Api-Key"
-STREAM_PATH = "/v0/tts/stream/json"
-DEFAULT_BASE_URL = "https://api.hume.ai"
-SUPPORTED_SAMPLE_RATE = 48000
-
-
-class VoiceId(TypedDict, total=False):
+class VoiceById(TypedDict, total=False):
     id: str
     provider: VoiceProvider | None
 
 
-class VoiceName(TypedDict, total=False):
+class VoiceByName(TypedDict, total=False):
     name: str
     provider: VoiceProvider | None
 
@@ -53,21 +43,12 @@ class VoiceName(TypedDict, total=False):
 class UtteranceOptions(TypedDict, total=False):
     description: str | None
     speed: float | None
-    voice: VoiceId | VoiceName | None
+    voice: VoiceById | VoiceByName | None
     trailing_silence: float | None
 
 
 class Utterance(UtteranceOptions, total=False):
     text: str
-
-
-class ContextGenerationId(TypedDict, total=False):
-    generation_id: str
-
-
-class ContextUtterances(TypedDict, total=False):
-    utterances: list[Utterance]
-
 
 class VoiceProvider(str, Enum):
     hume = "HUME_AI"
@@ -79,13 +60,28 @@ class AudioFormat(str, Enum):
     wav = "wav"
     pcm = "pcm"
 
+DEFAULT_HEADERS = {
+    "X-Hume-Client-Name": "LiveKit",
+    "X-Hume-Client-Version": __version__,
+}
+API_AUTH_HEADER = "X-Hume-Api-Key"
+STREAM_PATH = "/v0/tts/stream/json"
+DEFAULT_BASE_URL = "https://api.hume.ai"
+SUPPORTED_SAMPLE_RATE = 48000
+DEFAULT_UTTERANCE_OPTIONS = {
+    "voice": {
+        "name": "Male English Actor",
+        "provider": VoiceProvider.hume
+    }
+}
+
 
 @dataclass
 class _TTSOptions:
     api_key: str
     base_url: str
     utterance_options: Utterance
-    context: ContextGenerationId | ContextUtterances | None
+    context: str | list[Utterance] | None
     instant_mode: bool | None
     audio_format: AudioFormat
 
@@ -99,8 +95,8 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         utterance_options: NotGivenOr[UtteranceOptions] = NOT_GIVEN,
-        context: ContextGenerationId | ContextUtterances | None = None,
-        instant_mode: bool = True,
+        context: str | list[Utterance] | None = None,
+        instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         audio_format: AudioFormat = AudioFormat.mp3,
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -113,12 +109,24 @@ class TTS(tts.TTS):
         key = api_key or os.environ.get("HUME_API_KEY")
         if not key:
             raise ValueError("Hume API key is required via api_key or HUME_API_KEY env var")
+        
+        resolved_utterance_options = utterance_options if is_given(utterance_options) else DEFAULT_UTTERANCE_OPTIONS
+        
+        has_voice = resolved_utterance_options.get("voice") is not None
+        
+        # Default instant_mode is True if a voice is specified, otherwise False (Hume API requires a voice for instant mode)
+        if not is_given(instant_mode):
+            resolved_instant_mode = has_voice
+        elif instant_mode and not has_voice:
+            raise ValueError("Hume TTS: instant_mode cannot be enabled without specifying a voice")
+        else:
+            resolved_instant_mode = instant_mode
 
         self._opts = _TTSOptions(
             api_key=key,
-            utterance_options=utterance_options if is_given(utterance_options) else {},
+            utterance_options=resolved_utterance_options,
             context=context,
-            instant_mode=instant_mode,
+            instant_mode=resolved_instant_mode,
             audio_format=audio_format,
             base_url=base_url,
         )
@@ -134,7 +142,7 @@ class TTS(tts.TTS):
         self,
         *,
         utterance_options: NotGivenOr[UtteranceOptions] = NOT_GIVEN,
-        context: NotGivenOr[ContextGenerationId | ContextUtterances] = NOT_GIVEN,
+        context: NotGivenOr[str | list[Utterance]] = NOT_GIVEN,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
     ) -> None:
@@ -168,10 +176,10 @@ class ChunkedStream(tts.ChunkedStream):
             "instant_mode": self._opts.instant_mode,
             "format": {"type": self._opts.audio_format.value},
         }
-        if self._opts.context:
-            payload["context"] = self._opts.context
-
-        print(DEFAULT_HEADERS)
+        if self._opts.context is str:
+            payload["context"] = { "generation_id": self._opts.context }
+        elif self._opts.context is list[Utterance]:
+            payload["context"] = { "utterances": self._opts.context }
 
         try:
             async with self._tts._ensure_session().post(
