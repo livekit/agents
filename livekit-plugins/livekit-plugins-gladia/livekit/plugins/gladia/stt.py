@@ -146,14 +146,14 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
     }
 
     if opts.custom_vocabulary:
-        streaming_config["realtime_processing"]["custom_vocabulary"] = True  # type: ignore
-        streaming_config["realtime_processing"]["custom_vocabulary_config"] = {  # type: ignore
+        streaming_config["realtime_processing"]["custom_vocabulary"] = True
+        streaming_config["realtime_processing"]["custom_vocabulary_config"] = {
             "vocabulary": opts.custom_vocabulary,
         }
 
     if opts.custom_spelling:
-        streaming_config["realtime_processing"]["custom_spelling"] = True  # type: ignore
-        streaming_config["realtime_processing"]["custom_spelling_config"] = {  # type: ignore
+        streaming_config["realtime_processing"]["custom_spelling"] = True
+        streaming_config["realtime_processing"]["custom_spelling_config"] = {
             "spelling_dictionary": opts.custom_spelling,
         }
 
@@ -164,7 +164,7 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
     }
 
     if opts.translation_config.enabled:
-        streaming_config["realtime_processing"]["translation"] = True  # type: ignore
+        streaming_config["realtime_processing"]["translation"] = True
         translation_cfg = {
             "target_languages": opts.translation_config.target_languages,
             "model": opts.translation_config.model,
@@ -176,7 +176,7 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
         if opts.translation_config.context:
             translation_cfg["context"] = opts.translation_config.context
 
-        streaming_config["realtime_processing"]["translation_config"] = translation_cfg  # type: ignore
+        streaming_config["realtime_processing"]["translation_config"] = translation_cfg
 
     return streaming_config
 
