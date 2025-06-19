@@ -73,6 +73,8 @@ class _ResponseGeneration:
     _first_token_timestamp: float | None = None
     _completed_timestamp: float | None = None
     _done: bool = False
+    _user_transcription_completed: bool = False
+    _generation_emitted: bool = False
 
 
 class Boto3CredentialsResolver(IdentityResolver):
@@ -230,19 +232,19 @@ class RealtimeSession(
                 _created_timestamp=datetime.now().isoformat(),
             )
             msg_gen = _MessageGeneration(
-                    message_id=self._current_generation.response_id,
-                    text_ch=utils.aio.Chan(),
-                    audio_ch=utils.aio.Chan(),
-                )
-            self._current_generation.message_ch.send_nowait(
-            llm.MessageGeneration(
-                        message_id=msg_gen.message_id,
-                        text_stream=msg_gen.text_ch,
-                        audio_stream=msg_gen.audio_ch,
+                        message_id=self._current_generation.response_id,
+                        text_ch=utils.aio.Chan(),
+                        audio_ch=utils.aio.Chan(),
                     )
-                )
+            self._current_generation.message_ch.send_nowait(
+                llm.MessageGeneration(
+                            message_id=msg_gen.message_id,
+                            text_stream=msg_gen.text_ch,
+                            audio_stream=msg_gen.audio_ch,
+                        )
+                    )
             self._current_generation.messages[self._current_generation.response_id] = msg_gen
-            self._emit_generation_event()
+            # note: does not work if you emit llm.GCE too early (for some reason)
 
     async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
         logger.debug(f"AUDIO OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
@@ -275,19 +277,19 @@ class RealtimeSession(
             stop_reason == "END_TURN"
             and audio_content_id in self._current_generation.speculative_messages
         ):
-            # response_id = self._current_generation.speculative_messages[audio_content_id]
-            # if response_id in self._current_generation.messages:
-            #     curr_gen = self._current_generation.messages[response_id]
-            #     if not curr_gen.audio_ch.closed:
-            #         curr_gen.audio_ch.close()
-            #     if not curr_gen.text_ch.closed:
-            #         curr_gen.text_ch.close()
+            response_id = self._current_generation.speculative_messages[audio_content_id]
+            if response_id in self._current_generation.messages:
+                curr_gen = self._current_generation.messages[response_id]
+                if not curr_gen.audio_ch.closed:
+                    curr_gen.audio_ch.close()
+                if not curr_gen.text_ch.closed:
+                    curr_gen.text_ch.close()
             
-            # if not self._current_generation.message_ch.closed:
-            #     self._current_generation.message_ch.close()
+            if not self._current_generation.message_ch.closed:
+                self._current_generation.message_ch.close()
             
-            # self._current_generation = None
-            pass
+            self._current_generation = None
+            # pass
 
 
     async def _handle_text_output_content_start_event(self, event_data: dict) -> None:
@@ -298,6 +300,7 @@ class RealtimeSession(
 
         if role == "USER":
             self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+
             content_id = event_data["event"]["contentStart"]["contentId"]
             self._current_generation.user_messages[content_id] = self._current_generation.input_id
 
@@ -309,6 +312,7 @@ class RealtimeSession(
             self.emit(
                 "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
             )
+            
             # TODO: move this to Tool Use event handler in the future when it's implemented
             logger.debug(
                 f"EMITTING INPUT TRANSCRIPTION COMPLETED EVENT: {self._current_generation.input_transcription}"
@@ -322,7 +326,14 @@ class RealtimeSession(
                     is_final=True,
                 ),
             )
-
+            # beginning of agent's turn
+            # note: must be preceded by user ASR text
+            # TODO: replace /w a Future as bool flag is too fragile
+            self._current_generation.user_transcription_completed = True
+            if not self._current_generation._generation_emitted:
+                self._current_generation._generation_emitted = True
+                self._emit_generation_event()
+            
             # TODO: can't use content_id here b/c it's scoped to utterances
             #  instead create your own response_id
             # if self._current_generation.response_id is None:
@@ -330,9 +341,11 @@ class RealtimeSession(
 
             # must persist the speculative strings (?)
             text_content_id = event_data["event"]["contentStart"]["contentId"]
-            self._current_generation.speculative_messages[text_content_id] = (
-                self._current_generation.response_id
-            )
+            self._current_generation.speculative_messages[text_content_id] = self._current_generation.response_id
+
+
+
+
 
         # TODO: ignore for now
         # elif role == 'ASSISTANT' and 'FINAL' in event_data['event']['contentStart']['additionalModelFields']:
@@ -347,19 +360,15 @@ class RealtimeSession(
         logger.debug(f"TEXT OUTPUT CONTENT EVENT: {json.dumps(event_data, indent=2)}")
         text_content_id = event_data["event"]["textOutput"]["contentId"]
         text_content = event_data["event"]["textOutput"]["content"]
-        # Q: could this be mixed up /w user ASR text (?)
-        if self._current_generation.speculative_messages.get(text_content_id) == self._current_generation.response_id:
-            curr_gen = self._current_generation.messages[self._current_generation.response_id]
-            logger.debug(f"SENDING TEXT CONTENT TO MESSAGE CH: {text_content}")
-            curr_gen.text_ch.send_nowait(text_content)
 
         # TODO: rename event to llm.InputTranscriptionUpdated
-        elif (
+        if (
             self._current_generation.user_messages.get(text_content_id)
             == self._current_generation.input_id
         ):
             # rely on local_chat_ctx for this (?)
             self._current_generation.input_transcription += text_content
+            logger.debug(f"INPUT TRANSCRIPTION UPDATED: {self._current_generation.input_transcription}")
             self.emit(
                 "input_audio_transcription_completed",
                 llm.InputTranscriptionCompleted(
@@ -368,6 +377,13 @@ class RealtimeSession(
                     is_final=False,
                 ),
             )
+        # Q: could this be mixed up /w user ASR text (?)
+        elif self._current_generation.speculative_messages.get(text_content_id) == self._current_generation.response_id:
+            logger.debug(f"SENDING TEXT CONTENT TO MESSAGE CH: {text_content} with response_id: {self._current_generation.response_id} and content_id: {text_content_id}")
+            curr_gen = self._current_generation.messages[self._current_generation.response_id]
+            curr_gen.text_ch.send_nowait(text_content)
+
+
 
     # cannot rely on this event b/c stopReason=PARTIAL_TURN always for user
     # instead rely on stopReason
