@@ -28,6 +28,12 @@ from livekit.agents import APIConnectionError, APIConnectOptions, APITimeoutErro
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
+from .version import __version__
+
+DEFAULT_HEADERS = {
+    "X-Hume-Client-Name": "LiveKit",
+    "X-Hume-Client-Version": __version__,
+}
 API_AUTH_HEADER = "X-Hume-Api-Key"
 STREAM_PATH = "/v0/tts/stream/json"
 DEFAULT_BASE_URL = "https://api.hume.ai"
@@ -154,8 +160,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        utterance: UtteranceOptions = dict(self._opts.utterance_options)  # Make a copy
-        utterance["text"] = self._input_text
+        utterance: UtteranceOptions = {**self._opts.utterance_options, "text": self._input_text}
 
         payload: dict[str, Any] = {
             "utterances": [utterance],
@@ -166,10 +171,12 @@ class ChunkedStream(tts.ChunkedStream):
         if self._opts.context:
             payload["context"] = self._opts.context
 
+        print(DEFAULT_HEADERS)
+
         try:
             async with self._tts._ensure_session().post(
                 self._opts.http_url(STREAM_PATH),
-                headers={API_AUTH_HEADER: self._opts.api_key},
+                headers={**DEFAULT_HEADERS, API_AUTH_HEADER: self._opts.api_key},
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=None, sock_connect=self._conn_options.timeout),
                 # large read_bufsize to avoid `ValueError: Chunk too big`
