@@ -194,11 +194,11 @@ class TTS(tts.TTS):
         if is_given(speed):
             self._opts.speed = speed
         if is_given(voice):
-            self._opts.voice = voice
+            self._opts.voice = voice  # type: ignore
         if is_given(trailing_silence):
             self._opts.trailing_silence = trailing_silence
         if is_given(context):
-            self._opts.context = context
+            self._opts.context = context  # type: ignore
         if is_given(instant_mode):
             self._opts.instant_mode = instant_mode
         if is_given(audio_format):
@@ -236,9 +236,9 @@ class ChunkedStream(tts.ChunkedStream):
             "instant_mode": self._opts.instant_mode,
             "format": {"type": self._opts.audio_format.value},
         }
-        if self._opts.context is str:
+        if isinstance(self._opts.context, str):
             payload["context"] = {"generation_id": self._opts.context}
-        elif self._opts.context is list[Utterance]:
+        elif isinstance(self._opts.context, list):
             payload["context"] = {"utterances": self._opts.context}
 
         try:
