@@ -20,9 +20,11 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import aiohttp
+import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -47,6 +49,49 @@ from .models import DeepgramLanguages, DeepgramModels
 BASE_URL = "https://api.deepgram.com/v1/listen"
 
 
+# This is the magic number during testing that we use to determine if a frame is loud enough
+# to possibly contain speech. It's very conservative.
+MAGIC_NUMBER_THRESHOLD = 0.004**2
+
+
+class AudioEnergyFilter:
+    class State(Enum):
+        START = 0
+        SPEAKING = 1
+        SILENCE = 2
+        END = 3
+
+    def __init__(self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD):
+        self._cooldown_seconds = min_silence
+        self._cooldown = min_silence
+        self._state = self.State.SILENCE
+        self._rms_threshold = rms_threshold
+
+    def update(self, frame: rtc.AudioFrame) -> State:
+        arr = np.frombuffer(frame.data, dtype=np.int16)
+        float_arr = arr.astype(np.float32) / 32768.0
+        rms = np.mean(np.square(float_arr))
+
+        if rms > self._rms_threshold:
+            self._cooldown = self._cooldown_seconds
+            if self._state in (self.State.SILENCE, self.State.END):
+                self._state = self.State.START
+            else:
+                self._state = self.State.SPEAKING
+        else:
+            if self._cooldown <= 0:
+                if self._state in (self.State.SPEAKING, self.State.START):
+                    self._state = self.State.END
+                elif self._state == self.State.END:
+                    self._state = self.State.SILENCE
+            else:
+                # keep speaking during cooldown
+                self._cooldown -= frame.duration
+                self._state = self.State.SPEAKING
+
+        return self._state
+
+
 @dataclass
 class STTOptions:
     language: DeepgramLanguages | str | None
@@ -63,6 +108,7 @@ class STTOptions:
     keywords: list[tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
+    energy_filter: AudioEnergyFilter | bool = False
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
@@ -90,6 +136,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
+        energy_filter: AudioEnergyFilter | bool = False,
         numerals: bool = False,
         mip_opt_out: bool = False,
     ) -> None:
@@ -116,6 +163,8 @@ class STT(stt.STT):
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
+            energy_filter: Audio energy filter configuration for voice activity detection.
+                         Can be a boolean or AudioEnergyFilter instance. Defaults to False.
             numerals: Whether to include numerals in the transcription. Defaults to False.
             mip_opt_out: Whether to take part in the model improvement program
 
@@ -155,12 +204,16 @@ class STT(stt.STT):
             keywords=keywords if is_given(keywords) else [],
             keyterms=keyterms if is_given(keyterms) else [],
             profanity_filter=profanity_filter,
+            energy_filter=energy_filter,
             numerals=numerals,
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+        self._request_id = ""
+        self._reconnect_event = asyncio.Event()
+        self._reconnecting = False
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -351,8 +404,16 @@ class SpeechStream(stt.SpeechStream):
             duration=5.0,
         )
 
+        self._audio_energy_filter: AudioEnergyFilter | None = None
+        if opts.energy_filter:
+            if isinstance(opts.energy_filter, AudioEnergyFilter):
+                self._audio_energy_filter = opts.energy_filter
+            else:
+                self._audio_energy_filter = AudioEnergyFilter()
+
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        self._reconnecting = False
 
     def update_options(
         self,
@@ -373,6 +434,7 @@ class SpeechStream(stt.SpeechStream):
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+                
         if is_given(language):
             self._opts.language = language
         if is_given(model):
@@ -404,6 +466,7 @@ class SpeechStream(stt.SpeechStream):
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
 
+        self._reconnecting = True
         self._reconnect_event.set()
 
     async def _run(self) -> None:
@@ -416,14 +479,14 @@ class SpeechStream(stt.SpeechStream):
             try:
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-                    await asyncio.sleep(5)
+                    #await asyncio.sleep(5)
             except Exception:
                 return
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-
+            
             # forward audio to deepgram in chunks of 50ms
             samples_50ms = self._opts.sample_rate // 20
             audio_bstream = utils.audio.AudioByteStream(
@@ -433,26 +496,60 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
+            last_frame: rtc.AudioFrame | None = None
+            
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):                        
+                        state = self._check_energy_state(data)
+                        if state in (
+                            AudioEnergyFilter.State.START,
+                            AudioEnergyFilter.State.SPEAKING,
+                        ):
+                            if last_frame:
+                                frames.extend(audio_bstream.write(last_frame.data.tobytes()))
+                                last_frame = None
+                            frames.extend(audio_bstream.write(data.data.tobytes()))
+                        elif state == AudioEnergyFilter.State.END:
+                            # no need to buffer as we have cooldown period
+                            frames.extend(audio_bstream.flush())
+                            has_ended = True
+                        elif state == AudioEnergyFilter.State.SILENCE:
+                            # buffer the last silence frame, since it could contain beginning of speech
+                            # TODO: improve accuracy by using a ring buffer with longer window
+                            last_frame = data
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        has_ended = True
 
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    await ws.send_bytes(frame.data.tobytes())
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        try:
+                            await ws.send_bytes(frame.data.tobytes())
+                        except Exception as e:
+                            return
 
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        await ws.send_str(SpeechStream._FINALIZE_MSG)
-                        has_ended = False
+                        if has_ended:
+                            self._audio_duration_collector.flush()
+                            try:
+                                await ws.send_str(SpeechStream._FINALIZE_MSG)
+                            except Exception as e:
+                                return
+                            has_ended = False
+            except asyncio.CancelledError:
+                logger.debug("Send task cancelled, likely due to reconnection")
+                raise
+            except Exception as e:
+                logger.error(f"Error in send_task: {e}")
+                raise
 
             # tell deepgram we are done sending audio/inputs
             closing_ws = True
-            await ws.send_str(SpeechStream._CLOSE_MSG)
+            try:
+                await ws.send_str(SpeechStream._CLOSE_MSG)
+            except Exception:
+                pass  # WebSocket might already be closed
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -473,7 +570,6 @@ class SpeechStream(stt.SpeechStream):
                     raise APIStatusError(message="deepgram connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
 
                 try:
@@ -485,7 +581,8 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
-                ws = await self._connect_ws()
+                ws = await asyncio.wait_for(self._connect_ws(), timeout=10.0)
+                
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -502,18 +599,41 @@ class SpeechStream(stt.SpeechStream):
                     # propagate exceptions from completed tasks
                     for task in done:
                         if task != wait_reconnect_task:
-                            task.result()
+                            try:
+                                task.result()
+                            except asyncio.CancelledError:
+                                # This is expected when reconnecting
+                                pass
 
                     if wait_reconnect_task not in done:
+                        # Normal exit, not a reconnection
                         break
 
                     self._reconnect_event.clear()
+                    # Reset speaking state on reconnection
+                    self._speaking = False
+                    # Add a small delay to ensure audio stream is ready
+                    #await asyncio.sleep(0.1)
+                    # Continue the loop to reconnect
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    await tasks_group
+                    try:
+                        await tasks_group
+                    except asyncio.CancelledError:
+                        pass
+            except asyncio.TimeoutError:
+                if self._session.closed:
+                    break
+                #await asyncio.sleep(1.0)
+            except Exception as e:
+                if self._session.closed:
+                    break
+                # Add a small delay before reconnecting
+                #await asyncio.sleep(0.5)
             finally:
                 if ws is not None:
                     await ws.close()
+                    ws = None
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config: dict[str, Any] = {
@@ -554,6 +674,11 @@ class SpeechStream(stt.SpeechStream):
         )
         return ws
 
+    def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
+        if self._audio_energy_filter:
+            return self._audio_energy_filter.update(frame)
+        return AudioEnergyFilter.State.SPEAKING
+
     def _on_audio_duration_report(self, duration: float) -> None:
         usage_event = stt.SpeechEvent(
             type=stt.SpeechEventType.RECOGNITION_USAGE,
@@ -589,6 +714,7 @@ class SpeechStream(stt.SpeechStream):
             self._request_id = request_id
 
             alts = live_transcription_to_speech_data(self._opts.language, data)
+            
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
             # been observed.
