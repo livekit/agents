@@ -67,7 +67,7 @@ class AudioFormat(str, Enum):
 
 
 DEFAULT_HEADERS = {
-    "X-Hume-Client-Name": "LiveKit",
+    "X-Hume-Client-Name": "livekit",
     "X-Hume-Client-Version": __version__,
 }
 API_AUTH_HEADER = "X-Hume-Api-Key"
