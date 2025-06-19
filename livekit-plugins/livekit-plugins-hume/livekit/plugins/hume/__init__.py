@@ -24,7 +24,7 @@ from livekit.agents import Plugin
 from .tts import (
     TTS,
     AudioFormat,
-    UtteranceOptions,
+    Utterance,
     VoiceById,
     VoiceByName,
     VoiceProvider,
@@ -34,10 +34,10 @@ from .version import __version__
 __all__ = [
     "TTS",
     "AudioFormat",
-    "UtteranceOptions",
     "VoiceById",
     "VoiceByName",
     "VoiceProvider",
+    "Utterance",
 ]
 
 
