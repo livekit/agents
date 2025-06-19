@@ -30,6 +30,7 @@ from livekit.agents.utils import is_given
 
 from .version import __version__
 
+
 class VoiceById(TypedDict, total=False):
     id: str
     provider: VoiceProvider | None
@@ -41,24 +42,53 @@ class VoiceByName(TypedDict, total=False):
 
 
 class UtteranceOptions(TypedDict, total=False):
+    """Options for configuring each utterance sent to Hume TTS."""
+
     description: str | None
+    """Natural language instructions describing how the synthesized speech should sound
+    (≤1000 characters)
+
+    Including but not limited to tone, intonation, pacing, and accent (e.g., 'a soft, gentle
+    voice with a strong British accent').
+
+    - If a Voice is specified in the request, this description serves as acting instructions.
+      See: https://dev.hume.ai/docs/text-to-speech-tts/acting-instructions
+    - If no Voice is specified, a new voice is generated based on this description.
+      See: https://dev.hume.ai/docs/text-to-speech-tts/prompting
+    """
     speed: float | None
+    """Speed multiplier for the synthesized speech (≥0.25, ≤3.0, default: 1.0)
+
+    Note: Changes are non-linear - setting to 2.0 makes speech faster but not exactly twice as fast.
+    """
     voice: VoiceById | VoiceByName | None
+    """The name or id associated with a Voice from the Voice Library.
+
+    See: https://dev.hume.ai/docs/text-to-speech-tts/voices
+    """
     trailing_silence: float | None
+    """Duration of trailing silence (in seconds) to add to each utterance. (≥0, ≤5.0, default: 0.35)
+    """
 
 
 class Utterance(UtteranceOptions, total=False):
     text: str
 
+
 class VoiceProvider(str, Enum):
+    """Voice provider for the voice library."""
+
     hume = "HUME_AI"
     custom = "CUSTOM_VOICE"
 
 
 class AudioFormat(str, Enum):
+    """Audio format for the synthesized speech."""
+
     mp3 = "mp3"
     wav = "wav"
     pcm = "pcm"
+
 
 DEFAULT_HEADERS = {
     "X-Hume-Client-Name": "LiveKit",
@@ -69,10 +99,7 @@ STREAM_PATH = "/v0/tts/stream/json"
 DEFAULT_BASE_URL = "https://api.hume.ai"
 SUPPORTED_SAMPLE_RATE = 48000
 DEFAULT_UTTERANCE_OPTIONS = {
-    "voice": {
-        "name": "Male English Actor",
-        "provider": VoiceProvider.hume
-    }
+    "voice": {"name": "Male English Actor", "provider": VoiceProvider.hume}
 }
 
 
@@ -101,6 +128,21 @@ class TTS(tts.TTS):
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ):
+        """Initialize the Hume AI TTS client. Options will be used for all future synthesis
+        (until updated with update_options).
+
+        Args:
+            api_key: Hume AI API key. If not provided, will look for HUME_API_KEY environment
+                variable.
+            utterance_options: Options for text-to-speech synthesis. If not provided, uses
+                default options.
+            context: Optional context for synthesis, either as text or list of utterances.
+            instant_mode: Whether to use instant mode. Defaults to True if voice specified,
+                False otherwise. Requires a voice to be specified when enabled.
+            audio_format: Output audio format (mp3, wav, or pcm). Defaults to mp3.
+            base_url: Base URL for Hume AI API. Defaults to https://api.hume.ai
+            http_session: Optional aiohttp ClientSession to use for requests.
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=SUPPORTED_SAMPLE_RATE,
@@ -109,12 +151,15 @@ class TTS(tts.TTS):
         key = api_key or os.environ.get("HUME_API_KEY")
         if not key:
             raise ValueError("Hume API key is required via api_key or HUME_API_KEY env var")
-        
-        resolved_utterance_options = utterance_options if is_given(utterance_options) else DEFAULT_UTTERANCE_OPTIONS
-        
+
+        resolved_utterance_options = (
+            utterance_options if is_given(utterance_options) else DEFAULT_UTTERANCE_OPTIONS
+        )
+
         has_voice = resolved_utterance_options.get("voice") is not None
-        
-        # Default instant_mode is True if a voice is specified, otherwise False (Hume API requires a voice for instant mode)
+
+        # Default instant_mode is True if a voice is specified, otherwise False
+        # (Hume API requires a voice for instant mode)
         if not is_given(instant_mode):
             resolved_instant_mode = has_voice
         elif instant_mode and not has_voice:
@@ -146,6 +191,14 @@ class TTS(tts.TTS):
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         audio_format: NotGivenOr[AudioFormat] = NOT_GIVEN,
     ) -> None:
+        """Update TTS options used for all future synthesis (until updated again)
+
+        Args:
+            utterance_options: Options for text-to-speech synthesis.
+            context: Optional context for synthesis, either as text or list of utterances.
+            instant_mode: Whether to use instant mode.
+            audio_format: Output audio format (mp3, wav, or pcm).
+        """
         if is_given(utterance_options):
             self._opts.utterance_options = utterance_options
         if is_given(context):
@@ -177,9 +230,9 @@ class ChunkedStream(tts.ChunkedStream):
             "format": {"type": self._opts.audio_format.value},
         }
         if self._opts.context is str:
-            payload["context"] = { "generation_id": self._opts.context }
+            payload["context"] = {"generation_id": self._opts.context}
         elif self._opts.context is list[Utterance]:
-            payload["context"] = { "utterances": self._opts.context }
+            payload["context"] = {"utterances": self._opts.context}
 
         try:
             async with self._tts._ensure_session().post(
