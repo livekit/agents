@@ -68,6 +68,7 @@ class _RealtimeOptions:
     output_audio_transcription: types.AudioTranscriptionConfig | None
     image_encode_options: NotGivenOr[images.EncodeOptions]
     conn_options: APIConnectOptions
+    http_options: NotGivenOr[types.HttpOptions]
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
     realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
@@ -136,6 +137,7 @@ class RealtimeModel(llm.RealtimeModel):
         context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         _gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> None:
         """
@@ -259,6 +261,7 @@ class RealtimeModel(llm.RealtimeModel):
             api_version=api_version,
             gemini_tools=_gemini_tools,
             conn_options=conn_options,
+            http_options=http_options,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -319,7 +322,9 @@ class RealtimeSession(llm.RealtimeSession):
         if not api_version and (self._opts.enable_affective_dialog or self._opts.proactivity):
             api_version = "v1alpha"
 
-        http_options = types.HttpOptions(timeout=int(self._opts.conn_options.timeout * 1000))
+        http_options = self._opts.http_options or types.HttpOptions(
+            timeout=int(self._opts.conn_options.timeout * 1000)
+        )
         if api_version:
             http_options.api_version = api_version
 
