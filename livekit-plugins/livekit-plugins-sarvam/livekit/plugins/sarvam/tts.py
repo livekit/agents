@@ -270,7 +270,6 @@ class ChunkedStream(tts.ChunkedStream):
                 for b64 in audios:
                     wav_bytes = base64.b64decode(b64)
                     output_emitter.push(wav_bytes)
-                    
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Sarvam TTS API request timed out") from e
         except aiohttp.ClientError as e:
