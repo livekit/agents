@@ -221,7 +221,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        utterance: UtteranceOptions = {**self._opts.utterance_options, "text": self._input_text}
+        utterance: Utterance = {**self._opts.utterance_options, "text": self._input_text}
 
         payload: dict[str, Any] = {
             "utterances": [utterance],
