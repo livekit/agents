@@ -22,7 +22,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 import numpy as np
@@ -129,7 +129,7 @@ class STTOptions:
     )
 
 
-def _build_streaming_config(opts: STTOptions) -> dict:
+def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
     """Build the streaming configuration for Gladia API."""
     streaming_config = {
         "encoding": opts.encoding,
@@ -692,6 +692,8 @@ class SpeechStream(stt.SpeechStream):
         translation_informal: bool | None = None,
         custom_vocabulary: list[str | dict] | None = None,
         custom_spelling: dict[str, list[str]] | None = None,
+        pre_processing_audio_enhancer: bool | None = None,
+        pre_processing_speech_threshold: float | None = None,
     ) -> None:
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
@@ -743,6 +745,17 @@ class SpeechStream(stt.SpeechStream):
                 else self._opts.translation_config.informal,
             )
             self._opts.translation_config = translation_config
+
+        if pre_processing_audio_enhancer is not None or pre_processing_speech_threshold is not None:
+            self._opts.pre_processing = dataclasses.replace(
+                self._opts.pre_processing,
+                audio_enhancer=pre_processing_audio_enhancer
+                if pre_processing_audio_enhancer is not None
+                else self._opts.pre_processing.audio_enhancer,
+                speech_threshold=pre_processing_speech_threshold
+                if pre_processing_speech_threshold is not None
+                else self._opts.pre_processing.speech_threshold,
+            )
 
         if interim_results is not None:
             self._opts.interim_results = interim_results
