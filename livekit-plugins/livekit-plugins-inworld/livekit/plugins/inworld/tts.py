@@ -17,18 +17,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
 from dataclasses import dataclass, replace
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
+import httpx
 from inworld_sdk import InworldClient, models
 
 from livekit.agents import tokenize, tts, utils
+from livekit.agents._exceptions import APIConnectionError, APITimeoutError
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
 )
-from livekit.agents.utils import shortuuid
 
 AUDIO_ENCODING = "LINEAR16"
 INWORLD_API_BASE_URL = "https://api.inworld.ai/tts/v1alpha"
@@ -37,15 +38,6 @@ NUM_CHANNELS = 1
 SAMPLE_RATE = 24000
 SPEED = 1.0
 WAV_HEADER_SIZE = 44
-
-
-def strip_wav_header(audio_data: bytes) -> bytes:
-    if len(audio_data) <= WAV_HEADER_SIZE:
-        return audio_data
-    elif audio_data.startswith(b"RIFF") and audio_data[8:12] == b"WAVE":
-        return audio_data[WAV_HEADER_SIZE:]
-    else:
-        return audio_data
 
 
 @dataclass
@@ -94,9 +86,7 @@ class TTS(tts.TTS):
 
         api_key = api_key or os.getenv("INWORLD_API_KEY")
         if not api_key:
-            raise ValueError(
-                "Inworld API key required. Set INWORLD_API_KEY or provide api_key."
-            )
+            raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
 
         self._opts = _TTSOptions(
             modelId=model,
@@ -114,6 +104,15 @@ class TTS(tts.TTS):
             api_key=api_key,
             auth_type=auth_type,
             base_url=base_url,
+            http_client=httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=50,
+                    keepalive_expiry=120,
+                ),
+            ),
         )
 
     def update_options(
@@ -152,10 +151,7 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.ChunkedStream:
-        stream = self.stream(conn_options=conn_options)
-        stream.push_text(text)
-        stream.end_input()
-        return cast(tts.ChunkedStream, stream)
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self,
@@ -163,6 +159,52 @@ class TTS(tts.TTS):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.SynthesizeStream:
         return SynthesizeStream(tts=self, conn_options=conn_options)
+
+
+class ChunkedStream(tts.ChunkedStream):
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._opts.sampleRateHertz,
+            num_channels=NUM_CHANNELS,
+            mime_type=MIME_TYPE,
+        )
+
+        try:
+            synthesis = await self._create_synthesis()
+            if synthesis and synthesis.get("audioContent"):
+                audio_data = base64.b64decode(synthesis["audioContent"])
+                audio_data = _strip_wav_header(audio_data)
+                if audio_data:
+                    output_emitter.push(audio_data)
+            output_emitter.flush()
+        except httpx.TimeoutException:
+            raise APITimeoutError() from None
+        except Exception as e:
+            raise APIConnectionError() from e
+        finally:
+            output_emitter.flush()
+
+    def _create_synthesis(self) -> Coroutine[Any, Any, models.SynthesizeSpeechResponse]:
+        return self._tts._client.tts.synthesizeSpeech(
+            input=self._input_text,
+            voice=self._opts.voice,
+            languageCode=self._opts.languageCode,
+            modelId=self._opts.modelId,
+            audioConfig=cast(
+                models.AudioConfig,
+                {
+                    "audioEncoding": AUDIO_ENCODING,
+                    "speakingRate": self._opts.speed,
+                    "sampleRateHertz": self._opts.sampleRateHertz,
+                },
+            ),
+        )
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -177,10 +219,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Run the TTS synthesis process."""
         tokenizer_stream = self._opts.tokenizer.stream()
         output_emitter.initialize(
-            request_id=shortuuid(),
+            request_id=utils.shortuuid(),
             sample_rate=self._opts.sampleRateHertz,
             num_channels=NUM_CHANNELS,
             mime_type=MIME_TYPE,
@@ -189,24 +230,18 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         tasks = [
             asyncio.create_task(self._tokenize_input(tokenizer_stream)),
-            asyncio.create_task(
-                self._synthesize_sentences(tokenizer_stream, output_emitter)
-            ),
+            asyncio.create_task(self._synthesize_sentences(tokenizer_stream, output_emitter)),
         ]
 
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
+        await asyncio.gather(*tasks)
 
     async def _tokenize_input(self, tokenizer_stream: tokenize.SentenceStream) -> None:
-        """Feed input text to the tokenizer stream."""
         async for text in self._input_ch:
+            self._mark_started()
             if isinstance(text, str):
                 tokenizer_stream.push_text(text)
             elif isinstance(text, self._FlushSentinel):
                 tokenizer_stream.flush()
-
         tokenizer_stream.end_input()
 
     async def _synthesize_sentences(
@@ -214,38 +249,23 @@ class SynthesizeStream(tts.SynthesizeStream):
         tokenizer_stream: tokenize.SentenceStream,
         output_emitter: tts.AudioEmitter,
     ) -> None:
-        """Process sentences from tokenizer and synthesize audio."""
-        output_emitter.start_segment(segment_id=shortuuid())
+        output_emitter.start_segment(segment_id=utils.shortuuid())
 
         try:
             async for sentence in tokenizer_stream:
                 if not sentence.token.strip():
                     continue
-                await self._synthesize_sentence(sentence, output_emitter)
+                stream = self._create_synthesis_stream(sentence)
+                await self._process_audio_stream(stream, output_emitter)
             output_emitter.end_segment()
+        except httpx.TimeoutException:
+            raise APITimeoutError() from None
         except Exception as e:
-            print(f"Error synthesizing segment: {e}")
-            raise
-
-    async def _synthesize_sentence(
-        self, sentence: tokenize.TokenData, output_emitter: tts.AudioEmitter
-    ) -> None:
-        """Synthesize a single sentence to audio."""
-        try:
-            stream = self._create_synthesis_stream(sentence)
-            await self._process_audio_stream(stream, output_emitter)
-        except ValueError as e:
-            if "Chunk too big" in str(e):
-                print(f"Warning: Audio chunk too large, skipping: {e}")
-            else:
-                raise
-        except Exception as e:
-            print(f"Error calling Inworld API: {e}")
+            raise APIConnectionError() from e
 
     def _create_synthesis_stream(
         self, sentence: tokenize.TokenData
     ) -> AsyncGenerator[models.SynthesizeSpeechResponse, None]:
-        """Synthesize a stream for a sentence."""
         return self._tts._client.tts.synthesizeSpeechStream(
             input=sentence.token,
             voice=self._opts.voice,
@@ -266,22 +286,18 @@ class SynthesizeStream(tts.SynthesizeStream):
         stream: AsyncGenerator[models.SynthesizeSpeechResponse, None],
         output_emitter: tts.AudioEmitter,
     ) -> None:
-        """Process audio chunks from the synthesized stream."""
         async for chunk in stream:
             if chunk and chunk.get("audioContent"):
-                try:
-                    audio_data = base64.b64decode(chunk["audioContent"])
-                    audio_data = strip_wav_header(audio_data)
-                    if audio_data:
-                        self._push_audio_chunks(audio_data, output_emitter)
-                except Exception as e:
-                    print(f"Error processing audio: {e}")
+                audio_data = base64.b64decode(chunk["audioContent"])
+                audio_data = _strip_wav_header(audio_data)
+                if audio_data:
+                    output_emitter.push(audio_data)
 
-    def _push_audio_chunks(
-        self, audio_data: bytes, output_emitter: tts.AudioEmitter
-    ) -> None:
-        """Push audio data to the emitter in manageable chunks."""
-        max_chunk_size = 8192
-        for i in range(0, len(audio_data), max_chunk_size):
-            chunk_data = audio_data[i : i + max_chunk_size]
-            output_emitter.push(chunk_data)
+
+def _strip_wav_header(audio_data: bytes) -> bytes:
+    if len(audio_data) <= WAV_HEADER_SIZE:
+        return audio_data
+    elif audio_data.startswith(b"RIFF") and audio_data[8:12] == b"WAVE":
+        return audio_data[WAV_HEADER_SIZE:]
+    else:
+        return audio_data
