@@ -970,7 +970,7 @@ class RealtimeSession(
         events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
         diff_ops = llm.utils.compute_chat_ctx_diff(self._remote_chat_ctx.to_chat_ctx(), chat_ctx)
 
-        for msg_id in diff_ops.to_remove:
+        def _delete_item(msg_id: str) -> None:
             events.append(
                 ConversationItemDeleteEvent(
                     type="conversation.item.delete",
@@ -979,7 +979,7 @@ class RealtimeSession(
                 )
             )
 
-        for previous_msg_id, msg_id in diff_ops.to_create:
+        def _create_item(previous_msg_id: str | None, msg_id: str) -> None:
             chat_item = chat_ctx.get_by_id(msg_id)
             assert chat_item is not None
             events.append(
@@ -990,6 +990,17 @@ class RealtimeSession(
                     event_id=utils.shortuuid("chat_ctx_create_"),
                 )
             )
+
+        for msg_id in diff_ops.to_remove:
+            _delete_item(msg_id)
+
+        for previous_msg_id, msg_id in diff_ops.to_create:
+            _create_item(previous_msg_id, msg_id)
+
+        # update the items with the same id but different content
+        for previous_msg_id, msg_id in diff_ops.to_update:
+            _delete_item(msg_id)
+            _create_item(previous_msg_id, msg_id)
 
         return events
 
