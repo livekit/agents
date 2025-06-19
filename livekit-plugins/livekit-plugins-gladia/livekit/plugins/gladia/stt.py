@@ -131,7 +131,7 @@ class STTOptions:
 
 def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
     """Build the streaming configuration for Gladia API."""
-    streaming_config = {
+    streaming_config: dict[str, Any] = {
         "encoding": opts.encoding,
         "sample_rate": opts.sample_rate,
         "bit_depth": opts.bit_depth,
