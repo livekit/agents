@@ -189,7 +189,6 @@ class TTS(tts.TTS):
             instant_mode: Whether to use instant mode.
             audio_format: Output audio format (mp3, wav, or pcm).
         """
-        # Update individual utterance options
         if is_given(description):
             self._opts.description = description
         if is_given(speed):
@@ -198,7 +197,6 @@ class TTS(tts.TTS):
             self._opts.voice = voice
         if is_given(trailing_silence):
             self._opts.trailing_silence = trailing_silence
-
         if is_given(context):
             self._opts.context = context
         if is_given(instant_mode):
