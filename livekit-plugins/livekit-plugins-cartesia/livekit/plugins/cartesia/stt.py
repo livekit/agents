@@ -26,6 +26,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     stt,
@@ -298,7 +299,8 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    await utils.aio.gracefully_cancel(tasks_group)
+                    tasks_group.cancel()
+                    tasks_group.exception()  # retrieve the exception
             finally:
                 if ws is not None:
                     await ws.close()
@@ -321,10 +323,13 @@ class SpeechStream(stt.SpeechStream):
         query_string = "&".join(f"{k}={v}" for k, v in params.items())
         ws_url = f"{url}?{query_string}"
 
-        ws = await asyncio.wait_for(
-            self._session.ws_connect(ws_url),
-            self._conn_options.timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(ws_url),
+                self._conn_options.timeout,
+            )
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            raise APIConnectionError("failed to connect to cartesia") from e
         return ws
 
     def _process_stream_event(self, data: dict) -> None:
