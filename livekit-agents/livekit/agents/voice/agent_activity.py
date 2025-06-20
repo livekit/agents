@@ -1553,7 +1553,7 @@ class AgentActivity(RecognitionHooks):
                             )
                             tasks.append(tts_task)
                             realtime_audio_result = tts_gen_data.audio_ch
-                        else:
+                        elif self.llm.capabilities.audio_output:
                             realtime_audio = self._agent.realtime_audio_output_node(
                                 msg.audio_stream, model_settings
                             )
@@ -1561,6 +1561,10 @@ class AgentActivity(RecognitionHooks):
                                 await realtime_audio
                                 if asyncio.iscoroutine(realtime_audio)
                                 else realtime_audio
+                            )
+                        else:
+                            logger.warning(
+                                "audio output is enabled but neither tts nor realtime audio is available",  # noqa: E501
                             )
 
                         if realtime_audio_result is not None:
@@ -1631,7 +1635,7 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.truncate(
                         message_id=msg_id,
                         audio_end_ms=int(playback_position * 1000),
-                        forwarded_text=forwarded_text,
+                        audio_transcript=forwarded_text,
                     )
 
                 if forwarded_text:

@@ -537,7 +537,7 @@ class RealtimeSession(llm.RealtimeSession):
         self.start_user_activity()
 
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, forwarded_text: str | None = None
+        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
     ) -> None:
         logger.warning("truncate is not supported by the Google Realtime API.")
         pass

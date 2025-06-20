@@ -1127,7 +1127,7 @@ class RealtimeSession(
         self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(
-        self, *, message_id: str, audio_end_ms: int, forwarded_text: str | None = None
+        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
     ) -> None:
         if self._realtime_model.capabilities.audio_output:
             self.send_event(
@@ -1138,14 +1138,14 @@ class RealtimeSession(
                     audio_end_ms=audio_end_ms,
                 )
             )
-        elif forwarded_text is not None:
+        elif utils.is_given(audio_transcript):
             # sync the forwarded text to the remote chat ctx
             chat_ctx = self.chat_ctx.copy()
             if (idx := chat_ctx.index_by_id(message_id)) is not None:
                 new_item = copy.copy(chat_ctx.items[idx])
                 assert new_item.type == "message"
 
-                new_item.content = [forwarded_text]
+                new_item.content = [audio_transcript]
                 chat_ctx.items[idx] = new_item
                 events = self._create_update_chat_ctx_events(chat_ctx)
                 for ev in events:
