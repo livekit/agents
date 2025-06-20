@@ -161,7 +161,7 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
         streaming_config["pre_processing"] = {
             "audio_enhancer": opts.pre_processing.audio_enhancer,
             "speech_threshold": opts.pre_processing.speech_threshold,
-    }
+        }
 
     if opts.translation_config.enabled:
         streaming_config["realtime_processing"]["translation"] = True
@@ -179,6 +179,7 @@ def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
         streaming_config["realtime_processing"]["translation_config"] = translation_cfg
 
     return streaming_config
+
 
 class STT(stt.STT):
     def __init__(
@@ -271,7 +272,7 @@ class STT(stt.STT):
 
         pre_processing_config = PreProcessingConfiguration(
             audio_enhancer=pre_processing_audio_enhancer,
-            speech_threshold=pre_processing_speech_threshold
+            speech_threshold=pre_processing_speech_threshold,
         )
 
         if translation_enabled and not translation_target_languages:
