@@ -876,13 +876,15 @@ class RealtimeSession(
             "input_audio_noise_reduction": self._realtime_model._opts.input_audio_noise_reduction,
             "temperature": self._realtime_model._opts.temperature,
             "tool_choice": _to_oai_tool_choice(self._realtime_model._opts.tool_choice),
-            "tracing": tracing,
         }
         if self._instructions is not None:
             kwargs["instructions"] = self._instructions
 
         if self._realtime_model._opts.speed is not None:
             kwargs["speed"] = self._realtime_model._opts.speed
+
+        if tracing:
+            kwargs["tracing"] = tracing
 
         # initial session update
         return SessionUpdateEvent(
