@@ -171,6 +171,9 @@ class AgentActivity(RecognitionHooks):
 
         self._mcp_tools: list[mcp.MCPTool] = []
 
+        self._on_enter_task: asyncio.Task | None = None
+        self._on_exit_task: asyncio.Task | None = None
+
     @property
     def scheduling_paused(self) -> bool:
         return self._scheduling_paused
@@ -340,8 +343,10 @@ class AgentActivity(RecognitionHooks):
             await self._start_session()
             self._started = True
 
-            task = self._create_speech_task(self._agent.on_enter(), name="AgentTask_on_enter")
-            _set_activity_task_info(task, inline_task=True)
+            self._on_enter_task = task = self._create_speech_task(
+                self._agent.on_enter(), name="AgentTask_on_enter"
+            )
+            _set_activity_task_info(task, inline_task=False)
 
     async def _start_session(self):
         assert self._lock.locked, "_start_session should only be used when locked."
@@ -430,8 +435,10 @@ class AgentActivity(RecognitionHooks):
         # AgentSession makes sure there is always one agent available to the users.
 
         async with self._lock:
-            task = self._create_speech_task(self._agent.on_exit(), name="AgentTask_on_exit")
-            _set_activity_task_info(task, inline_task=True)
+            self._on_exit_task = task = self._create_speech_task(
+                self._agent.on_exit(), name="AgentTask_on_exit"
+            )
+            _set_activity_task_info(task, inline_task=False)
 
             await self._pause_scheduling_task()
 
@@ -1376,7 +1383,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._agent._chat_ctx.insert(msg)
                 self._session._conversation_item_added(msg)
-                speech_handle._chat_items.append(msg)
+                speech_handle._item_added([msg])
 
             if self._session.agent_state == "speaking":
                 self._session._update_agent_state("listening")
@@ -1395,7 +1402,7 @@ class AgentActivity(RecognitionHooks):
             )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
-            speech_handle._chat_items.append(msg)
+            speech_handle._item_added([msg])
 
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
@@ -1460,7 +1467,7 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            speech_handle._chat_items.extend(tool_messages)
+            speech_handle._item_added(tool_messages)
 
             if generate_tool_reply:
                 chat_ctx.items.extend(tool_messages)
@@ -1682,7 +1689,7 @@ class AgentActivity(RecognitionHooks):
                         interrupted=True,
                     )
                     self._agent._chat_ctx.items.append(msg)
-                    speech_handle._chat_items.append(msg)
+                    speech_handle._item_added([msg])
                     self._session._conversation_item_added(msg)
 
             speech_handle._mark_generation_done()
@@ -1699,7 +1706,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=False,
             )
             self._agent._chat_ctx.items.append(msg)
-            speech_handle._chat_items.append(msg)
+            speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501

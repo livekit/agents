@@ -31,6 +31,7 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool, RawFunctionTool
+    from ..voice import Agent
 
 
 class ImageContent(BaseModel):
@@ -141,12 +142,22 @@ class FunctionCall(BaseModel):
 
 class FunctionCallOutput(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
-    name: str = Field(default="")
     type: Literal["function_call_output"] = Field(default="function_call_output")
+    name: str = Field(default="")
     call_id: str
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+
+
+# class AgentHandoff(BaseModel):
+#     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+#     type: Literal["agent_handoff"] = Field(default="agent_handoff")
+#     old_agent_id: str | None
+#     new_agent_id: str
+#     old_agent: Agent | None = Field(exclude=True)
+#     new_agent: Agent | None = Field(exclude=True)
+#     created_at: float = Field(default_factory=time.time)
 
 
 ChatItem = Annotated[
