@@ -36,7 +36,7 @@ class LLM(OpenAILLM):
         ``api_key`` must be set to your Baseten API key, either using the argument or by setting
         the ``BASETEN_API_KEY`` environmental variable.
         """
-        api_key = api_key if is_given(api_key) else os.environ.get("BASETEN_API_KEY")
+        api_key = api_key if is_given(api_key) else os.environ.get("BASETEN_API_KEY", "")
         if not api_key:
             raise ValueError(
                 "BASETEN_API_KEY is required, either as argument or set BASETEN_API_KEY environmental variable"  # noqa: E501
