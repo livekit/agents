@@ -60,6 +60,7 @@ class _LLMOptions:
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
     gemini_tools: NotGivenOr[list[_LLMTool]]
+    http_options: NotGivenOr[types.HttpOptions]
 
 
 class LLM(llm.LLM):
@@ -80,6 +81,7 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
         gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
+        http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -106,6 +108,7 @@ class LLM(llm.LLM):
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
             gemini_tools (list[LLMTool], optional): The Gemini-specific tools to use for the session.
+            http_options (HttpOptions, optional): The HTTP options to use for the session.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -166,6 +169,7 @@ class LLM(llm.LLM):
             frequency_penalty=frequency_penalty,
             thinking_config=thinking_config,
             gemini_tools=gemini_tools,
+            http_options=http_options,
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -312,8 +316,9 @@ class LLMStream(llm.LLMStream):
                     if extra_data.system_messages
                     else None
                 ),
-                http_options=types.HttpOptions(
-                    timeout=int(self._conn_options.timeout * 1000),
+                http_options=(
+                    self._llm._opts.http_options
+                    or types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
                 ),
                 **self._extra_kwargs,
             )
