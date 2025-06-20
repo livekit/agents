@@ -865,7 +865,7 @@ class RealtimeSession(
         else:
             tracing = tracing_opts
 
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "model": self._realtime_model._opts.model,
             "voice": self._realtime_model._opts.voice,
             "input_audio_format": "pcm16",
@@ -891,7 +891,7 @@ class RealtimeSession(
             type="session.update",
             # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
             # Other providers support different voices, so we need to accommodate that.
-            session=session_update_event.Session.model_construct(**kwargs),  # type: ignore
+            session=session_update_event.Session.model_construct(**kwargs),
             event_id=utils.shortuuid("session_update_"),
         )
 
