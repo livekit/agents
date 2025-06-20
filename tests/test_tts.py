@@ -429,6 +429,13 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": lmnt.TTS(),
+            "proxy-upstream": "api.lmnt.com:443",
+        },
+        id="lmnt",
+    ),
+    pytest.param(
+        lambda: {
             "tts": playai.TTS(),
             "proxy-upstream": "api.play.ht:443",
         },
