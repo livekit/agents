@@ -283,7 +283,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         streaming_config = texttospeech.StreamingSynthesizeConfig(
             voice=self._opts.voice,
             streaming_audio_config=texttospeech.StreamingAudioConfig(
-                audio_encoding=encoding, sample_rate_hertz=self._opts.sample_rate
+                audio_encoding=encoding,
+                sample_rate_hertz=self._opts.sample_rate,
+                speaking_rate=self._opts.speaking_rate,
             ),
         )
 
