@@ -19,6 +19,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .speech_handle import SpeechHandle
+from .run_result import RunResult
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -578,6 +579,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
 
+        self.__speech_handle: SpeechHandle | None = None
+
     def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
             raise RuntimeError(f"{self.__class__.__name__} is already done")
@@ -623,18 +626,34 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         current_task.add_done_callback(_handle_task_done)
 
-        from .agent_activity import _AgentActivityContextVar
+        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
 
         # TODO(theomonnom): add a global lock for inline tasks
         # This may currently break in the case we use parallel tool calls.
 
+        speech_handle = _SpeechHandleContextVar.get(None)
         old_activity = _AgentActivityContextVar.get()
         old_agent = old_activity.agent
         session = old_activity.session
+
+        # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         await session._update_activity(
             self, previous_activity="pause", blocked_tasks=[current_task]
         )
+
+        # NOTE: _update_activity is calling the on_enter method, so the RunResult can capture all speeches
+        run_state = session._global_run_state
+        if speech_handle and run_state and not run_state.done():
+            # make sure to not deadlock on the current speech handle
+            run_state._unwatch_handle(speech_handle)
+            # it is OK to call _mark_done_if_needed here, the above _update_activity will call on_enter
+            # so handles added inside the on_enter will make sure we're not completing the run_state too early.
+            run_state._mark_done_if_needed(None)
+
         task_result = await asyncio.shield(self.__fut)
+
+        # run_state could have changed after self.__fut
+        run_state = session._global_run_state
 
         if session.current_agent != self:
             logger.warning(
@@ -643,6 +662,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             )
             await old_activity.aclose()
             return task_result
+
+        if speech_handle and run_state and not run_state.done():
+            run_state._watch_handle(speech_handle)
 
         await session._update_activity(old_agent, new_activity="resume")
         return task_result

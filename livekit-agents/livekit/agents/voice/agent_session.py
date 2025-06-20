@@ -6,6 +6,7 @@ import copy
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
+from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Generic,
@@ -47,6 +48,7 @@ from .events import (
     UserStateChangedEvent,
 )
 from .speech_handle import SpeechHandle
+from .run_result import RunResult
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -93,16 +95,7 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 """
 
 
-@dataclass
-class _RunState:
-    # TODO(theomonnom): verify AgentSession is always the same
-    # session: "AgentSession"
-    speech_handles: list[SpeechHandle]
-    new_items: list[ChatItem]
-    fut: asyncio.Future[None]
-
-
-_RunContextVar = contextvars.ContextVar["_RunState"]("agents_run_state")
+# _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
 
 
 @runtime_checkable
@@ -286,6 +279,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._closing_task: asyncio.Task[None] | None = None
         self._job_context_cb_registered: bool = False
 
+        self._global_run_state: RunResult | None = None
+
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
@@ -344,27 +339,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._agent
 
-    async def run(
-        self,
-        *,
-        user_input: str,
-        output_type: Run_T,
-    ) -> Run_T:
-        run_state = _RunContextVar.get(None)
-        if run_state is not None:
+    def run(self, *, user_input: str, output_type: Run_T = None) -> RunResult[Run_T]:
+        if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        run_state = _RunState(
-            speech_handles=[],
-            new_items=[],
-            fut=self._loop.create_future(),
-        )
-
-        tk = _RunContextVar.set(run_state)
-        try:
-            await run_state.fut
-        finally:
-            _RunContextVar.reset(tk)
+        run_state = RunResult(output_type=output_type)
+        self._global_run_state = run_state
+        self.generate_reply(user_input=user_input)
+        return run_state
 
     async def start(
         self,
@@ -468,7 +450,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 pass  # ignore
 
             # it is ok to await it directly, there is no previous task to drain
-            tasks.append(asyncio.create_task(self._update_activity(self._agent)))
+            tasks.append(
+                asyncio.create_task(self._update_activity(self._agent, wait_on_enter=False))
+            )
 
             try:
                 await asyncio.gather(*tasks)
@@ -574,23 +558,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
+        run_state = self._global_run_state
         if self._activity.scheduling_paused:
             if self._next_activity is None:
                 raise RuntimeError("AgentSession is closing, cannot use say()")
 
-            return self._next_activity.say(
+            handle = self._next_activity.say(
                 text,
                 audio=audio,
                 allow_interruptions=allow_interruptions,
                 add_to_chat_ctx=add_to_chat_ctx,
             )
+            if run_state:
+                run_state._watch_handle(handle)
 
-        return self._activity.say(
+            return handle
+
+        handle = self._activity.say(
             text,
             audio=audio,
             allow_interruptions=allow_interruptions,
             add_to_chat_ctx=add_to_chat_ctx,
         )
+        if run_state:
+            run_state._watch_handle(handle)
+
+        return handle
 
     def generate_reply(
         self,
@@ -622,23 +615,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else NOT_GIVEN
         )
 
+        run_state = self._global_run_state
         if self._activity.scheduling_paused:
             if self._next_activity is None:
                 raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
 
-            return self._next_activity._generate_reply(
+            handle = self._next_activity._generate_reply(
                 user_message=user_message,
                 instructions=instructions,
                 tool_choice=tool_choice,
                 allow_interruptions=allow_interruptions,
             )
+            if run_state:
+                run_state._watch_handle(handle)
 
-        return self._activity._generate_reply(
+            return handle
+
+        handle = self._activity._generate_reply(
             user_message=user_message,
             instructions=instructions,
             tool_choice=tool_choice,
             allow_interruptions=allow_interruptions,
         )
+        if run_state:
+            run_state._watch_handle(handle)
+
+        return handle
 
     def interrupt(self) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
@@ -679,10 +681,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent = agent
 
         if self._started:
-            self._update_activity_atask = asyncio.create_task(
-                self._update_activity_task(self._agent),
-                name="_update_activity_task",
+            self._update_activity_atask = task = asyncio.create_task(
+                self._update_activity_task(self._agent), name="_update_activity_task"
             )
+            run_state = self._global_run_state
+            if run_state:
+                # don't mark the RunResult as done, if there is currently an agent transition happening.
+                # (used to make sure we're correctly adding the AgentHandoffResult before completion)
+                run_state._watch_handle(task)
 
     async def _update_activity(
         self,
@@ -691,6 +697,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         previous_activity: Literal["close", "pause"] = "close",
         new_activity: Literal["start", "resume"] = "start",
         blocked_tasks: list[asyncio.Task] | None = None,
+        wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
             # _update_activity is called directy sometimes, update for redundancy
@@ -707,6 +714,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._next_activity = agent._activity
 
+            previous_activity_v = self._activity
             if self._activity is not None:
                 if previous_activity == "close":
                     await self._activity.drain()
@@ -717,10 +725,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._activity = self._next_activity
             self._next_activity = None
 
+            run_state = self._global_run_state
+            if run_state:
+                run_state._agent_handoff(
+                    old_agent=previous_activity_v.agent if previous_activity_v else None,
+                    new_agent=self._activity.agent,
+                )
+
             if new_activity == "start":
                 await self._activity.start()
             elif new_activity == "resume":
                 await self._activity.resume()
+
+            if wait_on_enter:
+                assert self._activity._on_enter_task is not None
+                await asyncio.shield(self._activity._on_enter_task)
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(self, task: Agent) -> None:
@@ -880,3 +899,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         pass
 
     # ---
+
+    async def __aenter__(self) -> AgentSession:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()

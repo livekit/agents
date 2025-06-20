@@ -365,9 +365,7 @@ class DriveThruAgent(Agent):
         return "\n".join(item.model_dump_json() for item in items)
 
 
-async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
+async def new_userdata() -> Userdata:
     fake_db = FakeDB()
     drink_items = await fake_db.list_drinks()
     combo_items = await fake_db.list_combo_meals()
@@ -384,6 +382,13 @@ async def entrypoint(ctx: JobContext):
         regular_items=regular_items,
         sauce_items=sauce_items,
     )
+    return userdata
+
+
+async def entrypoint(ctx: JobContext):
+    await ctx.connect()
+
+    userdata = await new_userdata()
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=deepgram.STT(
@@ -400,7 +405,7 @@ async def entrypoint(ctx: JobContext):
             ],
             mip_opt_out=True,
         ),
-        llm=openai.LLM(model="gpt-4o"),
+        llm=openai.LLM(model="gpt-4o", parallel_tool_calls=False, temperature=0.45),
         # tts=elevenlabs.TTS(
         #     model="eleven_turbo_v2_5",
         #     voice_id="21m00Tcm4TlvDq8ikWAM",

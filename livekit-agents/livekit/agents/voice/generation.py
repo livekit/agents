@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from functools import partial
@@ -361,20 +362,48 @@ async def _execute_tools_task(
             if not tool_output.first_tool_fut.done():
                 tool_output.first_tool_fut.set_result(None)
 
-            logger.debug(
-                "executing tool",
-                extra={
-                    "function": fnc_call.name,
-                    "arguments": fnc_call.arguments,
-                    "speech_id": speech_handle.id,
-                },
-            )
-
             try:
-                task = asyncio.create_task(
-                    function_tool(*fnc_args, **fnc_kwargs),
-                    name=f"function_tool_{fnc_call.name}",
-                )
+                from .run_result import _MockToolsContextVar
+
+                mock_tools = _MockToolsContextVar.get().get(type(session.current_agent), {})
+
+                if mock := mock_tools.get(fnc_call.name):
+                    logger.debug(
+                        "executing mock tool",
+                        extra={
+                            "function": fnc_call.name,
+                            "arguments": fnc_call.arguments,
+                            "speech_id": speech_handle.id,
+                        },
+                    )
+
+                    async def _run_mock():
+                        sig = inspect.signature(mock)
+                        bound = sig.bind_partial(*fnc_args, **fnc_kwargs)
+                        bound.apply_defaults()
+
+                        if asyncio.iscoroutinefunction(mock):
+                            return await mock(*fnc_args, **fnc_kwargs)
+                        else:
+                            return mock(*fnc_args, **fnc_kwargs)
+
+                    task = asyncio.create_task(
+                        _run_mock(),
+                        name=f"mock_tool_{fnc_call.name}",
+                    )
+                else:
+                    logger.debug(
+                        "executing tool",
+                        extra={
+                            "function": fnc_call.name,
+                            "arguments": fnc_call.arguments,
+                            "speech_id": speech_handle.id,
+                        },
+                    )
+                    task = asyncio.create_task(
+                        function_tool(*fnc_args, **fnc_kwargs),
+                        name=f"function_tool_{fnc_call.name}",
+                    )
 
                 tasks.append(task)
                 _set_activity_task_info(
