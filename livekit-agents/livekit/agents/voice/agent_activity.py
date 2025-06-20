@@ -4,7 +4,7 @@ import asyncio
 import contextvars
 import heapq
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Sequence
+from collections.abc import AsyncIterable, Coroutine, Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from livekit import rtc
@@ -1094,10 +1094,6 @@ class AgentActivity(RecognitionHooks):
                     and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                     and (timed_texts := await tts_gen_data.timed_texts_fut)
                 ):
-                    if isinstance(text_source, AsyncGenerator):
-                        tasks.append(
-                            asyncio.create_task(utils.aio.itertools.cleanup_tee_peer(text_source))
-                        )
                     text_source = timed_texts
 
                 forward_task, audio_out = perform_audio_forwarding(
@@ -1221,10 +1217,6 @@ class AgentActivity(RecognitionHooks):
                 and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                 and (timed_texts := await tts_gen_data.timed_texts_fut)
             ):
-                if isinstance(tr_input, AsyncGenerator):
-                    tasks.append(
-                        asyncio.create_task(utils.aio.itertools.cleanup_tee_peer(tr_input))
-                    )
                 tr_input = timed_texts
 
         await speech_handle.wait_if_not_interrupted(

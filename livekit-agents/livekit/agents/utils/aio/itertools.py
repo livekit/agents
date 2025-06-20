@@ -98,13 +98,3 @@ class Tee(Generic[T]):
 
 
 tee = Tee
-
-
-async def cleanup_tee_peer(agen: AsyncGenerator[Any, None]) -> None:
-    """Ensure tee peer's finally block is called even if never started."""
-    try:
-        await agen.asend(None)
-    except StopAsyncIteration:
-        return
-    finally:
-        await agen.aclose()
