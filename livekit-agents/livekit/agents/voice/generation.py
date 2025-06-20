@@ -294,7 +294,7 @@ async def _execute_tools_task(
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
-    from .agent import _authorize_inline_task
+    from .agent import _set_activity_task_info
     from .events import RunContext
 
     tasks: list[asyncio.Task[Any]] = []
@@ -339,7 +339,9 @@ async def _execute_tools_task(
                     fnc=function_tool,
                     json_arguments=json_args,
                     call_ctx=RunContext(
-                        session=session, speech_handle=speech_handle, function_call=fnc_call
+                        session=session,
+                        speech_handle=speech_handle,
+                        function_call=fnc_call,
                     ),
                 )
 
@@ -375,7 +377,12 @@ async def _execute_tools_task(
                 )
 
                 tasks.append(task)
-                _authorize_inline_task(task, function_call=fnc_call)
+                _set_activity_task_info(
+                    task,
+                    speech_handle=speech_handle,
+                    function_call=fnc_call,
+                    inline_task=True,
+                )
             except Exception as e:
                 # catching exceptions here because even though the function is asynchronous,
                 # errors such as missing or incompatible arguments can still occur at
@@ -617,7 +624,8 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
     elif add_if_missing:
         # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
-            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions])
+            0,
+            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]),
         )
 
 
