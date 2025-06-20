@@ -142,7 +142,6 @@ class AudioByteStream:
             logger.warning("AudioByteStream: incomplete frame during flush, dropping")
             return []
 
-        
         frames = [
             rtc.AudioFrame(
                 data=self._buf.copy(),
