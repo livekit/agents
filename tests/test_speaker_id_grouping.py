@@ -115,11 +115,11 @@ class TestSpeakerIdGrouping:
         fragments = [
             ("One Two", "1"),
             ("Three Four", "SPEAKER_A"),
-            ("Five Six", "USER_123"),
+            ("Five Six", "User 123"),
         ]
         result = self._process_fragments(fragments)
         assert result == (
-            "[1]One Two[/1] [SPEAKER_A]Three Four[/SPEAKER_A] [USER_123]Five Six[/USER_123]"
+            "[1]One Two[/1] [SPEAKER_A]Three Four[/SPEAKER_A] [User 123]Five Six[/User 123]"
         )
 
     def test_ignored_speaker_ids(self):
