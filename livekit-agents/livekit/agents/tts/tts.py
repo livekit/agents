@@ -17,7 +17,7 @@ from livekit import rtc
 from .._exceptions import APIError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio, audio, codecs, log_exceptions
 
 if TYPE_CHECKING:
@@ -44,8 +44,8 @@ class SynthesizedAudio:
 class TTSCapabilities:
     streaming: bool
     """Whether this TTS supports streaming (generally using websockets)"""
-    timed_transcript: bool = False
-    """Whether this TTS supports word timestamps"""
+    aligned_transcript: bool = False
+    """Whether this TTS supports aligned transcripts with word timestamps"""
 
 
 class TTSError(BaseModel):
@@ -713,7 +713,7 @@ class AudioEmitter:
                         if lk_dump_tts:
                             debug_frames.append(frame)
 
-                    frame.userdata["timed_transcripts"] = timed_transcripts
+                    frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
                     self._dst_ch.send_nowait(
                         SynthesizedAudio(
                             frame=frame,
@@ -726,7 +726,7 @@ class AudioEmitter:
                     return
 
             if last_frame is not None:
-                last_frame.userdata["timed_transcripts"] = timed_transcripts
+                last_frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
                 self._dst_ch.send_nowait(
                     SynthesizedAudio(
                         frame=last_frame,
@@ -751,7 +751,7 @@ class AudioEmitter:
             if last_frame is None:
                 return
 
-            last_frame.userdata["timed_transcripts"] = timed_transcripts
+            last_frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
             self._dst_ch.send_nowait(
                 SynthesizedAudio(
                     frame=last_frame,

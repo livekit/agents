@@ -29,7 +29,7 @@ class StreamAdapter(TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
         super().__init__(
-            capabilities=TTSCapabilities(streaming=True, timed_transcript=True),
+            capabilities=TTSCapabilities(streaming=True, aligned_transcript=True),
             sample_rate=tts.sample_rate,
             num_channels=tts.num_channels,
         )

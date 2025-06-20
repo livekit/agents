@@ -194,7 +194,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 consecutive speech. Default ``0.0`` s.
             use_tts_aligned_transcript (bool, optional): Whether to use TTS-aligned
                 transcript as the input of the ``transcription_node``. Only applies
-                if ``TTS.capabilities.timed_transcript`` is ``True`` or ``streaming``
+                if ``TTS.capabilities.aligned_transcript`` is ``True`` or ``streaming``
                 is ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
                 stt, llm, and tts.

@@ -1091,7 +1091,7 @@ class AgentActivity(RecognitionHooks):
                 if (
                     self.use_tts_aligned_transcript
                     and (tts := self.tts)
-                    and (tts.capabilities.timed_transcript or not tts.capabilities.streaming)
+                    and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                     and (timed_texts := await tts_gen_data.timed_texts_fut)
                 ):
                     text_source = timed_texts
@@ -1214,7 +1214,7 @@ class AgentActivity(RecognitionHooks):
             if (
                 self.use_tts_aligned_transcript
                 and (tts := self.tts)
-                and (tts.capabilities.timed_transcript or not tts.capabilities.streaming)
+                and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                 and (timed_texts := await tts_gen_data.timed_texts_fut)
             ):
                 tr_input = timed_texts

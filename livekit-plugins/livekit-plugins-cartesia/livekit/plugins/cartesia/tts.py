@@ -109,7 +109,10 @@ class TTS(tts.TTS):
         """  # noqa: E501
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True, timed_transcript=word_timestamps),
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+                aligned_transcript=word_timestamps,
+            ),
             sample_rate=sample_rate,
             num_channels=1,
         )
