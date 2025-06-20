@@ -1517,6 +1517,7 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state("speaking")
 
         tasks: list[asyncio.Task[Any]] = []
+        tees: list[utils.aio.itertools.Tee[Any]] = []
 
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
@@ -1535,7 +1536,9 @@ class AgentActivity(RecognitionHooks):
 
                     tts_text_input: AsyncIterable[str] | None = None
                     if not self.llm.capabilities.audio_output and self.tts:
-                        tts_text_input, tr_text_input = utils.aio.itertools.tee(msg.text_stream)
+                        tee = utils.aio.itertools.tee(msg.text_stream, 2)
+                        tts_text_input, tr_text_input = tee
+                        tees.append(tee)
                     else:
                         tr_text_input = msg.text_stream.__aiter__()
 
@@ -1617,6 +1620,8 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
+            for tee in tees:
+                await tee.aclose()
 
             if len(message_outputs) > 0:
                 # there should be only one message
@@ -1674,6 +1679,8 @@ class AgentActivity(RecognitionHooks):
 
         # mark playout must be done before _set_chat_message
         speech_handle._mark_playout_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
+        for tee in tees:
+            await tee.aclose()
 
         tool_output.first_tool_fut.add_done_callback(
             lambda _: self._session._update_agent_state("thinking")
