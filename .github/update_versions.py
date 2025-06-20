@@ -173,6 +173,41 @@ def update_versions(changesets: Dict[str, Tuple[str, List[str]]]) -> None:
     if new_agents_version:
         update_plugins_pyproject_agents_version(new_agents_version)
 
+def update_versions_ignore_changesets(bump_type: str) -> None:
+    """
+    Bump versions for livekit-agents and all plugins using a fixed bump_type,
+    ignoring any changeset files.
+    """
+    agents_ver = pathlib.Path("livekit-agents/livekit/agents/version.py")
+    plugins_root = pathlib.Path("livekit-plugins")
+    
+    new_agents_version = None
+
+    # Bump livekit-agents
+    if agents_ver.exists():
+        cur = read_version(agents_ver)
+        new = bump_version(cur, bump_type)
+        print(f"livekit-agents: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
+        write_new_version(agents_ver, new)
+        new_agents_version = new
+    else:
+        print("Warning: No version.py found for livekit-agents.")
+
+    # Bump each plugin's version.py
+    for pdir in plugins_root.glob("livekit-plugins-*"):
+        vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        if vf.exists():
+            cur = read_version(vf)
+            new = bump_version(cur, bump_type)
+            print(f"{pdir.name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
+            write_new_version(vf, new)
+        else:
+            print(f"Warning: version.py not found for {pdir.name} at {vf}")
+
+    # Update pyproject.toml references if livekit-agents was bumped
+    if new_agents_version:
+        update_plugins_pyproject_agents_version(new_agents_version)
+
 def update_prerelease(prerelease_type: str) -> None:
     """
     Perform prerelease (rc or dev) bumps everywhere and also update references in 
@@ -215,24 +250,40 @@ def update_prerelease(prerelease_type: str) -> None:
     default="none", 
     help="Pre-release type. Use 'none' for normal bump, or 'rc'/'dev' for pre-release."
 )
-def bump(pre: str) -> None:
+@click.option(
+    "--ignore-changesets",
+    is_flag=True,
+    default=False,
+    help="Ignore changeset files and bump all packages using a uniform bump type."
+)
+@click.option(
+    "--bump-type",
+    type=click.Choice(["patch", "minor", "major"]),
+    default="patch",
+    help="Type of version bump to apply when ignoring changesets. Defaults to patch."
+)
+def bump(pre: str, ignore_changesets: bool, bump_type: str) -> None:
     """
     Single command to do either normal or pre-release bumps.
 
-    By default (with --pre=none), this uses changesets in .github/next-release
-    to determine major/minor/patch increments per package.
-
-    If --pre=rc or --pre=dev, it updates the current versions to a new RC or DEV version.
-    In both cases, we also update pyproject.toml references that point to 
-    'livekit-agents>=XYZ' so they match the newly bumped version.
+    For a normal release (with --pre=none), by default the script uses changesets from
+    .github/next-release to determine per-package bump types. Use --ignore-changesets to ignore
+    the changesets and bump every package with the specified --bump-type.
+    
+    For pre-release bumps (--pre=rc or --pre=dev), it updates the current versions to a new RC or DEV version.
+    In both cases, plugin pyproject.toml references for 'livekit-agents' will be updated if that version changes.
     """
     if pre == "none":
-        # Normal release bump: read bumps from changesets
-        changesets = load_changesets(pathlib.Path(".github/next-release"))
-        # changesets => { "some-package": ("minor", ["changelog1", "changelog2"]), ... }
-        update_versions(changesets)
+        if ignore_changesets:
+            # When ignoring changesets, bump all packages uniformly using the provided bump_type.
+            update_versions_ignore_changesets(bump_type)
+        else:
+            # Normal release bump: read bumps from changesets
+            changesets = load_changesets(pathlib.Path(".github/next-release"))
+            # changesets => { "some-package": ("minor", ["changelog1", "changelog2"]), ... }
+            update_versions(changesets)
     else:
-        # Pre-release bump
+        # Pre-release bump (ignore_changesets is not applicable here)
         update_prerelease(pre)
 
 if __name__ == "__main__":
