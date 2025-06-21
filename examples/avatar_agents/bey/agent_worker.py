@@ -3,7 +3,14 @@ import os
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, WorkerType, cli
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    RoomOutputOptions,
+    WorkerOptions,
+    WorkerType,
+    cli,
 from livekit.plugins import bey, openai
 
 logger = logging.getLogger("bey-avatar-example")
@@ -26,6 +33,9 @@ async def entrypoint(ctx: JobContext):
     await session.start(
         agent=Agent(instructions="Talk to me!"),
         room=ctx.room,
+        # Disable room audio output to prevent the local agent from speaking.
+        # Otherwise, it will interrupt the avatar agent, which will then stay silent.
+        room_output_options=RoomOutputOptions(audio_enabled=False),
     )
 
     session.generate_reply(instructions="say hello to the user")
