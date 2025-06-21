@@ -59,6 +59,7 @@ services:
       - HUME_API_KEY
       - SPITCH_API_KEY
       - LMNT_API_KEY
+      - INWORLD_API_KEY
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"

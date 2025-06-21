@@ -90,3 +90,4 @@ jobs:
               -p livekit.plugins.langchain
               -p livekit.plugins.baseten
               -p livekit.plugins.sarvam
+              -p livekit.plugins.inworld
