@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
@@ -138,3 +139,50 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
             content=content,
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Filtering helpers
+# ---------------------------------------------------------------------------
+
+
+def _should_process_chunk(
+    chunk: dict,
+    allowed_langgraph_nodes: str | list[str] | None,
+    run_id: dict | None,
+) -> bool:
+    """Return *True* if chunk should be spoken; *False* otherwise."""
+
+    # Node-based filtering – if enabled, drop chunks from other nodes.
+    if allowed_langgraph_nodes is not None:
+        allowed: list[str] = (
+            [allowed_langgraph_nodes]
+            if isinstance(allowed_langgraph_nodes, str)
+            else list(allowed_langgraph_nodes)
+        )
+        node = None
+        if run_id and isinstance(run_id, dict):
+            node = run_id.get("langgraph_node")
+        node = (
+            node
+            or chunk.get("response_metadata", {}).get("langgraph_node")
+            or chunk.get("langgraph_node")
+        )
+        if node and node not in allowed:
+            return False
+
+    # Universal tool call filtering.
+    if chunk.get("tool_calls") or chunk.get("tool_call_chunks") or chunk.get("invalid_tool_calls"):
+        return False
+
+    # Type-based heuristics.
+    chunk_type = str(chunk.get("type", ""))
+    if "tool" in chunk_type.lower():
+        return False
+
+    # Additional kwargs may contain tool metadata.
+    additional = chunk.get("additional_kwargs", {})
+    if any(key in additional for key in ("tool_calls", "function_call", "tool_call_id")):
+        return False
+
+    return True
