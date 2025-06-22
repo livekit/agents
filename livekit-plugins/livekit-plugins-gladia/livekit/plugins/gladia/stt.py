@@ -22,7 +22,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 import numpy as np
@@ -98,6 +98,16 @@ class TranslationConfiguration:
     target_languages: list[str] = dataclasses.field(default_factory=list)
     model: str = "base"
     match_original_utterances: bool = True
+    lipsync: bool = True
+    context_adaptation: bool = False
+    context: str | None = None
+    informal: bool = False
+
+
+@dataclass
+class PreProcessingConfiguration:
+    audio_enhancer: bool = False
+    speech_threshold: float = 0.6
 
 
 @dataclass
@@ -112,6 +122,63 @@ class STTOptions:
         default_factory=TranslationConfiguration
     )
     energy_filter: AudioEnergyFilter | bool = False
+    custom_vocabulary: list[str | dict] | None = None
+    custom_spelling: dict[str, list[str]] | None = None
+    pre_processing: PreProcessingConfiguration = dataclasses.field(
+        default_factory=PreProcessingConfiguration
+    )
+
+
+def _build_streaming_config(opts: STTOptions) -> dict[str, Any]:
+    """Build the streaming configuration for Gladia API."""
+    streaming_config: dict[str, Any] = {
+        "encoding": opts.encoding,
+        "sample_rate": opts.sample_rate,
+        "bit_depth": opts.bit_depth,
+        "channels": opts.channels,
+        "language_config": {
+            "languages": opts.language_config.languages or [],
+            "code_switching": opts.language_config.code_switching,
+        },
+        "realtime_processing": {
+            "words_accurate_timestamps": False,
+        },
+    }
+
+    if opts.custom_vocabulary:
+        streaming_config["realtime_processing"]["custom_vocabulary"] = True
+        streaming_config["realtime_processing"]["custom_vocabulary_config"] = {
+            "vocabulary": opts.custom_vocabulary,
+        }
+
+    if opts.custom_spelling:
+        streaming_config["realtime_processing"]["custom_spelling"] = True
+        streaming_config["realtime_processing"]["custom_spelling_config"] = {
+            "spelling_dictionary": opts.custom_spelling,
+        }
+
+    if opts.pre_processing:
+        streaming_config["pre_processing"] = {
+            "audio_enhancer": opts.pre_processing.audio_enhancer,
+            "speech_threshold": opts.pre_processing.speech_threshold,
+        }
+
+    if opts.translation_config.enabled:
+        streaming_config["realtime_processing"]["translation"] = True
+        translation_cfg = {
+            "target_languages": opts.translation_config.target_languages,
+            "model": opts.translation_config.model,
+            "match_original_utterances": opts.translation_config.match_original_utterances,
+            "lipsync": opts.translation_config.lipsync,
+            "context_adaptation": opts.translation_config.context_adaptation,
+            "informal": opts.translation_config.informal,
+        }
+        if opts.translation_config.context:
+            translation_cfg["context"] = opts.translation_config.context
+
+        streaming_config["realtime_processing"]["translation_config"] = translation_cfg
+
+    return streaming_config
 
 
 class STT(stt.STT):
@@ -133,6 +200,14 @@ class STT(stt.STT):
         translation_target_languages: list[str] | None = None,
         translation_model: str = "base",
         translation_match_original_utterances: bool = True,
+        translation_lipsync: bool = True,
+        translation_context_adaptation: bool = False,
+        translation_context: str | None = None,
+        translation_informal: bool = False,
+        custom_vocabulary: list[str | dict] | None = None,
+        custom_spelling: dict[str, list[str]] | None = None,
+        pre_processing_audio_enhancer: bool = False,
+        pre_processing_speech_threshold: float = 0.6,
     ) -> None:
         """Create a new instance of Gladia STT.
 
@@ -159,6 +234,14 @@ class STT(stt.STT):
             translation_model: Translation model to use. Defaults to "base".
             translation_match_original_utterances: Whether to match original utterances with
                                                     translations. Defaults to True.
+            translation_lipsync: If True, enables lipsync generation for translations.
+            translation_context_adaptation: If True, adapts translation to the context.
+            translation_context: A string providing context for translation.
+            translation_informal: If True, uses informal translation style.
+            custom_vocabulary: A list of custom vocabulary to use for recognition.
+            custom_spelling: A dictionary of custom spelling to use for transcription.
+            pre_processing_audio_enhancer: Whether to enable audio enhancement pre-processing.
+            pre_processing_speech_threshold: The speech threshold for pre-processing.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -181,6 +264,15 @@ class STT(stt.STT):
             target_languages=translation_target_languages or [],
             model=translation_model,
             match_original_utterances=translation_match_original_utterances,
+            lipsync=translation_lipsync,
+            context_adaptation=translation_context_adaptation,
+            context=translation_context,
+            informal=translation_informal,
+        )
+
+        pre_processing_config = PreProcessingConfiguration(
+            audio_enhancer=pre_processing_audio_enhancer,
+            speech_threshold=pre_processing_speech_threshold,
         )
 
         if translation_enabled and not translation_target_languages:
@@ -196,7 +288,10 @@ class STT(stt.STT):
             channels=channels,
             encoding=encoding,
             translation_config=translation_config,
+            pre_processing=pre_processing_config,
             energy_filter=energy_filter,
+            custom_vocabulary=custom_vocabulary,
+            custom_spelling=custom_spelling,
         )
         self._session = http_session
         self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
@@ -216,43 +311,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         """Implement synchronous speech recognition for Gladia using the live endpoint."""
         config = self._sanitize_options(languages=[language] if is_given(language) else None)
-
-        streaming_config = {
-            "encoding": config.encoding,
-            "sample_rate": config.sample_rate,
-            "bit_depth": config.bit_depth,
-            "channels": config.channels,
-            "language_config": {
-                "languages": config.language_config.languages or [],
-                "code_switching": config.language_config.code_switching,
-            },
-            "realtime_processing": {
-                "words_accurate_timestamps": False,
-                "custom_vocabulary": False,
-                "custom_vocabulary_config": {
-                    "vocabulary": [
-                        "Gladia",
-                        {"value": "Gladia", "intensity": 0.5},
-                    ],
-                    "default_intensity": 0.5,
-                },
-                "custom_spelling": False,
-                "custom_spelling_config": {
-                    "spelling_dictionary": {
-                        "SQL": ["Sequel"],
-                    }
-                },
-            },
-        }
-
-        # Add translation configuration if enabled
-        if config.translation_config.enabled:
-            streaming_config["realtime_processing"]["translation"] = True  # type: ignore
-            streaming_config["realtime_processing"]["translation_config"] = {  # type: ignore
-                "target_languages": config.translation_config.target_languages,
-                "model": config.translation_config.model,
-                "match_original_utterances": config.translation_config.match_original_utterances,
-            }
+        streaming_config = _build_streaming_config(config)
 
         try:
             # Initialize a session with Gladia
@@ -459,6 +518,14 @@ class STT(stt.STT):
         translation_target_languages: list[str] | None = None,
         translation_model: str | None = None,
         translation_match_original_utterances: bool | None = None,
+        translation_lipsync: bool | None = None,
+        translation_context_adaptation: bool | None = None,
+        translation_context: str | None = None,
+        translation_informal: bool | None = None,
+        custom_vocabulary: list[str | dict] | None = None,
+        custom_spelling: dict[str, list[str]] | None = None,
+        pre_processing_audio_enhancer: bool | None = None,
+        pre_processing_speech_threshold: float | None = None,
     ) -> None:
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
@@ -477,6 +544,10 @@ class STT(stt.STT):
             or translation_target_languages is not None
             or translation_model is not None
             or translation_match_original_utterances is not None
+            or translation_lipsync is not None
+            or translation_context_adaptation is not None
+            or translation_context is not None
+            or translation_informal is not None
         ):
             translation_config = dataclasses.replace(
                 self._opts.translation_config,
@@ -492,8 +563,31 @@ class STT(stt.STT):
                 match_original_utterances=translation_match_original_utterances
                 if translation_match_original_utterances is not None
                 else self._opts.translation_config.match_original_utterances,
+                lipsync=translation_lipsync
+                if translation_lipsync is not None
+                else self._opts.translation_config.lipsync,
+                context_adaptation=translation_context_adaptation
+                if translation_context_adaptation is not None
+                else self._opts.translation_config.context_adaptation,
+                context=translation_context
+                if translation_context is not None
+                else self._opts.translation_config.context,
+                informal=translation_informal
+                if translation_informal is not None
+                else self._opts.translation_config.informal,
             )
             self._opts.translation_config = translation_config
+
+        if pre_processing_audio_enhancer is not None or pre_processing_speech_threshold is not None:
+            self._opts.pre_processing = dataclasses.replace(
+                self._opts.pre_processing,
+                audio_enhancer=pre_processing_audio_enhancer
+                if pre_processing_audio_enhancer is not None
+                else self._opts.pre_processing.audio_enhancer,
+                speech_threshold=pre_processing_speech_threshold
+                if pre_processing_speech_threshold is not None
+                else self._opts.pre_processing.speech_threshold,
+            )
 
         if interim_results is not None:
             self._opts.interim_results = interim_results
@@ -505,6 +599,10 @@ class STT(stt.STT):
             self._opts.channels = channels
         if encoding is not None:
             self._opts.encoding = encoding
+        if custom_vocabulary is not None:
+            self._opts.custom_vocabulary = custom_vocabulary
+        if custom_spelling is not None:
+            self._opts.custom_spelling = custom_spelling
 
         for stream in self._streams:
             stream.update_options(
@@ -519,6 +617,14 @@ class STT(stt.STT):
                 translation_target_languages=translation_target_languages,
                 translation_model=translation_model,
                 translation_match_original_utterances=translation_match_original_utterances,
+                translation_lipsync=translation_lipsync,
+                translation_context_adaptation=translation_context_adaptation,
+                translation_context=translation_context,
+                translation_informal=translation_informal,
+                custom_vocabulary=custom_vocabulary,
+                custom_spelling=custom_spelling,
+                pre_processing_audio_enhancer=pre_processing_audio_enhancer,
+                pre_processing_speech_threshold=pre_processing_speech_threshold,
             )
 
     def _sanitize_options(self, *, languages: list[str] | None = None) -> STTOptions:
@@ -581,6 +687,14 @@ class SpeechStream(stt.SpeechStream):
         translation_target_languages: list[str] | None = None,
         translation_model: str | None = None,
         translation_match_original_utterances: bool | None = None,
+        translation_lipsync: bool | None = None,
+        translation_context_adaptation: bool | None = None,
+        translation_context: str | None = None,
+        translation_informal: bool | None = None,
+        custom_vocabulary: list[str | dict] | None = None,
+        custom_spelling: dict[str, list[str]] | None = None,
+        pre_processing_audio_enhancer: bool | None = None,
+        pre_processing_speech_threshold: float | None = None,
     ) -> None:
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
@@ -599,6 +713,10 @@ class SpeechStream(stt.SpeechStream):
             or translation_target_languages is not None
             or translation_model is not None
             or translation_match_original_utterances is not None
+            or translation_lipsync is not None
+            or translation_context_adaptation is not None
+            or translation_context is not None
+            or translation_informal is not None
         ):
             translation_config = dataclasses.replace(
                 self._opts.translation_config,
@@ -614,8 +732,31 @@ class SpeechStream(stt.SpeechStream):
                 match_original_utterances=translation_match_original_utterances
                 if translation_match_original_utterances is not None
                 else self._opts.translation_config.match_original_utterances,
+                lipsync=translation_lipsync
+                if translation_lipsync is not None
+                else self._opts.translation_config.lipsync,
+                context_adaptation=translation_context_adaptation
+                if translation_context_adaptation is not None
+                else self._opts.translation_config.context_adaptation,
+                context=translation_context
+                if translation_context is not None
+                else self._opts.translation_config.context,
+                informal=translation_informal
+                if translation_informal is not None
+                else self._opts.translation_config.informal,
             )
             self._opts.translation_config = translation_config
+
+        if pre_processing_audio_enhancer is not None or pre_processing_speech_threshold is not None:
+            self._opts.pre_processing = dataclasses.replace(
+                self._opts.pre_processing,
+                audio_enhancer=pre_processing_audio_enhancer
+                if pre_processing_audio_enhancer is not None
+                else self._opts.pre_processing.audio_enhancer,
+                speech_threshold=pre_processing_speech_threshold
+                if pre_processing_speech_threshold is not None
+                else self._opts.pre_processing.speech_threshold,
+            )
 
         if interim_results is not None:
             self._opts.interim_results = interim_results
@@ -627,6 +768,10 @@ class SpeechStream(stt.SpeechStream):
             self._opts.channels = channels
         if encoding is not None:
             self._opts.encoding = encoding
+        if custom_vocabulary is not None:
+            self._opts.custom_vocabulary = custom_vocabulary
+        if custom_spelling is not None:
+            self._opts.custom_spelling = custom_spelling
 
         self._reconnect_event.set()
 
@@ -684,29 +829,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _init_live_session(self) -> dict:
         """Initialize a live session with Gladia."""
-        streaming_config = {
-            "encoding": self._opts.encoding,
-            "sample_rate": self._opts.sample_rate,
-            "bit_depth": self._opts.bit_depth,
-            "channels": self._opts.channels,
-            "language_config": {
-                "languages": self._opts.language_config.languages or [],
-                "code_switching": self._opts.language_config.code_switching,
-            },
-            "realtime_processing": {},
-        }
-
-        # Add translation configuration if enabled
-        if self._opts.translation_config.enabled:
-            streaming_config["realtime_processing"]["translation"] = True  # type: ignore
-            streaming_config["realtime_processing"]["translation_config"] = {  # type: ignore
-                "target_languages": self._opts.translation_config.target_languages,
-                "model": self._opts.translation_config.model,
-                "match_original_utterances": (
-                    self._opts.translation_config.match_original_utterances
-                ),
-            }
-
+        streaming_config = _build_streaming_config(self._opts)
         try:
             async with self._session.post(
                 url=self._base_url,
