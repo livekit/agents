@@ -201,6 +201,10 @@ class ChunkedStream(tts.ChunkedStream):
         return self._tts._http_client.post(
             "/tts/v1/voice",
             json=_generate_request(self._opts, self._input_text),
+            timeout=httpx.Timeout(
+                timeout=30,
+                connect=self._conn_options.timeout,
+            ),
         )
 
 
@@ -267,6 +271,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             "POST",
             "/tts/v1/voice:stream",
             json=_generate_request(self._opts, sentence.token),
+            timeout=httpx.Timeout(
+                timeout=30,
+                connect=self._conn_options.timeout,
+            ),
         )
 
     async def _process_audio_stream(
