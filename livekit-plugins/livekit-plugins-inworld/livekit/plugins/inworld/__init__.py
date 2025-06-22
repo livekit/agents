@@ -17,14 +17,12 @@
 See https://docs.livekit.io/agents/integrations/tts/inworld/ for more information.
 """
 
-from .models import __all__ as models_all
 from .tts import TTS
 from .version import __version__
 
 __all__ = [
     "TTS",
     "__version__",
-    *models_all,
 ]
 
 from livekit.agents import Plugin
