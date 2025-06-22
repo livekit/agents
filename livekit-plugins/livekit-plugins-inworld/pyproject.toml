@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-inworld"
 dynamic = ["version"]
-description = "Agent Framework plugin for voice synthesis with Inworld AI's API."
+description = "Agent Framework plugin for voice synthesis with Inworld's API."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9.0"

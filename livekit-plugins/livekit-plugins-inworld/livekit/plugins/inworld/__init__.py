@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inworld AI plugin for LiveKit Agents
+"""Inworld plugin for LiveKit Agents
 
 See https://docs.livekit.io/agents/integrations/tts/inworld/ for more information.
 """
