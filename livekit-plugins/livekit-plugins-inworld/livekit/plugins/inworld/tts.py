@@ -68,17 +68,17 @@ class TTS(tts.TTS):
         auth_type: Literal["basic", "bearer"] = "basic",
     ) -> None:
         """
-        Create a new instance of Inworld AI TTS.
+        Create a new instance of Inworld TTS.
 
         Args:
-            api_key (str, optional): The Inworld AI API key.
+            api_key (str, optional): The Inworld API key.
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
-            model (str, optional): The Inworld AI model to use. Defaults to "inworld-tts-1".
+            model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1".
             voice (str, optional): The voice to use. Defaults to "Olivia".
             pitch (float, optional): The pitch of the voice. Defaults to 0.0.
             speed (float, optional): The speed of the voice. Defaults to 1.0.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
-            base_url (str, optional): The base URL for the Inworld AI API.
+            base_url (str, optional): The base URL for the Inworld API.
             auth_type (Literal["basic", "bearer"], optional): The authentication type to use.
                 Defaults to "basic".
         """
@@ -134,7 +134,7 @@ class TTS(tts.TTS):
         Update the TTS configuration options.
 
         Args:
-            model (str, optional): The Inworld AI model to use.
+            model (str, optional): The Inworld model to use.
             voice (str, optional): The voice to use.
             pitch (float, optional): The pitch of the voice.
             speed (float, optional): The speed of the voice.
