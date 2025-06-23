@@ -439,6 +439,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._update_agent_state("listening")
+            if self._room_io and self._room_io.subscribed_fut:
+
+                def on_room_io_subscribed(_: asyncio.Future[None]) -> None:
+                    if self._user_state == "listening" and self._agent_state == "listening":
+                        self._set_user_away_timer()
+
+                self._room_io.subscribed_fut.add_done_callback(on_room_io_subscribed)
 
     async def _trace_chat_ctx(self) -> None:
         if self._activity is None:
@@ -703,6 +710,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _set_user_away_timer(self) -> None:
         self._cancel_user_away_timer()
         if self._opts.user_away_timeout is None:
+            return
+
+        if (
+            (room_io := self._room_io)
+            and room_io.subscribed_fut
+            and not room_io.subscribed_fut.done()
+        ):
+            # skip the timer before user join the room
             return
 
         self._user_away_timer = self._loop.call_later(
