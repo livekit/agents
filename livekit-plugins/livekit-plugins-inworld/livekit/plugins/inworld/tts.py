@@ -14,18 +14,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
 import os
 from collections.abc import Coroutine
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import httpx
 
-from livekit.agents import tokenize, tts, utils
+from livekit.agents import tts, utils
 from livekit.agents._exceptions import APIConnectionError, APITimeoutError
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -40,6 +37,7 @@ NUM_CHANNELS = 1
 PITCH = 0.0
 SAMPLE_RATE = 24000
 SPEED = 1.0
+TEMPERATURE = 0.8
 WAV_HEADER_SIZE = 44
 VOICE_ID = "Olivia"
 
@@ -51,7 +49,7 @@ class _TTSOptions:
     pitch: float | None
     speed: float | None
     sampleRateHertz: int | None
-    tokenizer: tokenize.basic.SentenceTokenizer
+    temperature: float | None
 
 
 class TTS(tts.TTS):
@@ -64,6 +62,7 @@ class TTS(tts.TTS):
         pitch: float = PITCH,
         speed: float = SPEED,
         sample_rate: int = SAMPLE_RATE,
+        temperature: float = TEMPERATURE,
         base_url: str = INWORLD_API_BASE_URL,
         auth_type: Literal["basic", "bearer"] = "basic",
     ) -> None:
@@ -78,6 +77,7 @@ class TTS(tts.TTS):
             pitch (float, optional): The pitch of the voice. Defaults to 0.0.
             speed (float, optional): The speed of the voice. Defaults to 1.0.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
+            temperature (float, optional): The temperature of the voice. Defaults to 0.8.
             base_url (str, optional): The base URL for the Inworld API.
             auth_type (Literal["basic", "bearer"], optional): The authentication type to use.
                 Defaults to "basic".
@@ -100,10 +100,7 @@ class TTS(tts.TTS):
             pitch=pitch,
             speed=speed,
             sampleRateHertz=sample_rate,
-            tokenizer=tokenize.basic.SentenceTokenizer(
-                min_sentence_len=10,
-                stream_context_len=5,
-            ),
+            temperature=temperature,
         )
 
         self._http_client = httpx.AsyncClient(
@@ -115,9 +112,7 @@ class TTS(tts.TTS):
             timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
             follow_redirects=True,
             limits=httpx.Limits(
-                max_connections=50,
-                max_keepalive_connections=50,
-                keepalive_expiry=120,
+                max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
             ),
         )
 
@@ -129,6 +124,7 @@ class TTS(tts.TTS):
         pitch: float | None = None,
         speed: float | None = None,
         sample_rate: int | None = None,
+        temperature: float | None = None,
     ) -> None:
         """
         Update the TTS configuration options.
@@ -139,6 +135,7 @@ class TTS(tts.TTS):
             pitch (float, optional): The pitch of the voice.
             speed (float, optional): The speed of the voice.
             sample_rate (int, optional): The audio sample rate in Hz.
+            temperature (float, optional): The temperature of the voice.
         """
         if model is not None:
             self._opts.modelId = model
@@ -150,6 +147,8 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if sample_rate is not None:
             self._opts.sampleRateHertz = sample_rate
+        if temperature is not None:
+            self._opts.temperature = temperature
 
     def synthesize(
         self,
@@ -158,13 +157,6 @@ class TTS(tts.TTS):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
-
-    def stream(
-        self,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> tts.SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -184,11 +176,10 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             synthesis = await self._create_synthesis()
             response = synthesis.json()
-            if response and response.get("audioContent"):
-                audio_data = base64.b64decode(response["audioContent"])
+            if response and (audio_content := response.get("audioContent")):
+                audio_data = base64.b64decode(audio_content)
                 audio_data = _strip_wav_header(audio_data)
-                if audio_data:
-                    output_emitter.push(audio_data)
+                output_emitter.push(audio_data)
             output_emitter.flush()
         except httpx.TimeoutException:
             raise APITimeoutError() from None
@@ -202,96 +193,9 @@ class ChunkedStream(tts.ChunkedStream):
             "/tts/v1/voice",
             json=_generate_request(self._opts, self._input_text),
             timeout=httpx.Timeout(
-                timeout=30,
-                connect=self._conn_options.timeout,
+                timeout=self._conn_options.timeout,
             ),
         )
-
-
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        tokenizer_stream = self._opts.tokenizer.stream()
-        output_emitter.initialize(
-            request_id=utils.shortuuid(),
-            sample_rate=self._opts.sampleRateHertz or SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-            mime_type=MIME_TYPE,
-            stream=True,
-        )
-
-        tasks = [
-            asyncio.create_task(self._tokenize_input(tokenizer_stream)),
-            asyncio.create_task(self._synthesize_sentences(tokenizer_stream, output_emitter)),
-        ]
-
-        await asyncio.gather(*tasks)
-
-    async def _tokenize_input(self, tokenizer_stream: tokenize.SentenceStream) -> None:
-        async for text in self._input_ch:
-            self._mark_started()
-            if isinstance(text, str):
-                tokenizer_stream.push_text(text)
-            elif isinstance(text, self._FlushSentinel):
-                tokenizer_stream.flush()
-        tokenizer_stream.end_input()
-
-    async def _synthesize_sentences(
-        self,
-        tokenizer_stream: tokenize.SentenceStream,
-        output_emitter: tts.AudioEmitter,
-    ) -> None:
-        output_emitter.start_segment(segment_id=utils.shortuuid())
-
-        try:
-            async for sentence in tokenizer_stream:
-                if not sentence.token.strip():
-                    continue
-                stream = self._create_synthesis_stream(sentence)
-                await self._process_audio_stream(stream, output_emitter)
-            output_emitter.end_segment()
-        except httpx.TimeoutException:
-            raise APITimeoutError() from None
-        except Exception as e:
-            raise APIConnectionError() from e
-
-    def _create_synthesis_stream(
-        self, sentence: tokenize.TokenData
-    ) -> AbstractAsyncContextManager[httpx.Response]:
-        return self._tts._http_client.stream(
-            "POST",
-            "/tts/v1/voice:stream",
-            json=_generate_request(self._opts, sentence.token),
-            timeout=httpx.Timeout(
-                timeout=30,
-                connect=self._conn_options.timeout,
-            ),
-        )
-
-    async def _process_audio_stream(
-        self,
-        stream: AbstractAsyncContextManager[httpx.Response],
-        output_emitter: tts.AudioEmitter,
-    ) -> None:
-        async with stream as response:
-            async for chunk in response.aiter_lines():
-                if chunk:
-                    chunk_data = json.loads(chunk)
-                    result = chunk_data.get("result")
-                    if result:
-                        audio_data = base64.b64decode(result.get("audioContent"))
-                        audio_data = _strip_wav_header(audio_data)
-                        if audio_data:
-                            output_emitter.push(audio_data)
 
 
 def _strip_wav_header(audio_data: bytes) -> bytes:
@@ -316,6 +220,7 @@ def _generate_request(
             "sampleRateHertz": opts.sampleRateHertz or SAMPLE_RATE,
             "speakingRate": opts.speed or SPEED,
         },
+        "temperature": opts.temperature or TEMPERATURE,
     }
 
     return data

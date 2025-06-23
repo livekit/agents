@@ -451,13 +451,6 @@ STREAM_TTS = [
         },
         id="openai-stream-adapter",
     ),
-    pytest.param(
-        lambda: {
-            "tts": inworld.TTS(),
-            "proxy-upstream": "api.inworld.ai:443",
-        },
-        id="inworld",
-    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
