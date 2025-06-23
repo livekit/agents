@@ -103,6 +103,12 @@ def get_tool_results_for_realtime(
 def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
     fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
     json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
+    # Gemini API expects type object here:
+    # https://github.com/googleapis/python-genai/issues/981
+    if json_schema:
+        json_schema["type"] = "object"
+    else:
+        json_schema = {"type": "object"}
     return types.FunctionDeclaration(
         name=fnc["name"],
         description=fnc["description"],
