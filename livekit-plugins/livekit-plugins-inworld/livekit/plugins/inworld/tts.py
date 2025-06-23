@@ -15,8 +15,9 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
-from collections.abc import Coroutine
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -174,12 +175,15 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         try:
-            synthesis = await self._create_synthesis()
-            response = synthesis.json()
-            if response and (audio_content := response.get("audioContent")):
-                audio_data = base64.b64decode(audio_content)
-                audio_data = _strip_wav_header(audio_data)
-                output_emitter.push(audio_data)
+            async with self._create_synthesis() as synthesis:
+                async for chunk in synthesis.aiter_lines():
+                    if chunk:
+                        chunk_data = json.loads(chunk)
+                        if chunk_data and (chunk_result := chunk_data.get("result")):
+                            if chunk_result and (audio_content := chunk_result.get("audioContent")):
+                                audio_data = base64.b64decode(audio_content)
+                                audio_data = _strip_wav_header(audio_data)
+                                output_emitter.push(audio_data)
             output_emitter.flush()
         except httpx.TimeoutException:
             raise APITimeoutError() from None
@@ -188,9 +192,10 @@ class ChunkedStream(tts.ChunkedStream):
         finally:
             output_emitter.flush()
 
-    def _create_synthesis(self) -> Coroutine[Any, Any, httpx.Response]:
-        return self._tts._http_client.post(
-            "/tts/v1/voice",
+    def _create_synthesis(self) -> AbstractAsyncContextManager[httpx.Response]:
+        return self._tts._http_client.stream(
+            "POST",
+            "/tts/v1/voice:stream",
             json=_generate_request(self._opts, self._input_text),
             timeout=httpx.Timeout(
                 timeout=self._conn_options.timeout,
