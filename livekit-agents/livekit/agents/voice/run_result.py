@@ -140,10 +140,9 @@ class RunResult(Generic[Run_T]):
 class RunAssert:
     def __init__(self, run_result: RunResult):
         self._events_list = run_result.events
-        self._events_iter = iter(self._events_list)
         self._current_index = 0
 
-    def nth(self, index: int) -> "EventAssert":
+    def __getitem__(self, index: int) -> "EventAssert":
         if not (0 <= index < len(self._events_list)):
             self._raise_with_debug_info(
                 f"nth({index}) out of range (total events: {len(self._events_list)})",
@@ -151,41 +150,83 @@ class RunAssert:
             )
         return EventAssert(self._events_list[index], self, index)
 
-    def skip_next(self, count: int = 1) -> "RunAssert":
-        for i in range(count):
-            try:
-                next(self._events_iter)
-                self._current_index += 1
-            except StopIteration:
-                self._raise_with_debug_info(
-                    f"Tried to skip {count} event(s), but only {i} were available."
-                )
-        return self
-
-    def no_more_events(self) -> None:
-        try:
-            event = next(self._events_iter)
-            self._raise_with_debug_info(
-                f"Expected no more events, but found: {type(event).__name__}"
-            )
-        except StopIteration:
-            pass
-
-    def _next_event(self) -> "EventAssert":
-        event = next(self._events_iter, None)
-        if event is None:
+    def _current_event(self) -> "EventAssert":
+        if self._current_index >= len(self._events_list):
             self._raise_with_debug_info("Expected another event, but none left.")
-        current_index = self._current_index
-        self._current_index += 1
-        return self.nth(current_index)
+        event = self[self._current_index]
+        return event
 
     def _raise_with_debug_info(self, message: str, index: int | None = None):
         marker_index = self._current_index if index is None else index
         event_info = "\n".join(
-            f"{'-->' if i == marker_index else '   '} [{i}] {event}"
+            f"{'>>' if i == marker_index else '   '} [{i}] {event}"
             for i, event in enumerate(self._events_list)
         )
         raise AssertionError(f"{message}\nAll events:\n{event_info}")
+
+    def skip_next(self, count: int = 1) -> "RunAssert":
+        for i in range(count):
+            if self._current_index >= len(self._events_list):
+                self._raise_with_debug_info(
+                    f"Tried to skip {count} event(s), but only {i} were available."
+                )
+            self._current_index += 1
+        return self
+
+    def maybe_message(
+        self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN
+    ) -> "ChatMessageAssert | None":
+        try:
+            ev = self._current_event().is_message(role=role)
+            self._current_index += 1
+            return ev
+        except AssertionError:
+            return None
+
+    def maybe_function_call(
+        self,
+        *,
+        name: NotGivenOr[str] = NOT_GIVEN,
+        arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> "FunctionCallAssert | None":
+        try:
+            ev = self._current_event().is_function_call(name=name, arguments=arguments)
+            self._current_index += 1
+            return ev
+        except AssertionError:
+            return None
+
+    def maybe_function_call_output(
+        self, *, output: NotGivenOr[str] = NOT_GIVEN, is_error: NotGivenOr[bool] = NOT_GIVEN
+    ) -> "FunctionCallOutputAssert | None":
+        try:
+            ev = self._current_event().is_function_call_output(output=output, is_error=is_error)
+            self._current_index += 1
+            return ev
+        except AssertionError:
+            return None
+
+    def maybe_agent_handoff(
+        self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
+    ) -> "AgentHandoffAssert | None":
+        try:
+            ev = self._current_event().is_agent_handoff(new_agent_type=new_agent_type)
+            self._current_index += 1
+            return ev
+        except AssertionError:
+            return None
+
+    def no_more_events(self) -> None:
+        if self._current_index < len(self._events_list):
+            event = self._events_list[self._current_index]
+            self._raise_with_debug_info(
+                f"Expected no more events, but found: {type(event).__name__}"
+            )
+
+    def message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> "ChatMessageAssert":
+        ev = self._current_event().is_message(role=role)
+        self._current_index += 1
+        return ev
 
     def function_call(
         self,
@@ -193,20 +234,23 @@ class RunAssert:
         name: NotGivenOr[str] = NOT_GIVEN,
         arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> "FunctionCallAssert":
-        return self._next_event().is_function_call(name=name, arguments=arguments)
+        ev = self._current_event().is_function_call(name=name, arguments=arguments)
+        self._current_index += 1
+        return ev
 
     def function_call_output(
         self, *, output: NotGivenOr[str] = NOT_GIVEN, is_error: NotGivenOr[bool] = NOT_GIVEN
     ) -> "FunctionCallOutputAssert":
-        return self._next_event().is_function_call_output(output=output, is_error=is_error)
-
-    def message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> "ChatMessageAssert":
-        return self._next_event().is_message(role=role)
+        ev = self._current_event().is_function_call_output(output=output, is_error=is_error)
+        self._current_index += 1
+        return ev
 
     def agent_handoff(
         self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
     ) -> "AgentHandoffAssert":
-        return self._next_event().is_agent_handoff(new_agent_type=new_agent_type)
+        ev = self._current_event().is_agent_handoff(new_agent_type=new_agent_type)
+        self._current_index += 1
+        return ev
 
 
 class EventAssert:
