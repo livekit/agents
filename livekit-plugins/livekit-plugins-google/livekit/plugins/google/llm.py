@@ -268,9 +268,7 @@ class LLM(llm.LLM):
             extra["thinking_config"] = self._opts.thinking_config
 
         if is_given(self._opts.automatic_function_calling_config):
-            extra["automatic_function_calling"] = (
-                self._opts.automatic_function_calling_config
-            )
+            extra["automatic_function_calling"] = self._opts.automatic_function_calling_config
 
         gemini_tools = gemini_tools if is_given(gemini_tools) else self._opts.gemini_tools
 
