@@ -311,6 +311,12 @@ class RoomIO:
             return None
         return self._participant_available_fut.result()
 
+    @property
+    def subscribed_fut(self) -> asyncio.Future[None] | None:
+        if self._audio_output:
+            return self._audio_output.subscribed
+        return None
+
     def set_participant(self, participant_identity: str | None) -> None:
         """Switch audio and video streams to specified participant"""
         if participant_identity is None:
