@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict, Any, Union, Literal
 import json
+from ...log import logger
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
@@ -62,12 +63,14 @@ class ToolResultInputConfiguration(BaseModel):
 
 
 class ToolInputSchema(BaseModel):
-    json_: Dict[str, Any] = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
+    json_: str = Field(
+        default_factory=lambda: json.dumps(
+            {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            }
+        ),
         alias="json",
     )
 
@@ -83,6 +86,7 @@ class Tool(BaseModel):
 
 
 class ToolConfiguration(BaseModel):
+    # toolChoice: Dict[str, Any] | None = None
     tools: List[Tool]
 
 
@@ -253,7 +257,7 @@ class SonicEventBuilder:
                 )
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_text_content_start_event(
@@ -271,7 +275,7 @@ class SonicEventBuilder:
                 )
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_tool_content_start_event(
@@ -291,7 +295,7 @@ class SonicEventBuilder:
                 )
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_audio_input_event(
@@ -308,7 +312,7 @@ class SonicEventBuilder:
                 )
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_text_input_event(
@@ -325,7 +329,7 @@ class SonicEventBuilder:
                 )
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_tool_result_event(
@@ -347,7 +351,7 @@ class SonicEventBuilder:
                 )
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_content_end_event(
@@ -362,7 +366,7 @@ class SonicEventBuilder:
                 )
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_prompt_end_event(prompt_name: str) -> str:
@@ -371,34 +375,44 @@ class SonicEventBuilder:
                 promptEnd=PromptEnd(promptName=prompt_name),
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_session_end_event() -> str:
         event = Event(
             event=SessionEndEvent(sessionEnd=SessionEnd()),
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)
 
     @staticmethod
     def create_prompt_start_event(
         prompt_name: str,
         voice_id: VOICE_ID,
         sample_rate: SAMPLE_RATE_HERTZ,
-        tool_configuration: Optional[ToolConfiguration] = None,
+        tool_configuration: Optional[Union[ToolConfiguration, Dict[str, Any], str]] = None,
     ) -> str:
         tool_configuration = tool_configuration or ToolConfiguration(tools=[])
-
+        for tool in tool_configuration.tools:
+            logger.debug(f"TOOL JSON SCHEMA: {tool.toolSpec.inputSchema}")
         tool_objects = [
             Tool(
                 toolSpec=ToolSpec(
                     name=tool.toolSpec.name,
                     description=tool.toolSpec.description,
-                    inputSchema=ToolInputSchema(json=tool.toolSpec.inputSchema.json),
+                    inputSchema=ToolInputSchema(json_=tool.toolSpec.inputSchema.json_),
                 )
             )
             for tool in tool_configuration.tools
         ]
+
+        if tool_configuration is None:
+            tool_configuration = ToolConfiguration(tools=[])
+        elif isinstance(tool_configuration, str):
+            tool_configuration = ToolConfiguration(**json.loads(tool_configuration))
+        elif isinstance(tool_configuration, dict):
+            tool_configuration = ToolConfiguration(**tool_configuration)
+
+        tool_objects = list(tool_configuration.tools)
         event = Event(
             event=PromptStartEvent(
                 promptStart=PromptStart(
@@ -412,4 +426,4 @@ class SonicEventBuilder:
                 )
             )
         )
-        return event.model_dump_json(exclude_none=True)
+        return event.model_dump_json(exclude_none=True, by_alias=True)

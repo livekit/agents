@@ -13,7 +13,11 @@ from typing import Any, Literal
 from livekit import rtc
 from livekit.agents import llm, utils
 from livekit.agents.llm.realtime import RealtimeSession
-from livekit.agents.llm.tool_context import get_raw_function_info, is_function_tool, is_raw_function_tool
+from livekit.agents.llm.tool_context import (
+    get_raw_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -32,8 +36,15 @@ from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_core.aio.interfaces.identity import IdentityResolver
 import boto3
 from ...log import logger
-from .events import SonicEventBuilder as seb, VOICE_ID
-
+from .events import (
+    SonicEventBuilder as seb,
+    VOICE_ID,
+    ToolConfiguration,
+    Tool,
+    ToolSpec,
+    ToolInputSchema,
+)
+from aws_sdk_bedrock_runtime.models import ValidationException
 
 INPUT_SAMPLE_RATE = 16000
 OUTPUT_SAMPLE_RATE = 24000
@@ -41,6 +52,11 @@ SAMPLE_SIZE_BITS = 16
 CHANNELS = 1
 CHUNK_SIZE = 512
 DEFAULT_TEMPERATURE = 0.7
+
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a friend. The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."
+    "When reading order numbers, please read each digit individually, separated by pauses. For example, order #1234 should be read as 'order number one-two-three-four' rather than 'order number one thousand two hundred thirty-four'."
+)
 
 
 @dataclass
@@ -67,6 +83,7 @@ class _ResponseGeneration:
     messages: dict[str, _MessageGeneration] = field(default_factory=dict)
     user_messages: dict[str, str] = field(default_factory=dict)
     speculative_messages: dict[str, str] = field(default_factory=dict)
+    tool_messages: dict[str, str] = field(default_factory=dict)
     output_text: str = ""  # agent ASR text
     _created_timestamp: str = field(default_factory=datetime.now().isoformat())
     _first_token_timestamp: float | None = None
@@ -158,6 +175,9 @@ class RealtimeSession(
         self.bedrock_client = None
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
+        self._tools_ready = asyncio.Event()
+        self._tool_type_map = {}
+        self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self.audio_input_queue = utils.aio.Chan()
 
         self.prompt_name = str(uuid.uuid4())
@@ -173,6 +193,9 @@ class RealtimeSession(
             "text_output_content_start": self._handle_text_output_content_start_event,
             "text_output_content": self._handle_text_output_content_event,
             "text_output_content_end": self._handle_text_output_content_end_event,
+            "tool_output_content_start": self._handle_tool_output_content_start_event,
+            "tool_output_content": self._handle_tool_output_content_event,
+            "tool_output_content_end": self._handle_tool_output_content_end_event,
             "completion_end": self._handle_completion_end_event,
             "usage": self._handle_usage_event,
             "other_event": self._handle_other_event,
@@ -196,10 +219,16 @@ class RealtimeSession(
                 return "text_output_content_start"
             elif event.get("contentEnd", {}).get("type") == "TEXT":
                 return "text_output_content_end"
+            elif event.get("contentStart", {}).get("type") == "TOOL":
+                return "tool_output_content_start"
+            elif event.get("contentEnd", {}).get("type") == "TOOL":
+                return "tool_output_content_end"
             elif event.get("textOutput"):
                 return "text_output_content"
             elif event.get("audioOutput"):
                 return "audio_output_content"
+            elif event.get("toolUse"):
+                return "tool_output_content"
             elif "completionStart" in event:
                 return "completion_start"
             elif "completionEnd" in event:
@@ -214,7 +243,7 @@ class RealtimeSession(
         logger.debug(f"Emitting generation event")
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
-            function_stream=self.dummy_stream,
+            function_stream=self._current_generation.function_ch,
             user_initiated=False,
         )
         self.emit("generation_created", generation_ev)
@@ -320,6 +349,60 @@ class RealtimeSession(
             logger.debug(f"BARGE-IN DETECTED FOR TEXT CONTENT ID: {text_content_id}")
             self._close_current_generation(self._current_generation.response_id)
 
+    async def _handle_tool_output_content_start_event(self, event_data: dict) -> None:
+        logger.debug(f"TOOL OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
+        tool_use_content_id = event_data["event"]["contentStart"]["contentId"]
+        self._current_generation.tool_messages[tool_use_content_id] = (
+            self._current_generation.response_id
+        )
+
+    # note: tool calls are synchronous for now
+    async def _handle_tool_output_content_event(self, event_data: dict) -> None:
+        logger.debug(f"TOOL OUTPUT CONTENT EVENT: {json.dumps(event_data, indent=2)}")
+        tool_use_content_id = event_data["event"]["toolUse"]["contentId"]
+        tool_use_id = event_data["event"]["toolUse"]["toolUseId"]
+        tool_name = event_data["event"]["toolUse"]["toolName"]
+        if (
+            self._current_generation.tool_messages.get(tool_use_content_id)
+            == self._current_generation.response_id
+        ):
+            args = event_data["event"]["toolUse"]["content"]
+            self._current_generation.function_ch.send_nowait(
+                llm.FunctionCall(
+                    call_id=tool_use_id,
+                    name=tool_name,
+                    arguments=args,
+                )
+            )
+            # need to invoke tool function here
+            logger.debug(f"TOOL ARGS: {args}")
+            # note: may need to inject RunContext here...
+            tool_type = self._tool_type_map[tool_name]
+            if tool_type == "FunctionTool":
+                tool_result = await self.tools.function_tools[tool_name](**json.loads(args))
+            elif tool_type == "RawFunctionTool":
+                tool_result = await self.tools.function_tools[tool_name](json.loads(args))
+            else:
+                raise ValueError(f"Unknown tool type: {tool_type}")
+            logger.debug(f"TOOL RESULT: {tool_result}")
+            self._tool_results_ch.send_nowait(
+                {
+                    "tool_use_id": tool_use_id,
+                    "tool_result": tool_result,
+                }
+            )
+
+    async def _handle_tool_output_content_end_event(self, event_data: dict) -> None:
+        logger.debug(f"TOOL OUTPUT CONTENT END EVENT: {json.dumps(event_data, indent=2)}")
+        # tool_use_id = event_data["event"]["contentEnd"]["toolUseId"]
+        # stop_reason = event_data["event"]["contentEnd"]["stopReason"]
+        # if (
+        #     stop_reason == "END_TURN"
+        #     and self._current_generation.speculative_messages.get(tool_use_id)
+        #     == self._current_generation.response_id
+        # ):
+        #     self._close_current_generation(self._current_generation.response_id)
+
     async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
         logger.debug(f"AUDIO OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
         audio_content_id = event_data["event"]["contentStart"]["contentId"]
@@ -414,11 +497,47 @@ class RealtimeSession(
                     model_id=self._realtime_model.model_id
                 )
             )
+            # Q: is this the right place? (perhaps only for bedrock client...)
             self.is_active = True
-            default_system_prompt = (
-                "You are a friend. The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."
-                "When reading order numbers, please read each digit individually, separated by pauses. For example, order #1234 should be read as 'order number one-two-three-four' rather than 'order number one thousand two hundred thirty-four'."
-            )
+            for name, tool in self.tools.function_tools.items():
+                logger.debug(f"TOOL: {name}: {vars(tool)}")
+            if not self.tools.function_tools:
+                try:
+                    await asyncio.wait_for(self._tools_ready.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Tools not ready after 2sec, continuing without them")
+
+            tool_cfg = None
+            if self.tools.function_tools:
+                tools = []
+                for name, f in self.tools.function_tools.items():
+                    if llm.tool_context.is_function_tool(f):
+                        description = llm.tool_context.get_function_info(f).description
+                        input_schema = llm.utils.build_legacy_openai_schema(
+                            f, internally_tagged=True
+                        )["parameters"]
+                        self._tool_type_map[name] = "FunctionTool"
+                    else:
+                        description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
+                            "description"
+                        )
+                        input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
+                            "parameters"
+                        ]
+                        self._tool_type_map[name] = "RawFunctionTool"
+
+                    tool = Tool(
+                        toolSpec=ToolSpec(
+                            name=name,
+                            description=description,
+                            inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),
+                        )
+                    )
+                    tools.append(tool)
+
+                tool_cfg = ToolConfiguration(tools=tools)
+            for tool in tool_cfg.tools:
+                logger.debug(f"Tool configuration: {tool.toolSpec.inputSchema}")
 
             init_events = [
                 seb.create_session_start_event(),
@@ -426,6 +545,7 @@ class RealtimeSession(
                     prompt_name=self.prompt_name,
                     voice_id=self._realtime_model._opts.voice,
                     sample_rate=OUTPUT_SAMPLE_RATE,
+                    tool_configuration=tool_cfg,
                 ),
                 seb.create_text_content_start_event(
                     prompt_name=self.prompt_name,
@@ -435,7 +555,7 @@ class RealtimeSession(
                 seb.create_text_input_event(
                     prompt_name=self.prompt_name,
                     content_name=self.content_name,
-                    content=default_system_prompt,
+                    content=DEFAULT_SYSTEM_PROMPT,
                 ),
                 seb.create_content_end_event(
                     prompt_name=self.prompt_name,
@@ -445,6 +565,7 @@ class RealtimeSession(
 
             for event in init_events:
                 await self.send_raw_event(event)
+                logger.debug(f"Sent event: {event}")
                 await asyncio.sleep(0.1)
 
             self.response_task = asyncio.create_task(
@@ -504,24 +625,6 @@ class RealtimeSession(
             logger.debug(f"Error sending event: {str(e)}")
             traceback.print_exc()
 
-    def _create_tool_content_start_event(self, prompt_name, content_name, tool_use_id):
-        return {
-            "event": {
-                "contentStart": {
-                    "promptName": prompt_name,
-                    "contentName": content_name,
-                    "interactive": False,
-                    "type": "TOOL",
-                    "role": "TOOL",
-                    "toolResultInputConfiguration": {
-                        "toolUseId": tool_use_id,
-                        "type": "TEXT",
-                        "textInputConfiguration": {"mediaType": "text/plain"},
-                    },
-                }
-            }
-        }
-
     @utils.log_exceptions(logger=logger)
     async def _process_responses(self):
         try:
@@ -545,7 +648,7 @@ class RealtimeSession(
                     break
                 except Exception as e:
                     # Handle ValidationException properly
-                    if "ValidationException" in str(e):
+                    if isinstance(e, ValidationException):
                         error_message = str(e)
                         logger.debug(f"Validation error: {error_message}")
                     else:
@@ -579,6 +682,7 @@ class RealtimeSession(
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Any]) -> None:
         # logger.warning("updating tool list is not yet supported by Nova Sonic's Realtime API")
+        logger.debug(f"Updating tools: {tools}")
         retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
         for tool in tools:
@@ -595,6 +699,9 @@ class RealtimeSession(
             #     continue
             retained_tools.append(tool)
         self._tools = llm.ToolContext(retained_tools)
+        if retained_tools:
+            self._tools_ready.set()
+            logger.debug("Tool list has been injected")
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         logger.warning(
@@ -658,6 +765,17 @@ class RealtimeSession(
         logger.debug("Starting audio input processing loop")
         while self.is_active:
             try:
+                try:
+                    val = self._tool_results_ch.recv_nowait()
+                    logger.debug(f"TOOL RESULT: {val}")
+                    tool_result = val["tool_result"]
+                    tool_use_id = val["tool_use_id"]
+                    await self._send_tool_events(tool_use_id, tool_result)
+
+                except utils.aio.channel.ChanEmpty:
+                    # logger.debug("No tool results received")
+                    pass
+
                 # logger.debug("Waiting for audio data from queue...")
                 data = await self.audio_input_queue.recv()
 
@@ -682,6 +800,28 @@ class RealtimeSession(
             except Exception as e:
                 logger.debug(f"Error processing audio: {e}")
                 traceback.print_exc()
+
+    async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
+        tool_content_name = str(uuid.uuid4())
+        tool_events = [
+            seb.create_tool_content_start_event(
+                prompt_name=self.prompt_name,
+                content_name=tool_content_name,
+                tool_use_id=tool_use_id,
+            ),
+            seb.create_tool_result_event(
+                prompt_name=self.prompt_name,
+                content_name=tool_content_name,
+                content=tool_result,
+            ),
+            seb.create_content_end_event(
+                prompt_name=self.prompt_name,
+                content_name=tool_content_name,
+            ),
+        ]
+        for event in tool_events:
+            await self.send_raw_event(event)
+            # logger.debug(f"Sent tool event: {event}")
 
     def generate_reply(
         self,

@@ -65,7 +65,7 @@ class _TurnTracker:
         # will always be correlated b/c generate_reply() is a stub
         # user ASR text ends when agent's ASR speculative text begins
         # corresponds to beginning of agent's turn
-        elif kind == "ASSISTANT_SPEC_START":
+        elif kind == "TOOL_OUTPUT_CONTENT_START" or kind == "ASSISTANT_SPEC_START":
             self._maybe_emit_input_stopped(turn)
             self._maybe_emit_transcript_completed(turn)
             self._maybe_emit_generation_created(turn)
@@ -144,6 +144,9 @@ def _classify(ev: dict) -> str:
     e = ev.get("event", {})
     if "textOutput" in e and e["textOutput"]["role"] == "USER":
         return "USER_TEXT_PARTIAL"
+
+    if "contentStart" in e and e["contentStart"]["type"] == "TOOL":
+        return "TOOL_OUTPUT_CONTENT_START"
 
     if "contentStart" in e and e["contentStart"]["role"] == "ASSISTANT":
         add = e["contentStart"].get("additionalModelFields", "")
