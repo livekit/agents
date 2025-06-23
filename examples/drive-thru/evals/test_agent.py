@@ -22,33 +22,31 @@ async def test_item_ordering() -> None:
         # add big mac
         await sess.start(DriveThruAgent(userdata=userdata))
         result = await sess.run(user_input="Can I get a Big Mac, no meal?")
-        result.expect.nth(0).is_function_call(
-            name="order_regular_item", arguments={"item_id": "big_mac"}
-        )
-        fnc_out = result.expect.nth(1).is_function_call_output()
+        result.expect.function_call(name="order_regular_item", arguments={"item_id": "big_mac"})
+        fnc_out = result.expect.function_call_output()
         assert fnc_out.event().item.output.startswith("The item was added")
-        result.expect.nth(2).is_message(role="assistant")
+        result.expect.message(role="assistant")
+        result.expect.no_more_events()
 
         # remove item
         result = await sess.run(user_input="No actually I don't want it")
-        try:
-            result.expect.nth(0).is_function_call(name="list_order_items")
-            result.expect.nth(1).is_function_call_output()
-            result.expect.nth(2).is_function_call(name="remove_order_item")
-            result.expect.nth(3).is_function_call_output()
-            result.expect.nth(4).is_message(role="assistant")
-        except AssertionError:
-            result.expect.nth(0).is_function_call(name="remove_order_item")
-            result.expect.nth(1).is_function_call_output()
-            result.expect.nth(2).is_message(role="assistant")
+        result.expect.maybe_message(role="assistant")
+        result.expect.maybe_function_call(name="list_order_items")
+        result.expect.maybe_function_call_output()
+        result.expect.function_call(name="remove_order_item")
+        result.expect.function_call_output()
+        result.expect.message(role="assistant")
+        result.expect.no_more_events()
 
         # order mcflurry
         result = await sess.run(user_input="Can I get a McFlurry Oreo?")
+        result.expect.maybe_message(role="assistant")
         result.expect.function_call(
             name="order_regular_item", arguments={"item_id": "sweet_mcflurry_oreo"}
         )
         result.expect.function_call_output()
         result.expect.message(role="assistant")
+        result.expect.no_more_events()
 
 
 @pytest.mark.asyncio
@@ -66,9 +64,11 @@ async def test_meal_order() -> None:
         )
         msg_assert = result.expect.message(role="assistant")
         await msg_assert.judge(llm, intent="should prompt the user to choose a drink")
+        result.expect.no_more_events()
 
         # order the drink
         result = await sess.run(user_input="a large coca cola")
+        result.expect.maybe_message(role="assistant")
         result.expect.function_call(
             name="order_combo_meal",
             arguments={
@@ -81,6 +81,7 @@ async def test_meal_order() -> None:
         )
         result.expect.function_call_output()
         result.expect.message(role="assistant")
+        result.expect.no_more_events()
 
 
 @pytest.mark.asyncio
@@ -97,6 +98,7 @@ async def test_failure() -> None:
         ):
             await sess.start(DriveThruAgent(userdata=userdata))
             result = await sess.run(user_input="Can I get a large vanilla shake?")
+            result.expect.maybe_message(role="assistant")
             result.expect.function_call(
                 name="order_regular_item", arguments={"item_id": "shake_vanilla", "size": "L"}
             )
@@ -104,6 +106,9 @@ async def test_failure() -> None:
             await result.expect.message(role="assistant").judge(
                 llm, intent="should inform the user that an error occurred"
             )
+
+            # leaving this commented, some LLMs may occasionally try to retry.
+            # result.expect.no_more_events()
 
 
 @pytest.mark.asyncio
@@ -122,21 +127,19 @@ async def test_unavailable_item() -> None:
         await sess.start(DriveThruAgent(userdata=userdata))
         result = await sess.run(user_input="Can I get a large coca cola?")
         try:
-            await (
-                result.expect.nth(0)
-                .is_message(role="assistant")
-                .judge(llm, intent="should inform the user that the coca cola is unavailable")
+            await result.expect.message(role="assistant").judge(
+                llm, intent="should inform the user that the coca cola is unavailable"
             )
         except:
-            result.expect.nth(0).is_function_call(
+            result.expect.maybe_message(role="assistant")
+            result.expect.function_call(
                 name="order_regular_item", arguments={"item_id": "coca_cola", "size": "L"}
             )
-            result.expect.nth(1).is_function_call_output()
-            await (
-                result.expect.nth(2)
-                .is_message(role="assistant")
-                .judge(llm, intent="should inform the user that the coca cola is unavailable")
+            result.expect.function_call_output(is_error=True)
+            await result.expect.message(role="assistant").judge(
+                llm, intent="should inform the user that the coca cola is unavailable"
             )
+        result.expect.no_more_events()
 
 
 @pytest.mark.asyncio
@@ -153,9 +156,11 @@ async def test_ask_for_size() -> None:
         await result.expect.message(role="assistant").judge(
             llm, intent="should ask for the drink size"
         )
+        result.expect.no_more_events()
 
         # order a small fanta
         result = await sess.run(user_input="a small one")
+        result.expect.maybe_message(role="assistant")
         result.expect.function_call(
             name="order_regular_item", arguments={"item_id": "fanta_orange", "size": "S"}
         )
@@ -163,6 +168,7 @@ async def test_ask_for_size() -> None:
         await result.expect.message(role="assistant").judge(
             llm, intent="should confirm that the fanta orange was ordered"
         )
+        result.expect.no_more_events()
 
 
 @pytest.mark.asyncio
@@ -172,6 +178,7 @@ async def test_consecutive_order() -> None:
     async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
         await sess.start(DriveThruAgent(userdata=userdata))
         result = await sess.run(user_input="Can I get two mayonnaise sauces?")
+        result.expect.maybe_message(role="assistant")
         result.expect.function_call(name="order_regular_item", arguments={"item_id": "mayonnaise"})
         result.expect.function_call_output()
         result.expect.function_call(name="order_regular_item", arguments={"item_id": "mayonnaise"})
@@ -179,6 +186,7 @@ async def test_consecutive_order() -> None:
         await result.expect.message(role="assistant").judge(
             llm, intent="should confirm that two mayonnaise sauces was ordered"
         )
+        result.expect.no_more_events()
 
 
 @pytest.mark.asyncio
@@ -206,6 +214,7 @@ async def test_conv():
         await agent.update_chat_ctx(chat_ctx)
 
         result = await sess.run(user_input="mayonnaise")
+        result.expect.maybe_message(role="assistant")
         result.expect.function_call(
             name="order_combo_meal",
             arguments={
@@ -220,3 +229,4 @@ async def test_conv():
         await result.expect.message(role="assistant").judge(
             llm, intent="should confirm the order of a Big Mac meal"
         )
+        result.expect.no_more_events()
