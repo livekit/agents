@@ -1,634 +1,415 @@
-from __future__ import annotations
-
-import asyncio
-import base64
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, List, Dict, Any, Union, Literal
 import json
-import traceback
-import uuid
-import weakref
-from collections.abc import Iterator
-from dataclasses import dataclass
-from typing import Any, Literal
-from livekit import rtc
-from livekit.agents import llm, utils
-from livekit.agents.llm.realtime import RealtimeSession
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
 
-from aws_sdk_bedrock_runtime.client import (
-    BedrockRuntimeClient,
-    InvokeModelWithBidirectionalStreamOperationInput,
-)
-from aws_sdk_bedrock_runtime.models import (
-    InvokeModelWithBidirectionalStreamInputChunk,
-    BidirectionalInputPayloadPart,
-)
-from aws_sdk_bedrock_runtime.config import Config, HTTPAuthSchemeResolver, SigV4AuthScheme
-from livekit.agents.utils.aio.channel import ChanEmpty
-from smithy_aws_core.identity import AWSCredentialsIdentity
-from smithy_core.aio.interfaces.identity import IdentityResolver
-import boto3
-from ..log import logger
-from .events import SonicEventBuilder as seb, VOICE_ID
+MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
+TYPE = Literal["TEXT", "AUDIO", "TOOL"]
+VOICE_ID = Literal["matthew", "tiffany", "amy"]
+ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
+GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]
+STOP_REASON = Literal["PARTIAL_TURN", "END_TURN", "INTERRUPTED"]
+SAMPLE_RATE_HERTZ = Literal[8_000, 16_000, 24_000]
+AUDIO_ENCODING = Literal["base64"]  # all audio data must be base64 encoded
+SAMPLE_SIZE_BITS = Literal[16]  # only supports 16-bit audio
+CHANNEL_COUNT = Literal[1]  # only supports monochannel audio
 
 
-INPUT_SAMPLE_RATE = 16000
-OUTPUT_SAMPLE_RATE = 24000
-SAMPLE_SIZE_BITS = 16
-CHANNELS = 1
-CHUNK_SIZE = 512
-DEFAULT_TEMPERATURE = 0.7
+class BaseModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
-@dataclass
-class _RealtimeOptions:
-    voice: VOICE_ID
-    temperature: float
-    tool_choice: llm.ToolChoice | None
-    region: str
+class InferenceConfiguration(BaseModel):
+    maxTokens: int = Field(default=1024, ge=1, le=10_000, frozen=True)
+    topP: float = Field(default=0.9, ge=0.0, le=1.0, frozen=True)
+    temperature: float = Field(default=0.7, ge=0.0, le=1.0, frozen=True)
 
 
-@dataclass
-class _MessageGeneration:
-    message_id: str
-    text_ch: utils.aio.Chan[str]
-    audio_ch: utils.aio.Chan[rtc.AudioFrame]
+class AudioInputConfiguration(BaseModel):
+    mediaType: MEDIA_TYPE = "audio/lpcm"
+    sampleRateHertz: SAMPLE_RATE_HERTZ = Field(default=16000)
+    sampleSizeBits: SAMPLE_SIZE_BITS = 16
+    channelCount: CHANNEL_COUNT = 1
+    audioType: str = "SPEECH"
+    encoding: AUDIO_ENCODING = "base64"
 
 
-@dataclass
-class _ResponseGeneration:
-    message_ch: utils.aio.Chan[llm.MessageGeneration]
-    function_ch: utils.aio.Chan[llm.FunctionCall]
-
-    messages: dict[str, _MessageGeneration]
-
-
-
-class Boto3CredentialsResolver(IdentityResolver):
-    def __init__(self):
-        self.session = boto3.Session()
-
-    async def get_identity(self, **kwargs):
-        try:
-            logger.debug("Attempting to load AWS credentials")
-            credentials = self.session.get_credentials()
-            if not credentials:
-                logger.error("Unable to load AWS credentials")
-                raise ValueError("Unable to load AWS credentials")
-
-            creds = credentials.get_frozen_credentials()
-            logger.debug(
-                f"AWS credentials loaded successfully. AWS_ACCESS_KEY_ID: {creds.access_key[:4]}***"
-            )
-
-            identity = AWSCredentialsIdentity(
-                access_key_id=creds.access_key,
-                secret_access_key=creds.secret_key,
-                session_token=creds.token if creds.token else None,
-                expiration=None,
-            )
-            return identity
-        except Exception as e:
-            logger.error(f"Failed to load AWS credentials: {str(e)}")
-            raise ValueError(f"Failed to load AWS credentials: {str(e)}")
+class AudioOutputConfiguration(BaseModel):
+    mediaType: MEDIA_TYPE = "audio/lpcm"
+    sampleRateHertz: SAMPLE_RATE_HERTZ = Field(default=24_000)
+    sampleSizeBits: SAMPLE_SIZE_BITS = 16
+    channelCount: CHANNEL_COUNT = 1
+    voiceId: VOICE_ID = Field(...)
+    encoding: AUDIO_ENCODING = "base64"
+    audioType: str = "SPEECH"
 
 
-class RealtimeModel(llm.RealtimeModel):
-    def __init__(
-        self,
-        *,
-        voice: VOICE_ID = "tiffany",
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        region: str = "us-east-1",
-    ):
-        super().__init__(
-            capabilities=llm.RealtimeCapabilities(
-                message_truncation=False,
-                turn_detection=True,
-                user_transcription=True,   
-                auto_tool_reply_generation=True,
-            )
-        )
-        self.model_id = 'amazon.nova-sonic-v1:0'
-        self._opts = _RealtimeOptions(
-            voice=voice,
-            temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
-            tool_choice=tool_choice or None,
-            region=region,
-        )
-        self._sessions = weakref.WeakSet[RealtimeSession]()
-
-    def session(self) -> RealtimeSession:
-        sess = RealtimeSession(self)
-        sess._initialization_task = asyncio.get_event_loop().create_future()
-        asyncio.create_task(sess._initialize_stream())
-        self._sessions.add(sess)
-        return sess
-
-    # Q: why can this be a stub? shouldn't it proxy to the session's impl?
-    async def aclose(self) -> None:
-        pass
+class TextInputConfiguration(BaseModel):
+    mediaType: MEDIA_TYPE = "text/plain"
 
 
-class RealtimeSession(
-    llm.RealtimeSession[Literal["bedrock_server_event_received", "bedrock_client_event_queued"]]
-):
-    def __init__(self, realtime_model: RealtimeModel) -> None:
-        super().__init__(realtime_model)
-        self._realtime_model = realtime_model
-        self._input_resampler: rtc.AudioResampler | None = None
-        self._bstream = utils.audio.AudioByteStream(
-            INPUT_SAMPLE_RATE, CHANNELS, samples_per_channel=CHUNK_SIZE
-        )
+class TextOutputConfiguration(BaseModel):
+    mediaType: MEDIA_TYPE = "text/plain"
 
-        self.response_task = None
-        self.stream_response = None
-        self.is_active = False
-        self._initialization_task = None
-        self.bedrock_client = None
-        self._chat_ctx = llm.ChatContext.empty()
-        self.audio_input_queue = utils.aio.Chan()
-        self.audio_output_queue = utils.aio.Chan()
-        self.text_output_queue = utils.aio.Chan()
-        self.output_queue = utils.aio.Chan()
-        self.dummy_stream = utils.aio.Chan()
 
-        self.prompt_name = str(uuid.uuid4())
-        self.content_name = str(uuid.uuid4())
-        self.audio_content_name = str(uuid.uuid4())
-        self._current_generation = {}
+class ToolUseOutputConfiguration(BaseModel):
+    mediaType: MEDIA_TYPE = "application/json"
 
-    @DeprecationWarning
-    @classmethod
-    async def create(cls, realtime_model: RealtimeModel) -> "RealtimeSession":
-        session = cls(realtime_model)
-        await session.initialize_stream()
-        return session
 
-    @utils.log_exceptions(logger=logger)
-    def _initialize_client(self):
-        config = Config(
-            endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
-            region=self._realtime_model._opts.region,
-            aws_credentials_identity_resolver=Boto3CredentialsResolver(),
-            http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
-            http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme()},
-        )
-        self.bedrock_client = BedrockRuntimeClient(config=config)
+class ToolResultInputConfiguration(BaseModel):
+    toolUseId: str
+    type: TYPE = "TEXT"
+    textInputConfiguration: TextInputConfiguration = TextInputConfiguration()
 
-    @utils.log_exceptions(logger=logger)
-    async def _initialize_stream(self):
-        try:
-            logger.debug(
-                f"Initializing Bedrock stream with realtime options: {self._realtime_model._opts}"
-            )
-            if not self.bedrock_client:
-                logger.debug("Creating Bedrock client")
-                self._initialize_client()
-            self.stream_response = await self.bedrock_client.invoke_model_with_bidirectional_stream(
-                InvokeModelWithBidirectionalStreamOperationInput(
-                    model_id=self._realtime_model.model_id
+
+class ToolInputSchema(BaseModel):
+    json_: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        alias="json",
+    )
+
+
+class ToolSpec(BaseModel):
+    name: str
+    description: str
+    inputSchema: ToolInputSchema
+
+
+class Tool(BaseModel):
+    toolSpec: ToolSpec
+
+
+class ToolConfiguration(BaseModel):
+    tools: List[Tool]
+
+
+class SessionStart(BaseModel):
+    inferenceConfiguration: InferenceConfiguration
+
+
+class InputTextContentStart(BaseModel):
+    promptName: str
+    contentName: str
+    type: TYPE = "TEXT"
+    interactive: bool = False
+    role: ROLE
+    textInputConfiguration: TextInputConfiguration
+
+
+class InputAudioContentStart(BaseModel):
+    promptName: str
+    contentName: str
+    type: TYPE = "AUDIO"
+    interactive: bool = True
+    role: ROLE = "USER"
+    audioInputConfiguration: AudioInputConfiguration
+
+
+class InputToolContentStart(BaseModel):
+    promptName: str
+    contentName: str
+    type: TYPE = "TOOL"
+    interactive: bool = False
+    role: ROLE = "TOOL"
+    toolResultInputConfiguration: ToolResultInputConfiguration
+
+
+class PromptStart(BaseModel):
+    promptName: str
+    textOutputConfiguration: TextOutputConfiguration
+    audioOutputConfiguration: AudioOutputConfiguration
+    toolUseOutputConfiguration: ToolUseOutputConfiguration
+    toolConfiguration: ToolConfiguration
+
+
+class TextInput(BaseModel):
+    promptName: str
+    contentName: str
+    content: str
+
+
+class AudioInput(BaseModel):
+    promptName: str
+    contentName: str
+    content: str
+
+
+class ToolResult(BaseModel):
+    promptName: str
+    contentName: str
+    content: str
+
+
+class ContentEndEvent(BaseModel):
+    promptName: str
+    contentName: str
+
+
+class PromptEnd(BaseModel):
+    promptName: str
+
+
+class SessionEnd(BaseModel):
+    pass
+
+
+class SessionStartEvent(BaseModel):
+    sessionStart: SessionStart
+
+
+class InputTextContentStartEvent(BaseModel):
+    contentStart: InputTextContentStart
+
+
+class InputAudioContentStartEvent(BaseModel):
+    contentStart: InputAudioContentStart
+
+
+class InputToolContentStartEvent(BaseModel):
+    contentStart: InputToolContentStart
+
+
+class PromptStartEvent(BaseModel):
+    promptStart: PromptStart
+
+
+class TextInputContentEvent(BaseModel):
+    textInput: TextInput
+
+
+class AudioInputContentEvent(BaseModel):
+    audioInput: AudioInput
+
+
+class ToolResultContentEvent(BaseModel):
+    toolResult: ToolResult
+
+
+class InputContentEndEvent(BaseModel):
+    contentEnd: ContentEndEvent
+
+
+class PromptEndEvent(BaseModel):
+    promptEnd: PromptEnd
+
+
+class SessionEndEvent(BaseModel):
+    sessionEnd: SessionEnd
+
+
+class Event(BaseModel):
+    event: Union[
+        SessionStartEvent,
+        InputTextContentStartEvent,
+        InputAudioContentStartEvent,
+        InputToolContentStartEvent,
+        PromptStartEvent,
+        TextInputContentEvent,
+        AudioInputContentEvent,
+        ToolResultContentEvent,
+        InputContentEndEvent,
+        PromptEndEvent,
+        SessionEndEvent,
+    ]
+
+
+class SonicEventBuilder:
+    @staticmethod
+    def create_session_start_event(
+        max_tokens: int = 1024,
+        top_p: float = 0.9,
+        temperature: float = 0.7,
+    ) -> str:
+        event = Event(
+            event=SessionStartEvent(
+                sessionStart=SessionStart(
+                    inferenceConfiguration=InferenceConfiguration(
+                        maxTokens=max_tokens,
+                        topP=top_p,
+                        temperature=temperature,
+                    )
                 )
             )
-            self.is_active = True
-            default_system_prompt = (
-                "You are a friend. The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."
-                "When reading order numbers, please read each digit individually, separated by pauses. For example, order #1234 should be read as 'order number one-two-three-four' rather than 'order number one thousand two hundred thirty-four'."
-            )
-
-            init_events = [
-                seb.create_session_start_event(),
-                seb.create_prompt_start_event(
-                    prompt_name=self.prompt_name,
-                    voice_id=self._realtime_model._opts.voice,
-                    sample_rate=OUTPUT_SAMPLE_RATE,
-                ),
-                seb.create_text_content_start_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.content_name,
-                    role="SYSTEM",
-                ),
-                seb.create_text_input_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.content_name,
-                    content=default_system_prompt,
-                ),
-                seb.create_content_end_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.content_name,
-                ),
-            ]
-
-            for event in init_events:
-                await self.send_raw_event(event)
-                # Small delay between init events
-                await asyncio.sleep(0.1)
-
-            # Start listening for responses
-            self.response_task = asyncio.create_task(
-                self._process_responses(), name="RealtimeSession._process_responses"
-            )
-
-            # Start processing audio input
-            asyncio.create_task(
-                self._process_audio_input(), name="RealtimeSession._process_audio_input"
-            )
-
-            if not self._initialization_task.done():
-                self._initialization_task.set_result(self)
-
-            # Wait a bit to ensure everything is set up
-            await asyncio.sleep(0.1)
-
-            logger.debug("Stream initialized successfully")
-        except Exception as e:
-            self.is_active = False
-            self._initialization_task.set_exception(e)
-            logger.debug(f"Failed to initialize stream: {str(e)}")
-            raise
-        return self
-
-    # can be used in places that need to explicitly wait for stream initialization
-    @utils.log_exceptions(logger=logger)
-    async def initialize_stream(self):
-        if not self.bedrock_client:
-            self._initialize_client()
-
-        if self.is_active:
-            return self
-
-        if self._initialization_task is not None:
-            return await self._initialization_task
-
-        return await self._initialize_stream()
-
-    @utils.log_exceptions(logger=logger)
-    async def send_raw_event(self, event_json):
-        if not self.stream_response or not self.is_active:
-            logger.debug("Stream not initialized or closed")
-            return
-
-        event = InvokeModelWithBidirectionalStreamInputChunk(
-            value=BidirectionalInputPayloadPart(bytes_=event_json.encode("utf-8"))
         )
+        return event.model_dump_json(exclude_none=False)
 
-        try:
-            await self.stream_response.input_stream.send(event)
-            ev_json = json.loads(event_json)
-            if "event" in ev_json and "audioOutput" in ev_json["event"]:
-                del ev_json["event"]["audioOutput"]["content"]
-            if "event" in ev_json and "audioInput" in ev_json["event"]:
-                del ev_json["event"]["audioInput"]["content"]
-            logger.debug(f"Sent event: {json.dumps(ev_json, indent=2)}")
-        except Exception as e:
-            logger.debug(f"Error sending event: {str(e)}")
-            traceback.print_exc()
-
-
-    def _create_tool_content_start_event(self, prompt_name, content_name, tool_use_id):
-        return {
-            "event": {
-                "contentStart": {
-                    "promptName": prompt_name,
-                    "contentName": content_name,
-                    "interactive": False,
-                    "type": "TOOL",
-                    "role": "TOOL",
-                    "toolResultInputConfiguration": {
-                        "toolUseId": tool_use_id,
-                        "type": "TEXT",
-                        "textInputConfiguration": {"mediaType": "text/plain"},
-                    },
-                }
-            }
-        }
-    
-
-    @utils.log_exceptions(logger=logger)
-    async def _process_responses(self):
-        try:
-            await self.initialize_stream()
-            while self.is_active:
-                try:
-                    output = await self.stream_response.await_output()
-                    result = await output[1].receive()
-                    if result.value and result.value.bytes_:
-                        try:
-                            response_data = result.value.bytes_.decode("utf-8")
-                            json_data = json.loads(response_data)
-
-                            if "event" in json_data:
-                                if json_data["event"].get("contentStart") and json_data["event"].get("contentStart").get("type") == "AUDIO":
-                                    logger.debug(
-                                        f"Output audio start detected: {json.dumps(json_data, indent=2)}"
-                                    )
-                                if json_data["event"].get("contentEnd") and json_data["event"].get("contentEnd").get("type") == "AUDIO":
-                                    logger.debug(
-                                        f"Output audio end detected: {json.dumps(json_data, indent=2)}"
-                                    )
-                                    logger.debug("Will emit generation event")
-                                    self._emit_generation_event()
-                                    logger.debug("Emitted generation event")
-                                # elif has_nested_key(json_data, ['event', 'contentStart', 'additionalModelFields', 'generationStage']):
-                                elif "SPECULATIVE" in json_data["event"].get("contentStart", {}).get("additionalModelFields", {}):
-                                    logger.debug(
-                                        f"raw content start: {json.dumps(json_data, indent=2)}"
-                                    )
-                                    role = json_data["event"]["contentStart"]["role"]
-                                    logger.debug(f"pre-update current generation: {self._current_generation}")
-                                    if role == "ASSISTANT":
-                                        self._current_generation.update({
-                                            json_data["event"]["contentStart"]["contentId"]: role,
-                                        })
-                                    elif role == "USER":
-                                        self._current_generation.update({
-                                            json_data["event"]["contentStart"]["contentId"]: role,
-                                        })
-                                    logger.debug(f"post-update current generation: {self._current_generation}")
-
-
-                                elif 'textOutput' in json_data["event"] and json_data["event"]["textOutput"]["contentId"] in self._current_generation:
-                                    logger.debug(
-                                        f"raw text output: {json.dumps(json_data, indent=2)}"
-                                    )
-                                    if self._current_generation.get(json_data["event"]["textOutput"]["contentId"]) == "ASSISTANT":
-                                        text = json_data["event"]["textOutput"]["content"]
-                                        logger.debug(f"Output text detected: {text}")
-                                        self.text_output_queue.send_nowait(text)
-                                        # self.text_output_queue.send_nowait(text)
-                                    elif self._current_generation.get(json_data["event"]["textOutput"]["contentId"]) == "USER":
-                                        self.emit(
-                                            "input_audio_transcription_completed",
-                                            llm.InputTranscriptionCompleted(
-                                                item_id=json_data["event"]["textOutput"]["contentId"],
-                                                transcript=json_data["event"]["textOutput"]["content"],
-                                                is_final=True,
-                                            ),
-                                        )
-                                
-                                elif "audioOutput" not in json_data["event"] and 'usageEvent' not in json_data['event']:
-                                    logger.debug(
-                                        f"Output event detected: {json.dumps(json_data, indent=2)}"
-                                    )
-                                elif "audioOutput" in json_data["event"]:
-                                    audio_content = json_data["event"]["audioOutput"]["content"]
-                                    audio_bytes = base64.b64decode(audio_content)
-                                    samples = len(audio_bytes) // 2
-                                    logger.debug(f"AUDIO OUTPUT LENGTH: {samples}")
-
-                                    # must transform into rtc.AudioFrame b/c that's what
-                                    # the AgentSession expects
-                                    await self.audio_output_queue.send(
-                                        rtc.AudioFrame(
-                                            data=audio_bytes,
-                                            sample_rate=OUTPUT_SAMPLE_RATE,
-                                            num_channels=CHANNELS,
-                                            samples_per_channel=samples,
-                                        )
-                                    )
-                                    del json_data["event"]["audioOutput"]["content"]
-                                    logger.debug(
-                                        f"Output audio detected: {json.dumps(json_data, indent=2)}"
-                                    )
-
-    
-                            # Put the response in the output queue for other components
-                            await self.output_queue.send(json_data)
-                        except json.JSONDecodeError:
-                            await self.output_queue.send({"raw_data": response_data})
-                except StopAsyncIteration:
-                    # Stream has ended
-                    break
-                except Exception as e:
-                    # Handle ValidationException properly
-                    if "ValidationException" in str(e):
-                        error_message = str(e)
-                        logger.debug(f"Validation error: {error_message}")
-                    else:
-                        logger.debug(f"Error receiving response: {e}")
-                    break
-
-        except Exception as e:
-            logger.debug(f"Response processing error: {e}")
-        finally:
-            self.is_active = False
-
-    @utils.log_exceptions(logger=logger)
-    def _emit_generation_event(self) -> None:
-        logger.debug(f"Emitting generation event")
-        message_generation = llm.MessageGeneration(
-            message_id=str(uuid.uuid4()),
-            text_stream=self.text_output_queue,
-            audio_stream=self.audio_output_queue,
-        )
-        # try:
-        #     text = self.text_output_queue.recv_nowait()
-        #     logger.debug(f"text channel in message generation: {text}")
-        # except ChanEmpty:
-        #     # Channel is empty
-        #     pass
-        if not self.text_output_queue.empty():
-            logger.debug(f"TEXT OUTPUT QUEUE IS NOT EMPTY")
-            pass
-        else:
-            logger.debug(f"TEXT OUTPUT QUEUE IS EMPTY")
-
-        # temp async generator
-        # required in order to fulfill contract that
-        # llm.GenerationCreatedEvent.message_stream requires Chan[llm.MessageGeneration]
-        async def message_stream_gen():
-            yield message_generation
-
-        generation_ev = llm.GenerationCreatedEvent(
-            message_stream=message_stream_gen(),
-            function_stream=self.dummy_stream,
-            user_initiated=False,
-        )
-        self.emit("generation_created", generation_ev)
-        logger.debug(f"Emitted generation event: {generation_ev}")
-
-    @property
-    def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx.copy()
-
-    def tools(self) -> llm.ToolContext:
-        return llm.ToolContext()
-
-    async def update_instructions(self, instructions: str) -> None:
-        logger.warning("updating system instructions is not yet supported by Nova Sonic's Realtime API")
-        pass
-
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        logger.warning("updating server-side chat context is not yet supported by Nova Sonic's Realtime API")
-        pass
-
-    async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Any]) -> None:
-        logger.warning("updating tool list is not yet supported by Nova Sonic's Realtime API")
-        pass
-
-    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
-        logger.warning("updating inference configuration options is not yet supported by Nova Sonic's Realtime API")
-        pass
-
-
-    @utils.log_exceptions(logger=logger)
-    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
-        if self._input_resampler:
-            if frame.sample_rate != self._input_resampler._input_rate:
-                # input audio changed to a different sample rate
-                self._input_resampler = None
-
-        # set resampler if resampling is needed
-        if self._input_resampler is None and (
-            frame.sample_rate != INPUT_SAMPLE_RATE or frame.num_channels != CHANNELS
-        ):
-            self._input_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=INPUT_SAMPLE_RATE,
-                num_channels=CHANNELS,
-            )
-
-        if self._input_resampler:
-            # flush the resampler when the input source is changed
-            yield from self._input_resampler.push(frame)
-        else:
-            yield frame
-
-    @utils.log_exceptions(logger=logger)
-    def _add_audio_chunk(self, audio_bytes):
-        squared_sum = sum(sample**2 for sample in audio_bytes)
-        if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
-            logger.debug(f"Enqueuing significant audio chunk")
-        self.audio_input_queue.send_nowait(
-            {
-                "audio_bytes": audio_bytes,
-                "prompt_name": self.prompt_name,
-                "content_name": self.audio_content_name,
-            }
-        )
-
-    @utils.log_exceptions(logger=logger)
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
-        for f in self._resample_audio(frame):
-            # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
-            data = f.data.tobytes()
-            for nf in self._bstream.write(data):
-                self._add_audio_chunk(nf.data)
-                # logger.debug(f"Audio chunk added: size={len(nf.data)}")
-
-    @utils.log_exceptions(logger=logger)
-    async def _process_audio_input(self):
-        await self.send_raw_event(seb.create_audio_content_start_event(
-            prompt_name=self.prompt_name,
-            content_name=self.audio_content_name,
-        ))
-        logger.debug("Starting audio input processing loop")
-        while self.is_active:
-            try:
-                logger.debug("Waiting for audio data from queue...")
-                data = await self.audio_input_queue.recv()
-
-                audio_bytes = data.get("audio_bytes")
-                if not audio_bytes:
-                    logger.debug("No audio bytes received")
-                    continue
-
-                blob = base64.b64encode(audio_bytes)
-                logger.debug(f"Sending audio data to Bedrock: size={len(audio_bytes)} bytes")
-                audio_event = seb.create_audio_input_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.audio_content_name,
-                    audio_content=blob.decode("utf-8"),
+    @staticmethod
+    def create_audio_content_start_event(
+        prompt_name: str,
+        content_name: str,
+        sample_rate: SAMPLE_RATE_HERTZ = 16_000,
+    ) -> str:
+        event = Event(
+            event=InputAudioContentStartEvent(
+                contentStart=InputAudioContentStart(
+                    promptName=prompt_name,
+                    contentName=content_name,
+                    audioInputConfiguration=AudioInputConfiguration(
+                        sampleRateHertz=sample_rate,
+                    ),
                 )
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
 
-                await self.send_raw_event(audio_event)
-                logger.debug("Audio event sent to Bedrock")
+    @staticmethod
+    def create_text_content_start_event(
+        prompt_name: str,
+        content_name: str,
+        role: ROLE,
+    ) -> str:
+        event = Event(
+            event=InputTextContentStartEvent(
+                contentStart=InputTextContentStart(
+                    promptName=prompt_name,
+                    contentName=content_name,
+                    role=role,
+                    textInputConfiguration=TextInputConfiguration(),
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
 
-            except asyncio.CancelledError:
-                logger.debug("Audio processing loop cancelled")
-                break
-            except Exception as e:
-                logger.debug(f"Error processing audio: {e}")
-                traceback.print_exc()
+    @staticmethod
+    def create_tool_content_start_event(
+        prompt_name: str,
+        content_name: str,
+        tool_use_id: str,
+    ) -> str:
+        event = Event(
+            event=InputToolContentStartEvent(
+                contentStart=InputToolContentStart(
+                    promptName=prompt_name,
+                    contentName=content_name,
+                    toolResultInputConfiguration=ToolResultInputConfiguration(
+                        toolUseId=tool_use_id,
+                        textInputConfiguration=TextInputConfiguration(),
+                    ),
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
 
-    def generate_reply(
-        self,
-        *,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
-    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        logger.warning("unprompted generation is not supported by Nova Sonic's Realtime API")
-        pass
+    @staticmethod
+    def create_audio_input_event(
+        prompt_name: str,
+        content_name: str,
+        audio_content: str,
+    ) -> str:
+        event = Event(
+            event=AudioInputContentEvent(
+                audioInput=AudioInput(
+                    promptName=prompt_name,
+                    contentName=content_name,
+                    content=audio_content,
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
 
-    def commit_audio(self) -> None:
-        pass
+    @staticmethod
+    def create_text_input_event(
+        prompt_name: str,
+        content_name: str,
+        content: str,
+    ) -> str:
+        event = Event(
+            event=TextInputContentEvent(
+                textInput=TextInput(
+                    promptName=prompt_name,
+                    contentName=content_name,
+                    content=content,
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
 
-    def clear_audio(self) -> None:
-        pass
+    @staticmethod
+    def create_tool_result_event(
+        prompt_name: str,
+        content_name: str,
+        content: Union[str, Dict[str, Any]],
+    ) -> str:
+        if isinstance(content, dict):
+            content_str = json.dumps(content)
+        else:
+            content_str = content
 
-    def push_video(self, frame: rtc.VideoFrame) -> None:
-        pass
+        event = Event(
+            event=ToolResultContentEvent(
+                toolResult=ToolResult(
+                    promptName=prompt_name,
+                    contentName=content_name,
+                    content=content_str,
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
 
-    def interrupt(self) -> None:
-        pass
+    @staticmethod
+    def create_content_end_event(
+        prompt_name: str,
+        content_name: str,
+    ) -> str:
+        event = Event(
+            event=InputContentEndEvent(
+                contentEnd=ContentEndEvent(
+                    promptName=prompt_name,
+                    contentName=content_name,
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
 
-    def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
-        logger.warning("truncate is not supported by Nova Sonic's Realtime API")
-        pass
+    @staticmethod
+    def create_prompt_end_event(prompt_name: str) -> str:
+        event = Event(
+            event=PromptEndEvent(
+                promptEnd=PromptEnd(promptName=prompt_name),
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
 
-    @utils.log_exceptions(logger=logger)
-    async def aclose(self) -> None:
-        if not self.is_active:
-            return
+    @staticmethod
+    def create_session_end_event() -> str:
+        event = Event(
+            event=SessionEndEvent(sessionEnd=SessionEnd()),
+        )
+        return event.model_dump_json(exclude_none=True)
 
-        self.is_active = False
-        if self.response_task and not self.response_task.done():
-            self.response_task.cancel()
+    @staticmethod
+    def create_prompt_start_event(
+        prompt_name: str,
+        voice_id: VOICE_ID,
+        sample_rate: SAMPLE_RATE_HERTZ,
+        tool_configuration: Optional[ToolConfiguration] = None,
+    ) -> str:
+        tool_configuration = tool_configuration or ToolConfiguration(tools=[])
 
-        await self.send_audio_content_end_event()
-        await self.send_prompt_end_event()
-        await self.send_session_end_event()
-
-        if self.stream_response:
-            await self.stream_response.input_stream.close()
-
-    async def send_audio_content_end_event(self):
-        if not self.is_active:
-            logger.debug("Stream is not active")
-            return
-
-        await self.send_raw_event(seb.create_content_end_event(
-            prompt_name=self.prompt_name,
-            content_name=self.audio_content_name,
-        ))
-        logger.debug("Audio ended")
-
-    async def send_prompt_end_event(self):
-        """Close the stream and clean up resources."""
-        if not self.is_active:
-            logger.debug("Stream is not active")
-            return
-
-        await self.send_raw_event(seb.create_prompt_end_event(
-            prompt_name=self.prompt_name,
-        ))
-        logger.debug("Prompt ended")
-
-    async def send_session_end_event(self):
-        """Send a session end event to the Bedrock stream."""
-        if not self.is_active:
-            logger.debug("Stream is not active")
-            return
-
-        await self.send_raw_event(seb.create_session_end_event())
-        self.is_active = False
-        logger.debug("Session ended")
-
-def has_nested_key(d, keys):
-    current = d
-    for key in keys:
-        if not isinstance(current, dict) or key not in current:
-            return False
-        current = current[key]
-    return True
+        tool_objects = [
+            Tool(
+                toolSpec=ToolSpec(
+                    name=tool.toolSpec.name,
+                    description=tool.toolSpec.description,
+                    inputSchema=ToolInputSchema(json=tool.toolSpec.inputSchema.json),
+                )
+            )
+            for tool in tool_configuration.tools
+        ]
+        event = Event(
+            event=PromptStartEvent(
+                promptStart=PromptStart(
+                    promptName=prompt_name,
+                    textOutputConfiguration=TextOutputConfiguration(),
+                    audioOutputConfiguration=AudioOutputConfiguration(
+                        voiceId=voice_id, sampleRateHertz=sample_rate
+                    ),
+                    toolUseOutputConfiguration=ToolUseOutputConfiguration(),
+                    toolConfiguration=ToolConfiguration(tools=tool_objects),
+                )
+            )
+        )
+        return event.model_dump_json(exclude_none=True)
