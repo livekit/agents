@@ -608,8 +608,10 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
         if chat_ctx.items[idx].type == "message":
             # create a new instance to avoid mutating the original
             chat_ctx.items[idx] = llm.ChatMessage(
-                id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions],
-                created_at=chat_ctx.items[idx].created_at
+                id=INSTRUCTIONS_MESSAGE_ID,
+                role="system",
+                content=[instructions],
+                created_at=chat_ctx.items[idx].created_at,
             )
         else:
             raise ValueError(
