@@ -158,11 +158,29 @@ class RunAssert:
 
     def _raise_with_debug_info(self, message: str, index: int | None = None):
         marker_index = self._current_index if index is None else index
-        event_info = "\n".join(
-            f"{'>>' if i == marker_index else '   '} [{i}] {event}"
-            for i, event in enumerate(self._events_list)
-        )
-        raise AssertionError(f"{message}\nAll events:\n{event_info}")
+        lines: list[str] = []
+
+        for i, event in enumerate(self._events_list):
+            prefix = ">>>" if i == marker_index else "   "
+
+            if isinstance(event, (ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent)):
+                item_repr = event.item.model_dump(
+                    exclude_none=True,
+                    exclude_defaults=True,
+                    exclude={"type", "id", "call_id", "created_at"},
+                )
+                line = f"{prefix} [{i}] {event.__class__.__name__}(item={item_repr})"
+            elif isinstance(event, AgentHandoffEvent):
+                line = (
+                    f"{prefix} [{i}] AgentHandoffEvent("
+                    f"old_agent={event.old_agent}, new_agent={event.new_agent})"
+                )
+            else:
+                line = f"{prefix} [{i}] {event}"
+
+            lines.append(line)
+
+        raise AssertionError(f"{message}\nContext around failure:\n" + "\n".join(lines))
 
     def skip_next(self, count: int = 1) -> "RunAssert":
         for i in range(count):
