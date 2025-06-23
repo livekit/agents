@@ -602,6 +602,8 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
         # )
         # logger.info(f"1st segment metrics: {metrics_collected_events.events[0][0][0]}")
         # logger.info(f"2nd segment metrics: {metrics_collected_events.events[1][0][0]}")
+    except NotImplementedError:
+        pytest.skip("streaming not supported for this TTS")
     except asyncio.TimeoutError:
         pytest.fail("test timed out after 30 seconds")
     finally:
@@ -668,6 +670,8 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
         assert metrics_collected_events.count == 0, (
             f"expected 0 metrics collected events, got {metrics_collected_events.count}"
         )
+    except NotImplementedError:
+        pytest.skip("streaming not supported for this TTS")
     finally:
         print("closing tts_v")
         await tts_v.aclose()
