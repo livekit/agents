@@ -341,6 +341,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._agent = agent
             self._update_agent_state("initializing")
 
+            tasks: list[asyncio.Task[None]] = []
             if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
                 from .chat_cli import ChatCLI
 
@@ -355,7 +356,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
 
                 chat_cli = ChatCLI(self)
-                await chat_cli.start()
+                tasks.append(asyncio.create_task(chat_cli.start(), name="_chat_cli_start"))
 
             elif is_given(room) and not self._room_io:
                 room_input_options = copy.copy(
@@ -365,25 +366,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_output_options or room_io.DEFAULT_ROOM_OUTPUT_OPTIONS
                 )
 
-                if self.input.audio is not None and room_input_options.audio_enabled:
-                    logger.warning(
-                        "RoomIO audio input is enabled but input.audio is already set, ignoring.."
-                    )
+                if self.input.audio is not None:
+                    if room_input_options.audio_enabled:
+                        logger.warning(
+                            "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
+                        )
                     room_input_options.audio_enabled = False
 
-                if self.output.audio is not None and room_output_options.audio_enabled:
-                    logger.warning(
-                        "RoomIO audio output is enabled but output.audio is already set, ignoring.."
-                    )
+                if self.output.audio is not None:
+                    if room_output_options.audio_enabled:
+                        logger.warning(
+                            "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
+                        )
                     room_output_options.audio_enabled = False
 
-                if (
-                    self.output.transcription is not None
-                    and room_output_options.transcription_enabled
-                ):
-                    logger.warning(
-                        "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
-                    )
+                if self.output.transcription is not None:
+                    if room_output_options.transcription_enabled:
+                        logger.warning(
+                            "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
+                        )
                     room_output_options.transcription_enabled = False
 
                 self._room_io = room_io.RoomIO(
@@ -392,7 +393,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     input_options=room_input_options,
                     output_options=room_output_options,
                 )
-                await self._room_io.start()
+                tasks.append(asyncio.create_task(self._room_io.start(), name="_room_io_start"))
 
             else:
                 if not self._room_io and not self.output.audio and not self.output.transcription:
@@ -400,20 +401,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         "session starts without output, forgetting to pass `room` to `AgentSession.start()`?"  # noqa: E501
                     )
 
-            if not self._job_context_cb_registered:
-                # session can be restarted, register the callbacks only once
-                try:
-                    job_ctx = get_job_context()
+            # session can be restarted, register the callbacks only once
+            try:
+                job_ctx = get_job_context()
+                if self._room_io:
+                    # automatically connect to the room when room io is used
+                    tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
+
+                if not self._job_context_cb_registered:
                     job_ctx.add_tracing_callback(self._trace_chat_ctx)
                     job_ctx.add_shutdown_callback(
                         lambda: self._aclose_impl(reason=CloseReason.JOB_SHUTDOWN)
                     )
                     self._job_context_cb_registered = True
-                except RuntimeError:
-                    pass  # ignore
+            except RuntimeError:
+                pass  # ignore
 
             # it is ok to await it directly, there is no previous task to drain
-            await self._update_activity_task(self._agent)
+            tasks.append(asyncio.create_task(self._update_activity_task(self._agent)))
+
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.cancel_and_wait(*tasks)
 
             # important: no await should be done after this!
 
@@ -429,6 +439,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._update_agent_state("listening")
+            if self._room_io and self._room_io.subscribed_fut:
+
+                def on_room_io_subscribed(_: asyncio.Future[None]) -> None:
+                    if self._user_state == "listening" and self._agent_state == "listening":
+                        self._set_user_away_timer()
+
+                self._room_io.subscribed_fut.add_done_callback(on_room_io_subscribed)
 
     async def _trace_chat_ctx(self) -> None:
         if self._activity is None:
@@ -604,12 +621,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
-    def commit_user_turn(self) -> None:
-        # commit the user turn and generate a reply
+    def commit_user_turn(self, *, transcript_timeout: float = 2.0) -> None:
+        """Commit the user turn and generate a reply.
+
+        Args:
+            transcript_timeout (float, optional): The timeout for the final transcript
+                to be received after committing the user turn.
+                Increase this value if the STT is slow to respond.
+
+        Raises:
+            RuntimeError: If the AgentSession isn't running.
+        """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn()
+        self._activity.commit_user_turn(transcript_timeout=transcript_timeout)
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
@@ -684,6 +710,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _set_user_away_timer(self) -> None:
         self._cancel_user_away_timer()
         if self._opts.user_away_timeout is None:
+            return
+
+        if (
+            (room_io := self._room_io)
+            and room_io.subscribed_fut
+            and not room_io.subscribed_fut.done()
+        ):
+            # skip the timer before user join the room
             return
 
         self._user_away_timer = self._loop.call_later(

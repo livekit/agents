@@ -7,6 +7,7 @@ livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
 livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
+livekit-plugins-baseten = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-clova = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
@@ -32,6 +33,8 @@ livekit-plugins-tavus = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-hedra = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
+livekit-plugins-langchain = { workspace = true }
+livekit-plugins-sarvam = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]

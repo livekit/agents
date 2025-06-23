@@ -38,9 +38,10 @@ class FallbackAdapter(
         self,
         llm: list[LLM],
         *,
-        attempt_timeout: float = 10.0,
-        max_retry_per_llm: int = 1,
-        retry_interval: float = 5,
+        attempt_timeout: float = 5.0,
+        # use fallback instead of retrying
+        max_retry_per_llm: int = 0,
+        retry_interval: float = 0.5,
     ) -> None:
         if len(llm) < 1:
             raise ValueError("at least one LLM instance must be provided.")
@@ -225,6 +226,7 @@ class FallbackLLMStream(LLMStream):
                         )
 
                     if chunk_sent:
+                        logger.error(f"{llm.label} failed after sending chunk, skip retrying")
                         raise
 
             self._try_recovery(llm)

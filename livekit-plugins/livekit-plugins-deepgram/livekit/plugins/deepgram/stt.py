@@ -20,11 +20,9 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
 import aiohttp
-import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -49,49 +47,6 @@ from .models import DeepgramLanguages, DeepgramModels
 BASE_URL = "https://api.deepgram.com/v1/listen"
 
 
-# This is the magic number during testing that we use to determine if a frame is loud enough
-# to possibly contain speech. It's very conservative.
-MAGIC_NUMBER_THRESHOLD = 0.004**2
-
-
-class AudioEnergyFilter:
-    class State(Enum):
-        START = 0
-        SPEAKING = 1
-        SILENCE = 2
-        END = 3
-
-    def __init__(self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD):
-        self._cooldown_seconds = min_silence
-        self._cooldown = min_silence
-        self._state = self.State.SILENCE
-        self._rms_threshold = rms_threshold
-
-    def update(self, frame: rtc.AudioFrame) -> State:
-        arr = np.frombuffer(frame.data, dtype=np.int16)
-        float_arr = arr.astype(np.float32) / 32768.0
-        rms = np.mean(np.square(float_arr))
-
-        if rms > self._rms_threshold:
-            self._cooldown = self._cooldown_seconds
-            if self._state in (self.State.SILENCE, self.State.END):
-                self._state = self.State.START
-            else:
-                self._state = self.State.SPEAKING
-        else:
-            if self._cooldown <= 0:
-                if self._state in (self.State.SPEAKING, self.State.START):
-                    self._state = self.State.END
-                elif self._state == self.State.END:
-                    self._state = self.State.SILENCE
-            else:
-                # keep speaking during cooldown
-                self._cooldown -= frame.duration
-                self._state = self.State.SPEAKING
-
-        return self._state
-
-
 @dataclass
 class STTOptions:
     language: DeepgramLanguages | str | None
@@ -108,7 +63,6 @@ class STTOptions:
     keywords: list[tuple[str, float]]
     keyterms: list[str]
     profanity_filter: bool
-    energy_filter: AudioEnergyFilter | bool = False
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
@@ -136,7 +90,6 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
-        energy_filter: AudioEnergyFilter | bool = False,
         numerals: bool = False,
         mip_opt_out: bool = False,
     ) -> None:
@@ -163,8 +116,6 @@ class STT(stt.STT):
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
-            energy_filter: Audio energy filter configuration for voice activity detection.
-                         Can be a boolean or AudioEnergyFilter instance. Defaults to False.
             numerals: Whether to include numerals in the transcription. Defaults to False.
             mip_opt_out: Whether to take part in the model improvement program
 
@@ -204,7 +155,6 @@ class STT(stt.STT):
             keywords=keywords if is_given(keywords) else [],
             keyterms=keyterms if is_given(keyterms) else [],
             profanity_filter=profanity_filter,
-            energy_filter=energy_filter,
             numerals=numerals,
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
@@ -401,13 +351,6 @@ class SpeechStream(stt.SpeechStream):
             duration=5.0,
         )
 
-        self._audio_energy_filter: AudioEnergyFilter | None = None
-        if opts.energy_filter:
-            if isinstance(opts.energy_filter, AudioEnergyFilter):
-                self._audio_energy_filter = opts.energy_filter
-            else:
-                self._audio_energy_filter = AudioEnergyFilter()
-
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
 
@@ -490,27 +433,10 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            last_frame: rtc.AudioFrame | None = None
             async for data in self._input_ch:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
-                    state = self._check_energy_state(data)
-                    if state in (
-                        AudioEnergyFilter.State.START,
-                        AudioEnergyFilter.State.SPEAKING,
-                    ):
-                        if last_frame:
-                            frames.extend(audio_bstream.write(last_frame.data.tobytes()))
-                            last_frame = None
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif state == AudioEnergyFilter.State.END:
-                        # no need to buffer as we have cooldown period
-                        frames.extend(audio_bstream.flush())
-                        has_ended = True
-                    elif state == AudioEnergyFilter.State.SILENCE:
-                        # buffer the last silence frame, since it could contain beginning of speech
-                        # TODO: improve accuracy by using a ring buffer with longer window
-                        last_frame = data
+                    frames.extend(audio_bstream.write(data.data.tobytes()))
                 elif isinstance(data, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
                     has_ended = True
@@ -584,7 +510,8 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    await tasks_group
+                    tasks_group.cancel()
+                    tasks_group.exception()  # retrieve the exception
             finally:
                 if ws is not None:
                     await ws.close()
@@ -619,19 +546,17 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
-        ws = await asyncio.wait_for(
-            self._session.ws_connect(
-                _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
-                headers={"Authorization": f"Token {self._api_key}"},
-            ),
-            self._conn_options.timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
+                    headers={"Authorization": f"Token {self._api_key}"},
+                ),
+                self._conn_options.timeout,
+            )
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            raise APIConnectionError("failed to connect to deepgram") from e
         return ws
-
-    def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
-        if self._audio_energy_filter:
-            return self._audio_energy_filter.update(frame)
-        return AudioEnergyFilter.State.SPEAKING
 
     def _on_audio_duration_report(self, duration: float) -> None:
         usage_event = stt.SpeechEvent(

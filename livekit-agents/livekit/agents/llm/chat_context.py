@@ -111,6 +111,7 @@ class ChatMessage(BaseModel):
     role: ChatRole
     content: list[ChatContent]
     interrupted: bool = False
+    transcript_confidence: float | None = None
     hash: bytes | None = None
     created_at: float = Field(default_factory=time.time)
 
@@ -201,7 +202,7 @@ class ChatContext:
 
     def insert(self, item: ChatItem | Sequence[ChatItem]) -> None:
         """Insert an item or list of items into the chat context by creation time."""
-        items = item if isinstance(item, list) else [item]
+        items = list(item) if isinstance(item, Sequence) else [item]
 
         for _item in items:
             idx = self.find_insertion_index(created_at=_item.created_at)

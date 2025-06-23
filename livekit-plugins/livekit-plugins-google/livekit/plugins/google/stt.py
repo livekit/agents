@@ -381,11 +381,14 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
+        audio_pushed = False
+
         # google requires a async generator when calling streaming_recognize
         # this function basically convert the queue into a async generator
         async def input_generator(
             client: SpeechAsyncClient, should_stop: asyncio.Event
         ) -> AsyncGenerator[cloud_speech.StreamingRecognizeRequest, None]:
+            nonlocal audio_pushed
             try:
                 # first request should contain the config
                 yield cloud_speech.StreamingRecognizeRequest(
@@ -402,6 +405,8 @@ class SpeechStream(stt.SpeechStream):
 
                     if isinstance(frame, rtc.AudioFrame):
                         yield cloud_speech.StreamingRecognizeRequest(audio=frame.data.tobytes())
+                        if not audio_pushed:
+                            audio_pushed = True
 
             except Exception:
                 logger.exception("an error occurred while streaming input to google STT")
@@ -470,6 +475,7 @@ class SpeechStream(stt.SpeechStream):
                     has_started = False
 
         while True:
+            audio_pushed = False
             try:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as client:
                     self._streaming_config = cloud_speech.StreamingRecognitionConfig(
@@ -514,13 +520,21 @@ class SpeechStream(stt.SpeechStream):
                             break
                         self._reconnect_event.clear()
                     finally:
-                        await utils.aio.gracefully_cancel(process_stream_task, wait_reconnect_task)
                         should_stop.set()
+                        if not process_stream_task.done() and not wait_reconnect_task.done():
+                            # try to gracefully stop the process_stream_task
+                            try:
+                                await asyncio.wait_for(process_stream_task, timeout=1.0)
+                            except asyncio.TimeoutError:
+                                pass
+
+                        await utils.aio.gracefully_cancel(process_stream_task, wait_reconnect_task)
             except DeadlineExceeded:
                 raise APITimeoutError() from None
             except GoogleAPICallError as e:
                 if e.code == 409:
-                    logger.debug("stream timed out, restarting.")
+                    if audio_pushed:
+                        logger.debug("stream timed out, restarting.")
                 else:
                     raise APIStatusError(
                         f"{e.message} {e.details}", status_code=e.code or -1

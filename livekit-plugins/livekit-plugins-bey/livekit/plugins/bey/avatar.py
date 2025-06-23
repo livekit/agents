@@ -14,6 +14,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
+    get_job_context,
     utils,
 )
 from livekit.agents.voice.avatar import DataStreamAudioOutput
@@ -83,6 +84,17 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
+        try:
+            job_ctx = get_job_context()
+            decoded = job_ctx.decode_token()
+            local_participant_identity = decoded["sub"]
+        except (RuntimeError, KeyError):
+            if not room.isconnected():
+                raise BeyException(
+                    "local participant identity not found in token, and room is not connected"
+                ) from None
+            local_participant_identity = room.local_participant.identity
+
         livekit_token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
@@ -90,19 +102,17 @@ class AvatarSession:
             .with_name(self._avatar_participant_name)
             .with_grants(api.VideoGrants(room_join=True, room=room.name))
             # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: room.local_participant.identity})
+            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
             .to_jwt()
         )
 
         logger.debug("starting avatar session")
         await self._start_agent(livekit_url, livekit_token)
 
-        logger.debug("waiting for avatar agent to join the room")
-        await utils.wait_for_participant(room=room, identity=self._avatar_participant_identity)
-
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
             destination_identity=self._avatar_participant_identity,
+            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
         )
 
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:

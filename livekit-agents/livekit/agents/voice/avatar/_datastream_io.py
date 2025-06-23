@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import asdict
@@ -11,11 +10,10 @@ from typing import Any
 from livekit import rtc
 
 from ... import utils
+from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ..io import AudioOutput, PlaybackFinishedEvent
 from ._types import AudioReceiver, AudioSegmentEnd
-
-logger = logging.getLogger(__name__)
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
@@ -28,40 +26,65 @@ class DataStreamAudioOutput(AudioOutput):
     """  # noqa: E501
 
     def __init__(
-        self, room: rtc.Room, *, destination_identity: str, sample_rate: int | None = None
+        self,
+        room: rtc.Room,
+        *,
+        destination_identity: str,
+        sample_rate: int | None = None,
+        wait_remote_track: rtc.TrackKind.ValueType | None = None,
     ):
         super().__init__(next_in_chain=None, sample_rate=sample_rate)
         self._room = room
         self._destination_identity = destination_identity
+        self._wait_remote_track = wait_remote_track
         self._stream_writer: rtc.ByteStreamWriter | None = None
         self._pushed_duration: float = 0.0
         self._tasks: set[asyncio.Task[Any]] = set()
 
-        # playback finished handler
-        def _handle_playback_finished(data: rtc.RpcInvocationData) -> str:
-            if data.caller_identity != self._destination_identity:
-                logger.warning(
-                    "playback finished event received from unexpected participant",
+        self._room_connected_fut = asyncio.Future[None]()
+        self._room.on("connection_state_changed", self._handle_connection_state_changed)
+        if self._room.isconnected():
+            self._room_connected_fut.set_result(None)
+        self._started = False
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        async with self._lock:
+            if self._started:
+                return
+
+            await self._room_connected_fut
+
+            self._room.local_participant.register_rpc_method(
+                RPC_PLAYBACK_FINISHED, self._handle_playback_finished
+            )
+            logger.debug(
+                "waiting for the remote participant",
+                extra={"identity": self._destination_identity},
+            )
+            await utils.wait_for_participant(room=self._room, identity=self._destination_identity)
+            if self._wait_remote_track:
+                logger.debug(
+                    "waiting for the remote track",
                     extra={
-                        "caller_identity": data.caller_identity,
-                        "expected_identity": self._destination_identity,
+                        "identity": self._destination_identity,
+                        "kind": rtc.TrackKind.Name(self._wait_remote_track),
                     },
                 )
-                return "reject"
+                await utils.wait_for_track_publication(
+                    room=self._room,
+                    identity=self._destination_identity,
+                    kind=self._wait_remote_track,
+                )
+            logger.debug("remote participant ready", extra={"identity": self._destination_identity})
 
-            event = PlaybackFinishedEvent(**json.loads(data.payload))
-            self.on_playback_finished(
-                playback_position=event.playback_position,
-                interrupted=event.interrupted,
-            )
-            return "ok"
-
-        self._room.local_participant.register_rpc_method(
-            RPC_PLAYBACK_FINISHED, _handle_playback_finished
-        )
+            self._started = True
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and stream audio frame to remote worker"""
+        if not self._started:
+            await self.start()
+
         await super().capture_frame(frame)
 
         if not self._stream_writer:
@@ -81,7 +104,7 @@ class DataStreamAudioOutput(AudioOutput):
     def flush(self) -> None:
         """Mark end of current audio segment"""
         super().flush()
-        if self._stream_writer is None:
+        if self._stream_writer is None or not self._started:
             return
 
         # close the stream marking the end of the segment
@@ -92,6 +115,9 @@ class DataStreamAudioOutput(AudioOutput):
         self._stream_writer = None
 
     def clear_buffer(self) -> None:
+        if not self._started:
+            return
+
         task = asyncio.create_task(
             self._room.local_participant.perform_rpc(
                 destination_identity=self._destination_identity,
@@ -101,6 +127,28 @@ class DataStreamAudioOutput(AudioOutput):
         )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
+        if data.caller_identity != self._destination_identity:
+            logger.warning(
+                "playback finished event received from unexpected participant",
+                extra={
+                    "caller_identity": data.caller_identity,
+                    "expected_identity": self._destination_identity,
+                },
+            )
+            return "reject"
+
+        event = PlaybackFinishedEvent(**json.loads(data.payload))
+        self.on_playback_finished(
+            playback_position=event.playback_position,
+            interrupted=event.interrupted,
+        )
+        return "ok"
+
+    def _handle_connection_state_changed(self, state: rtc.ConnectionState) -> None:
+        if self._room.isconnected() and not self._room_connected_fut.done():
+            self._room_connected_fut.set_result(None)
 
 
 class DataStreamAudioReceiver(AudioReceiver):

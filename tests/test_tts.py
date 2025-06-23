@@ -429,6 +429,13 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": playai.TTS(),
+            "proxy-upstream": "api.play.ht:443",
+        },
+        id="playai",
+    ),
+    pytest.param(
+        lambda: {
             "tts": tts.StreamAdapter(
                 tts=openai.TTS(), sentence_tokenizer=tokenize.basic.SentenceTokenizer()
             ),
@@ -598,6 +605,7 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
     except asyncio.TimeoutError:
         pytest.fail("test timed out after 30 seconds")
     finally:
+        print("closing tts_v")
         await tts_v.aclose()
 
 
@@ -661,6 +669,7 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
             f"expected 0 metrics collected events, got {metrics_collected_events.count}"
         )
     finally:
+        print("closing tts_v")
         await tts_v.aclose()
 
 

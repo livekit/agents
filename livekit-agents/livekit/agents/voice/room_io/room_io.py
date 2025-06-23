@@ -64,9 +64,12 @@ def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
 
 @dataclass
 class RoomInputOptions:
-    text_enabled: bool = True
-    audio_enabled: bool = True
-    video_enabled: bool = False
+    text_enabled: NotGivenOr[bool] = NOT_GIVEN
+    """If not given, default to True."""
+    audio_enabled: NotGivenOr[bool] = NOT_GIVEN
+    """If not given, default to True."""
+    video_enabled: NotGivenOr[bool] = NOT_GIVEN
+    """If not given, default to False."""
     audio_sample_rate: int = 24000
     audio_num_channels: int = 1
     noise_cancellation: rtc.NoiseCancellationOptions | None = None
@@ -88,8 +91,10 @@ class RoomInputOptions:
 
 @dataclass
 class RoomOutputOptions:
-    transcription_enabled: bool = True
-    audio_enabled: bool = True
+    transcription_enabled: NotGivenOr[bool] = NOT_GIVEN
+    """If not given, default to True."""
+    audio_enabled: NotGivenOr[bool] = NOT_GIVEN
+    """If not given, default to True."""
     audio_sample_rate: int = 24000
     audio_num_channels: int = 1
     audio_publish_options: rtc.TrackPublishOptions = field(
@@ -154,19 +159,22 @@ class RoomIO:
             )
             self._pre_connect_audio_handler.register()
 
-        if self._input_options.text_enabled:
+        if self._input_options.text_enabled or not utils.is_given(self._input_options.text_enabled):
             try:
                 self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
                 self._text_stream_handler_registered = True
             except ValueError:
-                logger.warning(
-                    f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
-                )
+                if self._input_options.text_enabled:
+                    logger.warning(
+                        f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
+                    )
 
         if self._input_options.video_enabled:
             self._video_input = _ParticipantVideoInputStream(self._room)
 
-        if self._input_options.audio_enabled:
+        if self._input_options.audio_enabled or not utils.is_given(
+            self._input_options.audio_enabled
+        ):
             self._audio_input = _ParticipantAudioInputStream(
                 self._room,
                 sample_rate=self._input_options.audio_sample_rate,
@@ -176,7 +184,9 @@ class RoomIO:
             )
 
         # -- create outputs --
-        if self._output_options.audio_enabled:
+        if self._output_options.audio_enabled or not utils.is_given(
+            self._output_options.audio_enabled
+        ):
             self._audio_output = _ParticipantAudioOutput(
                 self._room,
                 sample_rate=self._output_options.audio_sample_rate,
@@ -184,7 +194,9 @@ class RoomIO:
                 track_publish_options=self._output_options.audio_publish_options,
             )
 
-        if self._output_options.transcription_enabled:
+        if self._output_options.transcription_enabled or not utils.is_given(
+            self._output_options.transcription_enabled
+        ):
             self._user_tr_output = self._create_transcription_output(
                 is_delta_stream=False, participant=self._participant_identity
             )
@@ -298,6 +310,12 @@ class RoomIO:
         if not self._participant_available_fut.done():
             return None
         return self._participant_available_fut.result()
+
+    @property
+    def subscribed_fut(self) -> asyncio.Future[None] | None:
+        if self._audio_output:
+            return self._audio_output.subscribed
+        return None
 
     def set_participant(self, participant_identity: str | None) -> None:
         """Switch audio and video streams to specified participant"""
@@ -420,7 +438,7 @@ class RoomIO:
             self._close_session_atask.add_done_callback(_on_closed)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-        if self._output_options.transcription_enabled:
+        if self._user_transcript_atask:
             self._user_transcript_ch.send_nowait(ev)
 
     def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:

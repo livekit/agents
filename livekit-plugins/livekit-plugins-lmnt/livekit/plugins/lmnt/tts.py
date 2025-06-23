@@ -57,6 +57,8 @@ class _TTSOptions:
     num_channels: int
     voice: str
     api_key: str
+    temperature: float
+    top_p: float
 
 
 class TTS(tts.TTS):
@@ -68,12 +70,14 @@ class TTS(tts.TTS):
         self,
         *,
         model: LMNTModels = "blizzard",
-        voice: str = "zeke",
+        voice: str = "leah",
         language: LMNTLanguages | None = None,
         format: LMNTAudioFormats = "mp3",
         sample_rate: LMNTSampleRate = 24000,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
+        temperature: float = 1.0,
+        top_p: float = 0.8,
     ) -> None:
         """
         Create a new instance of LMNT TTS.
@@ -83,7 +87,7 @@ class TTS(tts.TTS):
         Args:
             model: The model to use for synthesis. Default is "blizzard".
                 Learn more at: https://docs.lmnt.com/guides/models
-            voice: The voice ID to use. Default is "zeke". Find more amazing voices at https://app.lmnt.com/
+            voice: The voice ID to use. Default is "leah". Find more amazing voices at https://app.lmnt.com/
             language: Two-letter ISO 639-1 language code. Defaults to None.
                 See: https://docs.lmnt.com/api-reference/speech/synthesize-speech-bytes#body-language
             format: Output file format. Options: aac, mp3, mulaw, raw, wav. Default is "mp3".
@@ -91,6 +95,15 @@ class TTS(tts.TTS):
                 See: https://docs.lmnt.com/api-reference/speech/synthesize-speech-bytes#body-sample-rate
             api_key: API key for authentication. Defaults to the LMNT_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession. A new session is created if not provided.
+            temperature: Influences how expressive and emotionally varied the speech becomes.
+                Lower values (like 0.3) create more neutral, consistent speaking styles.
+                Higher values (like 1.0) allow for more dynamic emotional range and speaking styles.
+                Default is 1.0.
+            top_p: Controls the stability of the generated speech.
+                A lower value (like 0.3) produces more consistent, reliable speech.
+                A higher value (like 0.9) gives more flexibility in how words are spoken,
+                but might occasionally produce unusual intonations or speech patterns.
+                Default is 0.8.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -115,6 +128,8 @@ class TTS(tts.TTS):
             voice=voice,
             format=format,
             api_key=api_key,
+            temperature=temperature,
+            top_p=top_p,
         )
 
         self._session = http_session
@@ -139,6 +154,8 @@ class TTS(tts.TTS):
         language: NotGivenOr[LMNTLanguages] = NOT_GIVEN,
         format: NotGivenOr[LMNTAudioFormats] = NOT_GIVEN,
         sample_rate: NotGivenOr[LMNTSampleRate] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS options.
@@ -150,6 +167,8 @@ class TTS(tts.TTS):
                 See: https://docs.lmnt.com/api-reference/speech/synthesize-speech-bytes#body-language
             format: Audio output format. Options: aac, mp3, mulaw, raw, wav.
             sample_rate: Output sample rate in Hz.
+            temperature: Controls the expressiveness of the speech. A number between 0.0 and 1.0.
+            top_p: Controls the stability of the generated speech. A number between 0.0 and 1.0.
         """
         if is_given(model):
             self._opts.model = model
@@ -161,6 +180,10 @@ class TTS(tts.TTS):
             self._opts.format = format
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
+        if is_given(temperature):
+            self._opts.temperature = temperature
+        if is_given(top_p):
+            self._opts.top_p = top_p
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -191,6 +214,8 @@ class ChunkedStream(tts.ChunkedStream):
             "sample_rate": self._opts.sample_rate,
             "model": self._opts.model,
             "format": self._opts.format,
+            "temperature": self._opts.temperature,
+            "top_p": self._opts.top_p,
         }
 
         try:
