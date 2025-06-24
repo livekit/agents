@@ -1978,15 +1978,11 @@ requires-dist = [
 name = "livekit-plugins-inworld"
 source = { editable = "livekit-plugins/livekit-plugins-inworld" }
 dependencies = [
-    { name = "httpx" },
     { name = "livekit-agents" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "livekit-agents", editable = "livekit-agents" },
-]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-langchain"

@@ -14,14 +14,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from typing import Any, Literal
+from urllib.parse import urljoin
 
-import httpx
+import aiohttp
 
 from livekit.agents import tts, utils
 from livekit.agents._exceptions import APIConnectionError, APITimeoutError
@@ -45,12 +47,17 @@ VOICE_ID = "Olivia"
 
 @dataclass
 class _TTSOptions:
-    modelId: str | None
-    voice: str | None
-    pitch: float | None
-    speed: float | None
-    sampleRateHertz: int | None
-    temperature: float | None
+    modelId: str
+    voice: str
+    pitch: float
+    speed: float
+    sampleRateHertz: int
+    temperature: float
+    base_url: str
+    headers: dict[str, str]
+
+    def get_endpoint_url(self) -> str:
+        return urljoin(self.base_url, "/tts/v1/voice:stream")
 
 
 class TTS(tts.TTS):
@@ -58,14 +65,15 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: str | None = None,
-        voice: str | None = None,
+        model: str = MODEL_ID,
+        voice: str = VOICE_ID,
         pitch: float = PITCH,
         speed: float = SPEED,
         sample_rate: int = SAMPLE_RATE,
         temperature: float = TEMPERATURE,
         base_url: str = INWORLD_API_BASE_URL,
         auth_type: Literal["basic", "bearer"] = "basic",
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
         Create a new instance of Inworld TTS.
@@ -82,6 +90,8 @@ class TTS(tts.TTS):
             base_url (str, optional): The base URL for the Inworld API.
             auth_type (Literal["basic", "bearer"], optional): The authentication type to use.
                 Defaults to "basic".
+            http_session (aiohttp.ClientSession, optional): The HTTP session to use.
+                If not provided, a new session will be created.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -92,9 +102,8 @@ class TTS(tts.TTS):
         api_key = api_key or os.getenv("INWORLD_API_KEY")
         if not api_key:
             raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
-
         auth_prefix = "Basic" if auth_type.lower() == "basic" else "Bearer"
-
+        self._session = http_session
         self._opts = _TTSOptions(
             modelId=model,
             voice=voice,
@@ -102,19 +111,11 @@ class TTS(tts.TTS):
             speed=speed,
             sampleRateHertz=sample_rate,
             temperature=temperature,
-        )
-
-        self._http_client = httpx.AsyncClient(
             base_url=base_url,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"{auth_prefix} {api_key}",
             },
-            timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-            follow_redirects=True,
-            limits=httpx.Limits(
-                max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
-            ),
         )
 
     def update_options(
@@ -151,6 +152,11 @@ class TTS(tts.TTS):
         if temperature is not None:
             self._opts.temperature = temperature
 
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+        return self._session
+
     def synthesize(
         self,
         text: str,
@@ -175,32 +181,44 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         try:
-            async with self._create_synthesis() as synthesis:
-                async for chunk in synthesis.aiter_lines():
-                    if chunk:
-                        chunk_data = json.loads(chunk)
-                        if chunk_data and (chunk_result := chunk_data.get("result")):
-                            if chunk_result and (audio_content := chunk_result.get("audioContent")):
-                                audio_data = base64.b64decode(audio_content)
-                                audio_data = _strip_wav_header(audio_data)
-                                output_emitter.push(audio_data)
+            async with self._create_synthesis() as response:
+                if response.status == 200:
+                    buffer = ""
+                    async for chunk in response.content.iter_chunks():
+                        buffer += chunk[0].decode("utf-8")
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            self._process_chunk(line, output_emitter)
+
+                    self._process_chunk(buffer, output_emitter)
             output_emitter.flush()
-        except httpx.TimeoutException:
+        except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             output_emitter.flush()
 
-    def _create_synthesis(self) -> AbstractAsyncContextManager[httpx.Response]:
-        return self._tts._http_client.stream(
-            "POST",
-            "/tts/v1/voice:stream",
+    def _create_synthesis(self) -> AbstractAsyncContextManager[aiohttp.ClientResponse]:
+        return self._tts._ensure_session().post(
+            self._opts.get_endpoint_url(),
+            headers=self._opts.headers,
             json=_generate_request(self._opts, self._input_text),
-            timeout=httpx.Timeout(
-                timeout=self._conn_options.timeout,
-            ),
+            timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
         )
+
+    def _process_chunk(self, line: str, output_emitter: tts.AudioEmitter) -> None:
+        if not line.strip():
+            pass
+        try:
+            chunk_data = json.loads(line)
+            if chunk_data and (chunk_result := chunk_data.get("result")):
+                if chunk_result and (audio_content := chunk_result.get("audioContent")):
+                    audio_data = base64.b64decode(audio_content)
+                    audio_data = _strip_wav_header(audio_data)
+                    output_emitter.push(audio_data)
+        except json.JSONDecodeError:
+            pass
 
 
 def _strip_wav_header(audio_data: bytes) -> bytes:
@@ -217,15 +235,15 @@ def _generate_request(
 ) -> dict[str, str | dict[str, str | float | int]]:
     data: dict[str, Any] = {
         "text": input,
-        "voiceId": opts.voice or VOICE_ID,
-        "modelId": opts.modelId or MODEL_ID,
+        "voiceId": opts.voice,
+        "modelId": opts.modelId,
         "audioConfig": {
             "audioEncoding": AUDIO_ENCODING,
-            "pitch": opts.pitch or PITCH,
-            "sampleRateHertz": opts.sampleRateHertz or SAMPLE_RATE,
-            "speakingRate": opts.speed or SPEED,
+            "pitch": opts.pitch,
+            "sampleRateHertz": opts.sampleRateHertz,
+            "speakingRate": opts.speed,
         },
-        "temperature": opts.temperature or TEMPERATURE,
+        "temperature": opts.temperature,
     }
 
     return data

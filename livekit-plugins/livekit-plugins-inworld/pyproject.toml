@@ -23,7 +23,6 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "httpx>=0.28.1",
     "livekit-agents>=1.1.1",
 ]
 
