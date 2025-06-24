@@ -16,7 +16,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, hume, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -38,7 +38,7 @@ class MyAgent(Agent):
     async def on_enter(self):
         # when the agent is added to the session, it'll generate a reply
         # according to its instructions
-        self.session.generate_reply()
+        await self.session.generate_reply(instructions="Greet the user")
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -77,7 +77,10 @@ async def entrypoint(ctx: JobContext):
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(model="nova-3", language="multi"),
-        tts=openai.TTS(voice="ash"),
+        tts=hume.TTS(
+            voice=hume.VoiceByName(name="Colton Rivers", provider=hume.VoiceProvider.hume),
+            description="The voice exudes calm, serene, and peaceful qualities, like a gentle stream flowing through a quiet forest.",
+        ),
         # use LiveKit's turn detection model
         turn_detection=MultilingualModel(),
     )
