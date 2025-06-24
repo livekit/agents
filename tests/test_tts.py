@@ -784,7 +784,7 @@ async def test_tts_audio_emitter(monkeypatch):
     )
     emitter_nostream.push(pcm_chunk)
     emitter_nostream.push(pcm_chunk)
-    emitter_nostream.flush()  # acts as final
+    emitter_nostream.end_input()  # acts as final
 
     # no end_input needed: flush() already closed in non-streaming
     await emitter_nostream.join()
@@ -940,7 +940,7 @@ async def test_tts_audio_emitter_wav(monkeypatch):
 
     # push one WAV blob, then flush() to mark final
     emitter2.push(wav_bytes)
-    emitter2.flush()
+    emitter2.end_input()
 
     await emitter2.join()
     rx2.close()

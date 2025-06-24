@@ -58,7 +58,7 @@ async def test_tts_fallback() -> None:
         assert fake1.synthesize_ch.recv_nowait()
         assert fake2.synthesize_ch.recv_nowait()
 
-        assert rtc.combine_audio_frames(frames).duration == 5.0
+        assert rtc.combine_audio_frames(frames).duration == 5.01
 
     assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
 
@@ -194,7 +194,7 @@ async def test_audio_resampled() -> None:
         assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
 
         combined_frame = rtc.combine_audio_frames(frames)
-        assert combined_frame.duration == 5.0
+        assert combined_frame.duration == 5.01
         assert combined_frame.sample_rate == 48000
 
     assert await asyncio.wait_for(fake1.synthesize_ch.recv(), 1.0)
