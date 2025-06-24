@@ -1,7 +1,8 @@
+import pytest
+
+from livekit.agents import AgentSession, ChatContext, llm
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.voice.run_result import mock_tools
-import pytest
-from livekit.agents import AgentSession, llm, ChatContext
 from livekit.plugins import openai
 
 from ..drivethru_agent import DriveThruAgent, new_userdata
@@ -187,6 +188,23 @@ async def test_consecutive_order() -> None:
             llm, intent="should confirm that two mayonnaise sauces was ordered"
         )
         result.expect.no_more_events()
+
+    async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
+        await sess.start(DriveThruAgent(userdata=userdata))
+        result = await sess.run(user_input="Can I get a keychup sauce and a McFlurry Oreo ?")
+        result.expect[:].contains_function_call(
+            name="order_regular_item", arguments={"item_id": "ketchup"}
+        )
+        result.expect[:].contains_function_call(
+            name="order_regular_item", arguments={"item_id": "sweet_mcflurry_oreo"}
+        )
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                llm, intent="should confirm that a ketchup and a McFlurry Oreo was ordered"
+            )
+        )
 
 
 @pytest.mark.asyncio

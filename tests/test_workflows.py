@@ -1,6 +1,6 @@
 import pytest
 
-from livekit.agents import AgentSession, workflows, ToolError
+from livekit.agents import AgentSession, ToolError, workflows
 from livekit.plugins import openai
 
 

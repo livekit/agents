@@ -8,7 +8,6 @@ import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from logging import exception
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,6 +15,7 @@ from typing import (
     Generic,
     Literal,
     TypeVar,
+    overload,
 )
 
 from .. import llm
@@ -156,19 +156,34 @@ class RunResult(Generic[Run_T]):
                 self._done_fut.set_exception(final_output)
 
 
-
 class RunAssert:
     def __init__(self, run_result: RunResult):
         self._events_list = run_result.events
         self._current_index = 0
 
-    def __getitem__(self, index: int) -> EventAssert:
-        if not (0 <= index < len(self._events_list)):
-            self._raise_with_debug_info(
-                f"nth({index}) out of range (total events: {len(self._events_list)})",
-                index=index,
-            )
-        return EventAssert(self._events_list[index], self, index)
+    @overload
+    def __getitem__(self, index: int) -> EventAssert: ...
+    @overload
+    def __getitem__(self, s: slice) -> EventRangeAssert: ...
+
+    def __getitem__(self, key: [int, slice]) -> EventAssert | EventRangeAssert:  # type: ignore
+        if isinstance(key, slice):
+            events = self._events_list[key]
+            return EventRangeAssert(events, self, key)
+        if isinstance(key, int):
+            if key < 0:
+                key += len(self._events_list)
+
+            if not (0 <= key < len(self._events_list)):
+                self._raise_with_debug_info(
+                    f"nth({key}) out of range (total events: {len(self._events_list)})",
+                    index=key,
+                )
+            return EventAssert(self._events_list[key], self, key)
+
+        raise TypeError(
+            f"{type(self).__name__} indices must be int or slice, not {type(key).__name__}"
+        )
 
     def _current_event(self) -> EventAssert:
         if self._current_index >= len(self._events_list):
@@ -347,6 +362,57 @@ class EventAssert:
         return AgentHandoffAssert(self._event, self._parent, self._index)
 
 
+class EventRangeAssert:
+    def __init__(self, events: list[RunEvent], parent: RunAssert, rng: slice):
+        self._events = events
+        self._parent = parent
+        self._rng = rng
+
+    def contains_function_call(
+        self,
+        *,
+        name: NotGivenOr[str] = NOT_GIVEN,
+        arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> FunctionCallAssert:
+        for idx, ev in enumerate(self._events):
+            candidate = EventAssert(ev, self._parent, (self._rng.start or 0) + idx)
+            with contextlib.suppress(AssertionError):
+                return candidate.is_function_call(name=name, arguments=arguments)
+
+        self._parent._raise_with_debug_info(
+            f"No FunctionCallEvent satisfying criteria found in range {self._rng!r}"
+        )
+
+    def contains_message(
+        self,
+        *,
+        role: NotGivenOr[llm.ChatRole] = NOT_GIVEN,
+    ) -> ChatMessageAssert:
+        for idx, ev in enumerate(self._events):
+            candidate = EventAssert(ev, self._parent, (self._rng.start or 0) + idx)
+            with contextlib.suppress(AssertionError):
+                return candidate.is_message(role=role)
+
+        self._parent._raise_with_debug_info(
+            f"No ChatMessageEvent matching criteria found in range {self._rng!r}"
+        )
+
+    def contains_function_call_output(
+        self,
+        *,
+        output: NotGivenOr[str] = NOT_GIVEN,
+        is_error: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> FunctionCallOutputAssert:
+        for idx, ev in enumerate(self._events):
+            candidate = EventAssert(ev, self._parent, (self._rng.start or 0) + idx)
+            with contextlib.suppress(AssertionError):
+                return candidate.is_function_call_output(output=output, is_error=is_error)
+
+        self._parent._raise_with_debug_info(
+            f"No FunctionCallOutputEvent matching criteria found in range {self._rng!r}"
+        )
+
+
 class ChatMessageAssert:
     def __init__(self, event: ChatMessageEvent, parent: RunAssert, index: int):
         self._event = event
@@ -434,7 +500,7 @@ class FunctionCallAssert:
         self._parent = parent
         self._index = index
 
-    def item(self) -> FunctionCallEvent:
+    def event(self) -> FunctionCallEvent:
         return self._event
 
 
