@@ -412,24 +412,16 @@ class RoomIO:
             and participant.disconnect_reason in DEFAULT_CLOSE_ON_DISCONNECT_REASONS
             and not self._close_session_atask
         ):
-
-            def _on_closed(_: asyncio.Task[None]) -> None:
-                self._close_session_atask = None
-
-                if self._close_session_atask is not None:
-                    return
-
             logger.debug(
                 "closing agent session due to participant disconnect",
                 extra={
                     "participant": participant.identity,
-                    "reason": rtc.DisconnectReason.Name(participant.disconnect_reason),
+                    "reason": rtc.DisconnectReason.Name(
+                        participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
+                    ),
                 },
             )
-            self._close_session_atask = asyncio.create_task(
-                self._agent_session._aclose_impl(reason=CloseReason.PARTICIPANT_DISCONNECTED)
-            )
-            self._close_session_atask.add_done_callback(_on_closed)
+            self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_atask:

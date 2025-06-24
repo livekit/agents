@@ -49,6 +49,7 @@ class SpeechHandle:
                 cb(self)
 
         self._done_fut.add_done_callback(_on_done)
+        self._maybe_run_final_output: Any = None  # kept private
 
     @staticmethod
     def create(

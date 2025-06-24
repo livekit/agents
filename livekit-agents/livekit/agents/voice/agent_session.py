@@ -488,11 +488,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         await self._activity.drain()
 
+    def _close_soon(
+        self,
+        *,
+        reason: CloseReason,
+        drain: bool = False,
+        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
+    ) -> None:
+        if self._closing_task:
+            return
+
+        self._closing_task = asyncio.create_task(
+            self._aclose_impl(error=error, drain=drain, reason=reason)
+        )
+
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
         self,
         *,
         reason: CloseReason,
+        drain: bool = False,
         error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
     ) -> None:
         async with self._lock:
@@ -500,13 +515,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
             if self._activity is not None:
-                try:
-                    await self._activity.interrupt()
-                except RuntimeError:
-                    # uninterruptible speech
-                    # TODO(long): force interrupt or wait for it to finish?
-                    # it might be an audio played from the error callback
-                    pass
+                if not drain:
+                    try:
+                        await self._activity.interrupt()
+                    except RuntimeError:
+                        # uninterruptible speech
+                        # TODO(long): force interrupt or wait for it to finish?
+                        # it might be an audio played from the error callback
+                        pass
+
                 await self._activity.drain()
 
                 # wait any uninterruptible speech to finish

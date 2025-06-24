@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from livekit import rtc
+from livekit.agents.voice.events import CloseReason
 
 from .. import llm, stt, tokenize, tts, utils, vad
 from ..llm import (
@@ -576,10 +577,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             allow_interruptions=allow_interruptions,
         )
 
+        self.__inline_mode = False
         self.__started = False
         self.__fut = asyncio.Future[TaskResult_T]()
-
-        self.__speech_handle: SpeechHandle | None = None
 
     def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
@@ -590,10 +590,23 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         else:
             self.__fut.set_result(result)
 
+        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+
+        speech_handle = _SpeechHandleContextVar.get(None)
+        activity = _AgentActivityContextVar.get()
+        session = activity.session
+
+        if speech_handle:
+            speech_handle._maybe_run_final_output = result
+
+        if not self.__inline_mode:
+            session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
+
     async def __await_impl(self) -> TaskResult_T:
         if self.__started:
             raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
 
+        self.__inline_mode = True
         self.__started = True
 
         current_task = asyncio.current_task()
