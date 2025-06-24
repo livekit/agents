@@ -837,16 +837,17 @@ class AudioEmitter:
                             )
                             decode_atask = asyncio.create_task(_decode_task())
                         audio_decoder.push(data)
-                    elif audio_decoder and decode_atask:
-                        if isinstance(data, AudioEmitter._FlushSegment):
+                    elif decode_atask:
+                        if isinstance(data, AudioEmitter._FlushSegment) and audio_decoder:
                             audio_decoder.end_input()
                             await decode_atask
                             _flush_frame()
                             audio_decoder = None
 
                         elif isinstance(data, AudioEmitter._EndSegment):
-                            audio_decoder.end_input()
-                            await decode_atask
+                            if audio_decoder:
+                                audio_decoder.end_input()
+                                await decode_atask
                             _emit_frame(is_final=True)
                             dump_segment()
                             audio_decoder = segment_ctx = audio_byte_stream = last_frame = None
