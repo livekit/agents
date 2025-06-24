@@ -644,7 +644,7 @@ class Worker(utils.EventEmitter[EventTypes]):
                 if scheme.startswith("http"):
                     scheme = scheme.replace("http", "ws")
 
-                path_parts = [f"{scheme}://{parse.netloc}", parse.path, "/agent"]
+                path_parts = [f"{scheme}://{parse.netloc}", parse.path, "agent"]
                 agent_url = reduce(urljoin, path_parts)
 
                 params = {}
