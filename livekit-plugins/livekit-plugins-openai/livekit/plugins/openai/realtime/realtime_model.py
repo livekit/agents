@@ -669,12 +669,9 @@ class RealtimeSession(
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
 
-        return await self._realtime_model._ensure_http_session().ws_connect(
-            url=url,
-            headers=headers,
-            timeout=aiohttp.ClientWSTimeout(
-                ws_close=self._realtime_model._opts.conn_options.timeout
-            ),
+        return await asyncio.wait_for(
+            self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
+            self._realtime_model._opts.conn_options.timeout,
         )
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
@@ -868,7 +865,7 @@ class RealtimeSession(
         else:
             tracing = tracing_opts
 
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "model": self._realtime_model._opts.model,
             "voice": self._realtime_model._opts.voice,
             "input_audio_format": "pcm16",
@@ -879,7 +876,6 @@ class RealtimeSession(
             "input_audio_noise_reduction": self._realtime_model._opts.input_audio_noise_reduction,
             "temperature": self._realtime_model._opts.temperature,
             "tool_choice": _to_oai_tool_choice(self._realtime_model._opts.tool_choice),
-            "tracing": tracing,
         }
         if self._instructions is not None:
             kwargs["instructions"] = self._instructions
@@ -887,12 +883,15 @@ class RealtimeSession(
         if self._realtime_model._opts.speed is not None:
             kwargs["speed"] = self._realtime_model._opts.speed
 
+        if tracing:
+            kwargs["tracing"] = tracing
+
         # initial session update
         return SessionUpdateEvent(
             type="session.update",
             # Using model_construct since OpenAI restricts voices to those defined in the BaseModel.  # noqa: E501
             # Other providers support different voices, so we need to accommodate that.
-            session=session_update_event.Session.model_construct(**kwargs),  # type: ignore
+            session=session_update_event.Session.model_construct(**kwargs),
             event_id=utils.shortuuid("session_update_"),
         )
 
@@ -1526,7 +1525,17 @@ class RealtimeSession(
                 audio_tokens=usage.get("input_token_details", {}).get("audio_tokens", 0),
                 cached_tokens=usage.get("input_token_details", {}).get("cached_tokens", 0),
                 text_tokens=usage.get("input_token_details", {}).get("text_tokens", 0),
-                cached_tokens_details=None,
+                cached_tokens_details=RealtimeModelMetrics.CachedTokenDetails(
+                    text_tokens=usage.get("input_token_details", {})
+                    .get("cached_tokens_details", {})
+                    .get("text_tokens", 0),
+                    audio_tokens=usage.get("input_token_details", {})
+                    .get("cached_tokens_details", {})
+                    .get("audio_tokens", 0),
+                    image_tokens=usage.get("input_token_details", {})
+                    .get("cached_tokens_details", {})
+                    .get("image_tokens", 0),
+                ),
                 image_tokens=0,
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
@@ -1686,14 +1695,11 @@ def _create_mock_audio_item(duration: float = 2) -> llm.ChatMessage:
     )
 
 
-def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str | llm.tool_context.Function:
-    oai_tool_choice: str | llm.tool_context.Function | None = None
-    if isinstance(tool_choice, dict) and tool_choice["type"] == "function":
-        oai_tool_choice = tool_choice["function"]
-    else:
-        oai_tool_choice = tool_choice
+def _to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
+    if isinstance(tool_choice, str):
+        return tool_choice
 
-    if oai_tool_choice is None:
-        oai_tool_choice = "auto"
+    elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
+        return tool_choice["function"]["name"]
 
-    return oai_tool_choice
+    return "auto"

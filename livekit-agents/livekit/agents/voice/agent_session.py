@@ -439,6 +439,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._update_agent_state("listening")
+            if self._room_io and self._room_io.subscribed_fut:
+
+                def on_room_io_subscribed(_: asyncio.Future[None]) -> None:
+                    if self._user_state == "listening" and self._agent_state == "listening":
+                        self._set_user_away_timer()
+
+                self._room_io.subscribed_fut.add_done_callback(on_room_io_subscribed)
 
     async def _trace_chat_ctx(self) -> None:
         if self._activity is None:
@@ -497,6 +504,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = False
             self.emit("close", CloseEvent(error=error, reason=reason))
+
+            self._cancel_user_away_timer()
+            self._user_state = "listening"
+            self._agent_state = "initializing"
+            self._llm_error_counts = 0
+            self._tts_error_counts = 0
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
@@ -614,12 +627,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
-    def commit_user_turn(self) -> None:
-        # commit the user turn and generate a reply
+    def commit_user_turn(self, *, transcript_timeout: float = 2.0) -> None:
+        """Commit the user turn and generate a reply.
+
+        Args:
+            transcript_timeout (float, optional): The timeout for the final transcript
+                to be received after committing the user turn.
+                Increase this value if the STT is slow to respond.
+
+        Raises:
+            RuntimeError: If the AgentSession isn't running.
+        """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
-        self._activity.commit_user_turn()
+        self._activity.commit_user_turn(transcript_timeout=transcript_timeout)
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
@@ -694,6 +716,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _set_user_away_timer(self) -> None:
         self._cancel_user_away_timer()
         if self._opts.user_away_timeout is None:
+            return
+
+        if (
+            (room_io := self._room_io)
+            and room_io.subscribed_fut
+            and not room_io.subscribed_fut.done()
+        ):
+            # skip the timer before user join the room
             return
 
         self._user_away_timer = self._loop.call_later(

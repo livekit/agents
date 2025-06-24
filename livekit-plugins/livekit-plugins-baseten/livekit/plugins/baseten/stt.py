@@ -89,8 +89,7 @@ class STT(stt.STT):
             ),
         )
 
-        if not is_given(api_key):
-            api_key = os.environ.get("BASETEN_API_KEY")
+        api_key = api_key or os.environ.get("BASETEN_API_KEY")
 
         if not api_key:
             raise ValueError(
