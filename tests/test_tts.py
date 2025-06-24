@@ -272,10 +272,12 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
         "expected all audio events to be non-final"
     )
     assert all(0.05 < event.frame.duration < 0.25 for event in audio_events[:-1]), (
-        "expected all frames to have a duration between 50ms and 250ms"
+        f"expected all frames to have a duration between 50ms and 250ms, got {[e.frame.duration for e in audio_events[:-1]]}"  # noqa: E501
     )
     assert audio_events[-1].is_final, "expected last audio event to be final"
-    assert 0 < audio_events[-1].frame.duration < 0.25, "expected last frame to not be empty"
+    assert 0 < audio_events[-1].frame.duration < 0.25, (
+        f"expected last frame to not be empty, got {audio_events[-1].frame.duration}"
+    )
 
     first_id = audio_events[0].request_id
     assert first_id, "expected to have a request_id"

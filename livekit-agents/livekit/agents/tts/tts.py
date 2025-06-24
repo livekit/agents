@@ -844,7 +844,7 @@ class AudioEmitter:
                             _flush_frame()
                             audio_decoder = None
 
-                        elif isinstance(data, AudioEmitter._EndSegment):
+                        elif isinstance(data, AudioEmitter._EndSegment) and segment_ctx:
                             if audio_decoder:
                                 audio_decoder.end_input()
                                 await decode_atask
