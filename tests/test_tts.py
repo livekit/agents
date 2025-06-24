@@ -453,10 +453,10 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": inworld.TTS(),
+            "tts": tts.StreamAdapter(tts=inworld.TTS()),
             "proxy-upstream": "api.inworld.ai:443",
         },
-        id="inworld",
+        id="inworld-stream-adapter",
     ),
 ]
 
