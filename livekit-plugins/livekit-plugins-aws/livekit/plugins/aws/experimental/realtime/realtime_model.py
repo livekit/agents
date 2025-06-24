@@ -20,6 +20,7 @@ from livekit.agents.llm.tool_context import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.utils.aio.channel import ChanEmpty
 
 from aws_sdk_bedrock_runtime.client import (
     BedrockRuntimeClient,
@@ -28,9 +29,10 @@ from aws_sdk_bedrock_runtime.client import (
 from aws_sdk_bedrock_runtime.models import (
     InvokeModelWithBidirectionalStreamInputChunk,
     BidirectionalInputPayloadPart,
+    ValidationException,
+    ModelTimeoutException,
 )
 from aws_sdk_bedrock_runtime.config import Config, HTTPAuthSchemeResolver, SigV4AuthScheme
-from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_core.aio.interfaces.identity import IdentityResolver
@@ -44,7 +46,6 @@ from .events import (
     ToolSpec,
     ToolInputSchema,
 )
-from aws_sdk_bedrock_runtime.models import ValidationException
 
 INPUT_SAMPLE_RATE = 16000
 OUTPUT_SAMPLE_RATE = 24000
@@ -123,10 +124,10 @@ class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
-        voice: VOICE_ID = "tiffany",
+        voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        region: str = "us-east-1",
+        region: NotGivenOr[str] = NOT_GIVEN,
     ):
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -138,10 +139,10 @@ class RealtimeModel(llm.RealtimeModel):
         )
         self.model_id = "amazon.nova-sonic-v1:0"
         self._opts = _RealtimeOptions(
-            voice=voice,
+            voice=voice if is_given(voice) else "tiffany",
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
             tool_choice=tool_choice or None,
-            region=region,
+            region=region if is_given(region) else "us-east-1",
         )
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
@@ -151,10 +152,6 @@ class RealtimeModel(llm.RealtimeModel):
         asyncio.create_task(sess._initialize_stream())
         self._sessions.add(sess)
         return sess
-
-    # Q: why can this be a stub? shouldn't it proxy to the session's impl?
-    async def aclose(self) -> None:
-        pass
 
 
 class RealtimeSession(
@@ -178,6 +175,8 @@ class RealtimeSession(
         self._tools_ready = asyncio.Event()
         self._tool_type_map = {}
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
+        self._instructions_ready = asyncio.Event()
+        self._instructions = DEFAULT_SYSTEM_PROMPT
         self.audio_input_queue = utils.aio.Chan()
 
         self.prompt_name = str(uuid.uuid4())
@@ -305,8 +304,6 @@ class RealtimeSession(
             role == "ASSISTANT"
             and "SPECULATIVE" in event_data["event"]["contentStart"]["additionalModelFields"]
         ):
-            # TODO: move this to Tool Use event handler in the future when it's implemented
-            # must persist the speculative strings
             text_content_id = event_data["event"]["contentStart"]["contentId"]
             self._current_generation.speculative_messages[text_content_id] = (
                 self._current_generation.response_id
@@ -539,6 +536,13 @@ class RealtimeSession(
             for tool in tool_cfg.tools:
                 logger.debug(f"Tool configuration: {tool.toolSpec.inputSchema}")
 
+            try:
+                await asyncio.wait_for(self._instructions_ready.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Instructions not received after 2sec, proceeding with default instructions"
+                )
+
             init_events = [
                 seb.create_session_start_event(),
                 seb.create_prompt_start_event(
@@ -555,7 +559,7 @@ class RealtimeSession(
                 seb.create_text_input_event(
                     prompt_name=self.prompt_name,
                     content_name=self.content_name,
-                    content=DEFAULT_SYSTEM_PROMPT,
+                    content=self._instructions,
                 ),
                 seb.create_content_end_event(
                     prompt_name=self.prompt_name,
@@ -669,10 +673,9 @@ class RealtimeSession(
         return self._tools.copy()
 
     async def update_instructions(self, instructions: str) -> None:
-        logger.warning(
-            "updating system instructions is not yet supported by Nova Sonic's Realtime API"
-        )
-        pass
+        self._instructions = instructions
+        self._instructions_ready.set()
+        logger.debug(f"Instructions updated: {instructions}")
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         logger.warning(
@@ -715,7 +718,6 @@ class RealtimeSession(
             if frame.sample_rate != self._input_resampler._input_rate:
                 self._input_resampler = None
 
-        # set resampler if resampling is needed
         if self._input_resampler is None and (
             frame.sample_rate != INPUT_SAMPLE_RATE or frame.num_channels != CHANNELS
         ):
@@ -874,7 +876,7 @@ class RealtimeSession(
                 content_name=self.audio_content_name,
             )
         )
-        logger.debug("Audio ended")
+        logger.debug("Audio end")
 
     async def send_prompt_end_event(self):
         if not self.is_active:
@@ -886,7 +888,7 @@ class RealtimeSession(
                 prompt_name=self.prompt_name,
             )
         )
-        logger.debug("Prompt ended")
+        logger.debug("Prompt end")
 
     async def send_session_end_event(self):
         if not self.is_active:
@@ -895,4 +897,4 @@ class RealtimeSession(
 
         await self.send_raw_event(seb.create_session_end_event())
         self.is_active = False
-        logger.debug("Session ended")
+        logger.debug("Session end")
