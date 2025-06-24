@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import copy
 import time
 from collections.abc import AsyncIterable
@@ -18,7 +17,6 @@ from typing import (
 )
 
 from livekit import rtc
-from livekit.agents.llm.chat_context import ChatItem
 
 from .. import debug, llm, stt, tts, utils, vad
 from ..cli import cli
@@ -47,8 +45,8 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
-from .speech_handle import SpeechHandle
 from .run_result import RunResult
+from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -339,7 +337,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._agent
 
-    def run(self, *, user_input: str, output_type: Run_T = None) -> RunResult[Run_T]:
+    def run(self, *, user_input: str, output_type: type[Run_T] | None = None) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 

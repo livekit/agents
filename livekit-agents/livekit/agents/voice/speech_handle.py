@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-import json
-import functools
 import asyncio
-from dataclasses import dataclass
 import contextlib
-from collections.abc import Generator
-from typing import Any, Callable, Generic, Literal, TypeVar, Sequence
+from collections.abc import Generator, Sequence
+from typing import TYPE_CHECKING, Any, Callable
 
-from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
 from .. import llm, utils
 
-
-from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
-    from .agent import Agent
+    pass
 
 
 class SpeechHandle:

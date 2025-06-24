@@ -20,7 +20,6 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .speech_handle import SpeechHandle
-from .run_result import RunResult
 
 if TYPE_CHECKING:
     from ..llm import mcp

@@ -31,7 +31,6 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..llm import FunctionTool, RawFunctionTool
-    from ..voice import Agent
 
 
 class ImageContent(BaseModel):

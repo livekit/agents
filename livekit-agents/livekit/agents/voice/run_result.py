@@ -1,35 +1,27 @@
 from __future__ import annotations
 
-import json
+import asyncio
+import contextlib
 import contextvars
 import functools
-import asyncio
-from dataclasses import dataclass
-import contextlib
+import json
 from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import (
+    TYPE_CHECKING,
     Any,
-    Awaitable,
     Callable,
     Generic,
     Literal,
     TypeVar,
-    Sequence,
-    ContextManager,
-    Type,
 )
 
-
-from contextlib import contextmanager
-
+from .. import llm
+from ..llm import function_tool, utils as llm_utils
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from .. import llm, utils
-from ..llm import function_tool, utils as llm_utils
 from .speech_handle import SpeechHandle
-
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -67,7 +59,7 @@ RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | Agen
 
 
 class RunResult(Generic[Run_T]):
-    def __init__(self, *, output_type: type[Run_T]) -> None:
+    def __init__(self, *, output_type: type[Run_T] | None) -> None:
         self._handles: set[SpeechHandle | asyncio.Task] = set()
 
         self._done_fut = asyncio.Future[None]()
@@ -145,12 +137,14 @@ class RunResult(Generic[Run_T]):
         with contextlib.suppress(asyncio.InvalidStateError):
             if self.__last_speech_handle is not None:
                 self._final_output = self.__last_speech_handle._maybe_run_final_output
-                
-                if not isinstance(self._final_output, self._output_type):
-                    self._done_fut.set_exception(RuntimeError(
-                        f"Expected output of type {self._output_type.__name__}, "
-                        f"got {type(self._final_output).__name__}"
-                    ))
+
+                if self._output_type and not isinstance(self._final_output, self._output_type):
+                    self._done_fut.set_exception(
+                        RuntimeError(
+                            f"Expected output of type {self._output_type.__name__}, "
+                            f"got {type(self._final_output).__name__}"
+                        )
+                    )
                     return
 
             self._done_fut.set_result(None)
@@ -161,7 +155,7 @@ class RunAssert:
         self._events_list = run_result.events
         self._current_index = 0
 
-    def __getitem__(self, index: int) -> "EventAssert":
+    def __getitem__(self, index: int) -> EventAssert:
         if not (0 <= index < len(self._events_list)):
             self._raise_with_debug_info(
                 f"nth({index}) out of range (total events: {len(self._events_list)})",
@@ -169,7 +163,7 @@ class RunAssert:
             )
         return EventAssert(self._events_list[index], self, index)
 
-    def _current_event(self) -> "EventAssert":
+    def _current_event(self) -> EventAssert:
         if self._current_index >= len(self._events_list):
             self._raise_with_debug_info("Expected another event, but none left.")
         event = self[self._current_index]
@@ -201,7 +195,7 @@ class RunAssert:
 
         raise AssertionError(f"{message}\nContext around failure:\n" + "\n".join(lines))
 
-    def skip_next(self, count: int = 1) -> "RunAssert":
+    def skip_next(self, count: int = 1) -> RunAssert:
         for i in range(count):
             if self._current_index >= len(self._events_list):
                 self._raise_with_debug_info(
@@ -212,7 +206,7 @@ class RunAssert:
 
     def maybe_message(
         self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN
-    ) -> "ChatMessageAssert | None":
+    ) -> ChatMessageAssert | None:
         try:
             ev = self._current_event().is_message(role=role)
             self._current_index += 1
@@ -225,7 +219,7 @@ class RunAssert:
         *,
         name: NotGivenOr[str] = NOT_GIVEN,
         arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "FunctionCallAssert | None":
+    ) -> FunctionCallAssert | None:
         try:
             ev = self._current_event().is_function_call(name=name, arguments=arguments)
             self._current_index += 1
@@ -235,7 +229,7 @@ class RunAssert:
 
     def maybe_function_call_output(
         self, *, output: NotGivenOr[str] = NOT_GIVEN, is_error: NotGivenOr[bool] = NOT_GIVEN
-    ) -> "FunctionCallOutputAssert | None":
+    ) -> FunctionCallOutputAssert | None:
         try:
             ev = self._current_event().is_function_call_output(output=output, is_error=is_error)
             self._current_index += 1
@@ -245,7 +239,7 @@ class RunAssert:
 
     def maybe_agent_handoff(
         self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
-    ) -> "AgentHandoffAssert | None":
+    ) -> AgentHandoffAssert | None:
         try:
             ev = self._current_event().is_agent_handoff(new_agent_type=new_agent_type)
             self._current_index += 1
@@ -260,7 +254,7 @@ class RunAssert:
                 f"Expected no more events, but found: {type(event).__name__}"
             )
 
-    def message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> "ChatMessageAssert":
+    def message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> ChatMessageAssert:
         ev = self._current_event().is_message(role=role)
         self._current_index += 1
         return ev
@@ -270,21 +264,21 @@ class RunAssert:
         *,
         name: NotGivenOr[str] = NOT_GIVEN,
         arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "FunctionCallAssert":
+    ) -> FunctionCallAssert:
         ev = self._current_event().is_function_call(name=name, arguments=arguments)
         self._current_index += 1
         return ev
 
     def function_call_output(
         self, *, output: NotGivenOr[str] = NOT_GIVEN, is_error: NotGivenOr[bool] = NOT_GIVEN
-    ) -> "FunctionCallOutputAssert":
+    ) -> FunctionCallOutputAssert:
         ev = self._current_event().is_function_call_output(output=output, is_error=is_error)
         self._current_index += 1
         return ev
 
     def agent_handoff(
         self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
-    ) -> "AgentHandoffAssert":
+    ) -> AgentHandoffAssert:
         ev = self._current_event().is_agent_handoff(new_agent_type=new_agent_type)
         self._current_index += 1
         return ev
@@ -304,7 +298,7 @@ class EventAssert:
         *,
         name: NotGivenOr[str] = NOT_GIVEN,
         arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> "FunctionCallAssert":
+    ) -> FunctionCallAssert:
         if not isinstance(self._event, FunctionCallEvent):
             self._raise("Expected FunctionCallEvent")
         if is_given(name) and self._event.item.name != name:
@@ -318,7 +312,7 @@ class EventAssert:
 
     def is_function_call_output(
         self, *, output: NotGivenOr[str] = NOT_GIVEN, is_error: NotGivenOr[bool] = NOT_GIVEN
-    ) -> "FunctionCallOutputAssert":
+    ) -> FunctionCallOutputAssert:
         if not isinstance(self._event, FunctionCallOutputEvent):
             self._raise("Expected FunctionCallOutputEvent")
         if is_given(output) and self._event.item.output != output:
@@ -327,7 +321,7 @@ class EventAssert:
             self._raise(f"Expected is_error={is_error}, got {self._event.item.is_error}")
         return FunctionCallOutputAssert(self._event, self._parent, self._index)
 
-    def is_message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> "ChatMessageAssert":
+    def is_message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> ChatMessageAssert:
         if not isinstance(self._event, ChatMessageEvent):
             self._raise("Expected ChatMessageEvent")
         if is_given(role) and self._event.item.role != role:
@@ -336,7 +330,7 @@ class EventAssert:
 
     def is_agent_handoff(
         self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
-    ) -> "AgentHandoffAssert":
+    ) -> AgentHandoffAssert:
         if not isinstance(self._event, AgentHandoffEvent):
             self._raise("Expected AgentHandoffEvent")
         if is_given(new_agent_type) and not isinstance(self._event.new_agent, new_agent_type):
@@ -358,7 +352,7 @@ class ChatMessageAssert:
     def event(self) -> ChatMessageEvent:
         return self._event
 
-    async def judge(self, llm_v: llm.LLM, *, intent: str) -> "ChatMessageAssert":
+    async def judge(self, llm_v: llm.LLM, *, intent: str) -> ChatMessageAssert:
         msg_content = self._event.item.text_content
 
         if not msg_content:
@@ -463,7 +457,7 @@ _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools", 
 
 
 @contextmanager
-def mock_tools(agent: type["Agent"], mocks: dict[str, Callable]):
+def mock_tools(agent: type[Agent], mocks: dict[str, Callable]):
     """
     Temporarily assign a set of mock tool callables to a specific Agent type within the current context.
 

@@ -1,8 +1,10 @@
-from dataclasses import dataclass
-from livekit.agents import Agent, AgentSession, function_tool, RunContext, workflows, AgentTask
-from livekit.plugins import openai
 import random
+from dataclasses import dataclass
+
 import pytest
+
+from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
+from livekit.plugins import openai
 
 
 class KellyAgent(Agent):
