@@ -67,12 +67,15 @@ RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | Agen
 
 
 class RunResult(Generic[Run_T]):
-    def __init__(self, *, output_type: Run_T) -> None:
+    def __init__(self, *, output_type: type[Run_T]) -> None:
         self._handles: set[SpeechHandle | asyncio.Task] = set()
 
         self._done_fut = asyncio.Future[None]()
         self._output_type = output_type
         self._recorded_items: list[RunEvent] = []
+        self._final_output: Run_T | None = None
+
+        self.__last_speech_handle: SpeechHandle | None = None
 
     @property
     def events(self) -> list[RunEvent]:
@@ -87,7 +90,10 @@ class RunResult(Generic[Run_T]):
         if not self._done_fut.done():
             raise RuntimeError("cannot retrieve final_output, RunResult is not done")
 
-        raise RuntimeError("TODO")
+        if not self._final_output:
+            raise RuntimeError("no final output")
+
+        return self._final_output
 
     def done(self) -> bool:
         return self._done_fut.done()
@@ -128,12 +134,25 @@ class RunResult(Generic[Run_T]):
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
 
-    def _mark_done_if_needed(self, _):
+    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task):
+        if isinstance(handle, SpeechHandle):
+            self.__last_speech_handle = handle
+
         if all([handle.done() for handle in self._handles]):
             self._mark_done()
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
+            if self.__last_speech_handle is not None:
+                self._final_output = self.__last_speech_handle._maybe_run_final_output
+                
+                if not isinstance(self._final_output, self._output_type):
+                    self._done_fut.set_exception(RuntimeError(
+                        f"Expected output of type {self._output_type.__name__}, "
+                        f"got {type(self._final_output).__name__}"
+                    ))
+                    return
+
             self._done_fut.set_result(None)
 
 
