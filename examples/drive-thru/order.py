@@ -1,5 +1,5 @@
-import string
 import secrets
+import string
 from dataclasses import dataclass
 from typing import Annotated, Literal, Union
 

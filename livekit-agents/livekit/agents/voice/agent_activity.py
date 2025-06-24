@@ -26,8 +26,8 @@ from ..utils.misc import is_given
 from .agent import (
     Agent,
     ModelSettings,
-    _set_activity_task_info,
     _get_activity_task_info,
+    _set_activity_task_info,
 )
 from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
 from .events import (

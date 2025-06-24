@@ -1,38 +1,37 @@
-import sys
 import os
+import sys
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from dotenv import load_dotenv
-from livekit.agents import (
-    Agent,
-    function_tool,
-    JobContext,
-    cli,
-    WorkerOptions,
-    AgentSession,
-    RunContext,
-    ToolError,
-    FunctionTool,
-    AudioConfig,
-    BackgroundAudioPlayer,
-)
-
-from typing import Literal, Annotated, Union
 from dataclasses import dataclass
+from typing import Annotated, Literal
+
 from database import (
     COMMON_INSTRUCTIONS,
-    find_items_by_id,
-    menu_instructions,
     FakeDB,
     MenuItem,
+    find_items_by_id,
+    menu_instructions,
 )
-from pydantic import BaseModel, Field
-from order import OrderState, OrderedCombo, OrderedHappy, OrderedRegular
+from dotenv import load_dotenv
+from order import OrderedCombo, OrderedHappy, OrderedRegular, OrderState
+from pydantic import Field
+
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    AudioConfig,
+    BackgroundAudioPlayer,
+    FunctionTool,
+    JobContext,
+    RunContext,
+    ToolError,
+    WorkerOptions,
+    cli,
+    function_tool,
+)
+from livekit.plugins import cartesia, deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
-from livekit.plugins import deepgram, openai, elevenlabs, silero, cartesia
-
 
 load_dotenv()
 

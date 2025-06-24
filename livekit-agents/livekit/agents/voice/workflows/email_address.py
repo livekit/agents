@@ -1,8 +1,16 @@
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
+from ... import llm, stt, tts, vad
 from ...llm.tool_context import ToolError, function_tool
+from ...types import NOT_GIVEN, NotGivenOr
 from ..agent import AgentTask
+
+if TYPE_CHECKING:
+    from ..agent_session import TurnDetectionMode
 
 EMAIL_REGEX = (
     r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
@@ -15,15 +23,32 @@ class GetEmailResult:
 
 
 class GetEmailAgent(AgentTask[GetEmailResult]):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
             instructions=(
-                "You are a voice assistant that captures and confirms the user's email address. "
-                "The input may have transcription errors from the speech-to-text. Quietly fix these errors as needed without mentioning them. "
-                "When you have a confident guess of the email, call 'update_email_address'. Only call 'validate_email_address' after the user clearly confirms the email. "
-                "If the email is unclear or invalid, guide the user to repeat it in parts—first the section before the @, then the domain—only when necessary."
-                "Avoid validating the email address too early and avoid generating any markdown in your output."
-            )
+                "You are only a single step in a broader system, responsible solely for capturing and confirming the user's email address."
+                "Treat all input as potentially containing transcription errors; silently fix these without mentioning them. "
+                "Call 'update_email_address' only when you are confident in the complete email. "
+                "Call 'validate_email_address' only after the user clearly confirms the email. "
+                "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. "
+                "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary."
+            ),
+            chat_ctx=chat_ctx,
+            turn_detection=turn_detection,
+            stt=stt,
+            vad=vad,
+            llm=llm,
+            tts=tts,
+            allow_interruptions=allow_interruptions,
         )
 
         self._current_email = ""
@@ -47,7 +72,7 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
         separated_email = " ".join(email)
 
         return (
-            f"Confirm the provided email address with the user: f{email}\n"
+            f"Confirm the provided email address with the user: {email}\n"
             f"For clarity with the text-to-speech, also repeat it character by character: {separated_email}"
         )
 
@@ -58,3 +83,12 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
             raise ToolError("No valid email address were provided")
 
         self.complete(GetEmailResult(email_address=self._current_email))
+
+    @function_tool
+    async def decline_email_capture(self, reason: str) -> None:
+        """Handles the case when the user explicitly declines to provide an email address.
+
+        Args:
+            reason: A short explanation of why the user declined
+        """
+        self.complete(ToolError(f"failed to get the user's email address: {reason}"))
