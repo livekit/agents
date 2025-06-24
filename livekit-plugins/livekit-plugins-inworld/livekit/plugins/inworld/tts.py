@@ -19,7 +19,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 import aiohttp
 
@@ -38,7 +38,7 @@ SAMPLE_RATE = 24000
 DEFAULT_VOICE = "Olivia"
 DEFAULT_MODEL = "inworld-tts-1"
 
-Encoding = str | Literal["LINEAR16", "MP3", "OGG_OPUS"]
+Encoding = Union[Literal["LINEAR16", "MP3", "OGG_OPUS"], str]
 
 
 @dataclass
