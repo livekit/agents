@@ -17,7 +17,4 @@ async def test_collect_email():
         await sess.start(workflows.GetEmailAgent())
 
         with pytest.raises(ToolError):
-            await sess.run(
-                user_input="I don't want to give my email address",
-                output_type=workflows.GetEmailResult,
-            )
+            await sess.run(user_input="I don't want to give my email address")

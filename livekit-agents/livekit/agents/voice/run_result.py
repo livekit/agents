@@ -8,6 +8,7 @@ import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from logging import exception
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -126,7 +127,7 @@ class RunResult(Generic[Run_T]):
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
 
-    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task):
+    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None):
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
@@ -135,19 +136,25 @@ class RunResult(Generic[Run_T]):
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
-            if self.__last_speech_handle is not None:
-                self._final_output = self.__last_speech_handle._maybe_run_final_output
+            if self.__last_speech_handle is None:
+                self._done_fut.set_result(None)
+                return
 
-                if self._output_type and not isinstance(self._final_output, self._output_type):
+            final_output = self.__last_speech_handle._maybe_run_final_output
+            if not isinstance(final_output, BaseException):
+                if self._output_type and not isinstance(final_output, self._output_type):
                     self._done_fut.set_exception(
                         RuntimeError(
                             f"Expected output of type {self._output_type.__name__}, "
                             f"got {type(self._final_output).__name__}"
                         )
                     )
-                    return
+                else:
+                    self._final_output = final_output
+                    self._done_fut.set_result(None)
+            else:
+                self._done_fut.set_exception(final_output)
 
-            self._done_fut.set_result(None)
 
 
 class RunAssert:

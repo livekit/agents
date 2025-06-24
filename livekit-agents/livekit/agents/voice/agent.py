@@ -589,6 +589,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         else:
             self.__fut.set_result(result)
 
+        self.__fut.exception() # silence exc not retrieved warnings
+
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
 
         speech_handle = _SpeechHandleContextVar.get(None)
