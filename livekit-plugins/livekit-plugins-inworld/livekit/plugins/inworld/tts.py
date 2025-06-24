@@ -38,7 +38,7 @@ SAMPLE_RATE = 24000
 DEFAULT_VOICE = "Olivia"
 DEFAULT_MODEL = "inworld-tts-1"
 
-Encoding = Literal["LINEAR16", "MP3", "OGG_OPUS"]
+Encoding = str | Literal["LINEAR16", "MP3", "OGG_OPUS"]
 
 
 @dataclass
@@ -108,7 +108,6 @@ class TTS(tts.TTS):
         self.api_key = api_key
         self._session = http_session
         self._base_url = base_url
-        # auth_prefix = "Basic" if auth_type.lower() == "basic" else "Bearer"
 
         self._opts = _TTSOptions(
             model=model if utils.is_given(model) else DEFAULT_MODEL,

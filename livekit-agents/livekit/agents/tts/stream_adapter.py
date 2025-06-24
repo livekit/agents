@@ -104,8 +104,6 @@ class StreamAdapterWrapper(SynthesizeStream):
                         output_emitter.push(audio.frame.data.tobytes())
                     output_emitter.flush()
 
-            output_emitter.end_input()
-
         tasks = [
             asyncio.create_task(_forward_input()),
             asyncio.create_task(_synthesize()),
