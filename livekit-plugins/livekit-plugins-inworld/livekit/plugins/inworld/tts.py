@@ -14,55 +14,69 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
-from collections.abc import Coroutine
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-import httpx
+import aiohttp
 
 from livekit.agents import tts, utils
-from livekit.agents._exceptions import APIConnectionError, APITimeoutError
+from livekit.agents._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
     APIConnectOptions,
+    NotGivenOr,
 )
 
-AUDIO_ENCODING = "LINEAR16"
-INWORLD_API_BASE_URL = "https://api.inworld.ai/"
-MIME_TYPE = "audio/wav"
-MODEL_ID = "inworld-tts-1"
+DEFAULT_URL = "https://api.inworld.ai/tts/v1/voice:stream"
 NUM_CHANNELS = 1
-PITCH = 0.0
 SAMPLE_RATE = 24000
-SPEED = 1.0
-WAV_HEADER_SIZE = 44
-VOICE_ID = "Olivia"
+DEFAULT_VOICE = "Olivia"
+DEFAULT_MODEL = "inworld-tts-1"
+
+Encoding = Literal["LINEAR16", "MP3", "OGG_OPUS"]
 
 
 @dataclass
 class _TTSOptions:
-    modelId: str | None
-    voice: str | None
-    pitch: float | None
-    speed: float | None
-    sampleRateHertz: int | None
+    model: str
+    encoding: Encoding
+    voice: str
+    sample_rate: int
+    bitrate: NotGivenOr[int] = NOT_GIVEN
+    pitch: NotGivenOr[float] = NOT_GIVEN
+    speed: NotGivenOr[float] = NOT_GIVEN
+    temperature: NotGivenOr[float] = NOT_GIVEN
+
+    @property
+    def mime_type(self) -> str:
+        if self.encoding == "MP3":
+            return "audio/mpeg"
+        elif self.encoding == "OGG_OPUS":
+            return "audio/ogg"
+        else:
+            return "audio/wav"
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        model: str | None = None,
-        voice: str | None = None,
-        pitch: float = PITCH,
-        speed: float = SPEED,
-        sample_rate: int = SAMPLE_RATE,
-        base_url: str = INWORLD_API_BASE_URL,
-        auth_type: Literal["basic", "bearer"] = "basic",
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[Encoding] = NOT_GIVEN,
+        bitrate: NotGivenOr[int] = NOT_GIVEN,
+        pitch: NotGivenOr[float] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        base_url: str = DEFAULT_URL,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
         Create a new instance of Inworld TTS.
@@ -72,58 +86,61 @@ class TTS(tts.TTS):
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
             model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1".
             voice (str, optional): The voice to use. Defaults to "Olivia".
+            encoding (str, optional): The encoding to use. Defaults to "OGG_OPUS".
+            bitrate (int, optional): The bitrate of the voice. Defaults to 64000.
             pitch (float, optional): The pitch of the voice. Defaults to 0.0.
             speed (float, optional): The speed of the voice. Defaults to 1.0.
-            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
-            base_url (str, optional): The base URL for the Inworld API.
-            auth_type (Literal["basic", "bearer"], optional): The authentication type to use.
-                Defaults to "basic".
+            sample_rate (int, optional): The audio sample rate in Hz. Defaults to 48000.
+            temperature (float, optional): The temperature of the voice. Defaults to 0.8.
+            base_url (str, optional): The base URL for the Inworld TTS API.
         """
+        if not utils.is_given(sample_rate):
+            sample_rate = SAMPLE_RATE
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.getenv("INWORLD_API_KEY")
+        api_key = api_key or os.getenv("INWORLD_API_KEY", "")
         if not api_key:
-            raise ValueError(
-                "Inworld API key required. Set INWORLD_API_KEY or provide api_key."
-            )
-
-        auth_prefix = "Basic" if auth_type.lower() == "basic" else "Bearer"
+            raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
+        self.api_key = api_key
+        self._session = http_session
+        self._base_url = base_url
+        # auth_prefix = "Basic" if auth_type.lower() == "basic" else "Bearer"
 
         self._opts = _TTSOptions(
-            modelId=model,
-            voice=voice,
+            model=model if utils.is_given(model) else DEFAULT_MODEL,
+            encoding=encoding if utils.is_given(encoding) else "OGG_OPUS",
+            voice=voice if utils.is_given(voice) else DEFAULT_VOICE,
+            bitrate=bitrate,
             pitch=pitch,
             speed=speed,
-            sampleRateHertz=sample_rate,
+            sample_rate=sample_rate,
+            temperature=temperature,
         )
+        if not utils.is_given(bitrate):
+            self._opts.bitrate = 64000
+        if not utils.is_given(sample_rate):
+            self._opts.sample_rate = 48000
 
-        self._http_client = httpx.AsyncClient(
-            base_url=base_url,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"{auth_prefix} {api_key}",
-            },
-            timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-            follow_redirects=True,
-            limits=httpx.Limits(
-                max_connections=50,
-                max_keepalive_connections=50,
-                keepalive_expiry=120,
-            ),
-        )
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+
+        return self._session
 
     def update_options(
         self,
         *,
-        model: str | None = None,
-        voice: str | None = None,
-        pitch: float | None = None,
-        speed: float | None = None,
-        sample_rate: int | None = None,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[Encoding] = NOT_GIVEN,
+        pitch: NotGivenOr[float] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS configuration options.
@@ -131,20 +148,26 @@ class TTS(tts.TTS):
         Args:
             model (str, optional): The Inworld model to use.
             voice (str, optional): The voice to use.
+            encoding (str, optional): The encoding to use.
             pitch (float, optional): The pitch of the voice.
             speed (float, optional): The speed of the voice.
             sample_rate (int, optional): The audio sample rate in Hz.
+            temperature (float, optional): The temperature of the voice.
         """
-        if model is not None:
-            self._opts.modelId = model
-        if voice is not None:
+        if utils.is_given(model):
+            self._opts.model = model
+        if utils.is_given(voice):
             self._opts.voice = voice
-        if pitch is not None:
+        if utils.is_given(encoding):
+            self._opts.encoding = encoding
+        if utils.is_given(pitch):
             self._opts.pitch = pitch
-        if speed is not None:
+        if utils.is_given(speed):
             self._opts.speed = speed
-        if sample_rate is not None:
-            self._opts.sampleRateHertz = sample_rate
+        if utils.is_given(sample_rate):
+            self._opts.sample_rate = sample_rate
+        if utils.is_given(temperature):
+            self._opts.temperature = temperature
 
     def synthesize(
         self,
@@ -156,77 +179,74 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        output_emitter.initialize(
-            request_id=utils.shortuuid(),
-            sample_rate=self._opts.sampleRateHertz or SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-            mime_type=MIME_TYPE,
-        )
-
         try:
-            synthesis = await self._create_synthesis()
-            response = synthesis.json()
+            audio_config: dict[str, Any] = {
+                "audioEncoding": self._opts.encoding,
+            }
+            if utils.is_given(self._opts.bitrate):
+                audio_config["bitrate"] = self._opts.bitrate
+            if utils.is_given(self._opts.sample_rate):
+                audio_config["sampleRateHertz"] = self._opts.sample_rate
+            if utils.is_given(self._opts.pitch):
+                audio_config["pitch"] = self._opts.pitch
+            if utils.is_given(self._opts.temperature):
+                audio_config["temperature"] = self._opts.temperature
+            if utils.is_given(self._opts.speed):
+                audio_config["speakingRate"] = self._opts.speed
 
-            # Save response as pretty JSON
-            with open("inworld_tts_response.json", "w") as f:
-                json.dump(response, f, indent=2, ensure_ascii=False)
+            body_params: dict[str, Any] = {
+                "text": self._input_text,
+                "voiceId": self._opts.voice,
+                "modelId": self._opts.model,
+                "audioConfig": audio_config,
+            }
+            if utils.is_given(self._opts.temperature):
+                body_params["temperature"] = self._opts.temperature
 
-            if response and (audio_content := response.get("audioContent")):
-                # Save the base64 encoded audio content
-                with open("inworld_tts_audio_content.txt", "w") as f:
-                    f.write(audio_content)
-                # audio_content = base64.b64decode(audio_content)
-                # audio_content = _strip_wav_header(audio_content)
+            async with self._tts._ensure_session().post(
+                self._tts._base_url,
+                headers={
+                    "Authorization": f"Basic {self._tts.api_key}",
+                },
+                json=body_params,
+                timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+            ) as resp:
+                resp.raise_for_status()
 
-                output_emitter.push(audio_content)
-            output_emitter.flush()
-        except httpx.TimeoutException:
+                request_id = utils.shortuuid()
+                output_emitter.initialize(
+                    request_id=request_id,
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                    mime_type=self._opts.mime_type,
+                )
+
+                async for line in resp.content:
+                    if not line:
+                        break
+                    data = json.loads(line)
+                    if result := data.get("result"):
+                        if audio_content := result.get("audioContent"):
+                            output_emitter.push(base64.b64decode(audio_content))
+                            output_emitter.flush()
+                    elif error := data.get("error"):
+                        raise APIStatusError(
+                            message=error.get("message"),
+                            status_code=error.get("code"),
+                            request_id=request_id,
+                            body=None,
+                        )
+        except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
             raise APIConnectionError() from e
-        finally:
-            output_emitter.flush()
-
-    def _create_synthesis(self) -> Coroutine[Any, Any, httpx.Response]:
-        return self._tts._http_client.post(
-            "/tts/v1/voice",
-            json=_generate_request(self._opts, self._input_text),
-            timeout=httpx.Timeout(
-                timeout=self._conn_options.timeout,
-            ),
-        )
-
-
-def _strip_wav_header(audio_data: bytes) -> bytes:
-    if len(audio_data) <= WAV_HEADER_SIZE:
-        return audio_data
-    elif audio_data.startswith(b"RIFF") and audio_data[8:12] == b"WAVE":
-        return audio_data[WAV_HEADER_SIZE:]
-    else:
-        return audio_data
-
-
-def _generate_request(
-    opts: _TTSOptions, input: str
-) -> dict[str, str | dict[str, str | float | int]]:
-    data: dict[str, Any] = {
-        "text": input,
-        "voiceId": opts.voice or VOICE_ID,
-        "modelId": opts.modelId or MODEL_ID,
-        "audioConfig": {
-            "audioEncoding": AUDIO_ENCODING,
-            "pitch": opts.pitch or PITCH,
-            "sampleRateHertz": opts.sampleRateHertz or SAMPLE_RATE,
-            "speakingRate": opts.speed or SPEED,
-        },
-    }
-
-    return data

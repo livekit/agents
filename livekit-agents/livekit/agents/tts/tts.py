@@ -205,7 +205,7 @@ class ChunkedStream(ABC):
             try:
                 await self._run(output_emitter)
 
-                output_emitter.flush()
+                output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
                 await output_emitter.join()
 
@@ -629,10 +629,7 @@ class AudioEmitter:
         if self._write_ch.closed:
             return
 
-        if self._streaming:
-            self._write_ch.send_nowait(self._FlushSegment())
-        else:
-            self.end_input()
+        self._write_ch.send_nowait(self._FlushSegment())
 
     def end_input(self) -> None:
         if not self._started:
@@ -819,8 +816,8 @@ class AudioEmitter:
                         if isinstance(data, AudioEmitter._FlushSegment):
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
-
                             _flush_frame()
+
                         elif isinstance(data, AudioEmitter._EndSegment):
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
@@ -839,13 +836,13 @@ class AudioEmitter:
                                 format=self._mime_type,
                             )
                             decode_atask = asyncio.create_task(_decode_task())
-
                         audio_decoder.push(data)
                     elif audio_decoder and decode_atask:
                         if isinstance(data, AudioEmitter._FlushSegment):
                             audio_decoder.end_input()
                             await decode_atask
                             _flush_frame()
+                            audio_decoder = None
 
                         elif isinstance(data, AudioEmitter._EndSegment):
                             audio_decoder.end_input()

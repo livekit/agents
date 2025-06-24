@@ -102,8 +102,9 @@ class StreamAdapterWrapper(SynthesizeStream):
                 ) as tts_stream:
                     async for audio in tts_stream:
                         output_emitter.push(audio.frame.data.tobytes())
-
                     output_emitter.flush()
+
+            output_emitter.end_input()
 
         tasks = [
             asyncio.create_task(_forward_input()),
