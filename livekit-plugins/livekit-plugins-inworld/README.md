@@ -25,7 +25,7 @@ you can use this TTS in the [Voice AI quickstart](/agents/start/voice-ai/).
 from livekit.plugins import inworld
 
 session = AgentSession(
-   tts=inworld.TTS(voice="Olivia")
+   tts=inworld.TTS(voice="Ashley")
    # ... llm, stt, etc.
 )
 ```

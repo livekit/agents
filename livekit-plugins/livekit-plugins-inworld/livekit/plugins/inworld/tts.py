@@ -42,7 +42,7 @@ DEFAULT_ENCODING = "OGG_OPUS"
 DEFAULT_MODEL = "inworld-tts-1"
 DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_URL = "https://api.inworld.ai/"
-DEFAULT_VOICE = "Olivia"
+DEFAULT_VOICE = "Ashley"
 NUM_CHANNELS = 1
 
 Encoding = Union[Literal["LINEAR16", "MP3", "OGG_OPUS"], str]
@@ -91,7 +91,7 @@ class TTS(tts.TTS):
         Args:
             api_key (str, optional): The Inworld API key.
                 If not provided, it will be read from the INWORLD_API_KEY environment variable.
-            voice (str, optional): The voice to use. Defaults to "Olivia".
+            voice (str, optional): The voice to use. Defaults to "Ashley".
             model (str, optional): The Inworld model to use. Defaults to "inworld-tts-1".
             encoding (str, optional): The encoding to use. Defaults to "MP3".
             bit_rate (int, optional): Bits per second of the audio. Defaults to 64000.
