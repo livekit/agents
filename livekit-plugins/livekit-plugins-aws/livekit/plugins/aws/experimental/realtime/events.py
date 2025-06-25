@@ -86,7 +86,7 @@ class Tool(BaseModel):
 
 
 class ToolConfiguration(BaseModel):
-    # toolChoice: Dict[str, Any] | None = None
+    toolChoice: Dict[str, Dict[str, str]] | None = None
     tools: List[Tool]
 
 
@@ -422,7 +422,7 @@ class SonicEventBuilder:
                         voiceId=voice_id, sampleRateHertz=sample_rate
                     ),
                     toolUseOutputConfiguration=ToolUseOutputConfiguration(),
-                    toolConfiguration=ToolConfiguration(tools=tool_objects),
+                    toolConfiguration=ToolConfiguration(tools=tool_objects, toolChoice=tool_configuration.toolChoice),
                 )
             )
         )

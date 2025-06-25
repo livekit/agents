@@ -9,9 +9,9 @@ import uuid
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Dict
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import llm, utils, ToolError
 from livekit.agents.llm.realtime import RealtimeSession
 from livekit.agents.llm.tool_context import (
     get_raw_function_info,
@@ -382,6 +382,12 @@ class RealtimeSession(
             else:
                 raise ValueError(f"Unknown tool type: {tool_type}")
             logger.debug(f"TOOL RESULT: {tool_result}")
+
+            # Sonic only accepts Structured Output for tool results
+            # therefore, must JSON stringify ToolError
+            if isinstance(tool_result, ToolError):
+                logger.warning(f"TOOL ERROR: {tool_name} {tool_result.message}")
+                tool_result = {"error": tool_result.message}
             self._tool_results_ch.send_nowait(
                 {
                     "tool_use_id": tool_use_id,
@@ -531,17 +537,16 @@ class RealtimeSession(
                         )
                     )
                     tools.append(tool)
-
-                tool_cfg = ToolConfiguration(tools=tools)
+                tool_choice = self._tool_choice_adapter(self._realtime_model._opts.tool_choice)
+                logger.debug(f"TOOL CHOICE: {tool_choice}")
+                tool_cfg = ToolConfiguration(tools=tools, toolChoice=tool_choice)
             for tool in tool_cfg.tools:
-                logger.debug(f"Tool configuration: {tool.toolSpec.inputSchema}")
+                logger.debug(f"TOOL CONFIGURATION: {tool.toolSpec.inputSchema}")
 
             try:
                 await asyncio.wait_for(self._instructions_ready.wait(), timeout=2.0)
             except asyncio.TimeoutError:
-                logger.warning(
-                    "Instructions not received after 2sec, proceeding with default instructions"
-                )
+                logger.warning("Instructions not received after 2sec, proceeding with default instructions")
 
             init_events = [
                 seb.create_session_start_event(),
@@ -824,6 +829,17 @@ class RealtimeSession(
         for event in tool_events:
             await self.send_raw_event(event)
             # logger.debug(f"Sent tool event: {event}")
+
+        
+    def _tool_choice_adapter(self, tool_choice: llm.ToolChoice) -> Dict[str, Dict[str, str]] | None:
+        if tool_choice == "auto":
+            return {"auto": {}}
+        elif tool_choice == "required":
+            return {"any": {}}
+        elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
+            return {"tool": {"name": tool_choice["function"]["name"]}}
+        else:
+            return None
 
     def generate_reply(
         self,
