@@ -912,6 +912,9 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
         if not gen.text_ch.closed:
+            if self._opts.output_audio_transcription is None:
+                # close the text data of transcription synchronizer
+                gen.text_ch.send_nowait("")
             gen.text_ch.close()
         if not gen.audio_ch.closed:
             gen.audio_ch.close()
