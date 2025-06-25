@@ -12,7 +12,7 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
 from .tts import (
     TTS,
@@ -83,6 +83,7 @@ class FallbackAdapter(
         super().__init__(
             capabilities=TTSCapabilities(
                 streaming=all(t.capabilities.streaming for t in tts),
+                aligned_transcript=all(t.capabilities.aligned_transcript for t in tts),
             ),
             sample_rate=sample_rate,
             num_channels=num_channels,
@@ -202,6 +203,9 @@ class FallbackChunkedStream(ChunkedStream):
                 try:
                     resampler = tts_status.resampler
                     async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
+                        if texts := synthesized_audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
+                            output_emitter.push_timed_transcript(texts)
+
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
                                 output_emitter.push(rf.data.tobytes())
@@ -341,6 +345,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             ),
                             recovering=False,
                         ):
+                            if texts := synthesized_audio.frame.userdata.get(
+                                USERDATA_TIMED_TRANSCRIPT
+                            ):
+                                output_emitter.push_timed_transcript(texts)
+
                             if resampler is not None:
                                 for resampled_frame in resampler.push(synthesized_audio.frame):
                                     output_emitter.push(resampled_frame.data.tobytes())
