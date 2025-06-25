@@ -422,7 +422,9 @@ class SonicEventBuilder:
                         voiceId=voice_id, sampleRateHertz=sample_rate
                     ),
                     toolUseOutputConfiguration=ToolUseOutputConfiguration(),
-                    toolConfiguration=ToolConfiguration(tools=tool_objects, toolChoice=tool_configuration.toolChoice),
+                    toolConfiguration=ToolConfiguration(
+                        tools=tool_objects, toolChoice=tool_configuration.toolChoice
+                    ),
                 )
             )
         )

@@ -11,7 +11,15 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal, Dict
 from livekit import rtc
-from livekit.agents import llm, utils, ToolError
+from livekit.agents import (
+    llm,
+    utils,
+    ToolError,
+    APIError,
+    APIConnectionError,
+    APITimeoutError,
+    APIStatusError,
+)
 from livekit.agents.llm.realtime import RealtimeSession
 from livekit.agents.llm.tool_context import (
     get_raw_function_info,
@@ -31,6 +39,9 @@ from aws_sdk_bedrock_runtime.models import (
     BidirectionalInputPayloadPart,
     ValidationException,
     ModelTimeoutException,
+    ThrottlingException,
+    ModelNotReadyException,
+    ModelErrorException,
 )
 from aws_sdk_bedrock_runtime.config import Config, HTTPAuthSchemeResolver, SigV4AuthScheme
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
@@ -53,6 +64,8 @@ SAMPLE_SIZE_BITS = 16
 CHANNELS = 1
 CHUNK_SIZE = 512
 DEFAULT_TEMPERATURE = 0.7
+DEFAULT_TOP_P = 0.9
+DEFAULT_MAX_TOKENS = 1024
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a friend. The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."
@@ -64,6 +77,8 @@ DEFAULT_SYSTEM_PROMPT = (
 class _RealtimeOptions:
     voice: VOICE_ID
     temperature: float
+    top_p: float
+    max_tokens: int
     tool_choice: llm.ToolChoice | None
     region: str
 
@@ -126,6 +141,8 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         voice: NotGivenOr[VOICE_ID] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         region: NotGivenOr[str] = NOT_GIVEN,
     ):
@@ -138,9 +155,13 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
         self.model_id = "amazon.nova-sonic-v1:0"
+        self.temperature = temperature
+        self.top_p = top_p
         self._opts = _RealtimeOptions(
             voice=voice if is_given(voice) else "tiffany",
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
+            top_p=top_p if is_given(top_p) else DEFAULT_TOP_P,
+            max_tokens=max_tokens if is_given(max_tokens) else DEFAULT_MAX_TOKENS,
             tool_choice=tool_choice or None,
             region=region if is_given(region) else "us-east-1",
         )
@@ -540,16 +561,29 @@ class RealtimeSession(
                 tool_choice = self._tool_choice_adapter(self._realtime_model._opts.tool_choice)
                 logger.debug(f"TOOL CHOICE: {tool_choice}")
                 tool_cfg = ToolConfiguration(tools=tools, toolChoice=tool_choice)
+
+                # recommended to set greedy inference configs for tool calls
+                if not is_given(self._realtime_model.top_p):
+                    self._realtime_model._opts.top_p = 1.0
+                if not is_given(self._realtime_model.temperature):
+                    self._realtime_model._opts.temperature = 1.0
+
             for tool in tool_cfg.tools:
                 logger.debug(f"TOOL CONFIGURATION: {tool.toolSpec.inputSchema}")
 
             try:
                 await asyncio.wait_for(self._instructions_ready.wait(), timeout=2.0)
             except asyncio.TimeoutError:
-                logger.warning("Instructions not received after 2sec, proceeding with default instructions")
+                logger.warning(
+                    "Instructions not received after 2sec, proceeding with default instructions"
+                )
 
             init_events = [
-                seb.create_session_start_event(),
+                seb.create_session_start_event(
+                    max_tokens=self._realtime_model._opts.max_tokens,
+                    top_p=self._realtime_model._opts.top_p,
+                    temperature=self._realtime_model._opts.temperature,
+                ),
                 seb.create_prompt_start_event(
                     prompt_name=self.prompt_name,
                     voice_id=self._realtime_model._opts.voice,
@@ -595,7 +629,7 @@ class RealtimeSession(
             self.is_active = False
             self._initialization_task.set_exception(e)
             logger.debug(f"Failed to initialize stream: {str(e)}")
-            raise
+            raise e
         return self
 
     # can be used in places that need to explicitly wait for stream initialization
@@ -647,25 +681,32 @@ class RealtimeSession(
                             response_data = result.value.bytes_.decode("utf-8")
                             json_data = json.loads(response_data)
                             await self._handle_event(json_data)
-                            # Put the response in the output queue for other components
-                            # await self.output_queue.send(json_data)
                         except json.JSONDecodeError:
-                            # await self.output_queue.send({"raw_data": response_data})
-                            pass
-                except StopAsyncIteration:
-                    # Stream has ended
+                            logger.warning(f"JSON decode error: {response_data}")
+                except ValidationException as ve:
+                    # there is a 1min no-activity (e.g. silence) timeout on the stream, after which the stream is closed
+                    if (
+                        ve.message
+                        == "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR"
+                    ):
+                        # TODO: attempt to recover
+                        pass
+                    else:
+                        logger.error(f"Validation error: {ve}\nAttempting to recover...")
+
+                    break
+                except (ThrottlingException, ModelNotReadyException, ModelErrorException) as re:
+                    logger.error(f"Retryable error: {re}")
+                    # TODO: attempt to recover
+                    break
+                except ModelTimeoutException as mte:
+                    logger.warning(f"Model timeout error: {mte}\nAttempting to recover...")
+                    # TODO: attempt to recover
                     break
                 except Exception as e:
-                    # Handle ValidationException properly
-                    if isinstance(e, ValidationException):
-                        error_message = str(e)
-                        logger.debug(f"Validation error: {error_message}")
-                    else:
-                        logger.debug(f"Error receiving response: {e}")
+                    logger.debug(f"error type: {type(e)}")
+                    logger.error(f"Response processing error: {e}")
                     break
-
-        except Exception as e:
-            logger.debug(f"Response processing error: {e}")
         finally:
             self.is_active = False
 
@@ -830,7 +871,6 @@ class RealtimeSession(
             await self.send_raw_event(event)
             # logger.debug(f"Sent tool event: {event}")
 
-        
     def _tool_choice_adapter(self, tool_choice: llm.ToolChoice) -> Dict[str, Dict[str, str]] | None:
         if tool_choice == "auto":
             return {"auto": {}}
