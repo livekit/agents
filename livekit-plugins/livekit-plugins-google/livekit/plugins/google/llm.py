@@ -59,6 +59,7 @@ class _LLMOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
+    automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
     gemini_tools: NotGivenOr[list[_LLMTool]]
     http_options: NotGivenOr[types.HttpOptions]
 
@@ -80,6 +81,9 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
+        automatic_function_calling_config: NotGivenOr[
+            types.AutomaticFunctionCallingConfigOrDict
+        ] = NOT_GIVEN,
         gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
     ) -> None:
@@ -107,6 +111,7 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
+            automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
             gemini_tools (list[LLMTool], optional): The Gemini-specific tools to use for the session.
             http_options (HttpOptions, optional): The HTTP options to use for the session.
         """  # noqa: E501
@@ -168,6 +173,7 @@ class LLM(llm.LLM):
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             thinking_config=thinking_config,
+            automatic_function_calling_config=automatic_function_calling_config,
             gemini_tools=gemini_tools,
             http_options=http_options,
         )
@@ -260,6 +266,9 @@ class LLM(llm.LLM):
         # Add thinking config if thinking_budget is provided
         if is_given(self._opts.thinking_config):
             extra["thinking_config"] = self._opts.thinking_config
+
+        if is_given(self._opts.automatic_function_calling_config):
+            extra["automatic_function_calling"] = self._opts.automatic_function_calling_config
 
         gemini_tools = gemini_tools if is_given(gemini_tools) else self._opts.gemini_tools
 

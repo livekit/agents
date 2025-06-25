@@ -80,6 +80,7 @@ langchain = ["livekit-plugins-langchain>=1.1.3"]
 sarvam = ["livekit-plugins-sarvam>=1.1.3"]
 spitch = ["livekit-plugins-spitch>=1.1.3"]
 inworld = ["livekit-plugins-inworld>=1.1.3"]
+hedra = ["livekit-plugins-hedra>=1.1.3"]
 
 
 [project.urls]
