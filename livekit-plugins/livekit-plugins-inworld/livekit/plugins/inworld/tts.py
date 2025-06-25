@@ -40,7 +40,7 @@ from livekit.agents.types import (
 DEFAULT_BIT_RATE = 64000
 DEFAULT_ENCODING = "OGG_OPUS"
 DEFAULT_MODEL = "inworld-tts-1"
-DEFAULT_SAMPLE_RATE = 24000
+DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_URL = "https://api.inworld.ai/"
 DEFAULT_VOICE = "Olivia"
 NUM_CHANNELS = 1
@@ -82,7 +82,6 @@ class TTS(tts.TTS):
         pitch: NotGivenOr[float] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
-        auth_type: Literal["basic", "bearer"] = "basic",
         base_url: str = DEFAULT_URL,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -101,8 +100,6 @@ class TTS(tts.TTS):
             speaking_rate (float, optional): The speed of the voice. Defaults to 1.0.
             temperature (float, optional): Determines the degree of randomness when sampling audio
                 tokens to generate the response. Defaults to 0.8.
-            auth_type (Literal["basic", "bearer"], optional): The authentication type to use.
-                Defaults to "basic".
             base_url (str, optional): The base URL for the Inworld TTS API.
                 Defaults to "https://api.inworld.ai/".
             http_session (aiohttp.ClientSession, optional): The HTTP session to use.
@@ -119,8 +116,7 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("Inworld API key required. Set INWORLD_API_KEY or provide api_key.")
 
-        auth_prefix = "Basic" if auth_type.lower() == "basic" else "Bearer"
-        self._authorization = f"{auth_prefix} {api_key}"
+        self._authorization = f"Basic {api_key}"
         self._base_url = base_url
         self._session = http_session
 
@@ -128,17 +124,12 @@ class TTS(tts.TTS):
             voice=voice if utils.is_given(voice) else DEFAULT_VOICE,
             model=model if utils.is_given(model) else DEFAULT_MODEL,
             encoding=encoding if utils.is_given(encoding) else DEFAULT_ENCODING,
-            bit_rate=bit_rate,
-            sample_rate=sample_rate,
+            bit_rate=bit_rate if utils.is_given(bit_rate) else DEFAULT_BIT_RATE,
+            sample_rate=sample_rate if utils.is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
             pitch=pitch,
             speaking_rate=speaking_rate,
             temperature=temperature,
         )
-
-        if not utils.is_given(bit_rate):
-            self._opts.bit_rate = DEFAULT_BIT_RATE
-        if not utils.is_given(sample_rate):
-            self._opts.sample_rate = DEFAULT_SAMPLE_RATE
 
     def update_options(
         self,

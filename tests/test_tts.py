@@ -271,9 +271,10 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
     assert all(not event.is_final for event in audio_events[:-1]), (
         "expected all audio events to be non-final"
     )
-    assert all(0.05 < event.frame.duration < 0.25 for event in audio_events[:-2]), (
-        f"expected all frames to have a duration between 50ms and 250ms, got {[e.frame.duration for e in audio_events[:-1]]}"  # noqa: E501
-    )
+    # this test is no longer valid because we could flush in the middle of a synthesis
+    # assert all(0.05 < event.frame.duration < 0.25 for event in audio_events[:-2]), (
+    #     f"expected all frames to have a duration between 50ms and 250ms, got {[e.frame.duration for e in audio_events[:-1]]}"  # noqa: E501
+    # )
     assert 0 < audio_events[-2].frame.duration < 0.25, (
         f"expected second last frame to not be empty, got {audio_events[-2].frame.duration}"
     )  # now we flush then end_input, the second last frame might be a non-full frame from flush
