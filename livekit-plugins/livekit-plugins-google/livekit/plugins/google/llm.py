@@ -62,6 +62,7 @@ class _LLMOptions:
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
     gemini_tools: NotGivenOr[list[_LLMTool]]
     http_options: NotGivenOr[types.HttpOptions]
+    seed: NotGivenOr[int]
 
 
 class LLM(llm.LLM):
@@ -86,6 +87,7 @@ class LLM(llm.LLM):
         ] = NOT_GIVEN,
         gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
+        seed: NotGivenOr[int] = NOT_GIVEN
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -176,6 +178,7 @@ class LLM(llm.LLM):
             automatic_function_calling_config=automatic_function_calling_config,
             gemini_tools=gemini_tools,
             http_options=http_options,
+            seed=seed
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -262,6 +265,8 @@ class LLM(llm.LLM):
             extra["presence_penalty"] = self._opts.presence_penalty
         if is_given(self._opts.frequency_penalty):
             extra["frequency_penalty"] = self._opts.frequency_penalty
+        if is_given(self._opts.seed):
+            extra["seed"] = self._opts.seed
 
         # Add thinking config if thinking_budget is provided
         if is_given(self._opts.thinking_config):
