@@ -77,7 +77,7 @@ class STT(stt.STT):
         detect_language: bool = False,
         interim_results: bool = True,
         punctuate: bool = True,
-        smart_format: bool = True,
+        smart_format: bool = False,
         sample_rate: int = 16000,
         no_delay: bool = True,
         endpointing_ms: int = 25,

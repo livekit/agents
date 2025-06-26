@@ -28,7 +28,6 @@ import time
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import reduce
 from typing import Any, Callable, Generic, Literal, TypeVar
 from urllib.parse import urljoin, urlparse
 
@@ -644,8 +643,8 @@ class Worker(utils.EventEmitter[EventTypes]):
                 if scheme.startswith("http"):
                     scheme = scheme.replace("http", "ws")
 
-                path_parts = [f"{scheme}://{parse.netloc}", parse.path, "/agent"]
-                agent_url = reduce(urljoin, path_parts)
+                base = f"{scheme}://{parse.netloc}{parse.path}".rstrip("/") + "/"
+                agent_url = urljoin(base, "agent")
 
                 params = {}
                 if self._opts._worker_token:

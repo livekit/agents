@@ -5,6 +5,7 @@ from .room_io import (
     RoomInputOptions,
     RoomIO,
     RoomOutputOptions,
+    TextInputEvent,
 )
 
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "RoomInputOptions",
     "RoomOutputOptions",
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
+    "TextInputEvent",
 ]
 
 # Cleanup docs of unexported modules
