@@ -63,6 +63,7 @@ class STTOptions:
     vad_speech_pad_ms: int = 30
     language: str = "en"
 
+
 class STT(stt.STT):
     def __init__(
         self,
