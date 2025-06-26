@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 import time
+import unicodedata
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -27,6 +29,28 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     return local_path
 
 
+def _normalize_text(text):
+    text = unicodedata.normalize("NFKC", text.lower())
+    text = ''.join(
+        ch for ch in text
+        if not (unicodedata.category(ch).startswith('P') and ch not in ["'", "-"])
+    )
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def _preprocess_convo(convo: list[dict[str, Any]], normalize: bool = True) -> list[dict[str, Any]]:
+    PUNCS_ON = "<|puncs_on|>"
+    PUNCS_OFF = "<|puncs_off|>"
+
+    for msg in convo:
+        if normalize:
+            msg['content'] = PUNCS_OFF + _normalize_text(msg['content'])
+        else:
+            msg['content'] = PUNCS_ON + msg['content']
+    return convo
+
+
 class _EUORunnerBase(_InferenceRunner):
     def __init__(self, model_type: EOUModelType):
         super().__init__()
@@ -48,6 +72,7 @@ class _EUORunnerBase(_InferenceRunner):
                 new_chat_ctx.append(msg)
                 last_msg = msg
 
+        new_chat_ctx = _preprocess_convo(new_chat_ctx)
         convo_text = self._tokenizer.apply_chat_template(
             new_chat_ctx,
             add_generation_prompt=False,
