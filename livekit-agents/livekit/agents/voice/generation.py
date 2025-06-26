@@ -244,11 +244,17 @@ async def _audio_forwarding_task(
                 out.first_frame_fut.set_result(None)
     finally:
         if isinstance(tts_output, _ACloseable):
-            await tts_output.aclose()
+            try:
+                await tts_output.aclose()
+            except Exception as e:
+                logger.error("error while closing tts output", exc_info=e)
 
         if resampler:
-            for frame in resampler.flush():
-                await audio_output.capture_frame(frame)
+            try:
+                for frame in resampler.flush():
+                    await audio_output.capture_frame(frame)
+            except Exception as e:
+                logger.error("error while flushing resampler", exc_info=e)
 
         audio_output.flush()
 
