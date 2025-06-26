@@ -11,6 +11,7 @@ import livekit.rtc as rtc
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 from ...log import logger
+from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import aio, log_exceptions
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
@@ -208,9 +209,10 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         num_channels: int,
         noise_cancellation: rtc.NoiseCancellationOptions | None,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
+        track_source: NotGivenOr[list[rtc.TrackSource.ValueType]] = NOT_GIVEN,
     ) -> None:
         _ParticipantInputStream.__init__(
-            self, room=room, track_source=rtc.TrackSource.SOURCE_MICROPHONE
+            self, room=room, track_source=track_source or [rtc.TrackSource.SOURCE_MICROPHONE]
         )
         self._sample_rate = sample_rate
         self._num_channels = num_channels
@@ -306,14 +308,17 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
 
 class _ParticipantVideoInputStream(_ParticipantInputStream[rtc.VideoFrame], VideoInput):
-    def __init__(self, room: rtc.Room) -> None:
+    def __init__(
+        self,
+        room: rtc.Room,
+        *,
+        track_source: NotGivenOr[list[rtc.TrackSource.ValueType]] = NOT_GIVEN,
+    ) -> None:
         _ParticipantInputStream.__init__(
             self,
             room=room,
-            track_source=[
-                rtc.TrackSource.SOURCE_CAMERA,
-                rtc.TrackSource.SOURCE_SCREENSHARE,
-            ],
+            track_source=track_source
+            or [rtc.TrackSource.SOURCE_CAMERA, rtc.TrackSource.SOURCE_SCREENSHARE],
         )
 
     @override

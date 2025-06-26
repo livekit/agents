@@ -87,6 +87,10 @@ class RoomInputOptions:
     close_on_disconnect: bool = True
     """Close the AgentSession if the linked participant disconnects with reasons in
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
+    accepted_audio_sources: NotGivenOr[list[rtc.TrackSource.ValueType]] = NOT_GIVEN
+    """Accepted audio sources. If not provided, accept `SOURCE_MICROPHONE`."""
+    accepted_video_sources: NotGivenOr[list[rtc.TrackSource.ValueType]] = NOT_GIVEN
+    """Accepted video sources. If not provided, accept `SOURCE_CAMERA` and `SOURCE_SCREENSHARE`."""
 
 
 @dataclass
@@ -170,7 +174,9 @@ class RoomIO:
                     )
 
         if self._input_options.video_enabled:
-            self._video_input = _ParticipantVideoInputStream(self._room)
+            self._video_input = _ParticipantVideoInputStream(
+                self._room, track_source=self._input_options.accepted_video_sources
+            )
 
         if self._input_options.audio_enabled or not utils.is_given(
             self._input_options.audio_enabled
@@ -181,6 +187,7 @@ class RoomIO:
                 num_channels=self._input_options.audio_num_channels,
                 noise_cancellation=self._input_options.noise_cancellation,
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
+                track_source=self._input_options.accepted_audio_sources,
             )
 
         # -- create outputs --
