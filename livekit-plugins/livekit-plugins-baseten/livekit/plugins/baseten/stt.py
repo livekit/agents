@@ -35,15 +35,14 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.stt import SpeechEvent
-from livekit.agents.types import (
-    NOT_GIVEN,
-    NotGivenOr,
-)
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 
-STTEncoding = Literal["pcm_s16le", "pcm_mulaw"]
+DEFAULT_LANGUAGE = "en"
+DEFAULT_ENCODING = "pcm_s16le"
+DEFAULT_SAMPLE_RATE = 16000
 
 # Define bytes per frame for different encoding types
 bytes_per_frame = {
@@ -56,9 +55,9 @@ ssl_context = ssl._create_unverified_context()
 
 @dataclass
 class STTOptions:
-    sample_rate: int
+    sample_rate: int = DEFAULT_SAMPLE_RATE
     buffer_size_seconds: float = 0.032
-    encoding: str = "pcm_s16le"
+    encoding: NotGivenOr[Literal["pcm_s16le", "pcm_mulaw"]] = NOT_GIVEN
 
     # Optional metadata fields specific to Baseten
     vad_threshold: float = 0.5
@@ -66,15 +65,26 @@ class STTOptions:
     vad_speech_pad_ms: int = 30
     language: str = "en"
 
+    def __post_init__(self):
+        if self.sample_rate is NOT_GIVEN:
+            self.sample_rate = DEFAULT_SAMPLE_RATE
+        if self.encoding is NOT_GIVEN:
+            self.encoding = DEFAULT_ENCODING
+        elif self.encoding not in ("pcm_s16le", "pcm_mulaw"):
+            raise ValueError(f"Invalid encoding: {self.encoding}")
+
+        if not self.language:
+            self.language = DEFAULT_LANGUAGE
+
 
 class STT(stt.STT):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        model_endpoint: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        model_endpoint: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 16000,
-        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        encoding: NotGivenOr[Literal["pcm_s16le", "pcm_mulaw"]] = NOT_GIVEN,
         buffer_size_seconds: float = 0.032,
         vad_threshold: float = 0.5,
         vad_min_silence_duration_ms: int = 300,
@@ -88,37 +98,32 @@ class STT(stt.STT):
                 interim_results=True,  # only final transcripts
             ),
         )
-
-        api_key = api_key or os.environ.get("BASETEN_API_KEY")
-
-        if not api_key:
+        self._api_key = api_key if is_given(api_key) else os.environ.get("BASETEN_API_KEY")
+        if not self._api_key:
             raise ValueError(
                 "Baseten API key is required. "
                 "Pass one in via the `api_key` parameter, "
                 "or set it as the `BASETEN_API_KEY` environment variable"
             )
-        self._api_key = api_key
 
-        model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
         if not model_endpoint:
             raise ValueError(
                 "The model endpoint is required, you can find it in the Baseten dashboard"
             )
+
         self._model_endpoint = model_endpoint
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
+            encoding=encoding,
             buffer_size_seconds=buffer_size_seconds,
             vad_threshold=vad_threshold,
             vad_min_silence_duration_ms=vad_min_silence_duration_ms,
             vad_speech_pad_ms=vad_speech_pad_ms,
             language=language,
         )
-        if is_given(encoding):
-            self._opts.encoding = encoding
-
         self._session = http_session
-        self._streams = weakref.WeakSet[SpeechStream]()
+        self._streams = weakref.WeakSet()
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -161,7 +166,7 @@ class STT(stt.STT):
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
-    ) -> None:
+    ):
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(vad_min_silence_duration_ms):
@@ -217,7 +222,7 @@ class SpeechStream(stt.SpeechStream):
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
-    ) -> None:
+    ):
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(vad_min_silence_duration_ms):
@@ -239,7 +244,7 @@ class SpeechStream(stt.SpeechStream):
 
         closing_ws = False
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def send_task(ws: aiohttp.ClientWebSocketResponse):
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -261,7 +266,7 @@ class SpeechStream(stt.SpeechStream):
                     int16_array = np.frombuffer(frame.data, dtype=np.int16)
                     await ws.send_bytes(int16_array.tobytes())
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
             while True:
                 try:
@@ -286,13 +291,13 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     data = json.loads(msg.data)
-                    msg_type = data.get("message_type")
 
-                    if msg_type == "partial_transcript":
-                        text = data.get("transcript", "")
-                        confidence = data.get("confidence", 0.0)
-                        segments = data.get("segments", [])
+                    is_final = data.get("is_final", True)
+                    segments = data.get("segments", [])
+                    text = data.get("transcript", "")
+                    confidence = data.get("confidence", 0.0)
 
+                    if not is_final:
                         if text:
                             start_time = segments[0].get("start", 0.0) if segments else 0.0
                             end_time = segments[-1].get("end", 0.0) if segments else 0.0
@@ -311,11 +316,8 @@ class SpeechStream(stt.SpeechStream):
                             )
                             self._event_ch.send_nowait(event)
 
-                    elif msg_type == "final_transcript":
-                        text = data.get("transcript", "")
-                        confidence = data.get("confidence", 0.0)
-                        segments = data.get("segments", [])
-                        language = data.get("language", self._opts.language)
+                    elif is_final:
+                        language = data.get("language_code", "")
 
                         if text:
                             start_time = segments[0].get("start", 0.0) if segments else 0.0
@@ -337,7 +339,7 @@ class SpeechStream(stt.SpeechStream):
                             self._event_ch.send_nowait(event)
 
                     else:
-                        logger.warning("Unknown message type from Baseten: %s", msg_type)
+                        logger.warning("Unknown message type from Baseten")
 
                 except Exception:
                     logger.exception("Failed to process message from Baseten")
@@ -386,12 +388,12 @@ class SpeechStream(stt.SpeechStream):
                 "min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
-            "streaming_whisper_params": {
+            "streaming_params": {
                 "encoding": self._opts.encoding,
-                "sample_rate": 16000,
+                "sample_rate": self._opts.sample_rate,
                 "enable_partial_transcripts": False,
-                "audio_language": self._opts.language,
             },
+            "whisper_params": {"audio_language": self._opts.language},
         }
 
         await ws.send_str(json.dumps(metadata))
