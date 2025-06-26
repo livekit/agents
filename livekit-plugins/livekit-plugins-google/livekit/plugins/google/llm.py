@@ -87,7 +87,7 @@ class LLM(llm.LLM):
         ] = NOT_GIVEN,
         gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
-        seed: NotGivenOr[int] = NOT_GIVEN
+        seed: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -178,7 +178,7 @@ class LLM(llm.LLM):
             automatic_function_calling_config=automatic_function_calling_config,
             gemini_tools=gemini_tools,
             http_options=http_options,
-            seed=seed
+            seed=seed,
         )
         self._client = Client(
             api_key=gemini_api_key,
