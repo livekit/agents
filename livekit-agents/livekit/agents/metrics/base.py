@@ -74,6 +74,9 @@ class EOUMetrics(BaseModel):
     on_user_turn_completed_delay: float
     """Time taken to invoke the user's `Agent.on_user_turn_completed` callback."""
 
+    last_speaking_time: float
+    """The time the user stopped speaking."""
+
     speech_id: str | None = None
 
 
