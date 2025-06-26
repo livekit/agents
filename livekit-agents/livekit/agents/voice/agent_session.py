@@ -740,7 +740,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_away_timer.cancel()
             self._user_away_timer = None
 
-    def _update_agent_state(self, state: AgentState) -> None:
+    def _update_agent_state(self, state: AgentState, *, speech_id: str | None = None) -> None:
         if self._agent_state == state:
             return
 
@@ -756,7 +756,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         old_state = self._agent_state
         self._agent_state = state
         self.emit(
-            "agent_state_changed", AgentStateChangedEvent(old_state=old_state, new_state=state)
+            "agent_state_changed",
+            AgentStateChangedEvent(old_state=old_state, new_state=state, speech_id=speech_id),
         )
 
     def _update_user_state(self, state: UserState) -> None:

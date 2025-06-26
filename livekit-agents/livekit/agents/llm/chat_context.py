@@ -417,7 +417,11 @@ class ChatContext:
         if any(
             (item_a.id != item_b.id)
             or (item_a.type != item_b.type)
-            or (item_a.type == "message" and item_a.text_content != item_b.text_content)
+            or (
+                item_a.type == "message"
+                and item_b.type == "message"
+                and item_a.text_content != item_b.text_content
+            )
             for item_a, item_b in zip(self.items, other.items)
         ):
             return False

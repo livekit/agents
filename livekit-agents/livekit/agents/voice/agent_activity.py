@@ -1165,7 +1165,7 @@ class AgentActivity(RecognitionHooks):
             tasks.append(forward_text)
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
-            self._session._update_agent_state("speaking")
+            self._session._update_agent_state("speaking", speech_id=speech_handle.id)
 
         if audio_output is None:
             # update the agent state based on text if no audio output
@@ -1315,7 +1315,7 @@ class AgentActivity(RecognitionHooks):
             tasks.append(forward_task)
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
-            self._session._update_agent_state("speaking")
+            self._session._update_agent_state("speaking", speech_id=speech_handle.id)
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -1595,7 +1595,7 @@ class AgentActivity(RecognitionHooks):
             return  # TODO(theomonnom): remove the message from the serverside history
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
-            self._session._update_agent_state("speaking")
+            self._session._update_agent_state("speaking", speech_id=speech_handle.id)
 
         @utils.log_exceptions(logger=logger)
         async def _read_messages(
