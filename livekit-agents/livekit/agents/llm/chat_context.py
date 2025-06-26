@@ -410,6 +410,20 @@ class ChatContext:
     def readonly(self) -> bool:
         return False
 
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, ChatContext) or len(self.items) != len(other.items):
+            return False
+
+        if any(
+            (item_a.id != item_b.id)
+            or (item_a.type != item_b.type)
+            or (item_a.type == "message" and item_a.text_content != item_b.text_content)
+            for item_a, item_b in zip(self.items, other.items)
+        ):
+            return False
+
+        return True
+
 
 class _ReadOnlyChatContext(ChatContext):
     """A read-only wrapper for ChatContext that prevents modifications."""

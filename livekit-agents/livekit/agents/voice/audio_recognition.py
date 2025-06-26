@@ -44,6 +44,7 @@ class RecognitionHooks(Protocol):
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
+    def on_pre_emptive_generation(self, info: _EndOfTurnInfo) -> None: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -332,6 +333,32 @@ class AudioRecognition:
         async def _bounce_eou_task(last_speaking_time: float) -> None:
             endpointing_delay = self._min_endpointing_delay
 
+            confidence_avg = (
+                sum(self._final_transcript_confidence) / len(self._final_transcript_confidence)
+                if self._final_transcript_confidence
+                else 0
+            )
+            if last_speaking_time <= 0:
+                transcription_delay = 0.0
+                end_of_utterance_delay = 0.0
+            else:
+                transcription_delay = max(self._last_final_transcript_time - last_speaking_time, 0)
+                end_of_utterance_delay = time.time() - last_speaking_time
+
+            min_extra_sleep = last_speaking_time + endpointing_delay - time.time()
+            if min_extra_sleep > 0:
+                self._hooks.on_pre_emptive_generation(
+                    _EndOfTurnInfo(
+                        new_transcript=self._audio_transcript,
+                        transcription_delay=transcription_delay,
+                        end_of_utterance_delay=end_of_utterance_delay,
+                        transcript_confidence=confidence_avg,
+                    )
+                )
+
+            logger.debug("min extra sleep: %s", min_extra_sleep)
+            tic = time.time()
+
             if turn_detector is not None:
                 if not turn_detector.supports_language(self._last_language):
                     logger.debug("Turn detector does not support language %s", self._last_language)
@@ -351,18 +378,12 @@ class AudioRecognition:
             extra_sleep = last_speaking_time + endpointing_delay - time.time()
             await asyncio.sleep(max(extra_sleep, 0))
 
-            tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
-            confidence_avg = (
-                sum(self._final_transcript_confidence) / len(self._final_transcript_confidence)
-                if self._final_transcript_confidence
-                else 0
-            )
+            toc = time.time()
+            logger.debug("extra sleep: %s", toc - tic)
 
-            if last_speaking_time <= 0:
-                transcription_delay = 0.0
-                end_of_utterance_delay = 0.0
-            else:
-                transcription_delay = max(self._last_final_transcript_time - last_speaking_time, 0)
+            tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
+
+            if last_speaking_time > 0:
                 end_of_utterance_delay = time.time() - last_speaking_time
 
             committed = self._hooks.on_end_of_turn(

@@ -13,6 +13,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     metrics,
+    stt,
 )
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
@@ -63,7 +64,7 @@ class MyAgent(Agent):
 
 
 def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
+    proc.userdata["vad"] = silero.VAD.load(min_silence_duration=0.3)
 
 
 async def entrypoint(ctx: JobContext):
@@ -76,10 +77,15 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4o-mini"),
-        stt=deepgram.STT(model="nova-3", language="multi"),
+        # stt=deepgram.STT(model="nova-3", language="multi"),
+        stt=stt.StreamAdapter(
+            stt=openai.STT(base_url="http://192.168.100.224:18000/v1"),
+            vad=silero.VAD.load(min_silence_duration=0.2),
+        ),
         tts=openai.TTS(voice="ash"),
         # use LiveKit's turn detection model
-        turn_detection=MultilingualModel(),
+        # turn_detection=MultilingualModel(),
+        min_endpointing_delay=0.5,
     )
 
     # log metrics as they are emitted, and total usage after session is over
