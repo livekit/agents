@@ -1080,7 +1080,7 @@ class AgentActivity(RecognitionHooks):
                 logger.warning(
                     "preemptive generation enabled but chat context or tools have changed after `on_user_turn_completed`",  # noqa: E501
                 )
-                preemptive.speech_handle.interrupt()
+                preemptive.speech_handle._cancel()
 
             self._preemptive_generation = None
 

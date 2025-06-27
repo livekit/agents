@@ -115,7 +115,7 @@ class SpeechHandle:
             return self
 
         with contextlib.suppress(asyncio.InvalidStateError):
-            self._scheduled_fut.set_result(None)
+            self._interrupt_fut.set_result(None)
 
         return self
 
