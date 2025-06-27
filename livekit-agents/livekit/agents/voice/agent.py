@@ -664,24 +664,23 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             # so handles added inside the on_enter will make sure we're not completing the run_state too early.
             run_state._mark_done_if_needed(None)
 
-        task_result = await asyncio.shield(self.__fut)
+        try:
+            return await asyncio.shield(self.__fut)
+        finally:
+            # run_state could have changed after self.__fut
+            run_state = session._global_run_state
 
-        # run_state could have changed after self.__fut
-        run_state = session._global_run_state
+            if session.current_agent != self:
+                logger.warning(
+                    f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
+                    "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
+                )
+                await old_activity.aclose()
+            else:
+                if speech_handle and run_state and not run_state.done():
+                    run_state._watch_handle(speech_handle)
 
-        if session.current_agent != self:
-            logger.warning(
-                f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
-                "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
-            )
-            await old_activity.aclose()
-            return task_result
-
-        if speech_handle and run_state and not run_state.done():
-            run_state._watch_handle(speech_handle)
-
-        await session._update_activity(old_agent, new_activity="resume")
-        return task_result
+                await session._update_activity(old_agent, new_activity="resume")
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
