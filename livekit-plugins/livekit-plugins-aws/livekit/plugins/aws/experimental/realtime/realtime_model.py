@@ -155,6 +155,9 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
         self.model_id = "amazon.nova-sonic-v1:0"
+        # note: temperature and top_p do not follow industry standards and are defined slightly differently for Sonic
+        # temperature ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic
+        # top_p ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic
         self.temperature = temperature
         self.top_p = top_p
         self._opts = _RealtimeOptions(
@@ -169,8 +172,8 @@ class RealtimeModel(llm.RealtimeModel):
 
     def session(self) -> RealtimeSession:
         sess = RealtimeSession(self)
-        sess._initialization_task = asyncio.get_event_loop().create_future()
-        asyncio.create_task(sess._initialize_stream())
+        sess._sess_init_fut = asyncio.get_running_loop().create_future()
+        asyncio.create_task(sess._initialize_streams())
         self._sessions.add(sess)
         return sess
 
@@ -190,12 +193,12 @@ class RealtimeSession(
             INPUT_SAMPLE_RATE, CHANNELS, samples_per_channel=CHUNK_SIZE
         )
 
-        self.response_task = None
-        self.audio_input_task = None
-        self.stream_response = None
-        self.is_active = False
-        self._initialization_task = None
-        self.bedrock_client = None
+        self._response_task = None
+        self._audio_input_task = None
+        self._stream_response = None
+        self._is_client_active = False
+        self._sess_init_fut = None
+        self._bedrock_client = None
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
         self._tools_ready = asyncio.Event()
@@ -203,11 +206,11 @@ class RealtimeSession(
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._instructions_ready = asyncio.Event()
         self._instructions = DEFAULT_SYSTEM_PROMPT
-        self._audio_input_queue = utils.aio.Chan()
+        self._audio_input_chan = utils.aio.Chan[bytes]()
 
-        self.prompt_name = str(uuid.uuid4())
-        self.content_name = str(uuid.uuid4())
-        self.audio_content_name = str(uuid.uuid4())
+        self._prompt_name = str(uuid.uuid4())
+        self._content_name = str(uuid.uuid4())
+        self._audio_content_name = str(uuid.uuid4())
         self._current_generation: _ResponseGeneration | None = None
 
         self._event_handlers = {
@@ -264,6 +267,177 @@ class RealtimeSession(
                 return "other_event"
 
     @utils.log_exceptions(logger=logger)
+    def _initialize_client(self):
+        config = Config(
+            endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
+            region=self._realtime_model._opts.region,
+            aws_credentials_identity_resolver=Boto3CredentialsResolver(),
+            http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
+            http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme()},
+        )
+        self._bedrock_client = BedrockRuntimeClient(config=config)
+
+    @utils.log_exceptions(logger=logger)
+    async def _send_raw_event(self, event_json):
+        if not self._is_client_active:
+            # or self.stream_response.input_stream.closed:
+            logger.debug("Stream not initialized or closed")
+            return
+
+        event = InvokeModelWithBidirectionalStreamInputChunk(
+            value=BidirectionalInputPayloadPart(bytes_=event_json.encode("utf-8"))
+        )
+
+        try:
+            await self._stream_response.input_stream.send(event)
+            ev_json = json.loads(event_json)
+            if "event" in ev_json and "audioOutput" in ev_json["event"]:
+                del ev_json["event"]["audioOutput"]["content"]
+            if "event" in ev_json and "audioInput" in ev_json["event"]:
+                del ev_json["event"]["audioInput"]["content"]
+            # logger.debug(f"Sent event: {json.dumps(ev_json, indent=2)}")
+        except Exception as e:
+            logger.debug(f"Error sending event: {str(e)}")
+            traceback.print_exc()
+
+    @utils.log_exceptions(logger=logger)
+    async def _initialize_streams(self):
+        try:
+            logger.debug(
+                f"Initializing Bedrock stream with realtime options: {self._realtime_model._opts}"
+            )
+            if not self._bedrock_client:
+                logger.debug("Creating Bedrock client")
+                self._initialize_client()
+            self._stream_response = (
+                await self._bedrock_client.invoke_model_with_bidirectional_stream(
+                    InvokeModelWithBidirectionalStreamOperationInput(
+                        model_id=self._realtime_model.model_id
+                    )
+                )
+            )
+            self._is_client_active = True
+            for name, tool in self.tools.function_tools.items():
+                logger.debug(f"TOOL: {name}: {vars(tool)}")
+            if not self.tools.function_tools:
+                try:
+                    await asyncio.wait_for(self._tools_ready.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Tools not ready after 2sec, continuing without them")
+
+            tool_cfg = None
+            if self.tools.function_tools:
+                tools = []
+                for name, f in self.tools.function_tools.items():
+                    if llm.tool_context.is_function_tool(f):
+                        description = llm.tool_context.get_function_info(f).description
+                        input_schema = llm.utils.build_legacy_openai_schema(
+                            f, internally_tagged=True
+                        )["parameters"]
+                        self._tool_type_map[name] = "FunctionTool"
+                    else:
+                        description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
+                            "description"
+                        )
+                        input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
+                            "parameters"
+                        ]
+                        self._tool_type_map[name] = "RawFunctionTool"
+
+                    tool = Tool(
+                        toolSpec=ToolSpec(
+                            name=name,
+                            description=description,
+                            inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),
+                        )
+                    )
+                    tools.append(tool)
+                tool_choice = self._tool_choice_adapter(self._realtime_model._opts.tool_choice)
+                logger.debug(f"TOOL CHOICE: {tool_choice}")
+                tool_cfg = ToolConfiguration(tools=tools, toolChoice=tool_choice)
+
+                # recommended to set greedy inference configs for tool calls
+                if not is_given(self._realtime_model.top_p):
+                    self._realtime_model._opts.top_p = 1.0
+                if not is_given(self._realtime_model.temperature):
+                    self._realtime_model._opts.temperature = 1.0
+
+            for tool in tool_cfg.tools:
+                logger.debug(f"TOOL CONFIGURATION: {tool.toolSpec.inputSchema}")
+
+            try:
+                await asyncio.wait_for(self._instructions_ready.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Instructions not received after 2sec, proceeding with default instructions"
+                )
+
+            init_events = [
+                seb.create_session_start_event(
+                    max_tokens=self._realtime_model._opts.max_tokens,
+                    top_p=self._realtime_model._opts.top_p,
+                    temperature=self._realtime_model._opts.temperature,
+                ),
+                seb.create_prompt_start_event(
+                    prompt_name=self._prompt_name,
+                    voice_id=self._realtime_model._opts.voice,
+                    sample_rate=OUTPUT_SAMPLE_RATE,
+                    tool_configuration=tool_cfg,
+                ),
+                seb.create_text_content_start_event(
+                    prompt_name=self._prompt_name,
+                    content_name=self._content_name,
+                    role="SYSTEM",
+                ),
+                seb.create_text_input_event(
+                    prompt_name=self._prompt_name,
+                    content_name=self._content_name,
+                    content=self._instructions,
+                ),
+                seb.create_content_end_event(
+                    prompt_name=self._prompt_name,
+                    content_name=self._content_name,
+                ),
+            ]
+
+            for event in init_events:
+                await self._send_raw_event(event)
+                logger.debug(f"Sent event: {event}")
+
+            self._response_task = asyncio.create_task(
+                self._process_responses(), name="RealtimeSession._process_responses"
+            )
+
+            self._audio_input_task = asyncio.create_task(
+                self._process_audio_input(), name="RealtimeSession._process_audio_input"
+            )
+
+            if not self._sess_init_fut.done():
+                self._sess_init_fut.set_result(self)
+
+            logger.debug("Stream initialized successfully")
+        except Exception as e:
+            self._is_client_active = False
+            self._sess_init_fut.set_exception(e)
+            logger.debug(f"Failed to initialize stream: {str(e)}")
+            raise e
+        return self
+
+    # can be used in places that need to explicitly wait for stream initialization
+    @utils.log_exceptions(logger=logger)
+    async def initialize_stream(self):
+        if not self._bedrock_client:
+            self._initialize_client()
+
+        if self._is_client_active:
+            return self
+
+        if self._sess_init_fut is not None:
+            return await self._sess_init_fut
+
+        return await self._initialize_streams()
+
+    @utils.log_exceptions(logger=logger)
     def _emit_generation_event(self) -> None:
         logger.debug(f"Emitting generation event")
         generation_ev = llm.GenerationCreatedEvent(
@@ -279,9 +453,9 @@ class RealtimeSession(
         event_type = self._get_event_type(event_data)
         event_handler = self._event_handlers.get(event_type)
         if event_handler:
-            logger.debug(
-                f"Handling event: {event_type} with event_handler: {event_handler} and event_data: {json.dumps(event_data, indent=2)}"
-            )
+            # logger.debug(
+            #     f"Handling event: {event_type} with event_handler: {event_handler} and event_data: {json.dumps(event_data, indent=2)}"
+            # )
             await event_handler(event_data)
             self._turn_tracker.feed(event_data)
         else:
@@ -497,192 +671,12 @@ class RealtimeSession(
         # logger.debug(f"USAGE EVENT: {json.dumps(event_data, indent=2)}")
         pass
 
-    @DeprecationWarning
-    @classmethod
-    async def create(cls, realtime_model: RealtimeModel) -> "RealtimeSession":
-        session = cls(realtime_model)
-        await session.initialize_stream()
-        return session
-
-    @utils.log_exceptions(logger=logger)
-    def _initialize_client(self):
-        config = Config(
-            endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
-            region=self._realtime_model._opts.region,
-            aws_credentials_identity_resolver=Boto3CredentialsResolver(),
-            http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
-            http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme()},
-        )
-        self.bedrock_client = BedrockRuntimeClient(config=config)
-
-    @utils.log_exceptions(logger=logger)
-    async def _initialize_stream(self):
-        try:
-            logger.debug(
-                f"Initializing Bedrock stream with realtime options: {self._realtime_model._opts}"
-            )
-            if not self.bedrock_client:
-                logger.debug("Creating Bedrock client")
-                self._initialize_client()
-            self.stream_response = await self.bedrock_client.invoke_model_with_bidirectional_stream(
-                InvokeModelWithBidirectionalStreamOperationInput(
-                    model_id=self._realtime_model.model_id
-                )
-            )
-            # Q: is this the right place? (perhaps only for bedrock client...)
-            self.is_active = True
-            for name, tool in self.tools.function_tools.items():
-                logger.debug(f"TOOL: {name}: {vars(tool)}")
-            if not self.tools.function_tools:
-                try:
-                    await asyncio.wait_for(self._tools_ready.wait(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    logger.warning("Tools not ready after 2sec, continuing without them")
-
-            tool_cfg = None
-            if self.tools.function_tools:
-                tools = []
-                for name, f in self.tools.function_tools.items():
-                    if llm.tool_context.is_function_tool(f):
-                        description = llm.tool_context.get_function_info(f).description
-                        input_schema = llm.utils.build_legacy_openai_schema(
-                            f, internally_tagged=True
-                        )["parameters"]
-                        self._tool_type_map[name] = "FunctionTool"
-                    else:
-                        description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
-                            "description"
-                        )
-                        input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
-                            "parameters"
-                        ]
-                        self._tool_type_map[name] = "RawFunctionTool"
-
-                    tool = Tool(
-                        toolSpec=ToolSpec(
-                            name=name,
-                            description=description,
-                            inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),
-                        )
-                    )
-                    tools.append(tool)
-                tool_choice = self._tool_choice_adapter(self._realtime_model._opts.tool_choice)
-                logger.debug(f"TOOL CHOICE: {tool_choice}")
-                tool_cfg = ToolConfiguration(tools=tools, toolChoice=tool_choice)
-
-                # recommended to set greedy inference configs for tool calls
-                if not is_given(self._realtime_model.top_p):
-                    self._realtime_model._opts.top_p = 1.0
-                if not is_given(self._realtime_model.temperature):
-                    self._realtime_model._opts.temperature = 1.0
-
-            for tool in tool_cfg.tools:
-                logger.debug(f"TOOL CONFIGURATION: {tool.toolSpec.inputSchema}")
-
-            try:
-                await asyncio.wait_for(self._instructions_ready.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Instructions not received after 2sec, proceeding with default instructions"
-                )
-
-            init_events = [
-                seb.create_session_start_event(
-                    max_tokens=self._realtime_model._opts.max_tokens,
-                    top_p=self._realtime_model._opts.top_p,
-                    temperature=self._realtime_model._opts.temperature,
-                ),
-                seb.create_prompt_start_event(
-                    prompt_name=self.prompt_name,
-                    voice_id=self._realtime_model._opts.voice,
-                    sample_rate=OUTPUT_SAMPLE_RATE,
-                    tool_configuration=tool_cfg,
-                ),
-                seb.create_text_content_start_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.content_name,
-                    role="SYSTEM",
-                ),
-                seb.create_text_input_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.content_name,
-                    content=self._instructions,
-                ),
-                seb.create_content_end_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.content_name,
-                ),
-            ]
-
-            for event in init_events:
-                await self.send_raw_event(event)
-                logger.debug(f"Sent event: {event}")
-                await asyncio.sleep(0.1)
-
-            self.response_task = asyncio.create_task(
-                self._process_responses(), name="RealtimeSession._process_responses"
-            )
-
-            self.audio_input_task = asyncio.create_task(
-                self._process_audio_input(), name="RealtimeSession._process_audio_input"
-            )
-
-            if not self._initialization_task.done():
-                self._initialization_task.set_result(self)
-
-            await asyncio.sleep(0.1)
-
-            logger.debug("Stream initialized successfully")
-        except Exception as e:
-            self.is_active = False
-            self._initialization_task.set_exception(e)
-            logger.debug(f"Failed to initialize stream: {str(e)}")
-            raise e
-        return self
-
-    # can be used in places that need to explicitly wait for stream initialization
-    @utils.log_exceptions(logger=logger)
-    async def initialize_stream(self):
-        if not self.bedrock_client:
-            self._initialize_client()
-
-        if self.is_active:
-            return self
-
-        if self._initialization_task is not None:
-            return await self._initialization_task
-
-        return await self._initialize_stream()
-
-    @utils.log_exceptions(logger=logger)
-    async def send_raw_event(self, event_json):
-        if not self.is_active:
-            # or self.stream_response.input_stream.closed:
-            logger.debug("Stream not initialized or closed")
-            return
-
-        event = InvokeModelWithBidirectionalStreamInputChunk(
-            value=BidirectionalInputPayloadPart(bytes_=event_json.encode("utf-8"))
-        )
-
-        try:
-            await self.stream_response.input_stream.send(event)
-            ev_json = json.loads(event_json)
-            if "event" in ev_json and "audioOutput" in ev_json["event"]:
-                del ev_json["event"]["audioOutput"]["content"]
-            if "event" in ev_json and "audioInput" in ev_json["event"]:
-                del ev_json["event"]["audioInput"]["content"]
-            logger.debug(f"Sent event: {json.dumps(ev_json, indent=2)}")
-        except Exception as e:
-            logger.debug(f"Error sending event: {str(e)}")
-            traceback.print_exc()
-
     @utils.log_exceptions(logger=logger)
     async def _process_responses(self):
         try:
             await self.initialize_stream()
-            _, output_stream = await self.stream_response.await_output()
-            while self.is_active:
+            _, output_stream = await self._stream_response.await_output()
+            while self._is_client_active:
                 # and not self.stream_response.output_stream.closed:
                 try:
                     result = await output_stream.receive()
@@ -729,7 +723,7 @@ class RealtimeSession(
                 finally:
                     pass
         finally:
-            self.is_active = False
+            self._is_client_active = False
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -749,6 +743,39 @@ class RealtimeSession(
             "updating server-side chat context is not yet supported by Nova Sonic's Realtime API"
         )
 
+    async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
+        tool_content_name = str(uuid.uuid4())
+        tool_events = [
+            seb.create_tool_content_start_event(
+                prompt_name=self._prompt_name,
+                content_name=tool_content_name,
+                tool_use_id=tool_use_id,
+            ),
+            seb.create_tool_result_event(
+                prompt_name=self._prompt_name,
+                content_name=tool_content_name,
+                content=tool_result,
+            ),
+            seb.create_content_end_event(
+                prompt_name=self._prompt_name,
+                content_name=tool_content_name,
+            ),
+        ]
+        for event in tool_events:
+            await self._send_raw_event(event)
+            # logger.debug(f"Sent tool event: {event}")
+
+    def _tool_choice_adapter(self, tool_choice: llm.ToolChoice) -> Dict[str, Dict[str, str]] | None:
+        if tool_choice == "auto":
+            return {"auto": {}}
+        elif tool_choice == "required":
+            return {"any": {}}
+        elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
+            return {"tool": {"name": tool_choice["function"]["name"]}}
+        else:
+            return None
+
+    # note: return value from tool functions registered to Sonic must be Structured Output (aka a dict that is JSON serializable)
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Any]) -> None:
         # logger.warning("updating tool list is not yet supported by Nova Sonic's Realtime API")
         logger.debug(f"Updating tools: {tools}")
@@ -799,35 +826,17 @@ class RealtimeSession(
             yield frame
 
     @utils.log_exceptions(logger=logger)
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if not self._audio_input_queue.closed:
-            # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
-            for f in self._resample_audio(frame):
-                # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
-
-                for nf in self._bstream.write(f.data.tobytes()):
-                    # squared_sum = sum(sample**2 for sample in audio_bytes)
-                    # if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
-                    #     logger.debug(f"Enqueuing significant audio chunk")
-                    self._audio_input_queue.send_nowait(
-                        {
-                            "audio_bytes": nf.data,
-                            "prompt_name": self.prompt_name,
-                            "content_name": self.audio_content_name,
-                        }
-                    )
-
-    @utils.log_exceptions(logger=logger)
     async def _process_audio_input(self):
-        await self.send_raw_event(
+        await self._send_raw_event(
             seb.create_audio_content_start_event(
-                prompt_name=self.prompt_name,
-                content_name=self.audio_content_name,
+                prompt_name=self._prompt_name,
+                content_name=self._audio_content_name,
             )
         )
         logger.debug("Starting audio input processing loop")
-        while self.is_active:
+        while self._is_client_active:
             try:
+                # note: could potentially pull this out into a separate task
                 try:
                     val = self._tool_results_ch.recv_nowait()
                     logger.debug(f"TOOL RESULT: {val}")
@@ -838,65 +847,55 @@ class RealtimeSession(
                 except utils.aio.channel.ChanEmpty:
                     # logger.debug("No tool results received")
                     pass
+                except utils.aio.channel.ChanClosed:
+                    logger.warning(
+                        "tool results channel closed, exiting audio input processing loop"
+                    )
+                    break
 
-                # logger.debug("Waiting for audio data from queue...")
-                data = await self._audio_input_queue.recv()
+                try:
+                    # logger.debug("Waiting for audio data from queue...")
+                    audio_bytes = await self._audio_input_chan.recv()
+                    blob = base64.b64encode(audio_bytes)
+                    # logger.debug(f"Sending audio data to Bedrock: size={len(audio_bytes)} bytes")
+                    audio_event = seb.create_audio_input_event(
+                        prompt_name=self._prompt_name,
+                        content_name=self._audio_content_name,
+                        audio_content=blob.decode("utf-8"),
+                    )
 
-                if (audio_bytes := data.get("audio_bytes")) is None:
-                    logger.debug("No audio bytes received")
-                    continue
-
-                blob = base64.b64encode(audio_bytes)
-                # logger.debug(f"Sending audio data to Bedrock: size={len(audio_bytes)} bytes")
-                audio_event = seb.create_audio_input_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.audio_content_name,
-                    audio_content=blob.decode("utf-8"),
-                )
-
-                await self.send_raw_event(audio_event)
-                # logger.debug("Audio event sent to Bedrock")
+                    await self._send_raw_event(audio_event)
+                    # logger.debug("Audio event sent to Bedrock")
+                except utils.aio.channel.ChanEmpty:
+                    # logger.debug("No audio data received")
+                    pass
+                except utils.aio.channel.ChanClosed:
+                    logger.warning(
+                        "audio input channel closed, exiting audio input processing loop"
+                    )
+                    break
 
             except asyncio.CancelledError:
                 logger.debug("Audio processing loop cancelled")
-                self._audio_input_queue.close()
+                self._audio_input_chan.close()
                 self._tool_results_ch.close()
                 raise
             except Exception as e:
                 logger.debug(f"Error processing audio: {e}")
                 traceback.print_exc()
 
-    async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
-        tool_content_name = str(uuid.uuid4())
-        tool_events = [
-            seb.create_tool_content_start_event(
-                prompt_name=self.prompt_name,
-                content_name=tool_content_name,
-                tool_use_id=tool_use_id,
-            ),
-            seb.create_tool_result_event(
-                prompt_name=self.prompt_name,
-                content_name=tool_content_name,
-                content=tool_result,
-            ),
-            seb.create_content_end_event(
-                prompt_name=self.prompt_name,
-                content_name=tool_content_name,
-            ),
-        ]
-        for event in tool_events:
-            await self.send_raw_event(event)
-            # logger.debug(f"Sent tool event: {event}")
+    @utils.log_exceptions(logger=logger)
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if not self._audio_input_chan.closed:
+            # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
+            for f in self._resample_audio(frame):
+                # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
 
-    def _tool_choice_adapter(self, tool_choice: llm.ToolChoice) -> Dict[str, Dict[str, str]] | None:
-        if tool_choice == "auto":
-            return {"auto": {}}
-        elif tool_choice == "required":
-            return {"any": {}}
-        elif isinstance(tool_choice, dict) and tool_choice["type"] == "function":
-            return {"tool": {"name": tool_choice["function"]["name"]}}
-        else:
-            return None
+                for nf in self._bstream.write(f.data.tobytes()):
+                    # squared_sum = sum(sample**2 for sample in audio_bytes)
+                    # if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
+                    #     logger.debug(f"Enqueuing significant audio chunk")
+                    self._audio_input_chan.send_nowait(nf.data)
 
     def generate_reply(
         self,
@@ -922,54 +921,53 @@ class RealtimeSession(
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
         pass
 
+    async def _send_all_content_block_events(self, events: list[Event]):
+        for event in events:
+            await self._send_raw_event(event)
+
     @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:
         logger.debug("aclose invoked")
-        if not self.is_active:
+        if not self._is_client_active:
             logger.debug("client not active within aclose")
             return
 
         await self._send_all_content_block_events(
             [
                 seb.create_content_end_event(
-                    prompt_name=self.prompt_name,
-                    content_name=self.audio_content_name,
+                    prompt_name=self._prompt_name,
+                    content_name=self._audio_content_name,
                 ),
-                seb.create_prompt_end_event(prompt_name=self.prompt_name),
+                seb.create_prompt_end_event(prompt_name=self._prompt_name),
                 seb.create_session_end_event(),
             ]
         )
         # allow event loops to fall out naturally
         # otherwise, the smithy layer will raise an InvalidStateError during cancellation
-        self.is_active = False
+        self._is_client_active = False
 
-        if not self.stream_response.output_stream.closed:
-            await self.stream_response.output_stream.close()
+        if not self._stream_response.output_stream.closed:
+            await self._stream_response.output_stream.close()
 
         # note: even after the self.is_active flag is flipped and the output stream is closed,
         # there is a future inside output_stream.receive() at the AWS-CRT C layer that blocks
         # resulting in an error after cancellation
         # however, it's mostly cosmetic-- the event loop will still exit
         # TODO: fix this nit
-        if self.response_task:
+        if self._response_task:
             try:
-                await asyncio.wait_for(self.response_task, timeout=1.0)
+                await asyncio.wait_for(self._response_task, timeout=1.0)
             except asyncio.TimeoutError:
                 logger.debug("shutdown of output event loop timed out-- cancelling")
-                self.response_task.cancel()
+                self._response_task.cancel()
 
         # must cancel the audio input task before closing the input stream
-        if self.audio_input_task and not self.audio_input_task.done():
-            self.audio_input_task.cancel()
-        if not self.stream_response.input_stream.closed:
-            await self.stream_response.input_stream.close()
+        if self._audio_input_task and not self._audio_input_task.done():
+            self._audio_input_task.cancel()
+        if not self._stream_response.input_stream.closed:
+            await self._stream_response.input_stream.close()
 
-        await asyncio.gather(self.response_task, self.audio_input_task, return_exceptions=True)
+        await asyncio.gather(self._response_task, self._audio_input_task, return_exceptions=True)
 
         logger.debug("Session end")
         logger.debug(f"CHAT CONTEXT: {self._chat_ctx.items}")
-
-    async def _send_all_content_block_events(self, events: list[Event]):
-        for event in events:
-            await self.send_raw_event(event)
-            # logger.debug(f"Sent event: {event}")
