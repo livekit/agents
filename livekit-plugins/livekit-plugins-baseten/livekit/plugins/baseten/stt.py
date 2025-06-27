@@ -35,10 +35,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.stt import SpeechEvent
-from livekit.agents.types import (
-    NOT_GIVEN,
-    NotGivenOr,
-)
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
@@ -56,7 +53,7 @@ ssl_context = ssl._create_unverified_context()
 
 @dataclass
 class STTOptions:
-    sample_rate: int
+    sample_rate: int = 16000
     buffer_size_seconds: float = 0.032
     encoding: str = "pcm_s16le"
 
@@ -97,13 +94,16 @@ class STT(stt.STT):
                 "Pass one in via the `api_key` parameter, "
                 "or set it as the `BASETEN_API_KEY` environment variable"
             )
+
         self._api_key = api_key
 
         model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
+
         if not model_endpoint:
             raise ValueError(
                 "The model endpoint is required, you can find it in the Baseten dashboard"
             )
+
         self._model_endpoint = model_endpoint
 
         self._opts = STTOptions(
@@ -114,6 +114,7 @@ class STT(stt.STT):
             vad_speech_pad_ms=vad_speech_pad_ms,
             language=language,
         )
+
         if is_given(encoding):
             self._opts.encoding = encoding
 
@@ -286,13 +287,13 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     data = json.loads(msg.data)
-                    msg_type = data.get("message_type")
 
-                    if msg_type == "partial_transcript":
-                        text = data.get("transcript", "")
-                        confidence = data.get("confidence", 0.0)
-                        segments = data.get("segments", [])
+                    is_final = data.get("is_final", True)
+                    segments = data.get("segments", [])
+                    text = data.get("transcript", "")
+                    confidence = data.get("confidence", 0.0)
 
+                    if not is_final:
                         if text:
                             start_time = segments[0].get("start", 0.0) if segments else 0.0
                             end_time = segments[-1].get("end", 0.0) if segments else 0.0
@@ -311,11 +312,8 @@ class SpeechStream(stt.SpeechStream):
                             )
                             self._event_ch.send_nowait(event)
 
-                    elif msg_type == "final_transcript":
-                        text = data.get("transcript", "")
-                        confidence = data.get("confidence", 0.0)
-                        segments = data.get("segments", [])
-                        language = data.get("language", self._opts.language)
+                    elif is_final:
+                        language = data.get("language_code", self._opts.language)
 
                         if text:
                             start_time = segments[0].get("start", 0.0) if segments else 0.0
@@ -337,7 +335,7 @@ class SpeechStream(stt.SpeechStream):
                             self._event_ch.send_nowait(event)
 
                     else:
-                        logger.warning("Unknown message type from Baseten: %s", msg_type)
+                        logger.warning("Unknown message type from Baseten")
 
                 except Exception:
                     logger.exception("Failed to process message from Baseten")
@@ -386,12 +384,12 @@ class SpeechStream(stt.SpeechStream):
                 "min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
-            "streaming_whisper_params": {
+            "streaming_params": {
                 "encoding": self._opts.encoding,
-                "sample_rate": 16000,
+                "sample_rate": self._opts.sample_rate,
                 "enable_partial_transcripts": False,
-                "audio_language": self._opts.language,
             },
+            "whisper_params": {"audio_language": self._opts.language},
         }
 
         await ws.send_str(json.dumps(metadata))
