@@ -29,7 +29,10 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     return local_path
 
 
-def _normalize_text(text):
+def _normalize_text(text: str) -> str:
+    if not text:
+        return ""
+
     text = unicodedata.normalize("NFKC", text.lower())
     text = "".join(
         ch for ch in text if not (unicodedata.category(ch).startswith("P") and ch not in ["'", "-"])
