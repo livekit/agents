@@ -68,8 +68,17 @@ DEFAULT_TOP_P = 0.9
 DEFAULT_MAX_TOKENS = 1024
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a friend. The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."
-    "When reading order numbers, please read each digit individually, separated by pauses. For example, order #1234 should be read as 'order number one-two-three-four' rather than 'order number one thousand two hundred thirty-four'."
+    "Your name is Sonic. You are a friend and eagerly helpful assistant."
+    "The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."
+    "Keep your responses short and concise unless the user asks you to elaborate or you are explicitly asked to be verbose and chatty."
+    "Do not repeat yourself. Do not ask the user to repeat themselves."
+    "Do ask the user to confirm or clarify their response if you are not sure what they mean."
+    "If after asking the user for clarification you still do not understand, be honest and tell them that you do not understand."
+    "Do not make up information or make assumptions. If you do not know the answer, tell the user that you do not know the answer."
+    "If the user makes a request of you that you cannot fulfill, tell them why you cannot fulfill it."
+    "When making tool calls, inform the user that you are using a tool to generate the response."
+    "Avoid formatted lists or numbering and keep your output as a spoken transcript to be acted out."
+    "Be appropriately emotive when responding to the user. Use American English as the language for your responses."
 )
 
 
@@ -172,6 +181,9 @@ class RealtimeModel(llm.RealtimeModel):
 
     def session(self) -> RealtimeSession:
         sess = RealtimeSession(self)
+
+        # note: this is a hack to get the session to initialize itself
+        # TODO: change how RealtimeSession is initialized by creating a single task main_atask that spawns subtasks
         sess._sess_init_fut = asyncio.get_running_loop().create_future()
         asyncio.create_task(sess._initialize_streams())
         self._sessions.add(sess)
@@ -188,6 +200,10 @@ class RealtimeSession(
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
+        self._event_builder = seb(
+            prompt_name=str(uuid.uuid4()),
+            audio_content_name=str(uuid.uuid4()),
+        )
         self._input_resampler: rtc.AudioResampler | None = None
         self._bstream = utils.audio.AudioByteStream(
             INPUT_SAMPLE_RATE, CHANNELS, samples_per_channel=CHUNK_SIZE
@@ -201,16 +217,13 @@ class RealtimeSession(
         self._bedrock_client = None
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
-        self._tools_ready = asyncio.Event()
         self._tool_type_map = {}
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
-        self._instructions_ready = asyncio.Event()
+        self._tools_ready = asyncio.get_running_loop().create_future()
+        self._instructions_ready = asyncio.get_running_loop().create_future()
+        self._chat_ctx_ready = asyncio.get_running_loop().create_future()
         self._instructions = DEFAULT_SYSTEM_PROMPT
         self._audio_input_chan = utils.aio.Chan[bytes]()
-
-        self._prompt_name = str(uuid.uuid4())
-        self._content_name = str(uuid.uuid4())
-        self._audio_content_name = str(uuid.uuid4())
         self._current_generation: _ResponseGeneration | None = None
 
         self._event_handlers = {
@@ -300,6 +313,48 @@ class RealtimeSession(
             logger.debug(f"Error sending event: {str(e)}")
             traceback.print_exc()
 
+    def _serialize_tool_config(self) -> ToolConfiguration | None:
+        tool_cfg = None
+        if self.tools.function_tools:
+            tools = []
+            for name, f in self.tools.function_tools.items():
+                if llm.tool_context.is_function_tool(f):
+                    description = llm.tool_context.get_function_info(f).description
+                    input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)[
+                        "parameters"
+                    ]
+                    self._tool_type_map[name] = "FunctionTool"
+                else:
+                    description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
+                        "description"
+                    )
+                    input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
+                        "parameters"
+                    ]
+                    self._tool_type_map[name] = "RawFunctionTool"
+
+                tool = Tool(
+                    toolSpec=ToolSpec(
+                        name=name,
+                        description=description,
+                        inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),
+                    )
+                )
+                tools.append(tool)
+            tool_choice = self._tool_choice_adapter(self._realtime_model._opts.tool_choice)
+            logger.debug(f"TOOL CHOICE: {tool_choice}")
+            tool_cfg = ToolConfiguration(tools=tools, toolChoice=tool_choice)
+
+            # recommended to set greedy inference configs for tool calls
+            if not is_given(self._realtime_model.top_p):
+                self._realtime_model._opts.top_p = 1.0
+            if not is_given(self._realtime_model.temperature):
+                self._realtime_model._opts.temperature = 1.0
+
+        for tool in tool_cfg.tools:
+            logger.debug(f"TOOL CONFIGURATION: {tool.toolSpec.inputSchema}")
+        return tool_cfg
+
     @utils.log_exceptions(logger=logger)
     async def _initialize_streams(self):
         try:
@@ -317,88 +372,44 @@ class RealtimeSession(
                 )
             )
             self._is_client_active = True
-            for name, tool in self.tools.function_tools.items():
-                logger.debug(f"TOOL: {name}: {vars(tool)}")
+
+            pending_events: list[asyncio.Future] = []
             if not self.tools.function_tools:
-                try:
-                    await asyncio.wait_for(self._tools_ready.wait(), timeout=2.0)
-                except asyncio.TimeoutError:
+                pending_events.append(self._tools_ready)
+            if not self._instructions_ready.done():
+                pending_events.append(self._instructions_ready)
+            if not self._chat_ctx_ready.done():
+                pending_events.append(self._chat_ctx_ready)
+
+            # note: can't know during sess init whether tools were not added
+            # or if they were added haven't yet been updated
+            # therefore in the case there are no tools, we wait the entire timeout
+            try:
+                if pending_events:
+                    await asyncio.wait_for(asyncio.gather(*pending_events), timeout=2.0)
+            except asyncio.TimeoutError:
+                if not self._tools_ready.done():
                     logger.warning("Tools not ready after 2sec, continuing without them")
 
-            tool_cfg = None
-            if self.tools.function_tools:
-                tools = []
-                for name, f in self.tools.function_tools.items():
-                    if llm.tool_context.is_function_tool(f):
-                        description = llm.tool_context.get_function_info(f).description
-                        input_schema = llm.utils.build_legacy_openai_schema(
-                            f, internally_tagged=True
-                        )["parameters"]
-                        self._tool_type_map[name] = "FunctionTool"
-                    else:
-                        description = llm.tool_context.get_raw_function_info(f).raw_schema.get(
-                            "description"
-                        )
-                        input_schema = llm.tool_context.get_raw_function_info(f).raw_schema[
-                            "parameters"
-                        ]
-                        self._tool_type_map[name] = "RawFunctionTool"
-
-                    tool = Tool(
-                        toolSpec=ToolSpec(
-                            name=name,
-                            description=description,
-                            inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),
-                        )
+                if not self._instructions_ready.done():
+                    logger.warning(
+                        "Instructions not received after 2sec, proceeding with default instructions"
                     )
-                    tools.append(tool)
-                tool_choice = self._tool_choice_adapter(self._realtime_model._opts.tool_choice)
-                logger.debug(f"TOOL CHOICE: {tool_choice}")
-                tool_cfg = ToolConfiguration(tools=tools, toolChoice=tool_choice)
+                if not self._chat_ctx_ready.done():
+                    logger.warning(
+                        "Chat context not received after 2sec, proceeding with empty chat context"
+                    )
 
-                # recommended to set greedy inference configs for tool calls
-                if not is_given(self._realtime_model.top_p):
-                    self._realtime_model._opts.top_p = 1.0
-                if not is_given(self._realtime_model.temperature):
-                    self._realtime_model._opts.temperature = 1.0
-
-            for tool in tool_cfg.tools:
-                logger.debug(f"TOOL CONFIGURATION: {tool.toolSpec.inputSchema}")
-
-            try:
-                await asyncio.wait_for(self._instructions_ready.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Instructions not received after 2sec, proceeding with default instructions"
-                )
-
-            init_events = [
-                seb.create_session_start_event(
-                    max_tokens=self._realtime_model._opts.max_tokens,
-                    top_p=self._realtime_model._opts.top_p,
-                    temperature=self._realtime_model._opts.temperature,
-                ),
-                seb.create_prompt_start_event(
-                    prompt_name=self._prompt_name,
-                    voice_id=self._realtime_model._opts.voice,
-                    sample_rate=OUTPUT_SAMPLE_RATE,
-                    tool_configuration=tool_cfg,
-                ),
-                seb.create_text_content_start_event(
-                    prompt_name=self._prompt_name,
-                    content_name=self._content_name,
-                    role="SYSTEM",
-                ),
-                seb.create_text_input_event(
-                    prompt_name=self._prompt_name,
-                    content_name=self._content_name,
-                    content=self._instructions,
-                ),
-                seb.create_content_end_event(
-                    prompt_name=self._prompt_name,
-                    content_name=self._content_name,
-                ),
-            ]
+            init_events = self._event_builder.create_prompt_start_block(
+                voice_id=self._realtime_model._opts.voice,
+                sample_rate=OUTPUT_SAMPLE_RATE,
+                system_content=self._instructions,
+                chat_ctx=self.chat_ctx,
+                tool_configuration=self._serialize_tool_config(),
+                max_tokens=self._realtime_model._opts.max_tokens,
+                top_p=self._realtime_model._opts.top_p,
+                temperature=self._realtime_model._opts.temperature,
+            )
 
             for event in init_events:
                 await self._send_raw_event(event)
@@ -420,7 +431,7 @@ class RealtimeSession(
             self._is_client_active = False
             self._sess_init_fut.set_exception(e)
             logger.debug(f"Failed to initialize stream: {str(e)}")
-            raise e
+            raise
         return self
 
     # can be used in places that need to explicitly wait for stream initialization
@@ -522,6 +533,9 @@ class RealtimeSession(
             == self._current_generation.input_id
         ):
             logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
+            # note: user ASR text is slightly different than what is sent to LiveKit (newline vs whitespace)
+            # TODO: fix this
+            self._chat_ctx.add_message(role="user", content=text_content)
 
         elif (
             self._current_generation.speculative_messages.get(text_content_id)
@@ -530,6 +544,14 @@ class RealtimeSession(
             logger.debug(
                 f"SENDING TEXT CONTENT TO MESSAGE CH: {text_content} with response_id: {self._current_generation.response_id} and content_id: {text_content_id}"
             )
+            # TODO: omitting barge-ins in chat context for now, but should address this
+            # currently only agent can be interrupted
+            # if text_content == "{ \"interrupted\" : true }":
+            #     logger.debug(f"BARGE-IN DETECTED FOR TEXT CONTENT ID: {text_content_id}")
+            #     self._chat_ctx.add_message(role="assistant", content=text_content, interrupted=True)
+            #     self._close_current_generation()
+            #     return
+
             curr_gen = self._current_generation.messages[self._current_generation.response_id]
             curr_gen.text_ch.send_nowait(text_content)
             self._chat_ctx.add_message(role="assistant", content=text_content)
@@ -735,32 +757,21 @@ class RealtimeSession(
 
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions
-        self._instructions_ready.set()
+        self._instructions_ready.set_result(True)
         logger.debug(f"Instructions updated: {instructions}")
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        logger.warning(
-            "updating server-side chat context is not yet supported by Nova Sonic's Realtime API"
-        )
+        self._chat_ctx = chat_ctx.copy()
+        logger.debug(f"Chat context updated: {self._chat_ctx.items}")
+        self._chat_ctx_ready.set_result(True)
 
     async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
         tool_content_name = str(uuid.uuid4())
-        tool_events = [
-            seb.create_tool_content_start_event(
-                prompt_name=self._prompt_name,
-                content_name=tool_content_name,
-                tool_use_id=tool_use_id,
-            ),
-            seb.create_tool_result_event(
-                prompt_name=self._prompt_name,
-                content_name=tool_content_name,
-                content=tool_result,
-            ),
-            seb.create_content_end_event(
-                prompt_name=self._prompt_name,
-                content_name=tool_content_name,
-            ),
-        ]
+        tool_events = self._event_builder.create_tool_content_block(
+            content_name=tool_content_name,
+            tool_use_id=tool_use_id,
+            content=tool_result,
+        )
         for event in tool_events:
             await self._send_raw_event(event)
             # logger.debug(f"Sent tool event: {event}")
@@ -796,7 +807,7 @@ class RealtimeSession(
             retained_tools.append(tool)
         self._tools = llm.ToolContext(retained_tools)
         if retained_tools:
-            self._tools_ready.set()
+            self._tools_ready.set_result(True)
             logger.debug("Tool list has been injected")
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
@@ -827,12 +838,7 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio_input(self):
-        await self._send_raw_event(
-            seb.create_audio_content_start_event(
-                prompt_name=self._prompt_name,
-                content_name=self._audio_content_name,
-            )
-        )
+        await self._send_raw_event(self._event_builder.create_audio_content_start_event())
         logger.debug("Starting audio input processing loop")
         while self._is_client_active:
             try:
@@ -858,9 +864,7 @@ class RealtimeSession(
                     audio_bytes = await self._audio_input_chan.recv()
                     blob = base64.b64encode(audio_bytes)
                     # logger.debug(f"Sending audio data to Bedrock: size={len(audio_bytes)} bytes")
-                    audio_event = seb.create_audio_input_event(
-                        prompt_name=self._prompt_name,
-                        content_name=self._audio_content_name,
+                    audio_event = self._event_builder.create_audio_input_event(
                         audio_content=blob.decode("utf-8"),
                     )
 
@@ -921,10 +925,6 @@ class RealtimeSession(
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
         pass
 
-    async def _send_all_content_block_events(self, events: list[Event]):
-        for event in events:
-            await self._send_raw_event(event)
-
     @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:
         logger.debug("aclose invoked")
@@ -932,16 +932,8 @@ class RealtimeSession(
             logger.debug("client not active within aclose")
             return
 
-        await self._send_all_content_block_events(
-            [
-                seb.create_content_end_event(
-                    prompt_name=self._prompt_name,
-                    content_name=self._audio_content_name,
-                ),
-                seb.create_prompt_end_event(prompt_name=self._prompt_name),
-                seb.create_session_end_event(),
-            ]
-        )
+        for event in self._event_builder.create_prompt_end_block():
+            await self._send_raw_event(event)
         # allow event loops to fall out naturally
         # otherwise, the smithy layer will raise an InvalidStateError during cancellation
         self._is_client_active = False

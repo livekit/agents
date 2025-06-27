@@ -1,6 +1,8 @@
+import uuid
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict, Any, Union, Literal
 import json
+from livekit.agents import llm
 from ...log import logger
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
@@ -221,8 +223,74 @@ class Event(BaseModel):
 
 
 class SonicEventBuilder:
-    @staticmethod
+    def __init__(self, prompt_name: str, audio_content_name: str):
+        self.prompt_name = prompt_name
+        self.audio_content_name = audio_content_name
+
+    def create_text_content_block(
+        self,
+        content_name: str,
+        role: ROLE,
+        content: str,
+    ) -> List[str]:
+        return [
+            self.create_text_content_start_event(content_name, role),
+            self.create_text_content_event(content_name, content),
+            self.create_content_end_event(content_name),
+        ]
+
+    def create_tool_content_block(
+        self,
+        content_name: str,
+        tool_use_id: str,
+        content: str,
+    ) -> List[str]:
+        return [
+            self.create_tool_content_start_event(content_name, tool_use_id),
+            self.create_tool_result_event(content_name, content),
+            self.create_content_end_event(content_name),
+        ]
+
+    def create_prompt_end_block(self) -> List[str]:
+        return [
+            self.create_content_end_event(self.audio_content_name, is_audio=True),
+            self.create_prompt_end_event(),
+            self.create_session_end_event(),
+        ]
+
+    def create_prompt_start_block(
+        self,
+        voice_id: VOICE_ID,
+        sample_rate: SAMPLE_RATE_HERTZ,
+        system_content: str,
+        chat_ctx: llm.ChatContext,
+        tool_configuration: Optional[Union[ToolConfiguration, Dict[str, Any], str]] = None,
+        max_tokens: int = 1024,
+        top_p: float = 0.9,
+        temperature: float = 0.7,
+    ) -> List[str]:
+        system_content_name = str(uuid.uuid4())
+        init_events = [
+            self.create_session_start_event(max_tokens, top_p, temperature),
+            self.create_prompt_start_event(voice_id, sample_rate, tool_configuration),
+            *self.create_text_content_block(system_content_name, "SYSTEM", system_content),
+        ]
+
+        # note: tool call events are not supported yet
+        if chat_ctx.items:
+            logger.debug(f"initiating session with chat context")
+            for item in chat_ctx.items:
+                ctx_content_name = str(uuid.uuid4())
+                init_events.extend(
+                    self.create_text_content_block(
+                        ctx_content_name, item.role.upper(), "".join(item.content)
+                    )
+                )
+
+        return init_events
+
     def create_session_start_event(
+        self,
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
@@ -240,17 +308,15 @@ class SonicEventBuilder:
         )
         return event.model_dump_json(exclude_none=False)
 
-    @staticmethod
     def create_audio_content_start_event(
-        prompt_name: str,
-        content_name: str,
+        self,
         sample_rate: SAMPLE_RATE_HERTZ = 16_000,
     ) -> str:
         event = Event(
             event=InputAudioContentStartEvent(
                 contentStart=InputAudioContentStart(
-                    promptName=prompt_name,
-                    contentName=content_name,
+                    promptName=self.prompt_name,
+                    contentName=self.audio_content_name,
                     audioInputConfiguration=AudioInputConfiguration(
                         sampleRateHertz=sample_rate,
                     ),
@@ -259,16 +325,15 @@ class SonicEventBuilder:
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
     def create_text_content_start_event(
-        prompt_name: str,
+        self,
         content_name: str,
         role: ROLE,
     ) -> str:
         event = Event(
             event=InputTextContentStartEvent(
                 contentStart=InputTextContentStart(
-                    promptName=prompt_name,
+                    promptName=self.prompt_name,
                     contentName=content_name,
                     role=role,
                     textInputConfiguration=TextInputConfiguration(),
@@ -277,16 +342,15 @@ class SonicEventBuilder:
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
     def create_tool_content_start_event(
-        prompt_name: str,
+        self,
         content_name: str,
         tool_use_id: str,
     ) -> str:
         event = Event(
             event=InputToolContentStartEvent(
                 contentStart=InputToolContentStart(
-                    promptName=prompt_name,
+                    promptName=self.prompt_name,
                     contentName=content_name,
                     toolResultInputConfiguration=ToolResultInputConfiguration(
                         toolUseId=tool_use_id,
@@ -297,33 +361,30 @@ class SonicEventBuilder:
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
     def create_audio_input_event(
-        prompt_name: str,
-        content_name: str,
+        self,
         audio_content: str,
     ) -> str:
         event = Event(
             event=AudioInputContentEvent(
                 audioInput=AudioInput(
-                    promptName=prompt_name,
-                    contentName=content_name,
+                    promptName=self.prompt_name,
+                    contentName=self.audio_content_name,
                     content=audio_content,
                 )
             )
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
-    def create_text_input_event(
-        prompt_name: str,
+    def create_text_content_event(
+        self,
         content_name: str,
         content: str,
     ) -> str:
         event = Event(
             event=TextInputContentEvent(
                 textInput=TextInput(
-                    promptName=prompt_name,
+                    promptName=self.prompt_name,
                     contentName=content_name,
                     content=content,
                 )
@@ -331,9 +392,8 @@ class SonicEventBuilder:
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
     def create_tool_result_event(
-        prompt_name: str,
+        self,
         content_name: str,
         content: Union[str, Dict[str, Any]],
     ) -> str:
@@ -345,7 +405,7 @@ class SonicEventBuilder:
         event = Event(
             event=ToolResultContentEvent(
                 toolResult=ToolResult(
-                    promptName=prompt_name,
+                    promptName=self.prompt_name,
                     contentName=content_name,
                     content=content_str,
                 )
@@ -353,40 +413,37 @@ class SonicEventBuilder:
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
     def create_content_end_event(
-        prompt_name: str,
+        self,
         content_name: str,
+        is_audio: bool = False,
     ) -> str:
         event = Event(
             event=InputContentEndEvent(
                 contentEnd=ContentEndEvent(
-                    promptName=prompt_name,
-                    contentName=content_name,
+                    promptName=self.prompt_name,
+                    contentName=content_name if not is_audio else self.audio_content_name,
                 )
             )
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
-    def create_prompt_end_event(prompt_name: str) -> str:
+    def create_prompt_end_event(self) -> str:
         event = Event(
             event=PromptEndEvent(
-                promptEnd=PromptEnd(promptName=prompt_name),
+                promptEnd=PromptEnd(promptName=self.prompt_name),
             )
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
-    def create_session_end_event() -> str:
+    def create_session_end_event(self) -> str:
         event = Event(
             event=SessionEndEvent(sessionEnd=SessionEnd()),
         )
         return event.model_dump_json(exclude_none=True, by_alias=True)
 
-    @staticmethod
     def create_prompt_start_event(
-        prompt_name: str,
+        self,
         voice_id: VOICE_ID,
         sample_rate: SAMPLE_RATE_HERTZ,
         tool_configuration: Optional[Union[ToolConfiguration, Dict[str, Any], str]] = None,
@@ -416,7 +473,7 @@ class SonicEventBuilder:
         event = Event(
             event=PromptStartEvent(
                 promptStart=PromptStart(
-                    promptName=prompt_name,
+                    promptName=self.prompt_name,
                     textOutputConfiguration=TextOutputConfiguration(),
                     audioOutputConfiguration=AudioOutputConfiguration(
                         voiceId=voice_id, sampleRateHertz=sample_rate
