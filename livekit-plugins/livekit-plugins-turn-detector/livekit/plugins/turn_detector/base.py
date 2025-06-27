@@ -31,11 +31,10 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
 
 def _normalize_text(text):
     text = unicodedata.normalize("NFKC", text.lower())
-    text = ''.join(
-        ch for ch in text
-        if not (unicodedata.category(ch).startswith('P') and ch not in ["'", "-"])
+    text = "".join(
+        ch for ch in text if not (unicodedata.category(ch).startswith("P") and ch not in ["'", "-"])
     )
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
@@ -45,9 +44,9 @@ def _preprocess_convo(convo: list[dict[str, Any]], normalize: bool = True) -> li
 
     for msg in convo:
         if normalize:
-            msg['content'] = PUNCS_OFF + _normalize_text(msg['content'])
+            msg["content"] = PUNCS_OFF + _normalize_text(msg["content"])
         else:
-            msg['content'] = PUNCS_ON + msg['content']
+            msg["content"] = PUNCS_ON + msg["content"]
     return convo
 
 
