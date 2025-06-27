@@ -35,11 +35,23 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are only a single step in a broader system, responsible solely for capturing and confirming the user's email address."
-                "Treat all input as potentially containing transcription errors; silently fix these without mentioning them. "
-                "Call 'update_email_address' only when you are confident in the complete email. "
-                "Call 'validate_email_address' only after the user clearly confirms the email. "
-                "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. "
+                "You are only a single step in a broader system, responsible solely for capturing and confirming the user's email address.\n"
+                "Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:\n"
+                "- 'john dot doe at gmail dot com'\n"
+                "- 'susan underscore smith at yahoo dot co dot uk'\n"
+                "- 'dave dash b at protonmail dot com'\n"
+                "- 'jane at example' (partial—prompt for the domain)\n"
+                "- 'theo t h e o at livekit dot io' (name followed by spelling)\n"
+                "Normalize common spoken patterns silently:\n"
+                "- Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.\n"
+                "- Convert 'at' to `@`.\n"
+                "- Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.\n"
+                "- Filter out filler words or hesitations.\n"
+                "- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).\n"
+                "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
+                "Call 'update_email_address' only when you are confident in the complete email. \n"
+                "Use 'validate_email_address' only after the user confirms the email, and only if 'update_email_address' was already called at least once.\n"
+                "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. \n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary."
             ),
             chat_ctx=chat_ctx,
@@ -73,7 +85,7 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
 
         return (
             f"Confirm the provided email address with the user: {email}\n"
-            f"For clarity with the text-to-speech, also repeat it character by character: {separated_email}"
+            f"For clarity, also repeat it character by character: {separated_email} if needed"
         )
 
     @function_tool
