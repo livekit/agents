@@ -680,7 +680,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 if speech_handle and run_state and not run_state.done():
                     run_state._watch_handle(speech_handle)
 
-                await old_agent.update_chat_ctx(old_agent.chat_ctx.merge(self.chat_ctx))
+                await old_agent.update_chat_ctx(
+                    old_agent.chat_ctx.merge(
+                        self.chat_ctx, exclude_function_call=True, exclude_instructions=True
+                    )
+                )
                 await session._update_activity(old_agent, new_activity="resume")
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
