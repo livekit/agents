@@ -107,11 +107,15 @@ class SpeechHandle:
         if not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
+        self._cancel()
+        return self
+
+    def _cancel(self) -> SpeechHandle:
         if self.done():
             return self
 
         with contextlib.suppress(asyncio.InvalidStateError):
-            self._interrupt_fut.set_result(None)
+            self._scheduled_fut.set_result(None)
 
         return self
 

@@ -2,17 +2,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    JobContext,
-    JobProcess,
-    WorkerOptions,
-    cli,
-    metrics,
-    stt,
-)
-from livekit.agents.llm import ChatContext, ChatMessage, function_tool
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, metrics
+from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.voice import AgentStateChangedEvent, MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -36,6 +27,9 @@ class MyAgent(Agent):
             "You are curious and friendly, and have a sense of humor.",
         )
 
+    async def on_enter(self):
+        self.session.generate_reply(instructions="say hello to the user")
+
     async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage):
         # update the chat context or tools here will cancel the preemptive generation
 
@@ -44,24 +38,7 @@ class MyAgent(Agent):
         # self.session.say(filler_response)
         # turn_ctx.add_message(role="assistant", content=[filler_response])
 
-        import pprint
-
-        print("===========")
-        pprint.pprint(turn_ctx.items)
-
         pass
-
-    @function_tool
-    async def lookup_weather(self, location: str):
-        """Called when the user asks for weather related information.
-
-        Args:
-            location: The location they are asking for
-        """
-
-        logger.info(f"Looking up weather for {location}")
-
-        return "sunny with a temperature of 70 degrees."
 
 
 async def entrypoint(ctx: JobContext):
@@ -69,11 +46,7 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         llm=openai.LLM(model="gpt-4o-mini"),
         stt=deepgram.STT(model="nova-3", language="multi"),
-        # stt=stt.StreamAdapter(
-        #     stt=openai.STT(base_url="http://localhost:18000/v1"),
-        #     vad=silero.VAD.load(min_silence_duration=0.2),
-        # ),
-        tts=openai.TTS(base_url="http://localhost:18000/v1", voice=""),
+        tts=openai.TTS(),
         turn_detection=MultilingualModel(),
         preemptive_generation=True,
     )

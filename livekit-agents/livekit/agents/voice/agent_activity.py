@@ -654,7 +654,7 @@ class AgentActivity(RecognitionHooks):
 
     def _cancel_preemptive_generation(self) -> None:
         if self._preemptive_generation is not None:
-            self._preemptive_generation.speech_handle.interrupt()
+            self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
 
     def interrupt(self) -> asyncio.Future[None]:
