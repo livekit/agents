@@ -66,6 +66,10 @@ class SpeechHandle:
         return self._interrupt_fut.done()
 
     @property
+    def scheduled(self) -> bool:
+        return self._scheduled_fut.done()
+
+    @property
     def allow_interruptions(self) -> bool:
         return self._allow_interruptions
 

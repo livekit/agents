@@ -1069,7 +1069,7 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(
                     "preemptive generation used",
-                    extra={"saved_latency": time.time() - preemptive.created_at},
+                    extra={"preemptive_delta": time.time() - preemptive.created_at},
                 )
             else:
                 logger.warning(
@@ -1272,17 +1272,25 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
         )
         tasks.append(llm_task)
+
+        # wait for the speech to be scheduled before TTS inference
+        wait_for_schedule = asyncio.ensure_future(speech_handle._wait_for_scheduled())
+        await speech_handle.wait_if_not_interrupted([wait_for_schedule])
+        if not speech_handle.scheduled:
+            wait_for_schedule.cancel()
+            await utils.aio.cancel_and_wait(*tasks)
+            return
+
+        if new_message is not None:
+            self._agent._chat_ctx.insert(new_message)
+            self._session._conversation_item_added(new_message)
+
         tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
         tts_text_input, llm_output = tee
 
-        # wait for the speech to be scheduled before TTS inference
-        await speech_handle.wait_if_not_interrupted(
-            [asyncio.ensure_future(speech_handle._wait_for_scheduled())]
-        )
-
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
-        if audio_output is not None and not speech_handle.interrupted:
+        if audio_output is not None:
             tts_task, tts_gen_data = perform_tts_inference(
                 node=self._agent.tts_node,
                 input=tts_text_input,
@@ -1293,10 +1301,6 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
         )
-
-        if new_message is not None:
-            self._agent._chat_ctx.insert(new_message)
-            self._session._conversation_item_added(new_message)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)

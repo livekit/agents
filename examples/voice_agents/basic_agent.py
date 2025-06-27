@@ -16,7 +16,7 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import MetricsCollectedEvent
+from livekit.agents.voice import AgentStateChangedEvent, MetricsCollectedEvent
 from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -64,7 +64,7 @@ class MyAgent(Agent):
 
 
 def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load(min_silence_duration=0.3)
+    proc.userdata["vad"] = silero.VAD.load(min_silence_duration=0.55)
 
 
 async def entrypoint(ctx: JobContext):
@@ -76,25 +76,44 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
-        llm=openai.LLM(model="gpt-4o-mini"),
+        # llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM.with_cerebras(model="llama-3.3-70b"),
         # stt=deepgram.STT(model="nova-3", language="multi"),
         stt=stt.StreamAdapter(
-            stt=openai.STT(base_url="http://192.168.100.224:18000/v1"),
+            stt=openai.STT(base_url="http://localhost:18000/v1"),
             vad=silero.VAD.load(min_silence_duration=0.2),
         ),
-        tts=openai.TTS(voice="ash"),
+        tts=openai.TTS(base_url="http://localhost:18000/v1", voice=""),
         # use LiveKit's turn detection model
-        # turn_detection=MultilingualModel(),
-        min_endpointing_delay=0.5,
+        turn_detection=MultilingualModel(),
+        preemptive_generation=True,
     )
 
     # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
 
+    last_eou_metrics: metrics.EOUMetrics | None = None
+
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):
+        nonlocal last_eou_metrics
+
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
+
+        if ev.metrics.type == "eou_metrics":
+            last_eou_metrics = ev.metrics
+
+    @session.on("agent_state_changed")
+    def _on_agent_state_changed(ev: AgentStateChangedEvent):
+        if (
+            ev.new_state == "speaking"
+            and last_eou_metrics
+            and last_eou_metrics.speech_id == ev.speech_id
+        ):
+            logger.info(
+                f"end to end latency: {ev.created_at - last_eou_metrics.last_speaking_time}"
+            )
 
     async def log_usage():
         summary = usage_collector.get_summary()
