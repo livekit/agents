@@ -304,11 +304,27 @@ class ChatContext:
         self._items[:] = new_items
         return self
 
-    def merge(self, other_chat_ctx: ChatContext) -> ChatContext:
+    def merge(
+        self,
+        other_chat_ctx: ChatContext,
+        *,
+        exclude_function_call: bool = False,
+        exclude_instructions: bool = False,
+    ) -> ChatContext:
         """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
         existing_ids = {item.id for item in self._items}
 
         for item in other_chat_ctx.items:
+            if exclude_function_call and item.type in ["function_call", "function_call_output"]:
+                continue
+
+            if (
+                exclude_instructions
+                and item.type == "message"
+                and item.role in ["system", "developer"]
+            ):
+                continue
+
             if item.id not in existing_ids:
                 idx = self.find_insertion_index(created_at=item.created_at)
                 self._items.insert(idx, item)
