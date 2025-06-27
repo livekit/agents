@@ -28,7 +28,6 @@ from livekit.agents.llm.tool_context import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.agents.utils.aio.channel import ChanEmpty
 
 from aws_sdk_bedrock_runtime.client import (
     BedrockRuntimeClient,
@@ -56,6 +55,7 @@ from .events import (
     Tool,
     ToolSpec,
     ToolInputSchema,
+    Event,
 )
 
 INPUT_SAMPLE_RATE = 16000
@@ -174,6 +174,10 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions.add(sess)
         return sess
 
+        # stub b/c RealtimeSession.aclose() is invoked directly
+        async def aclose(self) -> None:
+            pass
+
 
 class RealtimeSession(
     llm.RealtimeSession[Literal["bedrock_server_event_received", "bedrock_client_event_queued"]]
@@ -187,6 +191,7 @@ class RealtimeSession(
         )
 
         self.response_task = None
+        self.audio_input_task = None
         self.stream_response = None
         self.is_active = False
         self._initialization_task = None
@@ -198,7 +203,7 @@ class RealtimeSession(
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._instructions_ready = asyncio.Event()
         self._instructions = DEFAULT_SYSTEM_PROMPT
-        self.audio_input_queue = utils.aio.Chan()
+        self._audio_input_queue = utils.aio.Chan()
 
         self.prompt_name = str(uuid.uuid4())
         self.content_name = str(uuid.uuid4())
@@ -274,7 +279,9 @@ class RealtimeSession(
         event_type = self._get_event_type(event_data)
         event_handler = self._event_handlers.get(event_type)
         if event_handler:
-            # logger.debug(f"Handling event: {event_type} with event_handler: {event_handler} and event_data: {json.dumps(event_data, indent=2)}")
+            logger.debug(
+                f"Handling event: {event_type} with event_handler: {event_handler} and event_data: {json.dumps(event_data, indent=2)}"
+            )
             await event_handler(event_data)
             self._turn_tracker.feed(event_data)
         else:
@@ -333,14 +340,13 @@ class RealtimeSession(
     async def _handle_text_output_content_event(self, event_data: dict) -> None:
         logger.debug(f"TEXT OUTPUT CONTENT EVENT: {json.dumps(event_data, indent=2)}")
         text_content_id = event_data["event"]["textOutput"]["contentId"]
-        text_content = event_data["event"]["textOutput"]["content"]
+        text_content = f"{event_data['event']['textOutput']['content']}\n"
 
         # TODO: rename event to llm.InputTranscriptionUpdated
         if (
             self._current_generation.user_messages.get(text_content_id)
             == self._current_generation.input_id
         ):
-            # rely on local_chat_ctx for this (?)
             logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
 
         elif (
@@ -352,6 +358,7 @@ class RealtimeSession(
             )
             curr_gen = self._current_generation.messages[self._current_generation.response_id]
             curr_gen.text_ch.send_nowait(text_content)
+            self._chat_ctx.add_message(role="assistant", content=text_content)
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
     # only rely on this event for barge-ins
@@ -365,7 +372,7 @@ class RealtimeSession(
             and stop_reason == "INTERRUPTED"
         ):
             logger.debug(f"BARGE-IN DETECTED FOR TEXT CONTENT ID: {text_content_id}")
-            self._close_current_generation(self._current_generation.response_id)
+            self._close_current_generation()
 
     async def _handle_tool_output_content_start_event(self, event_data: dict) -> None:
         logger.debug(f"TOOL OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
@@ -462,22 +469,23 @@ class RealtimeSession(
             and self._current_generation.speculative_messages.get(audio_content_id)
             == self._current_generation.response_id
         ):
-            self._close_current_generation(self._current_generation.response_id)
+            self._close_current_generation()
 
-    def _close_current_generation(self, response_id: str) -> None:
-        if response_id in self._current_generation.messages:
-            curr_gen = self._current_generation.messages[response_id]
-            if not curr_gen.audio_ch.closed:
-                curr_gen.audio_ch.close()
-            if not curr_gen.text_ch.closed:
-                curr_gen.text_ch.close()
+    def _close_current_generation(self) -> None:
+        if self._current_generation is not None:
+            if self._current_generation.response_id in self._current_generation.messages:
+                curr_gen = self._current_generation.messages[self._current_generation.response_id]
+                if not curr_gen.audio_ch.closed:
+                    curr_gen.audio_ch.close()
+                if not curr_gen.text_ch.closed:
+                    curr_gen.text_ch.close()
 
-        if not self._current_generation.message_ch.closed:
-            self._current_generation.message_ch.close()
-        if not self._current_generation.function_ch.closed:
-            self._current_generation.function_ch.close()
+            if not self._current_generation.message_ch.closed:
+                self._current_generation.message_ch.close()
+            if not self._current_generation.function_ch.closed:
+                self._current_generation.function_ch.close()
 
-        self._current_generation = None
+            self._current_generation = None
 
     async def _handle_completion_end_event(self, event_data: dict) -> None:
         logger.debug(f"COMPLETION END EVENT: {event_data}")
@@ -615,7 +623,7 @@ class RealtimeSession(
                 self._process_responses(), name="RealtimeSession._process_responses"
             )
 
-            asyncio.create_task(
+            self.audio_input_task = asyncio.create_task(
                 self._process_audio_input(), name="RealtimeSession._process_audio_input"
             )
 
@@ -648,7 +656,8 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def send_raw_event(self, event_json):
-        if not self.stream_response or not self.is_active:
+        if not self.is_active:
+            # or self.stream_response.input_stream.closed:
             logger.debug("Stream not initialized or closed")
             return
 
@@ -663,7 +672,7 @@ class RealtimeSession(
                 del ev_json["event"]["audioOutput"]["content"]
             if "event" in ev_json and "audioInput" in ev_json["event"]:
                 del ev_json["event"]["audioInput"]["content"]
-            # logger.debug(f"Sent event: {json.dumps(ev_json, indent=2)}")
+            logger.debug(f"Sent event: {json.dumps(ev_json, indent=2)}")
         except Exception as e:
             logger.debug(f"Error sending event: {str(e)}")
             traceback.print_exc()
@@ -672,10 +681,11 @@ class RealtimeSession(
     async def _process_responses(self):
         try:
             await self.initialize_stream()
+            _, output_stream = await self.stream_response.await_output()
             while self.is_active:
+                # and not self.stream_response.output_stream.closed:
                 try:
-                    output = await self.stream_response.await_output()
-                    result = await output[1].receive()
+                    result = await output_stream.receive()
                     if result.value and result.value.bytes_:
                         try:
                             response_data = result.value.bytes_.decode("utf-8")
@@ -683,6 +693,15 @@ class RealtimeSession(
                             await self._handle_event(json_data)
                         except json.JSONDecodeError:
                             logger.warning(f"JSON decode error: {response_data}")
+                    else:
+                        logger.debug("No response received")
+                except asyncio.InvalidStateError:
+                    logger.debug("Response processing task invalid state error")
+                    break
+                except asyncio.CancelledError:
+                    logger.debug("Response processing task cancelled")
+                    self._close_current_generation()
+                    raise
                 except ValidationException as ve:
                     # there is a 1min no-activity (e.g. silence) timeout on the stream, after which the stream is closed
                     if (
@@ -707,6 +726,8 @@ class RealtimeSession(
                     logger.debug(f"error type: {type(e)}")
                     logger.error(f"Response processing error: {e}")
                     break
+                finally:
+                    pass
         finally:
             self.is_active = False
 
@@ -727,7 +748,6 @@ class RealtimeSession(
         logger.warning(
             "updating server-side chat context is not yet supported by Nova Sonic's Realtime API"
         )
-        pass
 
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Any]) -> None:
         # logger.warning("updating tool list is not yet supported by Nova Sonic's Realtime API")
@@ -756,7 +776,6 @@ class RealtimeSession(
         logger.warning(
             "updating inference configuration options is not yet supported by Nova Sonic's Realtime API"
         )
-        pass
 
     @utils.log_exceptions(logger=logger)
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
@@ -780,27 +799,23 @@ class RealtimeSession(
             yield frame
 
     @utils.log_exceptions(logger=logger)
-    def _add_audio_chunk(self, audio_bytes):
-        squared_sum = sum(sample**2 for sample in audio_bytes)
-        # if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
-        #     logger.debug(f"Enqueuing significant audio chunk")
-        self.audio_input_queue.send_nowait(
-            {
-                "audio_bytes": audio_bytes,
-                "prompt_name": self.prompt_name,
-                "content_name": self.audio_content_name,
-            }
-        )
-
-    @utils.log_exceptions(logger=logger)
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
-        for f in self._resample_audio(frame):
-            # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
+        if not self._audio_input_queue.closed:
+            # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
+            for f in self._resample_audio(frame):
+                # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
 
-            for nf in self._bstream.write(f.data.tobytes()):
-                self._add_audio_chunk(nf.data)
-                # logger.debug(f"Audio chunk added: size={len(nf.data)}")
+                for nf in self._bstream.write(f.data.tobytes()):
+                    # squared_sum = sum(sample**2 for sample in audio_bytes)
+                    # if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
+                    #     logger.debug(f"Enqueuing significant audio chunk")
+                    self._audio_input_queue.send_nowait(
+                        {
+                            "audio_bytes": nf.data,
+                            "prompt_name": self.prompt_name,
+                            "content_name": self.audio_content_name,
+                        }
+                    )
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio_input(self):
@@ -825,7 +840,7 @@ class RealtimeSession(
                     pass
 
                 # logger.debug("Waiting for audio data from queue...")
-                data = await self.audio_input_queue.recv()
+                data = await self._audio_input_queue.recv()
 
                 if (audio_bytes := data.get("audio_bytes")) is None:
                     logger.debug("No audio bytes received")
@@ -844,7 +859,9 @@ class RealtimeSession(
 
             except asyncio.CancelledError:
                 logger.debug("Audio processing loop cancelled")
-                break
+                self._audio_input_queue.close()
+                self._tool_results_ch.close()
+                raise
             except Exception as e:
                 logger.debug(f"Error processing audio: {e}")
                 traceback.print_exc()
@@ -907,50 +924,52 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:
+        logger.debug("aclose invoked")
         if not self.is_active:
+            logger.debug("client not active within aclose")
             return
 
+        await self._send_all_content_block_events(
+            [
+                seb.create_content_end_event(
+                    prompt_name=self.prompt_name,
+                    content_name=self.audio_content_name,
+                ),
+                seb.create_prompt_end_event(prompt_name=self.prompt_name),
+                seb.create_session_end_event(),
+            ]
+        )
+        # allow event loops to fall out naturally
+        # otherwise, the smithy layer will raise an InvalidStateError during cancellation
         self.is_active = False
-        if self.response_task and not self.response_task.done():
-            self.response_task.cancel()
 
-        await self.send_audio_content_end_event()
-        await self.send_prompt_end_event()
-        await self.send_session_end_event()
+        if not self.stream_response.output_stream.closed:
+            await self.stream_response.output_stream.close()
 
-        if self.stream_response:
+        # note: even after the self.is_active flag is flipped and the output stream is closed,
+        # there is a future inside output_stream.receive() at the AWS-CRT C layer that blocks
+        # resulting in an error after cancellation
+        # however, it's mostly cosmetic-- the event loop will still exit
+        # TODO: fix this nit
+        if self.response_task:
+            try:
+                await asyncio.wait_for(self.response_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                logger.debug("shutdown of output event loop timed out-- cancelling")
+                self.response_task.cancel()
+
+        # must cancel the audio input task before closing the input stream
+        if self.audio_input_task and not self.audio_input_task.done():
+            self.audio_input_task.cancel()
+        if not self.stream_response.input_stream.closed:
             await self.stream_response.input_stream.close()
 
-    async def send_audio_content_end_event(self):
-        if not self.is_active:
-            logger.debug("Stream is not active")
-            return
+        await asyncio.gather(self.response_task, self.audio_input_task, return_exceptions=True)
 
-        await self.send_raw_event(
-            seb.create_content_end_event(
-                prompt_name=self.prompt_name,
-                content_name=self.audio_content_name,
-            )
-        )
-        logger.debug("Audio end")
-
-    async def send_prompt_end_event(self):
-        if not self.is_active:
-            logger.debug("Stream is not active")
-            return
-
-        await self.send_raw_event(
-            seb.create_prompt_end_event(
-                prompt_name=self.prompt_name,
-            )
-        )
-        logger.debug("Prompt end")
-
-    async def send_session_end_event(self):
-        if not self.is_active:
-            logger.debug("Stream is not active")
-            return
-
-        await self.send_raw_event(seb.create_session_end_event())
-        self.is_active = False
         logger.debug("Session end")
+        logger.debug(f"CHAT CONTEXT: {self._chat_ctx.items}")
+
+    async def _send_all_content_block_events(self, events: list[Event]):
+        for event in events:
+            await self.send_raw_event(event)
+            # logger.debug(f"Sent event: {event}")
