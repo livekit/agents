@@ -32,7 +32,9 @@ def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.Functio
                 types.FunctionDeclaration(
                     name=info.name,
                     description=info.raw_schema.get("description", ""),
-                    parameters_json_schema=info.raw_schema.get("parameters", {}),
+                    parameters=info.raw_schema.get("parameters", {}),
+                    # will change in genai 1.20.1
+                    # parameters_json_schema=info.raw_schema.get("parameters", {}),
                 )
             )
 

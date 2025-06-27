@@ -1,6 +1,6 @@
 # Inworld plugin for LiveKit Agents
 
-Support for voice synthesis with [Inworld](https://beta.docs.inworld.ai/api-reference/ttsAPI/texttospeech/synthesize-speech).
+Support for voice synthesis with [Inworld](https://docs.inworld.ai/docs/tts/tts).
 
 See [https://docs.livekit.io/agents/integrations/tts/inworld/](https://docs.livekit.io/agents/integrations/tts/inworld/) for more information.
 
@@ -12,7 +12,7 @@ pip install livekit-plugins-inworld
 
 ## Authentication
 
-The Inworld plugin requires a [Inworld API key](https://studio.inworld.ai/login).
+The Inworld plugin requires a [Inworld API key](https://platform.inworld.ai/login).
 
 Set `INWORLD_API_KEY` in your `.env` file.
 
@@ -25,7 +25,7 @@ you can use this TTS in the [Voice AI quickstart](/agents/start/voice-ai/).
 from livekit.plugins import inworld
 
 session = AgentSession(
-   tts=inworld.TTS(voice="Ashley")
+   tts=inworld.TTS(voice="Hades")
    # ... llm, stt, etc.
 )
 ```
