@@ -23,6 +23,7 @@ class SpeechHandle:
         allow_interruptions: bool,
         step_index: int,
         parent: SpeechHandle | None,
+        scheduled: bool,
     ) -> None:
         self._id = speech_id
         self._step_index = step_index
@@ -31,6 +32,9 @@ class SpeechHandle:
         self._authorize_fut = asyncio.Future[None]()
         self._playout_done_fut = asyncio.Future[None]()
         self._parent = parent
+        self._scheduled_fut = asyncio.Future[None]()
+        if scheduled:
+            self._scheduled_fut.set_result(None)
 
         self._chat_message: llm.ChatMessage | None = None
 
@@ -39,12 +43,14 @@ class SpeechHandle:
         allow_interruptions: bool = True,
         step_index: int = 0,
         parent: SpeechHandle | None = None,
+        scheduled: bool = True,
     ) -> SpeechHandle:
         return SpeechHandle(
             speech_id=utils.shortuuid("speech_"),
             allow_interruptions=allow_interruptions,
             step_index=step_index,
             parent=parent,
+            scheduled=scheduled,
         )
 
     @property
@@ -58,6 +64,10 @@ class SpeechHandle:
     @property
     def interrupted(self) -> bool:
         return self._interrupt_fut.done()
+
+    @property
+    def scheduled(self) -> bool:
+        return self._scheduled_fut.done()
 
     @property
     def allow_interruptions(self) -> bool:
@@ -97,6 +107,10 @@ class SpeechHandle:
         if not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
+        self._cancel()
+        return self
+
+    def _cancel(self) -> SpeechHandle:
         if self.done():
             return self
 
@@ -130,6 +144,13 @@ class SpeechHandle:
 
     async def _wait_for_authorization(self) -> None:
         await asyncio.shield(self._authorize_fut)
+
+    def _mark_scheduled(self) -> None:
+        with contextlib.suppress(asyncio.InvalidStateError):
+            self._scheduled_fut.set_result(None)
+
+    async def _wait_for_scheduled(self) -> None:
+        await asyncio.shield(self._scheduled_fut)
 
     def _mark_playout_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
