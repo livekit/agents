@@ -25,7 +25,12 @@ from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from .agent import Agent, ModelSettings
-from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
+from .audio_recognition import (
+    AudioRecognition,
+    RecognitionHooks,
+    _EndOfTurnInfo,
+    _PreemptiveGenerationInfo,
+)
 from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
@@ -64,7 +69,7 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 @dataclass
 class _PreemptiveGeneration:
     speech_handle: SpeechHandle
-    eou_info: _EndOfTurnInfo
+    info: _PreemptiveGenerationInfo
     chat_ctx: llm.ChatContext
     tools: list[llm.FunctionTool | llm.RawFunctionTool]
     tool_choice: llm.ToolChoice | None
@@ -918,7 +923,7 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
-    def on_preemptive_generation(self, info: _EndOfTurnInfo) -> None:
+    def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
         if (
             not self._session.options.preemptive_generation
             or self.draining
@@ -939,7 +944,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle=self._generate_reply(
                 user_message=user_message, chat_ctx=chat_ctx, schedule_speech=False
             ),
-            eou_info=info,
+            info=info,
             chat_ctx=chat_ctx.copy(),
             tools=self.tools.copy(),
             tool_choice=self._tool_choice,
@@ -1060,7 +1065,7 @@ class AgentActivity(RecognitionHooks):
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
             if (
-                preemptive.eou_info.new_transcript == user_message.text_content
+                preemptive.info.new_transcript == user_message.text_content
                 and preemptive.chat_ctx == temp_mutable_chat_ctx
                 and preemptive.tools == self.tools
                 and preemptive.tool_choice == self._tool_choice
@@ -1069,7 +1074,7 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(
                     "preemptive generation used",
-                    extra={"preemptive_delta": time.time() - preemptive.created_at},
+                    extra={"preemptive_lead_time": time.time() - preemptive.created_at},
                 )
             else:
                 logger.warning(

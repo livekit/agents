@@ -30,6 +30,12 @@ class _EndOfTurnInfo:
     last_speaking_time: float
 
 
+@dataclass
+class _PreemptiveGenerationInfo:
+    new_transcript: str
+    transcript_confidence: float
+
+
 class _TurnDetector(Protocol):
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
     def unlikely_threshold(self, language: str | None) -> float | None: ...
@@ -45,7 +51,7 @@ class RecognitionHooks(Protocol):
     def on_interim_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
-    def on_preemptive_generation(self, info: _EndOfTurnInfo) -> None: ...
+    def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
 
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
@@ -279,17 +285,14 @@ class AudioRecognition:
 
             if self._vad_base_turn_detection or self._user_turn_committed:
                 self._hooks.on_preemptive_generation(
-                    _EndOfTurnInfo(
+                    _PreemptiveGenerationInfo(
                         new_transcript=self._audio_transcript,
-                        transcription_delay=0,
-                        end_of_utterance_delay=0,
                         transcript_confidence=(
                             sum(self._final_transcript_confidence)
                             / len(self._final_transcript_confidence)
                             if self._final_transcript_confidence
                             else 0
                         ),
-                        last_speaking_time=self._last_speaking_time,
                     )
                 )
 
