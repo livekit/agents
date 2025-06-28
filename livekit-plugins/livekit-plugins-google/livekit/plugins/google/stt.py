@@ -265,7 +265,7 @@ class STT(stt.STT):
                 )
 
                 return _recognize_response_to_speech_event(raw,
-                                                           min_confidence_threshold=config.min_confidence_threshold)  # type: ignore
+                                                           min_confidence_threshold=self._config.min_confidence_threshold)  # type: ignore
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
