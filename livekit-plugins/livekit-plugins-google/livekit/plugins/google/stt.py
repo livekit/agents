@@ -611,6 +611,8 @@ def _streaming_recognize_response_to_speech_data(
         confidence += result.alternatives[0].confidence
 
     confidence /= len(resp.results)
+    logger.debug(f"Streaming STT confidence: {confidence}, text: {text}")
+
     lg = resp.results[0].language_code
     if confidence < min_confidence_threshold:
         return None
