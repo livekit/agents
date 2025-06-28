@@ -69,6 +69,7 @@ class STTOptions:
     model: SpeechModels | str
     sample_rate: int
     min_confidence_threshold: float
+    chunk_duration_ms: int
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
     speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN
 
@@ -107,6 +108,7 @@ class STT(stt.STT):
         location: str = "global",
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
+        chunk_duration_ms: int = 200,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
@@ -131,6 +133,8 @@ class STT(stt.STT):
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
             (default: 0.65)
+            chunk_duration_ms(int): duration of audio chunks sent to Google STT in milliseconds
+            (default: 100)
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
@@ -169,6 +173,7 @@ class STT(stt.STT):
             model=model,
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
+            chunk_duration_ms=chunk_duration_ms,
             keywords=keywords,
             speech_adaptation=speech_adaptation,
         )
@@ -264,8 +269,9 @@ class STT(stt.STT):
                     timeout=conn_options.timeout,
                 )
 
-                return _recognize_response_to_speech_event(raw,
-                                                           min_confidence_threshold=self._config.min_confidence_threshold)  # type: ignore
+                return _recognize_response_to_speech_event(
+                    raw, min_confidence_threshold=self._config.min_confidence_threshold
+                )  # type: ignore
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
@@ -298,7 +304,7 @@ class STT(stt.STT):
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
-        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels | str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
@@ -369,7 +375,7 @@ class SpeechStream(stt.SpeechStream):
         interim_results: NotGivenOr[bool] = NOT_GIVEN,
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
-        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels | str] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
@@ -406,6 +412,15 @@ class SpeechStream(stt.SpeechStream):
             client: SpeechAsyncClient, should_stop: asyncio.Event
         ) -> AsyncGenerator[cloud_speech.StreamingRecognizeRequest, None]:
             nonlocal audio_pushed
+
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._config.sample_rate,
+                num_channels=1,
+                samples_per_channel=self._config.sample_rate
+                * self._config.chunk_duration_ms
+                // 1000,
+            )
+
             try:
                 # first request should contain the config
                 yield cloud_speech.StreamingRecognizeRequest(
@@ -421,10 +436,16 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     if isinstance(frame, rtc.AudioFrame):
-                        yield cloud_speech.StreamingRecognizeRequest(audio=frame.data.tobytes())
-                        if not audio_pushed:
-                            audio_pushed = True
+                        chunked_frames = audio_bstream.push(frame.data)
+                        for chunk_frame in chunked_frames:
+                            yield cloud_speech.StreamingRecognizeRequest(
+                                audio=chunk_frame.data.tobytes()
+                            )
+                            if not audio_pushed:
+                                audio_pushed = True
 
+                for frame in audio_bstream.flush():
+                    yield cloud_speech.StreamingRecognizeRequest(audio=frame.data.tobytes())
             except Exception:
                 logger.exception("an error occurred while streaming input to google STT")
 
