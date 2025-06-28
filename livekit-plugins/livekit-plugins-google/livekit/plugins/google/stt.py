@@ -264,7 +264,8 @@ class STT(stt.STT):
                     timeout=conn_options.timeout,
                 )
 
-                return _recognize_response_to_speech_event(raw)
+                return _recognize_response_to_speech_event(raw,
+                                                           min_confidence_threshold=config.min_confidence_threshold)  # type: ignore
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
@@ -561,6 +562,8 @@ class SpeechStream(stt.SpeechStream):
 
 def _recognize_response_to_speech_event(
     resp: cloud_speech.RecognizeResponse,
+    *,
+    min_confidence_threshold: float = _default_min_confidence,
 ) -> stt.SpeechEvent:
     text = ""
     confidence = 0.0
@@ -575,6 +578,11 @@ def _recognize_response_to_speech_event(
     confidence /= len(resp.results)
     logger.debug(f"STT confidence: {confidence}, text: {text}")
     lg = resp.results[0].language_code
+    if confidence < min_confidence_threshold:
+        return None
+    if text == "":
+        return None
+
     return stt.SpeechEvent(
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
