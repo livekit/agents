@@ -61,26 +61,32 @@ class _TurnTracker:
             turn.add_partial_text(event["event"]["textOutput"]["content"])
             self._maybe_emit_input_started(turn)
             self._emit_transcript_updated(turn)
+            # note: cannot invoke self._maybe_input_stopped() here
+            # b/c there is no way to know if the user is done speaking
 
         # will always be correlated b/c generate_reply() is a stub
         # user ASR text ends when agent's ASR speculative text begins
         # corresponds to beginning of agent's turn
         elif kind == "TOOL_OUTPUT_CONTENT_START" or kind == "ASSISTANT_SPEC_START":
+            # must be a maybe methods b/c agent can chain multiple tool calls
             self._maybe_emit_input_stopped(turn)
             self._maybe_emit_transcript_completed(turn)
             self._maybe_emit_generation_created(turn)
 
         elif kind == "BARGE_IN":
-            stop = event["event"]["contentEnd"]["stopReason"]
-            if stop == "INTERRUPTED":
+            logger.debug(f"BARGE-IN DETECTED IN TURN TRACKER: {event}")
+            if event["event"]["textOutput"]["content"] == '{ "interrupted" : true }':
+                logger.debug(f"BARGE-IN DETECTED IN TURN TRACKER ENDING TURN: {turn}")
+                # start new turn immediately to make interruptions snappier
+                self._emit("input_speech_started", llm.InputSpeechStartedEvent())
                 turn.phase = _Phase.DONE
 
         elif kind == "ASSISTANT_AUDIO_END":
-            stop = event["event"]["contentEnd"]["stopReason"]
-            if stop == "END_TURN":
+            if event["event"]["contentEnd"]["stopReason"] == "END_TURN":
                 turn.phase = _Phase.DONE
 
         if turn.phase is _Phase.DONE:
+            logger.debug(f"TURN TRACKER DONE: {turn}")
             self._curr_turn = None
 
     def _ensure_turn(self) -> _Turn:
@@ -153,7 +159,7 @@ def _classify(ev: dict) -> str:
         if "SPECULATIVE" in add:
             return "ASSISTANT_SPEC_START"
 
-    if "contentEnd" in e and e["contentEnd"]["stopReason"] == "INTERRUPTED":
+    if "textOutput" in e and e["textOutput"]["content"] == '{ "interrupted" : true }':
         return "BARGE_IN"
 
     # note: there cannot be any audio events for the user in the output event loop

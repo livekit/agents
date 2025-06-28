@@ -4,6 +4,7 @@ import asyncio
 import base64
 from datetime import datetime
 import json
+import time
 import traceback
 import uuid
 import weakref
@@ -57,6 +58,8 @@ from .events import (
     ToolInputSchema,
     Event,
 )
+from .pretty_printer import log_event_data, log_message, AnsiColors
+
 
 INPUT_SAMPLE_RATE = 16000
 OUTPUT_SAMPLE_RATE = 24000
@@ -250,35 +253,6 @@ class RealtimeSession(
     ) -> tuple[utils.aio.Chan[llm.MessageGeneration], utils.aio.Chan[llm.FunctionCall]]:
         return (self._current_generation.message_ch, self._current_generation.function_ch)
 
-    def _get_event_type(self, json_data: dict) -> str:
-        if event := json_data.get("event"):
-            if event.get("contentStart", {}).get("type") == "AUDIO":
-                return "audio_output_content_start"
-            elif event.get("contentEnd", {}).get("type") == "AUDIO":
-                return "audio_output_content_end"
-            elif event.get("contentStart", {}).get("type") == "TEXT":
-                return "text_output_content_start"
-            elif event.get("contentEnd", {}).get("type") == "TEXT":
-                return "text_output_content_end"
-            elif event.get("contentStart", {}).get("type") == "TOOL":
-                return "tool_output_content_start"
-            elif event.get("contentEnd", {}).get("type") == "TOOL":
-                return "tool_output_content_end"
-            elif event.get("textOutput"):
-                return "text_output_content"
-            elif event.get("audioOutput"):
-                return "audio_output_content"
-            elif event.get("toolUse"):
-                return "tool_output_content"
-            elif "completionStart" in event:
-                return "completion_start"
-            elif "completionEnd" in event:
-                return "completion_end"
-            elif "usageEvent" in event:
-                return "usage"
-            else:
-                return "other_event"
-
     @utils.log_exceptions(logger=logger)
     def _initialize_client(self):
         config = Config(
@@ -461,7 +435,7 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _handle_event(self, event_data: dict) -> None:
-        event_type = self._get_event_type(event_data)
+        event_type = self._event_builder.get_event_type(event_data)
         event_handler = self._event_handlers.get(event_type)
         if event_handler:
             # logger.debug(
@@ -473,7 +447,7 @@ class RealtimeSession(
             logger.warning(f"No event handler found for event type: {event_type}")
 
     async def _handle_completion_start_event(self, event_data: dict) -> None:
-        logger.debug(f"COMPLETION START EVENT: {json.dumps(event_data, indent=2)}")
+        log_event_data(event_data)
         self._create_response_generation()
 
     def _create_response_generation(self) -> None:
@@ -504,12 +478,12 @@ class RealtimeSession(
 
     # will be completely ignoring post-ASR text events
     async def _handle_text_output_content_start_event(self, event_data: dict) -> None:
+        log_event_data(event_data)
         role = event_data["event"]["contentStart"]["role"]
-        logger.debug(f"TEXT OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
 
         # note: does not work if you emit llm.GCE too early (for some reason)
-        self._create_response_generation()
         if role == "USER":
+            self._create_response_generation()
             content_id = event_data["event"]["contentStart"]["contentId"]
             self._current_generation.user_messages[content_id] = self._current_generation.input_id
 
@@ -523,55 +497,63 @@ class RealtimeSession(
             )
 
     async def _handle_text_output_content_event(self, event_data: dict) -> None:
-        logger.debug(f"TEXT OUTPUT CONTENT EVENT: {json.dumps(event_data, indent=2)}")
+        log_event_data(event_data)
         text_content_id = event_data["event"]["textOutput"]["contentId"]
         text_content = f"{event_data['event']['textOutput']['content']}\n"
 
-        # TODO: rename event to llm.InputTranscriptionUpdated
-        if (
-            self._current_generation.user_messages.get(text_content_id)
-            == self._current_generation.input_id
-        ):
-            logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
-            # note: user ASR text is slightly different than what is sent to LiveKit (newline vs whitespace)
-            # TODO: fix this
-            self._chat_ctx.add_message(role="user", content=text_content)
-
-        elif (
-            self._current_generation.speculative_messages.get(text_content_id)
-            == self._current_generation.response_id
-        ):
+        # currently only agent can be interrupted
+        if text_content == '{ "interrupted" : true }\n':
+            # the interrupted flag is not being set correctly in chat_ctx
+            # this is b/c audio playback is desynced from text transcription
+            # TODO: fix this; possibly via a playback timer
+            idx = self._chat_ctx.find_insertion_index(created_at=time.time()) - 1
             logger.debug(
-                f"SENDING TEXT CONTENT TO MESSAGE CH: {text_content} with response_id: {self._current_generation.response_id} and content_id: {text_content_id}"
+                f"BARGE-IN DETECTED using idx: {idx} and chat_msg: {self._chat_ctx.items[idx]}"
             )
-            # TODO: omitting barge-ins in chat context for now, but should address this
-            # currently only agent can be interrupted
-            # if text_content == "{ \"interrupted\" : true }":
-            #     logger.debug(f"BARGE-IN DETECTED FOR TEXT CONTENT ID: {text_content_id}")
-            #     self._chat_ctx.add_message(role="assistant", content=text_content, interrupted=True)
-            #     self._close_current_generation()
-            #     return
+            self._chat_ctx.items[idx].interrupted = True
+            self._close_current_generation()
+            return
 
-            curr_gen = self._current_generation.messages[self._current_generation.response_id]
-            curr_gen.text_ch.send_nowait(text_content)
-            self._chat_ctx.add_message(role="assistant", content=text_content)
+        # ignore events until turn starts
+        if self._current_generation is not None:
+            # TODO: rename event to llm.InputTranscriptionUpdated
+            if (
+                self._current_generation.user_messages.get(text_content_id)
+                == self._current_generation.input_id
+            ):
+                logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
+                # note: user ASR text is slightly different than what is sent to LiveKit (newline vs whitespace)
+                # TODO: fix this
+                self._chat_ctx.add_message(role="user", content=text_content)
+
+            elif (
+                self._current_generation.speculative_messages.get(text_content_id)
+                == self._current_generation.response_id
+            ):
+                logger.debug(
+                    f"SENDING TEXT CONTENT TO MESSAGE CH: {text_content} with response_id: {self._current_generation.response_id} and content_id: {text_content_id}"
+                )
+
+                curr_gen = self._current_generation.messages[self._current_generation.response_id]
+                curr_gen.text_ch.send_nowait(text_content)
+                self._chat_ctx.add_message(role="assistant", content=text_content)
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
-    # only rely on this event for barge-ins
     async def _handle_text_output_content_end_event(self, event_data: dict) -> None:
-        logger.debug(f"TEXT OUTPUT CONTENT STOP EVENT: {json.dumps(event_data, indent=2)}")
         stop_reason = event_data["event"]["contentEnd"]["stopReason"]
         text_content_id = event_data["event"]["contentEnd"]["contentId"]
         if (
-            self._current_generation.speculative_messages.get(text_content_id)
+            self._current_generation
+            is not None  # means that first utterance in the turn was an interrupt
+            and self._current_generation.speculative_messages.get(text_content_id)
             == self._current_generation.response_id
-            and stop_reason == "INTERRUPTED"
+            and stop_reason == "END_TURN"
         ):
-            logger.debug(f"BARGE-IN DETECTED FOR TEXT CONTENT ID: {text_content_id}")
+            log_event_data(event_data)
             self._close_current_generation()
 
     async def _handle_tool_output_content_start_event(self, event_data: dict) -> None:
-        logger.debug(f"TOOL OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
+        log_event_data(event_data)
         tool_use_content_id = event_data["event"]["contentStart"]["contentId"]
         self._current_generation.tool_messages[tool_use_content_id] = (
             self._current_generation.response_id
@@ -579,7 +561,7 @@ class RealtimeSession(
 
     # note: tool calls are synchronous for now
     async def _handle_tool_output_content_event(self, event_data: dict) -> None:
-        logger.debug(f"TOOL OUTPUT CONTENT EVENT: {json.dumps(event_data, indent=2)}")
+        log_event_data(event_data)
         tool_use_content_id = event_data["event"]["toolUse"]["contentId"]
         tool_use_id = event_data["event"]["toolUse"]["toolUseId"]
         tool_name = event_data["event"]["toolUse"]["toolName"]
@@ -620,27 +602,22 @@ class RealtimeSession(
             )
 
     async def _handle_tool_output_content_end_event(self, event_data: dict) -> None:
-        logger.debug(f"TOOL OUTPUT CONTENT END EVENT: {json.dumps(event_data, indent=2)}")
-        # tool_use_id = event_data["event"]["contentEnd"]["toolUseId"]
-        # stop_reason = event_data["event"]["contentEnd"]["stopReason"]
-        # if (
-        #     stop_reason == "END_TURN"
-        #     and self._current_generation.speculative_messages.get(tool_use_id)
-        #     == self._current_generation.response_id
-        # ):
-        #     self._close_current_generation(self._current_generation.response_id)
+        log_event_data(event_data)
 
     async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
-        logger.debug(f"AUDIO OUTPUT CONTENT START EVENT: {json.dumps(event_data, indent=2)}")
-        audio_content_id = event_data["event"]["contentStart"]["contentId"]
-        self._current_generation.speculative_messages[audio_content_id] = (
-            self._current_generation.response_id
-        )
+        if self._current_generation is not None:
+            log_event_data(event_data)
+            audio_content_id = event_data["event"]["contentStart"]["contentId"]
+            self._current_generation.speculative_messages[audio_content_id] = (
+                self._current_generation.response_id
+            )
 
     async def _handle_audio_output_content_event(self, event_data: dict) -> None:
-        audio_content_id = event_data["event"]["audioOutput"]["contentId"]
         if (
-            self._current_generation.speculative_messages.get(audio_content_id)
+            self._current_generation is not None
+            and self._current_generation.speculative_messages.get(
+                event_data["event"]["audioOutput"]["contentId"]
+            )
             == self._current_generation.response_id
         ):
             audio_content = event_data["event"]["audioOutput"]["content"]
@@ -657,14 +634,15 @@ class RealtimeSession(
             )
 
     async def _handle_audio_output_content_end_event(self, event_data: dict) -> None:
-        logger.debug(f"AUDIO OUTPUT CONTENT END EVENT: {json.dumps(event_data, indent=2)}")
-        audio_content_id = event_data["event"]["contentEnd"]["contentId"]
-        stop_reason = event_data["event"]["contentEnd"]["stopReason"]
         if (
-            stop_reason == "END_TURN"
-            and self._current_generation.speculative_messages.get(audio_content_id)
+            self._current_generation is not None
+            and event_data["event"]["contentEnd"]["stopReason"] == "END_TURN"
+            and self._current_generation.speculative_messages.get(
+                event_data["event"]["contentEnd"]["contentId"]
+            )
             == self._current_generation.response_id
         ):
+            log_event_data(event_data)
             self._close_current_generation()
 
     def _close_current_generation(self) -> None:
@@ -684,13 +662,13 @@ class RealtimeSession(
             self._current_generation = None
 
     async def _handle_completion_end_event(self, event_data: dict) -> None:
-        logger.debug(f"COMPLETION END EVENT: {event_data}")
+        log_event_data(event_data)
 
     async def _handle_other_event(self, event_data: dict) -> None:
-        logger.warning(f"OTHER EVENT: {event_data}")
+        log_event_data(event_data)
 
     async def _handle_usage_event(self, event_data: dict) -> None:
-        # logger.debug(f"USAGE EVENT: {json.dumps(event_data, indent=2)}")
+        # log_event_data(event_data)
         pass
 
     @utils.log_exceptions(logger=logger)
@@ -788,22 +766,10 @@ class RealtimeSession(
 
     # note: return value from tool functions registered to Sonic must be Structured Output (aka a dict that is JSON serializable)
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Any]) -> None:
-        # logger.warning("updating tool list is not yet supported by Nova Sonic's Realtime API")
         logger.debug(f"Updating tools: {tools}")
         retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
         for tool in tools:
-            # if is_function_tool(tool):
-            #     tool_desc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-            # elif is_raw_function_tool(tool):
-            #     tool_info = get_raw_function_info(tool)
-            #     tool_desc = tool_info.raw_schema
-            #     tool_desc["type"] = "function"  # internally tagged
-            # else:
-            #     logger.warning(
-            #         "Nova Sonic Realtime API does not support this tool type", extra={"tool": tool}
-            #     )
-            #     continue
             retained_tools.append(tool)
         self._tools = llm.ToolContext(retained_tools)
         if retained_tools:
@@ -844,6 +810,7 @@ class RealtimeSession(
             try:
                 # note: could potentially pull this out into a separate task
                 try:
+                    # logger.debug("attempting to recv tool result")
                     val = self._tool_results_ch.recv_nowait()
                     logger.debug(f"TOOL RESULT: {val}")
                     tool_result = val["tool_result"]
@@ -860,7 +827,7 @@ class RealtimeSession(
                     break
 
                 try:
-                    # logger.debug("Waiting for audio data from queue...")
+                    # logger.debug("attempting to recv audio data")
                     audio_bytes = await self._audio_input_chan.recv()
                     blob = base64.b64encode(audio_bytes)
                     # logger.debug(f"Sending audio data to Bedrock: size={len(audio_bytes)} bytes")
@@ -869,7 +836,7 @@ class RealtimeSession(
                     )
 
                     await self._send_raw_event(audio_event)
-                    # logger.debug("Audio event sent to Bedrock")
+                    # logger.debug("audio event sent to Bedrock")
                 except utils.aio.channel.ChanEmpty:
                     # logger.debug("No audio data received")
                     pass
@@ -888,6 +855,12 @@ class RealtimeSession(
                 logger.debug(f"Error processing audio: {e}")
                 traceback.print_exc()
 
+    # for debugging purposes only
+    def _log_significant_audio(self, audio_bytes: bytes) -> None:
+        squared_sum = sum(sample**2 for sample in audio_bytes)
+        if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
+            log_message("Enqueuing significant audio chunk", AnsiColors.BLUE)
+
     @utils.log_exceptions(logger=logger)
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._audio_input_chan.closed:
@@ -896,10 +869,10 @@ class RealtimeSession(
                 # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
 
                 for nf in self._bstream.write(f.data.tobytes()):
-                    # squared_sum = sum(sample**2 for sample in audio_bytes)
-                    # if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
-                    #     logger.debug(f"Enqueuing significant audio chunk")
+                    self._log_significant_audio(nf.data)
                     self._audio_input_chan.send_nowait(nf.data)
+        else:
+            logger.warning("audio input channel closed, skipping audio")
 
     def generate_reply(
         self,
@@ -907,23 +880,21 @@ class RealtimeSession(
         instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         logger.warning("unprompted generation is not supported by Nova Sonic's Realtime API")
-        pass
 
     def commit_audio(self) -> None:
-        pass
+        logger.warning("commit_audio is not supported by Nova Sonic's Realtime API")
 
     def clear_audio(self) -> None:
-        pass
+        logger.warning("clear_audio is not supported by Nova Sonic's Realtime API")
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        pass
+        logger.warning("video is not supported by Nova Sonic's Realtime API")
 
     def interrupt(self) -> None:
-        pass
+        logger.warning("interrupt is not supported by Nova Sonic's Realtime API")
 
     def truncate(self, *, message_id: str, audio_end_ms: int) -> None:
         logger.warning("truncate is not supported by Nova Sonic's Realtime API")
-        pass
 
     @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:

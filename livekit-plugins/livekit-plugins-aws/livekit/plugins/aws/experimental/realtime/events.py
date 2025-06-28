@@ -227,6 +227,36 @@ class SonicEventBuilder:
         self.prompt_name = prompt_name
         self.audio_content_name = audio_content_name
 
+    @classmethod
+    def get_event_type(cls, json_data: dict) -> str:
+        if event := json_data.get("event"):
+            if event.get("contentStart", {}).get("type") == "AUDIO":
+                return "audio_output_content_start"
+            elif event.get("contentEnd", {}).get("type") == "AUDIO":
+                return "audio_output_content_end"
+            elif event.get("contentStart", {}).get("type") == "TEXT":
+                return "text_output_content_start"
+            elif event.get("contentEnd", {}).get("type") == "TEXT":
+                return "text_output_content_end"
+            elif event.get("contentStart", {}).get("type") == "TOOL":
+                return "tool_output_content_start"
+            elif event.get("contentEnd", {}).get("type") == "TOOL":
+                return "tool_output_content_end"
+            elif event.get("textOutput"):
+                return "text_output_content"
+            elif event.get("audioOutput"):
+                return "audio_output_content"
+            elif event.get("toolUse"):
+                return "tool_output_content"
+            elif "completionStart" in event:
+                return "completion_start"
+            elif "completionEnd" in event:
+                return "completion_end"
+            elif "usageEvent" in event:
+                return "usage"
+            else:
+                return "other_event"
+
     def create_text_content_block(
         self,
         content_name: str,
