@@ -28,6 +28,7 @@ from google.auth import default as gauth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
+from google.cloud.speech_v2.types import DenoiserConfig
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -70,6 +71,7 @@ class STTOptions:
     sample_rate: int
     min_confidence_threshold: float
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
+    denoiser_config: NotGivenOr[DenoiserConfig] = NOT_GIVEN
     speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN
 
     def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
@@ -110,6 +112,7 @@ class STT(stt.STT):
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[DenoiserConfig] = NOT_GIVEN,
         speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
@@ -134,6 +137,7 @@ class STT(stt.STT):
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
+            denoiser_config(SpeechAdaptation): the denoiser config for recognition (default: None)
             speech_adaptation(SpeechAdaptation): the speech adaptation to use for recognition (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
@@ -170,6 +174,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             min_confidence_threshold=min_confidence_threshold,
             keywords=keywords,
+            denoiser_config=denoiser_config,
             speech_adaptation=speech_adaptation,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -243,6 +248,7 @@ class STT(stt.STT):
                 sample_rate_hertz=frame.sample_rate,
                 audio_channel_count=frame.num_channels,
             ),
+            denoiser_config=config.denoiser_config,
             adaptation=config.build_adaptation(),
             features=cloud_speech.RecognitionFeatures(
                 enable_automatic_punctuation=config.punctuate,
@@ -300,6 +306,7 @@ class STT(stt.STT):
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[DenoiserConfig] = NOT_GIVEN,
         speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
@@ -322,6 +329,8 @@ class STT(stt.STT):
             self._pool.invalidate()
         if is_given(keywords):
             self._config.keywords = keywords
+        if is_given(denoiser_config):
+            self._config.denoiser_config = denoiser_config
         if is_given(speech_adaptation):
             self._config.speech_adaptation = speech_adaptation
 
@@ -334,6 +343,7 @@ class STT(stt.STT):
                 spoken_punctuation=spoken_punctuation,
                 model=model,
                 keywords=keywords,
+                denoiser_config=denoiser_config,
                 speech_adaptation=speech_adaptation,
             )
 
@@ -371,6 +381,7 @@ class SpeechStream(stt.SpeechStream):
         model: NotGivenOr[SpeechModels] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[DenoiserConfig] = NOT_GIVEN,
         speech_adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
@@ -391,6 +402,8 @@ class SpeechStream(stt.SpeechStream):
             self._config.min_confidence_threshold = min_confidence_threshold
         if is_given(keywords):
             self._config.keywords = keywords
+        if is_given(denoiser_config):
+            self._config.denoiser_config = denoiser_config
         if is_given(speech_adaptation):
             self._config.speech_adaptation = speech_adaptation
 
