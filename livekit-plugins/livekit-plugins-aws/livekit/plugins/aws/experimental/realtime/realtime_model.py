@@ -187,8 +187,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         # note: this is a hack to get the session to initialize itself
         # TODO: change how RealtimeSession is initialized by creating a single task main_atask that spawns subtasks
-        sess._sess_init_fut = asyncio.get_running_loop().create_future()
-        asyncio.create_task(sess._initialize_streams())
+        asyncio.create_task(sess.initialize_streams())
         self._sessions.add(sess)
         return sess
 
@@ -215,9 +214,8 @@ class RealtimeSession(
         self._response_task = None
         self._audio_input_task = None
         self._stream_response = None
-        self._is_client_active = False
-        self._sess_init_fut = None
         self._bedrock_client = None
+        self._is_sess_active = asyncio.Event()
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
         self._tool_type_map = {}
@@ -266,9 +264,8 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _send_raw_event(self, event_json):
-        if not self._is_client_active:
-            # or self.stream_response.input_stream.closed:
-            logger.debug("Stream not initialized or closed")
+        if not self._stream_response:
+            logger.warning("stream not initialized; dropping event (this should never occur)")
             return
 
         event = InvokeModelWithBidirectionalStreamInputChunk(
@@ -277,15 +274,10 @@ class RealtimeSession(
 
         try:
             await self._stream_response.input_stream.send(event)
-            ev_json = json.loads(event_json)
-            if "event" in ev_json and "audioOutput" in ev_json["event"]:
-                del ev_json["event"]["audioOutput"]["content"]
-            if "event" in ev_json and "audioInput" in ev_json["event"]:
-                del ev_json["event"]["audioInput"]["content"]
-            # logger.debug(f"Sent event: {json.dumps(ev_json, indent=2)}")
         except Exception as e:
-            logger.debug(f"Error sending event: {str(e)}")
+            logger.error(f"Error sending event: {str(e)}")
             traceback.print_exc()
+            raise
 
     def _serialize_tool_config(self) -> ToolConfiguration | None:
         tool_cfg = None
@@ -330,14 +322,13 @@ class RealtimeSession(
         return tool_cfg
 
     @utils.log_exceptions(logger=logger)
-    async def _initialize_streams(self):
+    async def initialize_streams(self, is_restart: bool = False):
         try:
-            logger.debug(
-                f"Initializing Bedrock stream with realtime options: {self._realtime_model._opts}"
-            )
             if not self._bedrock_client:
                 logger.debug("Creating Bedrock client")
                 self._initialize_client()
+
+            logger.debug("Initializing Bedrock stream")
             self._stream_response = (
                 await self._bedrock_client.invoke_model_with_bidirectional_stream(
                     InvokeModelWithBidirectionalStreamOperationInput(
@@ -345,35 +336,38 @@ class RealtimeSession(
                     )
                 )
             )
-            self._is_client_active = True
 
-            pending_events: list[asyncio.Future] = []
-            if not self.tools.function_tools:
-                pending_events.append(self._tools_ready)
-            if not self._instructions_ready.done():
-                pending_events.append(self._instructions_ready)
-            if not self._chat_ctx_ready.done():
-                pending_events.append(self._chat_ctx_ready)
-
-            # note: can't know during sess init whether tools were not added
-            # or if they were added haven't yet been updated
-            # therefore in the case there are no tools, we wait the entire timeout
-            try:
-                if pending_events:
-                    await asyncio.wait_for(asyncio.gather(*pending_events), timeout=2.0)
-            except asyncio.TimeoutError:
-                if not self._tools_ready.done():
-                    logger.warning("Tools not ready after 2sec, continuing without them")
-
+            if is_restart:
+                pending_events: list[asyncio.Future] = []
+                if not self.tools.function_tools:
+                    pending_events.append(self._tools_ready)
                 if not self._instructions_ready.done():
-                    logger.warning(
-                        "Instructions not received after 2sec, proceeding with default instructions"
-                    )
+                    pending_events.append(self._instructions_ready)
                 if not self._chat_ctx_ready.done():
-                    logger.warning(
-                        "Chat context not received after 2sec, proceeding with empty chat context"
-                    )
+                    pending_events.append(self._chat_ctx_ready)
 
+                # note: can't know during sess init whether tools were not added
+                # or if they were added haven't yet been updated
+                # therefore in the case there are no tools, we wait the entire timeout
+                try:
+                    if pending_events:
+                        await asyncio.wait_for(asyncio.gather(*pending_events), timeout=1.0)
+                except asyncio.TimeoutError:
+                    if not self._tools_ready.done():
+                        logger.warning("Tools not ready after 1sec, continuing without them")
+
+                    if not self._instructions_ready.done():
+                        logger.warning(
+                            "Instructions not received after 1sec, proceeding with default instructions"
+                        )
+                    if not self._chat_ctx_ready.done():
+                        logger.warning(
+                            "Chat context not received after 1sec, proceeding with empty chat context"
+                        )
+
+            logger.debug(
+                f"Initializing Bedrock session with realtime options: {self._realtime_model._opts}"
+            )
             init_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
                 sample_rate=OUTPUT_SAMPLE_RATE,
@@ -389,38 +383,21 @@ class RealtimeSession(
                 await self._send_raw_event(event)
                 logger.debug(f"Sent event: {event}")
 
-            self._response_task = asyncio.create_task(
-                self._process_responses(), name="RealtimeSession._process_responses"
-            )
+            if not is_restart:
+                self._audio_input_task = asyncio.create_task(
+                    self._process_audio_input(), name="RealtimeSession._process_audio_input"
+                )
+                self._response_task = asyncio.create_task(
+                    self._process_responses(), name="RealtimeSession._process_responses"
+                )
 
-            self._audio_input_task = asyncio.create_task(
-                self._process_audio_input(), name="RealtimeSession._process_audio_input"
-            )
-
-            if not self._sess_init_fut.done():
-                self._sess_init_fut.set_result(self)
-
+            self._is_sess_active.set()
             logger.debug("Stream initialized successfully")
         except Exception as e:
-            self._is_client_active = False
-            self._sess_init_fut.set_exception(e)
+            self._is_sess_active.set_exception(e)
             logger.debug(f"Failed to initialize stream: {str(e)}")
             raise
         return self
-
-    # can be used in places that need to explicitly wait for stream initialization
-    @utils.log_exceptions(logger=logger)
-    async def initialize_stream(self):
-        if not self._bedrock_client:
-            self._initialize_client()
-
-        if self._is_client_active:
-            return self
-
-        if self._sess_init_fut is not None:
-            return await self._sess_init_fut
-
-        return await self._initialize_streams()
 
     @utils.log_exceptions(logger=logger)
     def _emit_generation_event(self) -> None:
@@ -438,9 +415,6 @@ class RealtimeSession(
         event_type = self._event_builder.get_event_type(event_data)
         event_handler = self._event_handlers.get(event_type)
         if event_handler:
-            # logger.debug(
-            #     f"Handling event: {event_type} with event_handler: {event_handler} and event_data: {json.dumps(event_data, indent=2)}"
-            # )
             await event_handler(event_data)
             self._turn_tracker.feed(event_data)
         else:
@@ -674,9 +648,12 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     async def _process_responses(self):
         try:
-            await self.initialize_stream()
+            await self._is_sess_active.wait()
+
+            # note: may need another signal here to block input task until bedrock is ready
+            # TODO: save this as a field so we're not re-awaiting it every time
             _, output_stream = await self._stream_response.await_output()
-            while self._is_client_active:
+            while self._is_sess_active.is_set():
                 # and not self.stream_response.output_stream.closed:
                 try:
                     result = await output_stream.receive()
@@ -697,24 +674,32 @@ class RealtimeSession(
                     self._close_current_generation()
                     raise
                 except ValidationException as ve:
-                    # there is a 1min no-activity (e.g. silence) timeout on the stream, after which the stream is closed
+                    # there is a 3min no-activity (e.g. silence) timeout on the stream, after which the stream is closed
                     if (
-                        ve.message
-                        == "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR"
+                        "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR"
+                        in ve.message
                     ):
-                        # TODO: attempt to recover
-                        pass
-                    else:
                         logger.error(f"Validation error: {ve}\nAttempting to recover...")
+                        self._is_sess_active.clear()
+                        await self.initialize_streams(is_restart=True)
+                        logger.info("Session restarted successfully")
 
-                    break
+                    else:
+                        logger.error(f"Validation error: {ve}")
+                        break
                 except (ThrottlingException, ModelNotReadyException, ModelErrorException) as re:
                     logger.error(f"Retryable error: {re}")
-                    # TODO: attempt to recover
+                    self._is_sess_active.clear()
+                    await self.initialize_streams(is_restart=True)
+                    logger.info("Session restarted successfully")
+
                     break
                 except ModelTimeoutException as mte:
                     logger.warning(f"Model timeout error: {mte}\nAttempting to recover...")
-                    # TODO: attempt to recover
+                    self._is_sess_active.clear()
+                    await self.initialize_streams(is_restart=True)
+                    logger.info("Session restarted successfully")
+
                     break
                 except Exception as e:
                     logger.debug(f"error type: {type(e)}")
@@ -723,7 +708,7 @@ class RealtimeSession(
                 finally:
                     pass
         finally:
-            self._is_client_active = False
+            self._is_sess_active.clear()
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -739,9 +724,13 @@ class RealtimeSession(
         logger.debug(f"Instructions updated: {instructions}")
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        self._chat_ctx = chat_ctx.copy()
-        logger.debug(f"Chat context updated: {self._chat_ctx.items}")
-        self._chat_ctx_ready.set_result(True)
+        # sometimes fires randomly
+        # add a guard here to only allow chat_ctx to be updated on
+        # the very first session initialization
+        if not self._chat_ctx_ready.done():
+            self._chat_ctx = chat_ctx.copy()
+            logger.debug(f"Chat context updated: {self._chat_ctx.items}")
+            self._chat_ctx_ready.set_result(True)
 
     async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
         tool_content_name = str(uuid.uuid4())
@@ -806,7 +795,7 @@ class RealtimeSession(
     async def _process_audio_input(self):
         await self._send_raw_event(self._event_builder.create_audio_content_start_event())
         logger.debug("Starting audio input processing loop")
-        while self._is_client_active:
+        while self._is_sess_active.is_set():
             try:
                 # note: could potentially pull this out into a separate task
                 try:
@@ -899,17 +888,17 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:
         logger.debug("aclose invoked")
-        if not self._is_client_active:
-            logger.debug("client not active within aclose")
+        if not self._is_sess_active.is_set():
+            logger.debug("already inactive within aclose")
             return
 
         for event in self._event_builder.create_prompt_end_block():
             await self._send_raw_event(event)
         # allow event loops to fall out naturally
         # otherwise, the smithy layer will raise an InvalidStateError during cancellation
-        self._is_client_active = False
+        self._is_sess_active.clear()
 
-        if not self._stream_response.output_stream.closed:
+        if self._stream_response and not self._stream_response.output_stream.closed:
             await self._stream_response.output_stream.close()
 
         # note: even after the self.is_active flag is flipped and the output stream is closed,
@@ -927,7 +916,7 @@ class RealtimeSession(
         # must cancel the audio input task before closing the input stream
         if self._audio_input_task and not self._audio_input_task.done():
             self._audio_input_task.cancel()
-        if not self._stream_response.input_stream.closed:
+        if self._stream_response and not self._stream_response.input_stream.closed:
             await self._stream_response.input_stream.close()
 
         await asyncio.gather(self._response_task, self._audio_input_task, return_exceptions=True)
