@@ -573,6 +573,7 @@ def _recognize_response_to_speech_event(
     end_offset = resp.results[-1].alternatives[0].words[-1].end_offset
 
     confidence /= len(resp.results)
+    logger.debug(f"STT confidence: {confidence}, text: {text}")
     lg = resp.results[0].language_code
     return stt.SpeechEvent(
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -603,7 +604,6 @@ def _streaming_recognize_response_to_speech_data(
 
     confidence /= len(resp.results)
     lg = resp.results[0].language_code
-
     if confidence < min_confidence_threshold:
         return None
     if text == "":
