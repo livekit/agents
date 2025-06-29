@@ -87,6 +87,17 @@ DEFAULT_SYSTEM_PROMPT = (
 
 @dataclass
 class _RealtimeOptions:
+    """Configuration container for a Sonic realtime session.
+
+    Attributes:
+        voice (VOICE_ID): Voice identifier used for TTS output.
+        temperature (float): Sampling temperature controlling randomness; 1.0 is most deterministic.
+        top_p (float): Nucleus sampling parameter; 0.0 considers all tokens.
+        max_tokens (int): Maximum number of tokens the model may generate in a single response.
+        tool_choice (llm.ToolChoice | None): Strategy that dictates how the model should invoke tools.
+        region (str): AWS region hosting the Bedrock Sonic model endpoint.
+    """
+
     voice: VOICE_ID
     temperature: float
     top_p: float
@@ -97,6 +108,14 @@ class _RealtimeOptions:
 
 @dataclass
 class _MessageGeneration:
+    """Grouping of streams that together represent one assistant message.
+
+    Attributes:
+        message_id (str): Unique identifier that ties together text and audio for a single assistant turn.
+        text_ch (utils.aio.Chan[str]): Channel that yields partial text tokens as they arrive.
+        audio_ch (utils.aio.Chan[rtc.AudioFrame]): Channel that yields audio frames for the same assistant turn.
+    """
+
     message_id: str
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
@@ -104,6 +123,26 @@ class _MessageGeneration:
 
 @dataclass
 class _ResponseGeneration:
+    """Book-keeping dataclass tracking the lifecycle of a Sonic turn.
+
+    This object is created whenever we receive a *completion_start* event from the model
+    and is disposed of once the assistant turn finishes (e.g. *END_TURN*).
+
+    Attributes:
+        message_ch (utils.aio.Chan[llm.MessageGeneration]): Multiplexed stream for all assistant messages.
+        function_ch (utils.aio.Chan[llm.FunctionCall]): Stream that emits function tool calls.
+        input_id (str): Synthetic message id for the user input of the current turn.
+        response_id (str): Synthetic message id for the assistant reply of the current turn.
+        messages (dict[str, _MessageGeneration]): Map of message_id -> per-message stream containers.
+        user_messages (dict[str, str]): Map Bedrock content_id -> input_id.
+        speculative_messages (dict[str, str]): Map Bedrock content_id -> response_id (assistant side).
+        tool_messages (dict[str, str]): Map Bedrock content_id -> response_id for tool calls.
+        output_text (str): Accumulated assistant text (only used for metrics / debugging).
+        _created_timestamp (str): ISO-8601 timestamp when the generation record was created.
+        _first_token_timestamp (float | None): Wall-clock time of first token emission.
+        _completed_timestamp (float | None): Wall-clock time when the turn fully completed.
+    """
+
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
     input_id: str  # corresponds to user's portion of the turn
@@ -119,10 +158,31 @@ class _ResponseGeneration:
 
 
 class Boto3CredentialsResolver(IdentityResolver):
+    """IdentityResolver implementation that sources AWS credentials from boto3.
+
+    The resolver delegates to the default boto3.Session() credential chain which
+    checks environment variables, shared credentials files, EC2 instance profiles, etc.
+    The credentials are then wrapped in an AWSCredentialsIdentity so they can be
+    passed into Bedrock runtime clients.
+    """
+
     def __init__(self):
         self.session = boto3.Session()
 
     async def get_identity(self, **kwargs):
+        """Asynchronously resolve AWS credentials.
+
+        This method is invoked by the Bedrock runtime client whenever a new request needs to be
+        signed.  It converts the static or temporary credentials returned by boto3
+        into an AWSCredentialsIdentity instance.
+
+        Returns:
+            AWSCredentialsIdentity: Identity containing the
+            AWS access key, secret key and optional session token.
+
+        Raises:
+            ValueError: If no credentials could be found by boto3.
+        """
         try:
             logger.debug("Attempting to load AWS credentials")
             credentials = self.session.get_credentials()
@@ -148,6 +208,12 @@ class Boto3CredentialsResolver(IdentityResolver):
 
 
 class RealtimeModel(llm.RealtimeModel):
+    """High-level entry point that conforms to the LiveKit RealtimeModel interface.
+
+    The object is very light-weight-– it mainly stores default inference options and
+    spawns a RealtimeSession when session() is invoked.
+    """
+
     def __init__(
         self,
         *,
@@ -158,6 +224,16 @@ class RealtimeModel(llm.RealtimeModel):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         region: NotGivenOr[str] = NOT_GIVEN,
     ):
+        """Instantiate a new RealtimeModel.
+
+        Args:
+            voice (VOICE_ID | NotGiven): Preferred voice id for Sonic TTS output. Falls back to "tiffany".
+            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
+            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
+            max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
+            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation ("auto", "required", or explicit function).
+            region (str | NotGiven): AWS region of the Bedrock runtime endpoint.
+        """
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
@@ -183,6 +259,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
     def session(self) -> RealtimeSession:
+        """Return a new RealtimeSession bound to this model instance."""
         sess = RealtimeSession(self)
 
         # note: this is a hack to get the session to initialize itself
@@ -199,7 +276,26 @@ class RealtimeModel(llm.RealtimeModel):
 class RealtimeSession(
     llm.RealtimeSession[Literal["bedrock_server_event_received", "bedrock_client_event_queued"]]
 ):
+    """Bidirectional streaming session against the Nova Sonic Bedrock runtime.
+
+    The session owns two asynchronous tasks:
+
+    1. _process_audio_input – pushes user mic audio and tool results to Bedrock.
+    2. _process_responses – receives server events from Bedrock and converts them into
+       LiveKit abstractions such as llm.MessageGeneration.
+
+    A set of helper handlers (_handle_*) transform the low-level Bedrock
+    JSON payloads into higher-level application events and keep
+    _ResponseGeneration state in sync.
+    """
+
     def __init__(self, realtime_model: RealtimeModel) -> None:
+        """Create and wire-up a new realtime session.
+
+        Args:
+            realtime_model (RealtimeModel): Parent model instance that stores static
+                inference options and the Smithy Bedrock client configuration.
+        """
         super().__init__(realtime_model)
         self._realtime_model = realtime_model
         self._event_builder = seb(
@@ -253,6 +349,7 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     def _initialize_client(self):
+        """Instantiate the Bedrock runtime client"""
         config = Config(
             endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
             region=self._realtime_model._opts.region,
@@ -264,6 +361,14 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _send_raw_event(self, event_json):
+        """Low-level helper that serialises event_json and forwards it to the bidirectional stream.
+
+        Args:
+            event_json (dict | str): The JSON payload (already in Bedrock wire format) to queue.
+
+        Raises:
+            Exception: Propagates any failures returned by the Bedrock runtime client.
+        """
         if not self._stream_response:
             logger.warning("stream not initialized; dropping event (this should never occur)")
             return
@@ -280,6 +385,14 @@ class RealtimeSession(
             raise
 
     def _serialize_tool_config(self) -> ToolConfiguration | None:
+        """Convert self.tools into the JSON structure expected by Sonic.
+
+        If any tools are registered, the method also harmonises temperature and
+        top_p defaults to Sonic's recommended greedy values (1.0).
+
+        Returns:
+            ToolConfiguration | None: None when no tools are present, otherwise a complete config block.
+        """
         tool_cfg = None
         if self.tools.function_tools:
             tools = []
@@ -323,6 +436,15 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def initialize_streams(self, is_restart: bool = False):
+        """Open the Bedrock bidirectional stream and spawn background worker tasks.
+
+        This coroutine is idempotent and can be invoked again when recoverable
+        errors (e.g. timeout, throttling) require a fresh session.
+
+        Args:
+            is_restart (bool, optional): Marks whether we are re-initialising an
+                existing session after an error. Defaults to False.
+        """
         try:
             if not self._bedrock_client:
                 logger.debug("Creating Bedrock client")
@@ -401,6 +523,7 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     def _emit_generation_event(self) -> None:
+        """Publish a llm.GenerationCreatedEvent to external subscribers."""
         logger.debug(f"Emitting generation event")
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
@@ -412,6 +535,7 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _handle_event(self, event_data: dict) -> None:
+        """Dispatch a raw Bedrock event to the corresponding _handle_* method."""
         event_type = self._event_builder.get_event_type(event_data)
         event_handler = self._event_handlers.get(event_type)
         if event_handler:
@@ -425,6 +549,7 @@ class RealtimeSession(
         self._create_response_generation()
 
     def _create_response_generation(self) -> None:
+        """Instantiate _ResponseGeneration and emit the GenerationCreated event."""
         if self._current_generation is None:
             self._current_generation = _ResponseGeneration(
                 message_ch=utils.aio.Chan(),
@@ -452,6 +577,7 @@ class RealtimeSession(
 
     # will be completely ignoring post-ASR text events
     async def _handle_text_output_content_start_event(self, event_data: dict) -> None:
+        """Handle text_output_content_start for both user and assistant roles."""
         log_event_data(event_data)
         role = event_data["event"]["contentStart"]["role"]
 
@@ -471,6 +597,7 @@ class RealtimeSession(
             )
 
     async def _handle_text_output_content_event(self, event_data: dict) -> None:
+        """Stream partial text tokens into the current _MessageGeneration."""
         log_event_data(event_data)
         text_content_id = event_data["event"]["textOutput"]["contentId"]
         text_content = f"{event_data['event']['textOutput']['content']}\n"
@@ -485,6 +612,8 @@ class RealtimeSession(
                 f"BARGE-IN DETECTED using idx: {idx} and chat_msg: {self._chat_ctx.items[idx]}"
             )
             self._chat_ctx.items[idx].interrupted = True
+            # there is a 40-message limit on the chat context
+            self._chat_ctx.truncate(max_items=40)
             self._close_current_generation()
             return
 
@@ -514,6 +643,7 @@ class RealtimeSession(
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
     async def _handle_text_output_content_end_event(self, event_data: dict) -> None:
+        """Mark the assistant message closed when Bedrock signals END_TURN."""
         stop_reason = event_data["event"]["contentEnd"]["stopReason"]
         text_content_id = event_data["event"]["contentEnd"]["contentId"]
         if (
@@ -527,6 +657,7 @@ class RealtimeSession(
             self._close_current_generation()
 
     async def _handle_tool_output_content_start_event(self, event_data: dict) -> None:
+        """Track mapping content_id -> response_id for upcoming tool use."""
         log_event_data(event_data)
         tool_use_content_id = event_data["event"]["contentStart"]["contentId"]
         self._current_generation.tool_messages[tool_use_content_id] = (
@@ -535,6 +666,7 @@ class RealtimeSession(
 
     # note: tool calls are synchronous for now
     async def _handle_tool_output_content_event(self, event_data: dict) -> None:
+        """Execute the referenced tool locally and forward results back to Bedrock."""
         log_event_data(event_data)
         tool_use_content_id = event_data["event"]["toolUse"]["contentId"]
         tool_use_id = event_data["event"]["toolUse"]["toolUseId"]
@@ -579,6 +711,7 @@ class RealtimeSession(
         log_event_data(event_data)
 
     async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
+        """Associate the upcoming audio chunk with the active assistant message."""
         if self._current_generation is not None:
             log_event_data(event_data)
             audio_content_id = event_data["event"]["contentStart"]["contentId"]
@@ -587,6 +720,7 @@ class RealtimeSession(
             )
 
     async def _handle_audio_output_content_event(self, event_data: dict) -> None:
+        """Decode base64 audio from Bedrock and forward it to the audio stream."""
         if (
             self._current_generation is not None
             and self._current_generation.speculative_messages.get(
@@ -608,6 +742,7 @@ class RealtimeSession(
             )
 
     async def _handle_audio_output_content_end_event(self, event_data: dict) -> None:
+        """Close the assistant message streams once Bedrock finishes audio for the turn."""
         if (
             self._current_generation is not None
             and event_data["event"]["contentEnd"]["stopReason"] == "END_TURN"
@@ -620,6 +755,7 @@ class RealtimeSession(
             self._close_current_generation()
 
     def _close_current_generation(self) -> None:
+        """Helper that closes all channels of the active _ResponseGeneration."""
         if self._current_generation is not None:
             if self._current_generation.response_id in self._current_generation.messages:
                 curr_gen = self._current_generation.messages[self._current_generation.response_id]
@@ -647,6 +783,7 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _process_responses(self):
+        """Background task that drains Bedrock's output stream and feeds the event handlers."""
         try:
             await self._is_sess_active.wait()
 
@@ -661,6 +798,7 @@ class RealtimeSession(
                         try:
                             response_data = result.value.bytes_.decode("utf-8")
                             json_data = json.loads(response_data)
+                            # logger.debug(f"Received event: {json_data}")
                             await self._handle_event(json_data)
                         except json.JSONDecodeError:
                             logger.warning(f"JSON decode error: {response_data}")
@@ -712,18 +850,22 @@ class RealtimeSession(
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
+        """A copy of the mutable chat context maintained inside the session."""
         return self._chat_ctx.copy()
 
     @property
     def tools(self) -> llm.ToolContext:
+        """A copy of the currently registered tool context."""
         return self._tools.copy()
 
     async def update_instructions(self, instructions: str) -> None:
+        """Injects the system prompt at the start of the session."""
         self._instructions = instructions
         self._instructions_ready.set_result(True)
         logger.debug(f"Instructions updated: {instructions}")
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        """Inject an initial chat history once during the very first session startup."""
         # sometimes fires randomly
         # add a guard here to only allow chat_ctx to be updated on
         # the very first session initialization
@@ -733,6 +875,7 @@ class RealtimeSession(
             self._chat_ctx_ready.set_result(True)
 
     async def _send_tool_events(self, tool_use_id: str, tool_result: str) -> None:
+        """Send tool_result back to Bedrock, grouped under tool_use_id."""
         tool_content_name = str(uuid.uuid4())
         tool_events = self._event_builder.create_tool_content_block(
             content_name=tool_content_name,
@@ -744,6 +887,7 @@ class RealtimeSession(
             # logger.debug(f"Sent tool event: {event}")
 
     def _tool_choice_adapter(self, tool_choice: llm.ToolChoice) -> Dict[str, Dict[str, str]] | None:
+        """Translate the LiveKit ToolChoice enum into Sonic's JSON schema."""
         if tool_choice == "auto":
             return {"auto": {}}
         elif tool_choice == "required":
@@ -753,8 +897,9 @@ class RealtimeSession(
         else:
             return None
 
-    # note: return value from tool functions registered to Sonic must be Structured Output (aka a dict that is JSON serializable)
+    # note: return value from tool functions registered to Sonic must be Structured Output (a dict that is JSON serializable)
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Any]) -> None:
+        """Replace the active tool set with tools and notify Sonic if necessary."""
         logger.debug(f"Updating tools: {tools}")
         retained_tools: list[llm.FunctionTool | llm.RawFunctionTool] = []
 
@@ -766,12 +911,14 @@ class RealtimeSession(
             logger.debug("Tool list has been injected")
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
+        """Live update of inference options is not supported by Sonic yet."""
         logger.warning(
             "updating inference configuration options is not yet supported by Nova Sonic's Realtime API"
         )
 
     @utils.log_exceptions(logger=logger)
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
+        """Ensure mic audio matches Sonic's required sample rate & channels."""
         if self._input_resampler:
             if frame.sample_rate != self._input_resampler._input_rate:
                 self._input_resampler = None
@@ -793,6 +940,7 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio_input(self):
+        """Background task that feeds audio and tool results into the Bedrock stream."""
         await self._send_raw_event(self._event_builder.create_audio_content_start_event())
         logger.debug("Starting audio input processing loop")
         while self._is_sess_active.is_set():
@@ -846,12 +994,14 @@ class RealtimeSession(
 
     # for debugging purposes only
     def _log_significant_audio(self, audio_bytes: bytes) -> None:
+        """Utility that prints a debug message when the audio chunk has non-trivial RMS energy."""
         squared_sum = sum(sample**2 for sample in audio_bytes)
         if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
             log_message("Enqueuing significant audio chunk", AnsiColors.BLUE)
 
     @utils.log_exceptions(logger=logger)
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        """Enqueue an incoming mic rtc.AudioFrame for transcription."""
         if not self._audio_input_chan.closed:
             # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
             for f in self._resample_audio(frame):
@@ -887,6 +1037,7 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:
+        """Gracefully shut down the realtime session and release network resources."""
         logger.debug("aclose invoked")
         if not self._is_sess_active.is_set():
             logger.debug("already inactive within aclose")
