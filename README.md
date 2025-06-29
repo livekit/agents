@@ -192,6 +192,8 @@ async def entrypoint(ctx: JobContext):
 
 ## Examples
 
+For more examples and detailed setup instructions, see the [examples directory](examples/).
+
 <table>
 <tr>
 <td width="50%">
