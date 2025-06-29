@@ -74,19 +74,16 @@ class _TurnTracker:
             self._maybe_emit_generation_created(turn)
 
         elif kind == "BARGE_IN":
-            logger.debug(f"BARGE-IN DETECTED IN TURN TRACKER: {event}")
-            if event["event"]["textOutput"]["content"] == '{ "interrupted" : true }':
-                logger.debug(f"BARGE-IN DETECTED IN TURN TRACKER ENDING TURN: {turn}")
-                # start new turn immediately to make interruptions snappier
-                self._emit("input_speech_started", llm.InputSpeechStartedEvent())
-                turn.phase = _Phase.DONE
+            logger.debug(f"BARGE-IN DETECTED IN TURN TRACKER: {turn}")
+            # start new turn immediately to make interruptions snappier
+            self._emit("input_speech_started", llm.InputSpeechStartedEvent())
+            turn.phase = _Phase.DONE
 
         elif kind == "ASSISTANT_AUDIO_END":
             if event["event"]["contentEnd"]["stopReason"] == "END_TURN":
                 turn.phase = _Phase.DONE
 
         if turn.phase is _Phase.DONE:
-            logger.debug(f"TURN TRACKER DONE: {turn}")
             self._curr_turn = None
 
     def _ensure_turn(self) -> _Turn:

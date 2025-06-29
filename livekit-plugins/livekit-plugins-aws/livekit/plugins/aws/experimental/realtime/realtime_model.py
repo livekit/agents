@@ -61,15 +61,18 @@ from .events import (
 from .pretty_printer import log_event_data, log_message, AnsiColors
 
 
-INPUT_SAMPLE_RATE = 16000
-OUTPUT_SAMPLE_RATE = 24000
-SAMPLE_SIZE_BITS = 16
-CHANNELS = 1
-CHUNK_SIZE = 512
+DEFAULT_INPUT_SAMPLE_RATE = 16000
+DEFAULT_OUTPUT_SAMPLE_RATE = 24000
+DEFAULT_SAMPLE_SIZE_BITS = 16
+DEFAULT_CHANNELS = 1
+DEFAULT_CHUNK_SIZE = 512
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.9
 DEFAULT_MAX_TOKENS = 1024
-
+MAX_MESSAGE_SIZE = 1024
+MAX_MESSAGES = 40
+DEFAULT_MAX_SESSION_RESTART_ATTEMPTS = 3
+DEFAULT_MAX_SESSION_RESTART_DELAY = 10
 DEFAULT_SYSTEM_PROMPT = (
     "Your name is Sonic. You are a friend and eagerly helpful assistant."
     "The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."
@@ -304,7 +307,7 @@ class RealtimeSession(
         )
         self._input_resampler: rtc.AudioResampler | None = None
         self._bstream = utils.audio.AudioByteStream(
-            INPUT_SAMPLE_RATE, CHANNELS, samples_per_channel=CHUNK_SIZE
+            DEFAULT_INPUT_SAMPLE_RATE, DEFAULT_CHANNELS, samples_per_channel=DEFAULT_CHUNK_SIZE
         )
 
         self._response_task = None
@@ -322,6 +325,10 @@ class RealtimeSession(
         self._instructions = DEFAULT_SYSTEM_PROMPT
         self._audio_input_chan = utils.aio.Chan[bytes]()
         self._current_generation: _ResponseGeneration | None = None
+
+        # note: currently tracks session restart attempts across all sessions
+        # TODO: track restart attempts per turn
+        self._session_restart_attempts = 0
 
         self._event_handlers = {
             "completion_start": self._handle_completion_start_event,
@@ -380,8 +387,23 @@ class RealtimeSession(
         try:
             await self._stream_response.input_stream.send(event)
         except Exception as e:
-            logger.error(f"Error sending event: {str(e)}")
-            traceback.print_exc()
+            logger.exception("Error sending event")
+            request_id = e.message.split(" ")[0].split("=")[1]
+            self.emit(
+                "error",
+                llm.RealtimeModelError(
+                    timestamp=time.monotonic(),
+                    label=self._realtime_model._label,
+                    error=APIStatusError(
+                        message=e.message,
+                        status_code=500,
+                        request_id=request_id,
+                        body=e,
+                        retryable=False,
+                    ),
+                    recoverable=False,
+                ),
+            )
             raise
 
     def _serialize_tool_config(self) -> ToolConfiguration | None:
@@ -447,10 +469,10 @@ class RealtimeSession(
         """
         try:
             if not self._bedrock_client:
-                logger.debug("Creating Bedrock client")
+                logger.info("Creating Bedrock client")
                 self._initialize_client()
 
-            logger.debug("Initializing Bedrock stream")
+            logger.info("Initializing Bedrock stream")
             self._stream_response = (
                 await self._bedrock_client.invoke_model_with_bidirectional_stream(
                     InvokeModelWithBidirectionalStreamOperationInput(
@@ -459,7 +481,7 @@ class RealtimeSession(
                 )
             )
 
-            if is_restart:
+            if not is_restart:
                 pending_events: list[asyncio.Future] = []
                 if not self.tools.function_tools:
                     pending_events.append(self._tools_ready)
@@ -487,12 +509,18 @@ class RealtimeSession(
                             "Chat context not received after 1sec, proceeding with empty chat context"
                         )
 
-            logger.debug(
+            logger.info(
                 f"Initializing Bedrock session with realtime options: {self._realtime_model._opts}"
             )
+            # there is a 40-message limit on the chat context
+            if len(self._chat_ctx.items) > MAX_MESSAGES:
+                logger.warning(
+                    f"Chat context has {len(self._chat_ctx.items)} messages, truncating to {MAX_MESSAGES}"
+                )
+                self._chat_ctx.truncate(max_items=MAX_MESSAGES)
             init_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
-                sample_rate=OUTPUT_SAMPLE_RATE,
+                sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,
                 system_content=self._instructions,
                 chat_ctx=self.chat_ctx,
                 tool_configuration=self._serialize_tool_config(),
@@ -509,10 +537,10 @@ class RealtimeSession(
                 self._audio_input_task = asyncio.create_task(
                     self._process_audio_input(), name="RealtimeSession._process_audio_input"
                 )
-                self._response_task = asyncio.create_task(
-                    self._process_responses(), name="RealtimeSession._process_responses"
-                )
 
+            self._response_task = asyncio.create_task(
+                self._process_responses(), name="RealtimeSession._process_responses"
+            )
             self._is_sess_active.set()
             logger.debug("Stream initialized successfully")
         except Exception as e:
@@ -531,7 +559,6 @@ class RealtimeSession(
             user_initiated=False,
         )
         self.emit("generation_created", generation_ev)
-        # logger.debug(f"Emitted generation event: {generation_ev}")
 
     @utils.log_exceptions(logger=logger)
     async def _handle_event(self, event_data: dict) -> None:
@@ -612,8 +639,6 @@ class RealtimeSession(
                 f"BARGE-IN DETECTED using idx: {idx} and chat_msg: {self._chat_ctx.items[idx]}"
             )
             self._chat_ctx.items[idx].interrupted = True
-            # there is a 40-message limit on the chat context
-            self._chat_ctx.truncate(max_items=40)
             self._close_current_generation()
             return
 
@@ -627,19 +652,38 @@ class RealtimeSession(
                 logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
                 # note: user ASR text is slightly different than what is sent to LiveKit (newline vs whitespace)
                 # TODO: fix this
-                self._chat_ctx.add_message(role="user", content=text_content)
+                self._update_chat_ctx(role="user", text_content=text_content)
 
             elif (
                 self._current_generation.speculative_messages.get(text_content_id)
                 == self._current_generation.response_id
             ):
-                logger.debug(
-                    f"SENDING TEXT CONTENT TO MESSAGE CH: {text_content} with response_id: {self._current_generation.response_id} and content_id: {text_content_id}"
-                )
-
                 curr_gen = self._current_generation.messages[self._current_generation.response_id]
                 curr_gen.text_ch.send_nowait(text_content)
-                self._chat_ctx.add_message(role="assistant", content=text_content)
+                # note: this update is per utterance, not per turn
+                self._update_chat_ctx(role="assistant", text_content=text_content)
+
+    def _update_chat_ctx(self, role: str, text_content: str) -> None:
+        """
+        Update the chat context with the latest ASR text while guarding against model limitations:
+            a) 40 total messages limit
+            b) 1kB message size limit
+        """
+        prev_utterance = self._chat_ctx.items[-1]
+        if prev_utterance.role == role:
+            if (
+                len(prev_utterance.content[0].encode("utf-8")) + len(text_content.encode("utf-8"))
+                < MAX_MESSAGE_SIZE
+            ):
+                prev_utterance.content[0] = "\n".join([prev_utterance.content[0], text_content])
+            else:
+                self._chat_ctx.add_message(role=role, content=text_content)
+                if len(self._chat_ctx.items) > MAX_MESSAGES:
+                    self._chat_ctx.truncate(max_items=MAX_MESSAGES)
+        else:
+            self._chat_ctx.add_message(role=role, content=text_content)
+            if len(self._chat_ctx.items) > MAX_MESSAGES:
+                self._chat_ctx.truncate(max_items=MAX_MESSAGES)
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
     async def _handle_text_output_content_end_event(self, event_data: dict) -> None:
@@ -683,8 +727,7 @@ class RealtimeSession(
                     arguments=args,
                 )
             )
-            # need to invoke tool function here
-            logger.debug(f"TOOL ARGS: {args}")
+
             # note: may need to inject RunContext here...
             tool_type = self._tool_type_map[tool_name]
             if tool_type == "FunctionTool":
@@ -693,7 +736,7 @@ class RealtimeSession(
                 tool_result = await self.tools.function_tools[tool_name](json.loads(args))
             else:
                 raise ValueError(f"Unknown tool type: {tool_type}")
-            logger.debug(f"TOOL RESULT: {tool_result}")
+            logger.debug(f"TOOL ARGS: {args}\nTOOL RESULT: {tool_result}")
 
             # Sonic only accepts Structured Output for tool results
             # therefore, must JSON stringify ToolError
@@ -730,13 +773,12 @@ class RealtimeSession(
         ):
             audio_content = event_data["event"]["audioOutput"]["content"]
             audio_bytes = base64.b64decode(audio_content)
-            # logger.debug(f"SENDING AUDIO CONTENT TO MESSAGE CH: {len(audio_bytes)} bytes")
             curr_gen = self._current_generation.messages[self._current_generation.response_id]
             curr_gen.audio_ch.send_nowait(
                 rtc.AudioFrame(
                     data=audio_bytes,
-                    sample_rate=OUTPUT_SAMPLE_RATE,
-                    num_channels=CHANNELS,
+                    sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,
+                    num_channels=DEFAULT_CHANNELS,
                     samples_per_channel=len(audio_bytes) // 2,
                 )
             )
@@ -803,12 +845,9 @@ class RealtimeSession(
                         except json.JSONDecodeError:
                             logger.warning(f"JSON decode error: {response_data}")
                     else:
-                        logger.debug("No response received")
-                except asyncio.InvalidStateError:
-                    logger.debug("Response processing task invalid state error")
-                    break
+                        logger.warning("No response received")
                 except asyncio.CancelledError:
-                    logger.debug("Response processing task cancelled")
+                    logger.info("Response processing task cancelled")
                     self._close_current_generation()
                     raise
                 except ValidationException as ve:
@@ -817,45 +856,95 @@ class RealtimeSession(
                         "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR"
                         in ve.message
                     ):
-                        logger.error(f"Validation error: {ve}\nAttempting to recover...")
-                        self._is_sess_active.clear()
-                        await self.initialize_streams(is_restart=True)
-                        logger.info("Session restarted successfully")
+                        logger.warning(f"Validation error: {ve}\nAttempting to recover...")
+                        await self._restart_session(ve)
 
                     else:
                         logger.error(f"Validation error: {ve}")
-                        break
+                        request_id = ve.split(" ")[0].split("=")[1]
+                        self.emit(
+                            "error",
+                            llm.RealtimeModelError(
+                                timestamp=time.monotonic(),
+                                label=self._realtime_model._label,
+                                error=APIStatusError(
+                                    message=ve.message,
+                                    status_code=400,
+                                    request_id=request_id,
+                                    body=ve,
+                                    retryable=False,
+                                ),
+                                recoverable=False,
+                            ),
+                        )
+                        raise
                 except (ThrottlingException, ModelNotReadyException, ModelErrorException) as re:
-                    logger.error(f"Retryable error: {re}")
-                    self._is_sess_active.clear()
-                    await self.initialize_streams(is_restart=True)
-                    logger.info("Session restarted successfully")
-
+                    logger.warning(f"Retryable error: {re}\nAttempting to recover...")
+                    await self._restart_session(re)
                     break
                 except ModelTimeoutException as mte:
                     logger.warning(f"Model timeout error: {mte}\nAttempting to recover...")
-                    self._is_sess_active.clear()
-                    await self.initialize_streams(is_restart=True)
-                    logger.info("Session restarted successfully")
-
+                    await self._restart_session(mte)
                     break
                 except Exception as e:
-                    logger.debug(f"error type: {type(e)}")
-                    logger.error(f"Response processing error: {e}")
-                    break
-                finally:
-                    pass
+                    logger.error(f"Response processing error: {e} (type: {type(e)})")
+                    request_id = e.message.split(" ")[0].split("=")[1]
+                    self.emit(
+                        "error",
+                        llm.RealtimeModelError(
+                            timestamp=time.monotonic(),
+                            label=self._realtime_model._label,
+                            error=APIStatusError(
+                                message=e.message,
+                                status_code=500,
+                                request_id=request_id,
+                                body=e,
+                                retryable=False,
+                            ),
+                            recoverable=False,
+                        ),
+                    )
+                    raise
+
         finally:
+            logger.info("main output response stream processing task exiting")
             self._is_sess_active.clear()
+
+    async def _restart_session(self, ex: Exception) -> None:
+        if self._session_restart_attempts >= DEFAULT_MAX_SESSION_RESTART_ATTEMPTS:
+            logger.error("Max session restart attempts reached, exiting")
+            self.emit(
+                "error",
+                llm.RealtimeModelError(
+                    timestamp=time.monotonic(),
+                    label=self._realtime_model._label,
+                    error=APIStatusError(
+                        message=f"Max restart attempts exceeded: {ex}",
+                        status_code=500,
+                        request_id=ex.message.split(" ")[0].split("=")[1],
+                        body=ex,
+                        retryable=False,
+                    ),
+                    recoverable=False,
+                ),
+            )
+            self._is_sess_active.clear()
+            return
+        self._session_restart_attempts += 1
+        self._is_sess_active.clear()
+        delay = 2 ** (self._session_restart_attempts - 1) - 1
+        await asyncio.sleep(min(delay, DEFAULT_MAX_SESSION_RESTART_DELAY))
+        await self.initialize_streams(is_restart=True)
+        logger.info(
+            f"Session restarted successfully ({self._session_restart_attempts}/{DEFAULT_MAX_SESSION_RESTART_ATTEMPTS})"
+        )
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        """A copy of the mutable chat context maintained inside the session."""
         return self._chat_ctx.copy()
 
     @property
     def tools(self) -> llm.ToolContext:
-        """A copy of the currently registered tool context."""
         return self._tools.copy()
 
     async def update_instructions(self, instructions: str) -> None:
@@ -924,12 +1013,12 @@ class RealtimeSession(
                 self._input_resampler = None
 
         if self._input_resampler is None and (
-            frame.sample_rate != INPUT_SAMPLE_RATE or frame.num_channels != CHANNELS
+            frame.sample_rate != DEFAULT_INPUT_SAMPLE_RATE or frame.num_channels != DEFAULT_CHANNELS
         ):
             self._input_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate,
-                output_rate=INPUT_SAMPLE_RATE,
-                num_channels=CHANNELS,
+                output_rate=DEFAULT_INPUT_SAMPLE_RATE,
+                num_channels=DEFAULT_CHANNELS,
             )
 
         if self._input_resampler:
@@ -942,20 +1031,17 @@ class RealtimeSession(
     async def _process_audio_input(self):
         """Background task that feeds audio and tool results into the Bedrock stream."""
         await self._send_raw_event(self._event_builder.create_audio_content_start_event())
-        logger.debug("Starting audio input processing loop")
+        logger.info("Starting audio input processing loop")
         while self._is_sess_active.is_set():
             try:
                 # note: could potentially pull this out into a separate task
                 try:
-                    # logger.debug("attempting to recv tool result")
                     val = self._tool_results_ch.recv_nowait()
-                    logger.debug(f"TOOL RESULT: {val}")
                     tool_result = val["tool_result"]
                     tool_use_id = val["tool_use_id"]
                     await self._send_tool_events(tool_use_id, tool_result)
 
                 except utils.aio.channel.ChanEmpty:
-                    # logger.debug("No tool results received")
                     pass
                 except utils.aio.channel.ChanClosed:
                     logger.warning(
@@ -964,18 +1050,14 @@ class RealtimeSession(
                     break
 
                 try:
-                    # logger.debug("attempting to recv audio data")
                     audio_bytes = await self._audio_input_chan.recv()
                     blob = base64.b64encode(audio_bytes)
-                    # logger.debug(f"Sending audio data to Bedrock: size={len(audio_bytes)} bytes")
                     audio_event = self._event_builder.create_audio_input_event(
                         audio_content=blob.decode("utf-8"),
                     )
 
                     await self._send_raw_event(audio_event)
-                    # logger.debug("audio event sent to Bedrock")
                 except utils.aio.channel.ChanEmpty:
-                    # logger.debug("No audio data received")
                     pass
                 except utils.aio.channel.ChanClosed:
                     logger.warning(
@@ -984,13 +1066,12 @@ class RealtimeSession(
                     break
 
             except asyncio.CancelledError:
-                logger.debug("Audio processing loop cancelled")
+                logger.info("Audio processing loop cancelled")
                 self._audio_input_chan.close()
                 self._tool_results_ch.close()
                 raise
             except Exception as e:
-                logger.debug(f"Error processing audio: {e}")
-                traceback.print_exc()
+                logger.exception("Error processing audio")
 
     # for debugging purposes only
     def _log_significant_audio(self, audio_bytes: bytes) -> None:
@@ -1038,9 +1119,9 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:
         """Gracefully shut down the realtime session and release network resources."""
-        logger.debug("aclose invoked")
+        logger.info("attempting to shutdown agent session")
         if not self._is_sess_active.is_set():
-            logger.debug("already inactive within aclose")
+            logger.info("agent session already inactive")
             return
 
         for event in self._event_builder.create_prompt_end_block():
@@ -1061,7 +1142,7 @@ class RealtimeSession(
             try:
                 await asyncio.wait_for(self._response_task, timeout=1.0)
             except asyncio.TimeoutError:
-                logger.debug("shutdown of output event loop timed out-- cancelling")
+                logger.warning("shutdown of output event loop timed out-- cancelling")
                 self._response_task.cancel()
 
         # must cancel the audio input task before closing the input stream
@@ -1071,6 +1152,5 @@ class RealtimeSession(
             await self._stream_response.input_stream.close()
 
         await asyncio.gather(self._response_task, self._audio_input_task, return_exceptions=True)
-
-        logger.debug("Session end")
         logger.debug(f"CHAT CONTEXT: {self._chat_ctx.items}")
+        logger.info("Session end")
