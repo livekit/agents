@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from mistralai import AssistantMessage, ChatCompletionChoice, Mistral, SystemMessage, UserMessage
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
@@ -24,6 +23,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from mistralai import AssistantMessage, ChatCompletionChoice, Mistral, SystemMessage, UserMessage
 
 from .models import ChatModels
 
