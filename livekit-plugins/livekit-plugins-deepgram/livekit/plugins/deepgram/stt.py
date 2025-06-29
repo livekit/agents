@@ -77,7 +77,7 @@ class STT(stt.STT):
         detect_language: bool = False,
         interim_results: bool = True,
         punctuate: bool = True,
-        smart_format: bool = True,
+        smart_format: bool = False,
         sample_rate: int = 16000,
         no_delay: bool = True,
         endpointing_ms: int = 25,
@@ -510,7 +510,8 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    await tasks_group
+                    tasks_group.cancel()
+                    tasks_group.exception()  # retrieve the exception
             finally:
                 if ws is not None:
                     await ws.close()
@@ -545,13 +546,16 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
-        ws = await asyncio.wait_for(
-            self._session.ws_connect(
-                _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
-                headers={"Authorization": f"Token {self._api_key}"},
-            ),
-            self._conn_options.timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    _to_deepgram_url(live_config, base_url=self._base_url, websocket=True),
+                    headers={"Authorization": f"Token {self._api_key}"},
+                ),
+                self._conn_options.timeout,
+            )
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            raise APIConnectionError("failed to connect to deepgram") from e
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:

@@ -28,7 +28,15 @@ def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.Functio
     for fnc in fncs:
         if is_raw_function_tool(fnc):
             info = get_raw_function_info(fnc)
-            tools.append(types.FunctionDeclaration(**info.raw_schema))
+            tools.append(
+                types.FunctionDeclaration(
+                    name=info.name,
+                    description=info.raw_schema.get("description", ""),
+                    parameters=info.raw_schema.get("parameters", {}),
+                    # will change in genai 1.20.1
+                    # parameters_json_schema=info.raw_schema.get("parameters", {}),
+                )
+            )
 
         elif is_function_tool(fnc):
             tools.append(_build_gemini_fnc(fnc))

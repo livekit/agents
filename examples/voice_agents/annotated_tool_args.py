@@ -34,7 +34,7 @@ class RoomName(str, Enum):
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions=("You are a helpful assistatn."),
+            instructions=("You are a helpful assistant."),
         )
 
     @function_tool

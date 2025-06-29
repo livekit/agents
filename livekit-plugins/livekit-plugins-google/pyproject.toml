@@ -25,9 +25,9 @@ classifiers = [
 dependencies = [
     "google-auth >= 2, < 3",
     "google-cloud-speech >= 2, < 3",
-    "google-cloud-texttospeech >= 2.24, < 3",
-    "google-genai >= v1.16.1",
-    "livekit-agents>=1.1.1",
+    "google-cloud-texttospeech >= 2.27, < 3",
+    "google-genai == v1.20.0",
+    "livekit-agents>=1.1.4",
 ]
 
 [project.urls]

@@ -26,6 +26,7 @@ class _EndOfTurnInfo:
     new_transcript: str
     transcription_delay: float
     end_of_utterance_delay: float
+    transcript_confidence: float
 
 
 class _TurnDetector(Protocol):
@@ -79,6 +80,7 @@ class AudioRecognition:
         self._last_speaking_time: float = 0
         self._last_final_transcript_time: float = 0
         self._final_transcript_received = asyncio.Event()
+        self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._last_language: str | None = None
@@ -156,6 +158,7 @@ class AudioRecognition:
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        self._final_transcript_confidence = []
         self._user_turn_committed = False
 
         # reset stt to clear the buffer from previous user turn
@@ -234,6 +237,7 @@ class AudioRecognition:
             self._hooks.on_final_transcript(ev)
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
+            confidence = ev.alternatives[0].confidence
 
             if not self._last_language or (
                 language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
@@ -259,6 +263,7 @@ class AudioRecognition:
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
+            self._final_transcript_confidence.append(confidence)
             self._audio_interim_transcript = ""
             self._final_transcript_received.set()
 
@@ -347,18 +352,32 @@ class AudioRecognition:
             await asyncio.sleep(max(extra_sleep, 0))
 
             tracing.Tracing.log_event("end of user turn", {"transcript": self._audio_transcript})
+            confidence_avg = (
+                sum(self._final_transcript_confidence) / len(self._final_transcript_confidence)
+                if self._final_transcript_confidence
+                else 0
+            )
+
+            if last_speaking_time <= 0:
+                transcription_delay = 0.0
+                end_of_utterance_delay = 0.0
+            else:
+                transcription_delay = max(self._last_final_transcript_time - last_speaking_time, 0)
+                end_of_utterance_delay = time.time() - last_speaking_time
+
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     new_transcript=self._audio_transcript,
-                    transcription_delay=max(
-                        self._last_final_transcript_time - last_speaking_time, 0
-                    ),
-                    end_of_utterance_delay=time.time() - last_speaking_time,
+                    transcription_delay=transcription_delay,
+                    end_of_utterance_delay=end_of_utterance_delay,
+                    transcript_confidence=confidence_avg,
                 )
             )
             if committed:
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
+                self._final_transcript_confidence = []
+
             self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:
