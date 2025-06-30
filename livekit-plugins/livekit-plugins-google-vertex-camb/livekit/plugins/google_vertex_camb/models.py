@@ -13,10 +13,16 @@
 # limitations under the License.
 
 from enum import Enum
-
-
 class Language(str, Enum):
     """Language enum for Google Vertex AI MARS7 API"""
 
     EN_US = "en-us"
     ES_ES = "es-es"
+    FR_FR = "fr-fr"
+    DE_DE = "de-de"
+    JA_JP = "ja-jp"
+    KO_KR = "ko-kr"
+    ZH_CN = "zh-cn"
+    EN_GB = "en-gb"
+    FR_CA = "fr-ca"
+

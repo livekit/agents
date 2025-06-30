@@ -59,7 +59,7 @@ class _TTSOptions:
     endpoint_id: str
     credentials_path: NotGivenOr[str]
     language: Language
-    audio_ref_path: NotGivenOr[str]
+    audio_ref_path: str
     ref_text: NotGivenOr[str]
     word_tokenizer: tokenize.WordTokenizer
 
@@ -191,23 +191,18 @@ class ChunkedStream(tts.ChunkedStream):
         request_id = utils.shortuuid()
 
         try:
-            # Load reference audio if provided
             audio_ref_bytes = None
-            if is_given(self._opts.audio_ref_path):
-                with open(self._opts.audio_ref_path, "rb") as f:
-                    audio_ref_bytes = base64.b64encode(f.read()).decode("utf-8")
+            with open(self._opts.audio_ref_path, "rb") as f:
+                audio_ref_bytes = base64.b64encode(f.read()).decode("utf-8")
 
             # Create the instances payload for MARS7 API
             instances = {
                 "text": self._input_text,
                 "language": self._opts.language.value,
+                "audio_ref": audio_ref_bytes,
             }
-
-            # Add reference audio if provided
-            if audio_ref_bytes:
-                instances["audio_ref"] = audio_ref_bytes
-                if is_given(self._opts.ref_text):
-                    instances["ref_text"] = self._opts.ref_text
+            if is_given(self._opts.ref_text):
+                instances["ref_text"] = self._opts.ref_text
 
             endpoint = aiplatform.Endpoint(endpoint_name=self._opts.endpoint_id)
             data = {"instances": [instances]}
