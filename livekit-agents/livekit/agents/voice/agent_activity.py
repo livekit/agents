@@ -45,6 +45,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
+from . import io
 
 
 def log_event(event: str, **kwargs) -> None:
@@ -1074,12 +1075,33 @@ class AgentActivity(RecognitionHooks):
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
 
+        # Track the playback event to get synchronized transcript
+        playback_ev: io.PlaybackFinishedEvent | None = None
+        playback_fut: asyncio.Future[io.PlaybackFinishedEvent] | None = None
+        
+        if audio_output is not None:
+            # Create a future to capture the playback event
+            playback_fut = asyncio.Future[io.PlaybackFinishedEvent]()
+            
+            def on_playback_finished(ev: io.PlaybackFinishedEvent) -> None:
+                if not playback_fut.done():
+                    playback_fut.set_result(ev)
+            
+            audio_output.once("playback_finished", on_playback_finished)
+
         await speech_handle.wait_if_not_interrupted([*tasks])
 
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
+            
+            # Get the playback event if available
+            if playback_fut and playback_fut.done():
+                playback_ev = playback_fut.result()
+            
+            # Remove the listener to prevent memory leaks
+            audio_output.off("playback_finished", on_playback_finished)
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
@@ -1087,10 +1109,22 @@ class AgentActivity(RecognitionHooks):
             if audio_output is not None:
                 audio_output.clear_buffer()
                 await audio_output.wait_for_playout()
+                
+                # Try to get the playback event after interruption
+                if playback_fut and playback_fut.done():
+                    playback_ev = playback_fut.result()
 
         if add_to_chat_ctx:
+            # Use synchronized transcript if available when interrupted
+            final_text = ""
+            if speech_handle.interrupted and playback_ev and playback_ev.synchronized_transcript:
+                final_text = playback_ev.synchronized_transcript
+                logger.debug(f"_tts_task: Using synchronized transcript: {final_text}")
+            else:
+                final_text = text_out.text if text_out else ""
+            
             msg = self._agent._chat_ctx.add_message(
-                role="assistant", content=text_out.text, interrupted=speech_handle.interrupted
+                role="assistant", content=final_text, interrupted=speech_handle.interrupted
             )
             speech_handle._set_chat_message(msg)
             self._session._conversation_item_added(msg)
