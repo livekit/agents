@@ -73,6 +73,9 @@ class MyAgent(Agent):
             self.session.say("session.say from on_user_turn_completed")
 
 
+SESSION_TIMEOUT = 60.0
+
+
 async def test_events_and_metrics() -> None:
     speed = 5.0
     actions = FakeActions()
@@ -97,7 +100,7 @@ async def test_events_and_metrics() -> None:
     session.on("conversation_item_added", conversation_events.append)
     session.on("user_input_transcribed", user_transcription_events.append)
 
-    t_origin = await run_session(session, agent)
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     # conversation_item_added
     assert len(conversation_events) == 2
@@ -176,7 +179,7 @@ async def test_tool_call() -> None:
     session.on("function_tools_executed", tool_executed_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await run_session(session, agent)
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
     check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
@@ -236,7 +239,7 @@ async def test_interruption() -> None:
     session.on("agent_state_changed", agent_state_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await run_session(session, agent)
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     chat_ctx_items = agent.chat_ctx.items
     assert len(chat_ctx_items) == 4
@@ -278,7 +281,7 @@ async def test_interruption_options() -> None:
     playback_finished_events: list[PlaybackFinishedEvent] = []
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    await run_session(session, MyAgent())
+    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 1
     assert playback_finished_events[0].interrupted is True
@@ -291,7 +294,7 @@ async def test_interruption_options() -> None:
     playback_finished_events.clear()
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    await run_session(session, MyAgent())
+    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 1
     assert playback_finished_events[0].interrupted is False
@@ -321,7 +324,7 @@ async def test_interruption_by_text_input() -> None:
 
     asyncio.get_event_loop().call_later(5 / speed, fake_text_input)
 
-    await run_session(session, agent, drain_delay=2.0)
+    await asyncio.wait_for(run_session(session, agent, drain_delay=2.0), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
     assert playback_finished_events[0].interrupted is True
@@ -370,7 +373,7 @@ async def test_interruption_before_speaking() -> None:
     session.on("agent_state_changed", agent_state_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await run_session(session, agent)
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     assert len(agent_state_events) == 5
     assert agent_state_events[0].old_state == "initializing"
@@ -430,7 +433,7 @@ async def test_generate_reply() -> None:
     session.on("function_tools_executed", tool_executed_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await run_session(session, agent)
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     # playback_finished
     assert len(playback_finished_events) == 3

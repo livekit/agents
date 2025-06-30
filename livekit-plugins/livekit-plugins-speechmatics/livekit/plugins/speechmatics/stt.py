@@ -25,6 +25,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     stt,
@@ -235,7 +236,8 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    await tasks_group
+                    tasks_group.cancel()
+                    tasks_group.exception()  # retrieve the exception
             finally:
                 if ws is not None:
                     await ws.close()
@@ -255,11 +257,18 @@ class SpeechStream(stt.SpeechStream):
             **self._extra_headers,
         }
         url = sanitize_url(self._connection_settings.url, self._transcription_config.language)
-        return await self._session.ws_connect(
-            url,
-            ssl=self._connection_settings.ssl_context,
-            headers=headers,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    url,
+                    ssl=self._connection_settings.ssl_context,
+                    headers=headers,
+                ),
+                self._conn_options.timeout,
+            )
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            raise APIConnectionError("failed to connect to speechmatics") from e
+        return ws
 
     def _process_stream_event(self, data: dict, closing_ws: bool) -> None:
         message_type = data["message"]

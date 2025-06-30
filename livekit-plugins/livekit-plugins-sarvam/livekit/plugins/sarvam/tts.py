@@ -118,7 +118,7 @@ class SarvamTTSOptions:
     target_language_code: SarvamTTSLanguages | str  # BCP-47 for supported Indian languages
     api_key: str  # Sarvam.ai API key
     text: str | None = None  # Will be provided by the stream adapter
-    speaker: SarvamTTSSpeakers | str = "manisha"  # Default speaker compatible with v2
+    speaker: SarvamTTSSpeakers | str = "anushka"  # Default speaker compatible with v2
     pitch: float = 0.0
     pace: float = 1.0
     loudness: float = 1.0
@@ -154,7 +154,7 @@ class TTS(tts.TTS):
         *,
         target_language_code: SarvamTTSLanguages | str,
         model: SarvamTTSModels | str = "bulbul:v2",
-        speaker: SarvamTTSSpeakers | str = "manisha",
+        speaker: SarvamTTSSpeakers | str = "anushka",
         speech_sample_rate: int = 22050,
         num_channels: int = 1,  # Sarvam output is mono WAV
         pitch: float = 0.0,
@@ -260,14 +260,16 @@ class ChunkedStream(tts.ChunkedStream):
                 if not audios or not isinstance(audios, list):
                     raise APIConnectionError("Sarvam TTS API response invalid: no audio data")
 
-                wav_bytes = base64.b64decode(audios[0])
                 output_emitter.initialize(
                     request_id=request_id or "unknown",
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
                     mime_type="audio/wav",
                 )
-                output_emitter.push(wav_bytes)
+                # handle multiple audio chunks
+                for b64 in audios:
+                    wav_bytes = base64.b64decode(b64)
+                    output_emitter.push(wav_bytes)
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Sarvam TTS API request timed out") from e
         except aiohttp.ClientError as e:

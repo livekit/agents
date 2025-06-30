@@ -45,7 +45,7 @@ from .log import logger
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
 
 # Supported Sarvam models
-SarvamSTTModels = Literal["saarika:v1", "saarika:v2", "saarika:flash"]
+SarvamSTTModels = Literal["saarika:v1", "saarika:v2", "saarika:flash", "saarika:v2.5"]
 
 
 @dataclass
@@ -60,7 +60,7 @@ class SarvamSTTOptions:
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
-    model: SarvamSTTModels | str = "saarika:v2"
+    model: SarvamSTTModels | str = "saarika:v2.5"
     api_key: str | None = None
     base_url: str = SARVAM_STT_BASE_URL
 
@@ -83,7 +83,7 @@ class STT(stt.STT):
         self,
         *,
         language: str,
-        model: SarvamSTTModels | str = "saarika:v2",
+        model: SarvamSTTModels | str = "saarika:v2.5",
         api_key: str | None = None,
         base_url: str = SARVAM_STT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -144,8 +144,8 @@ class STT(stt.STT):
         form_data.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
 
         # Add model and language_code to the form data if specified
-        # Sarvam API docs state language_code is optional for saarika:v2 but mandatory for v1
-        # Model is also optional, defaults to saarika:v2
+        # Sarvam API docs state language_code is optional for saarika:v2x but mandatory for v1
+        # Model is also optional, defaults to saarika:v2.5
         if opts_language:
             form_data.add_field("language_code", opts_language)
         if opts_model:

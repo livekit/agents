@@ -34,13 +34,19 @@ class _EUORunnerBase(_InferenceRunner):
 
     def _format_chat_ctx(self, chat_ctx: list[dict[str, Any]]) -> str:
         new_chat_ctx = []
+        last_msg: dict[str, Any] | None = None
         for msg in chat_ctx:
             content = msg["content"]
             if not content:
                 continue
 
-            msg["content"] = content
-            new_chat_ctx.append(msg)
+            # need to combine adjacent turns together to match training data
+            if last_msg and last_msg["role"] == msg["role"]:
+                last_msg["content"] += content
+            else:
+                msg["content"] = content
+                new_chat_ctx.append(msg)
+                last_msg = msg
 
         convo_text = self._tokenizer.apply_chat_template(
             new_chat_ctx,

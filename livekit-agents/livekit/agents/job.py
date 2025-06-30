@@ -157,6 +157,11 @@ class JobContext:
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
+        """Returns an LiveKitAPI for making API calls to LiveKit.
+
+        This property requires LIVEKIT_API_KEY and LIVEKIT_API_SECRET to be set in the environment.
+        If they are passed in WorkerOptions, it would not be able to satisfy this API.
+        """
         return api.LiveKitAPI(session=http_context.http_session())
 
     @property

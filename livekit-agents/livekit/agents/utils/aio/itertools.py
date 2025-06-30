@@ -96,5 +96,8 @@ class Tee(Generic[T]):
         for child in self._children:
             await child.aclose()
 
+        if isinstance(self._iterator, _ACloseable):
+            await self._iterator.aclose()
+
 
 tee = Tee

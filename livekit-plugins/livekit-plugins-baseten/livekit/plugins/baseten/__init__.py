@@ -10,16 +10,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .llm import LLM
 from .log import logger
+from .models import LLMModels
 from .stt import STT, SpeechStream
 from .tts import TTS
 from .version import __version__
 
 __all__ = [
+    "LLM",
     "STT",
     "SpeechStream",
     "logger",
     "TTS",
+    "LLMModels",
     "__version__",
 ]
 

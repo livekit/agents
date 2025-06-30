@@ -113,6 +113,13 @@ class TTS(tts.TTS):
         if not cartesia_api_key:
             raise ValueError("CARTESIA_API_KEY must be set")
 
+        if (speed or emotion) and model != "sonic-2-2025-03-07":
+            logger.warning(
+                "speed and emotion controls are only supported for model 'sonic-2-2025-03-07', "
+                "see https://docs.cartesia.ai/developer-tools/changelog for details",
+                extra={"model": model, "speed": speed, "emotion": emotion},
+            )
+
         self._opts = _TTSOptions(
             model=model,
             language=language,
@@ -184,6 +191,13 @@ class TTS(tts.TTS):
             self._opts.speed = cast(Optional[Union[TTSVoiceSpeed, float]], speed)
         if is_given(emotion):
             self._opts.emotion = emotion
+
+        if (speed or emotion) and self._opts.model != "sonic-2-2025-03-07":
+            logger.warning(
+                "speed and emotion controls are only supported for model 'sonic-2-2025-03-07', "
+                "see https://docs.cartesia.ai/developer-tools/changelog for details",
+                extra={"model": self._opts.model, "speed": speed, "emotion": emotion},
+            )
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
