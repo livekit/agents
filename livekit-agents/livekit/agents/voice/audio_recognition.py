@@ -253,13 +253,18 @@ class AudioRecognition(rtc.EventEmitter[Literal["metrics_collected"]]):
                 f"stream history: {self._audio_stream_start_time_history}"
             )
 
-            # These numbers are emitted to taylor fresh and used to calculate the turn latency.
-            eou_metrics = metrics.EOUMetrics(
-                timestamp=time.time(),
-                end_of_utterance_delay=end_of_utterance_delay,
-                transcription_delay=transcription_delay,
-            )
-            self.emit("metrics_collected", eou_metrics)
+            # We inject [beep detected] transcripts manually in voice detection. If this type of transcript is found, do not attempt to emit metrics as it will distort EOU/Transcript delay measurements.
+            if "[beep detected]" not in self._audio_transcript:
+                # These numbers are emitted to taylor fresh and used to calculate the turn latency.
+                eou_metrics = metrics.EOUMetrics(
+                    timestamp=time.time(),
+                    end_of_utterance_delay=end_of_utterance_delay,
+                    transcription_delay=transcription_delay,
+                )
+                self.emit("metrics_collected", eou_metrics)
+            else:
+                logger.info("Skipping EOU metrics emission for [beep detected] transcript")
+
             await self._hooks.on_end_of_turn(self._audio_transcript)
             self._audio_transcript = ""
 
