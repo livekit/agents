@@ -63,7 +63,10 @@ class CMakeBuild(build_ext):
             self.build_temp.mkdir(parents=True)
 
         subprocess.run(["cmake", ext.sourcedir, *cmake_args], cwd=self.build_temp, check=True)
-        subprocess.run(["cmake", "--build", ".", "--target", ext.name], cwd=self.build_temp, check=True)
+        subprocess.run(
+            ["cmake", "--build", ".", "--target", ext.name], cwd=self.build_temp, check=True
+        )
+
 
 setuptools.setup(
     name="livekit-blingfire",
