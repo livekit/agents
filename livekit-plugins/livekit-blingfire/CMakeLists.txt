@@ -1,6 +1,4 @@
 cmake_minimum_required(VERSION 3.19)
-set(CMAKE_CONFIGURATION_TYPES Debug Release)
-
 project(lk_blingfire)
 
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
