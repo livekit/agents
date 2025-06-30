@@ -667,21 +667,26 @@ class RealtimeSession(  # noqa: F811
             a) 40 total messages limit
             b) 1kB message size limit
         """
-        prev_utterance = self._chat_ctx.items[-1]
-        if prev_utterance.role == role:
-            if (
-                len(prev_utterance.content[0].encode("utf-8")) + len(text_content.encode("utf-8"))
-                < MAX_MESSAGE_SIZE
-            ):
-                prev_utterance.content[0] = "\n".join([prev_utterance.content[0], text_content])
+        logger.debug(f"Updating chat context with role: {role} and text_content: {text_content}")
+        if len(self._chat_ctx.items) == 0:
+            self._chat_ctx.add_message(role=role, content=text_content)
+        else:
+            prev_utterance = self._chat_ctx.items[-1]
+            if prev_utterance.role == role:
+                if (
+                    len(prev_utterance.content[0].encode("utf-8"))
+                    + len(text_content.encode("utf-8"))
+                    < MAX_MESSAGE_SIZE
+                ):
+                    prev_utterance.content[0] = "\n".join([prev_utterance.content[0], text_content])
+                else:
+                    self._chat_ctx.add_message(role=role, content=text_content)
+                    if len(self._chat_ctx.items) > MAX_MESSAGES:
+                        self._chat_ctx.truncate(max_items=MAX_MESSAGES)
             else:
                 self._chat_ctx.add_message(role=role, content=text_content)
                 if len(self._chat_ctx.items) > MAX_MESSAGES:
                     self._chat_ctx.truncate(max_items=MAX_MESSAGES)
-        else:
-            self._chat_ctx.add_message(role=role, content=text_content)
-            if len(self._chat_ctx.items) > MAX_MESSAGES:
-                self._chat_ctx.truncate(max_items=MAX_MESSAGES)
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
     async def _handle_text_output_content_end_event(self, event_data: dict) -> None:
