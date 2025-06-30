@@ -20,7 +20,7 @@ See https://docs.livekit.io/agents/integrations/aws/ for more information.
 """
 
 try:
-    from . import realtime
+    from .experimental import realtime
 except ImportError as e:
     raise ImportError(
         "The 'realtime' module requires optional dependencies. "

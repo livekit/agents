@@ -4,8 +4,8 @@ import asyncio
 import base64
 from datetime import datetime
 import json
+import os
 import time
-import traceback
 import uuid
 import weakref
 from collections.abc import Iterator
@@ -16,20 +16,12 @@ from livekit.agents import (
     llm,
     utils,
     ToolError,
-    APIError,
-    APIConnectionError,
-    APITimeoutError,
     APIStatusError,
 )
 from livekit.agents.llm.realtime import RealtimeSession
-from livekit.agents.llm.tool_context import (
-    get_raw_function_info,
-    is_function_tool,
-    is_raw_function_tool,
-)
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-
+from livekit.agents.metrics import RealtimeModelMetrics
 from aws_sdk_bedrock_runtime.client import (
     BedrockRuntimeClient,
     InvokeModelWithBidirectionalStreamOperationInput,
@@ -86,6 +78,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "Avoid formatted lists or numbering and keep your output as a spoken transcript to be acted out."
     "Be appropriately emotive when responding to the user. Use American English as the language for your responses."
 )
+
+lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
 
 
 @dataclass
@@ -388,14 +382,20 @@ class RealtimeSession(
             await self._stream_response.input_stream.send(event)
         except Exception as e:
             logger.exception("Error sending event")
-            request_id = e.message.split(" ")[0].split("=")[1]
+            err_msg = getattr(e, "message", str(e))
+            request_id = None
+            try:
+                request_id = err_msg.split(" ")[0].split("=")[1]
+            except Exception:
+                pass
+
             self.emit(
                 "error",
                 llm.RealtimeModelError(
                     timestamp=time.monotonic(),
                     label=self._realtime_model._label,
                     error=APIStatusError(
-                        message=e.message,
+                        message=err_msg,
                         status_code=500,
                         request_id=request_id,
                         body=e,
@@ -451,9 +451,6 @@ class RealtimeSession(
                 self._realtime_model._opts.top_p = 1.0
             if not is_given(self._realtime_model.temperature):
                 self._realtime_model._opts.temperature = 1.0
-
-        for tool in tool_cfg.tools:
-            logger.debug(f"TOOL CONFIGURATION: {tool.toolSpec.inputSchema}")
         return tool_cfg
 
     @utils.log_exceptions(logger=logger)
@@ -495,18 +492,18 @@ class RealtimeSession(
                 # therefore in the case there are no tools, we wait the entire timeout
                 try:
                     if pending_events:
-                        await asyncio.wait_for(asyncio.gather(*pending_events), timeout=1.0)
+                        await asyncio.wait_for(asyncio.gather(*pending_events), timeout=0.5)
                 except asyncio.TimeoutError:
                     if not self._tools_ready.done():
-                        logger.warning("Tools not ready after 1sec, continuing without them")
+                        logger.warning("Tools not ready after 500ms, continuing without them")
 
                     if not self._instructions_ready.done():
                         logger.warning(
-                            "Instructions not received after 1sec, proceeding with default instructions"
+                            "Instructions not received after 500ms, proceeding with default instructions"
                         )
                     if not self._chat_ctx_ready.done():
                         logger.warning(
-                            "Chat context not received after 1sec, proceeding with empty chat context"
+                            "Chat context not received after 500ms, proceeding with empty chat context"
                         )
 
             logger.info(
@@ -821,7 +818,40 @@ class RealtimeSession(
 
     async def _handle_usage_event(self, event_data: dict) -> None:
         # log_event_data(event_data)
-        pass
+        # TODO: implement duration and ttft
+        input_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["input"]
+        output_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["output"]
+        # Q: should we be counting per turn or utterance?
+        metrics = RealtimeModelMetrics(
+            label=self._realtime_model._label,
+            # TODO: pass in the correct request_id
+            request_id=event_data["event"]["usageEvent"]["completionId"],
+            timestamp=time.monotonic(),
+            duration=0,
+            ttft=0,
+            cancelled=False,
+            input_tokens=input_tokens["speechTokens"] + input_tokens["textTokens"],
+            output_tokens=output_tokens["speechTokens"] + output_tokens["textTokens"],
+            total_tokens=input_tokens["speechTokens"]
+            + input_tokens["textTokens"]
+            + output_tokens["speechTokens"]
+            + output_tokens["textTokens"],
+            # need duration to calculate this
+            tokens_per_second=0,
+            input_token_details=RealtimeModelMetrics.InputTokenDetails(
+                text_tokens=input_tokens["textTokens"],
+                audio_tokens=input_tokens["speechTokens"],
+                image_tokens=0,
+                cached_tokens=0,
+                cached_tokens_details=None,
+            ),
+            output_token_details=RealtimeModelMetrics.OutputTokenDetails(
+                text_tokens=output_tokens["textTokens"],
+                audio_tokens=output_tokens["speechTokens"],
+                image_tokens=0,
+            ),
+        )
+        self.emit("metrics_collected", metrics)
 
     @utils.log_exceptions(logger=logger)
     async def _process_responses(self):
@@ -886,9 +916,23 @@ class RealtimeSession(
                     logger.warning(f"Model timeout error: {mte}\nAttempting to recover...")
                     await self._restart_session(mte)
                     break
+                except ValueError as val_err:
+                    if "I/O operation on closed file." == val_err.args[0]:
+                        logger.info("initiating graceful shutdown of session")
+                        break
+                    raise
+                except OSError:
+                    logger.info("stream already closed, exiting")
+                    break
                 except Exception as e:
-                    logger.error(f"Response processing error: {e} (type: {type(e)})")
-                    request_id = e.message.split(" ")[0].split("=")[1]
+                    err_msg = getattr(e, "message", str(e))
+                    logger.error(f"Response processing error: {err_msg} (type: {type(e)})")
+                    request_id = None
+                    try:
+                        request_id = err_msg.split(" ")[0].split("=")[1]
+                    except Exception:
+                        pass
+
                     self.emit(
                         "error",
                         llm.RealtimeModelError(
@@ -913,15 +957,21 @@ class RealtimeSession(
     async def _restart_session(self, ex: Exception) -> None:
         if self._session_restart_attempts >= DEFAULT_MAX_SESSION_RESTART_ATTEMPTS:
             logger.error("Max session restart attempts reached, exiting")
+            err_msg = getattr(ex, "message", str(ex))
+            request_id = None
+            try:
+                request_id = err_msg.split(" ")[0].split("=")[1]
+            except Exception:
+                pass
             self.emit(
                 "error",
                 llm.RealtimeModelError(
                     timestamp=time.monotonic(),
                     label=self._realtime_model._label,
                     error=APIStatusError(
-                        message=f"Max restart attempts exceeded: {ex}",
+                        message=f"Max restart attempts exceeded: {err_msg}",
                         status_code=500,
-                        request_id=ex.message.split(" ")[0].split("=")[1],
+                        request_id=request_id,
                         body=ex,
                         retryable=False,
                     ),
@@ -1078,7 +1128,8 @@ class RealtimeSession(
         """Utility that prints a debug message when the audio chunk has non-trivial RMS energy."""
         squared_sum = sum(sample**2 for sample in audio_bytes)
         if (squared_sum / len(audio_bytes)) ** 0.5 > 200:
-            log_message("Enqueuing significant audio chunk", AnsiColors.BLUE)
+            if lk_bedrock_debug:
+                log_message("Enqueuing significant audio chunk", AnsiColors.BLUE)
 
     @utils.log_exceptions(logger=logger)
     def push_audio(self, frame: rtc.AudioFrame) -> None:
