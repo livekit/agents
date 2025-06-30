@@ -1,5 +1,9 @@
 name: Build package
 
+permissions:
+  contents: read
+  actions: write
+
 on:
   workflow_call:
     inputs:
@@ -102,7 +106,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.11"
 
       - name: Install cibuildwheel
         run: |
@@ -113,9 +117,31 @@ jobs:
         run: cibuildwheel --output-dir dist
         env:
           CIBW_BUILD_VERBOSITY: 3
+          CIBW_ARCHS_WINDOWS: "AMD64"
 
       - name: Upload distribution package
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}
+          name: ${{ inputs.artifact_name }}-${{ matrix.os }}
           path: livekit-plugins/livekit-blingfire/dist/
+
+  merge_artifacts:
+    if: inputs.package == 'livekit-blingfire'
+    runs-on: ubuntu-latest
+    needs: build_blingfire
+    steps:
+      - name: Download all platform wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.artifact_name }}-*
+          path: all_dists
+          merge-multiple: true
+
+      - name: List contents
+        run: ls -R all_dists
+
+      - name: Upload unified wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: all_dists/
