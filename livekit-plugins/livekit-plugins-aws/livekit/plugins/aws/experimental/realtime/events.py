@@ -1,8 +1,11 @@
-import uuid
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Dict, Any, Union, Literal
 import json
+import uuid
+from typing import Any, Literal, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from livekit.agents import llm
+
 from ...log import logger
 
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
@@ -88,8 +91,8 @@ class Tool(BaseModel):
 
 
 class ToolConfiguration(BaseModel):
-    toolChoice: Dict[str, Dict[str, str]] | None = None
-    tools: List[Tool]
+    toolChoice: dict[str, dict[str, str]] | None = None
+    tools: list[Tool]
 
 
 class SessionStart(BaseModel):
@@ -262,7 +265,7 @@ class SonicEventBuilder:
         content_name: str,
         role: ROLE,
         content: str,
-    ) -> List[str]:
+    ) -> list[str]:
         return [
             self.create_text_content_start_event(content_name, role),
             self.create_text_content_event(content_name, content),
@@ -274,14 +277,14 @@ class SonicEventBuilder:
         content_name: str,
         tool_use_id: str,
         content: str,
-    ) -> List[str]:
+    ) -> list[str]:
         return [
             self.create_tool_content_start_event(content_name, tool_use_id),
             self.create_tool_result_event(content_name, content),
             self.create_content_end_event(content_name),
         ]
 
-    def create_prompt_end_block(self) -> List[str]:
+    def create_prompt_end_block(self) -> list[str]:
         return [
             self.create_content_end_event(self.audio_content_name, is_audio=True),
             self.create_prompt_end_event(),
@@ -294,11 +297,11 @@ class SonicEventBuilder:
         sample_rate: SAMPLE_RATE_HERTZ,
         system_content: str,
         chat_ctx: llm.ChatContext,
-        tool_configuration: Optional[Union[ToolConfiguration, Dict[str, Any], str]] = None,
+        tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-    ) -> List[str]:
+    ) -> list[str]:
         system_content_name = str(uuid.uuid4())
         init_events = [
             self.create_session_start_event(max_tokens, top_p, temperature),
@@ -308,7 +311,7 @@ class SonicEventBuilder:
 
         # note: tool call events are not supported yet
         if chat_ctx.items:
-            logger.debug(f"initiating session with chat context")
+            logger.debug("initiating session with chat context")
             for item in chat_ctx.items:
                 ctx_content_name = str(uuid.uuid4())
                 init_events.extend(
@@ -425,7 +428,7 @@ class SonicEventBuilder:
     def create_tool_result_event(
         self,
         content_name: str,
-        content: Union[str, Dict[str, Any]],
+        content: Union[str, dict[str, Any]],
     ) -> str:
         if isinstance(content, dict):
             content_str = json.dumps(content)
@@ -476,7 +479,7 @@ class SonicEventBuilder:
         self,
         voice_id: VOICE_ID,
         sample_rate: SAMPLE_RATE_HERTZ,
-        tool_configuration: Optional[Union[ToolConfiguration, Dict[str, Any], str]] = None,
+        tool_configuration: Optional[Union[ToolConfiguration, dict[str, Any], str]] = None,
     ) -> str:
         tool_configuration = tool_configuration or ToolConfiguration(tools=[])
         for tool in tool_configuration.tools:

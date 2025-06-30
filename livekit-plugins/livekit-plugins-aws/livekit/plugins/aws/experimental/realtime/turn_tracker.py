@@ -1,8 +1,13 @@
 from __future__ import annotations
-import uuid, enum, datetime
-from typing import Callable, Any
+
+import datetime
+import enum
+import uuid
 from dataclasses import dataclass, field
+from typing import Any, Callable
+
 from livekit.agents import llm, utils
+
 from ...log import logger
 
 
@@ -133,7 +138,7 @@ class _TurnTracker:
         if not turn.ev_generation_sent:
             turn.ev_generation_sent = True
             msg_stream, fn_stream = self._get_streams()
-            logger.debug(f"Emitting generation event")
+            logger.debug("Emitting generation event")
             generation_ev = llm.GenerationCreatedEvent(
                 message_stream=msg_stream,
                 function_stream=fn_stream,

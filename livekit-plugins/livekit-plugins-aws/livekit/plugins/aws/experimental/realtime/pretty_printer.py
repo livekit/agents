@@ -1,5 +1,6 @@
 import json
 import logging
+
 from .events import SonicEventBuilder
 
 logger = logging.getLogger("livekit.plugins.aws")

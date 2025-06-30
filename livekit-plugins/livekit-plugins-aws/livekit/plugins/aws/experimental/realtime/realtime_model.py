@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import datetime
 import json
 import os
 import time
@@ -10,48 +9,50 @@ import uuid
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, Dict
-from livekit import rtc
-from livekit.agents import (
-    llm,
-    utils,
-    ToolError,
-    APIStatusError,
-)
-from livekit.agents.llm.realtime import RealtimeSession
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
-from livekit.agents.metrics import RealtimeModelMetrics
+from datetime import datetime
+from typing import Any, Literal
+
+import boto3
 from aws_sdk_bedrock_runtime.client import (
     BedrockRuntimeClient,
     InvokeModelWithBidirectionalStreamOperationInput,
 )
+from aws_sdk_bedrock_runtime.config import Config, HTTPAuthSchemeResolver, SigV4AuthScheme
 from aws_sdk_bedrock_runtime.models import (
-    InvokeModelWithBidirectionalStreamInputChunk,
     BidirectionalInputPayloadPart,
-    ValidationException,
+    InvokeModelWithBidirectionalStreamInputChunk,
+    ModelErrorException,
+    ModelNotReadyException,
     ModelTimeoutException,
     ThrottlingException,
-    ModelNotReadyException,
-    ModelErrorException,
+    ValidationException,
 )
-from aws_sdk_bedrock_runtime.config import Config, HTTPAuthSchemeResolver, SigV4AuthScheme
-from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_core.aio.interfaces.identity import IdentityResolver
-import boto3
+
+from livekit import rtc
+from livekit.agents import (
+    APIStatusError,
+    ToolError,
+    llm,
+    utils,
+)
+from livekit.agents.llm.realtime import RealtimeSession
+from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
+from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
+
 from ...log import logger
 from .events import (
-    SonicEventBuilder as seb,
     VOICE_ID,
-    ToolConfiguration,
+    SonicEventBuilder as seb,
     Tool,
-    ToolSpec,
+    ToolConfiguration,
     ToolInputSchema,
-    Event,
+    ToolSpec,
 )
-from .pretty_printer import log_event_data, log_message, AnsiColors
-
+from .pretty_printer import AnsiColors, log_event_data, log_message
 
 DEFAULT_INPUT_SAMPLE_RATE = 16000
 DEFAULT_OUTPUT_SAMPLE_RATE = 24000
@@ -67,16 +68,16 @@ DEFAULT_MAX_SESSION_RESTART_ATTEMPTS = 3
 DEFAULT_MAX_SESSION_RESTART_DELAY = 10
 DEFAULT_SYSTEM_PROMPT = (
     "Your name is Sonic. You are a friend and eagerly helpful assistant."
-    "The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."
-    "Keep your responses short and concise unless the user asks you to elaborate or you are explicitly asked to be verbose and chatty."
+    "The user and you will engage in a spoken dialog exchanging the transcripts of a natural real-time conversation."  # noqa: E501
+    "Keep your responses short and concise unless the user asks you to elaborate or you are explicitly asked to be verbose and chatty."  # noqa: E501
     "Do not repeat yourself. Do not ask the user to repeat themselves."
     "Do ask the user to confirm or clarify their response if you are not sure what they mean."
-    "If after asking the user for clarification you still do not understand, be honest and tell them that you do not understand."
-    "Do not make up information or make assumptions. If you do not know the answer, tell the user that you do not know the answer."
-    "If the user makes a request of you that you cannot fulfill, tell them why you cannot fulfill it."
+    "If after asking the user for clarification you still do not understand, be honest and tell them that you do not understand."  # noqa: E501
+    "Do not make up information or make assumptions. If you do not know the answer, tell the user that you do not know the answer."  # noqa: E501
+    "If the user makes a request of you that you cannot fulfill, tell them why you cannot fulfill it."  # noqa: E501
     "When making tool calls, inform the user that you are using a tool to generate the response."
-    "Avoid formatted lists or numbering and keep your output as a spoken transcript to be acted out."
-    "Be appropriately emotive when responding to the user. Use American English as the language for your responses."
+    "Avoid formatted lists or numbering and keep your output as a spoken transcript to be acted out."  # noqa: E501
+    "Be appropriately emotive when responding to the user. Use American English as the language for your responses."  # noqa: E501
 )
 
 lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
@@ -93,7 +94,7 @@ class _RealtimeOptions:
         max_tokens (int): Maximum number of tokens the model may generate in a single response.
         tool_choice (llm.ToolChoice | None): Strategy that dictates how the model should invoke tools.
         region (str): AWS region hosting the Bedrock Sonic model endpoint.
-    """
+    """  # noqa: E501
 
     voice: VOICE_ID
     temperature: float
@@ -111,7 +112,7 @@ class _MessageGeneration:
         message_id (str): Unique identifier that ties together text and audio for a single assistant turn.
         text_ch (utils.aio.Chan[str]): Channel that yields partial text tokens as they arrive.
         audio_ch (utils.aio.Chan[rtc.AudioFrame]): Channel that yields audio frames for the same assistant turn.
-    """
+    """  # noqa: E501
 
     message_id: str
     text_ch: utils.aio.Chan[str]
@@ -138,7 +139,7 @@ class _ResponseGeneration:
         _created_timestamp (str): ISO-8601 timestamp when the generation record was created.
         _first_token_timestamp (float | None): Wall-clock time of first token emission.
         _completed_timestamp (float | None): Wall-clock time when the turn fully completed.
-    """
+    """  # noqa: E501
 
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
@@ -201,7 +202,7 @@ class Boto3CredentialsResolver(IdentityResolver):
             return identity
         except Exception as e:
             logger.error(f"Failed to load AWS credentials: {str(e)}")
-            raise ValueError(f"Failed to load AWS credentials: {str(e)}")
+            raise ValueError(f"Failed to load AWS credentials: {str(e)}")  # noqa: B904
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -230,7 +231,7 @@ class RealtimeModel(llm.RealtimeModel):
             max_tokens (int | NotGiven): Upper bound for tokens emitted by the model. Defaults to DEFAULT_MAX_TOKENS.
             tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation ("auto", "required", or explicit function).
             region (str | NotGiven): AWS region of the Bedrock runtime endpoint.
-        """
+        """  # noqa: E501
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
@@ -240,9 +241,9 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
         self.model_id = "amazon.nova-sonic-v1:0"
-        # note: temperature and top_p do not follow industry standards and are defined slightly differently for Sonic
-        # temperature ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic
-        # top_p ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic
+        # note: temperature and top_p do not follow industry standards and are defined slightly differently for Sonic  # noqa: E501
+        # temperature ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
+        # top_p ranges from 0.0 to 1.0, where 0.0 is the most random and 1.0 is the most deterministic  # noqa: E501
         self.temperature = temperature
         self.top_p = top_p
         self._opts = _RealtimeOptions(
@@ -260,7 +261,7 @@ class RealtimeModel(llm.RealtimeModel):
         sess = RealtimeSession(self)
 
         # note: this is a hack to get the session to initialize itself
-        # TODO: change how RealtimeSession is initialized by creating a single task main_atask that spawns subtasks
+        # TODO: change how RealtimeSession is initialized by creating a single task main_atask that spawns subtasks  # noqa: E501
         asyncio.create_task(sess.initialize_streams())
         self._sessions.add(sess)
         return sess
@@ -270,7 +271,7 @@ class RealtimeModel(llm.RealtimeModel):
             pass
 
 
-class RealtimeSession(
+class RealtimeSession(  # noqa: F811
     llm.RealtimeSession[Literal["bedrock_server_event_received", "bedrock_client_event_queued"]]
 ):
     """Bidirectional streaming session against the Nova Sonic Bedrock runtime.
@@ -414,7 +415,7 @@ class RealtimeSession(
 
         Returns:
             ToolConfiguration | None: None when no tools are present, otherwise a complete config block.
-        """
+        """  # noqa: E501
         tool_cfg = None
         if self.tools.function_tools:
             tools = []
@@ -499,11 +500,11 @@ class RealtimeSession(
 
                     if not self._instructions_ready.done():
                         logger.warning(
-                            "Instructions not received after 500ms, proceeding with default instructions"
+                            "Instructions not received after 500ms, proceeding with default instructions"  # noqa: E501
                         )
                     if not self._chat_ctx_ready.done():
                         logger.warning(
-                            "Chat context not received after 500ms, proceeding with empty chat context"
+                            "Chat context not received after 500ms, proceeding with empty chat context"  # noqa: E501
                         )
 
             logger.info(
@@ -512,7 +513,7 @@ class RealtimeSession(
             # there is a 40-message limit on the chat context
             if len(self._chat_ctx.items) > MAX_MESSAGES:
                 logger.warning(
-                    f"Chat context has {len(self._chat_ctx.items)} messages, truncating to {MAX_MESSAGES}"
+                    f"Chat context has {len(self._chat_ctx.items)} messages, truncating to {MAX_MESSAGES}"  # noqa: E501
                 )
                 self._chat_ctx.truncate(max_items=MAX_MESSAGES)
             init_events = self._event_builder.create_prompt_start_block(
@@ -549,7 +550,7 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     def _emit_generation_event(self) -> None:
         """Publish a llm.GenerationCreatedEvent to external subscribers."""
-        logger.debug(f"Emitting generation event")
+        logger.debug("Emitting generation event")
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
@@ -647,7 +648,7 @@ class RealtimeSession(
                 == self._current_generation.input_id
             ):
                 logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
-                # note: user ASR text is slightly different than what is sent to LiveKit (newline vs whitespace)
+                # note: user ASR text is slightly different than what is sent to LiveKit (newline vs whitespace)  # noqa: E501
                 # TODO: fix this
                 self._update_chat_ctx(role="user", text_content=text_content)
 
@@ -881,9 +882,9 @@ class RealtimeSession(
                     self._close_current_generation()
                     raise
                 except ValidationException as ve:
-                    # there is a 3min no-activity (e.g. silence) timeout on the stream, after which the stream is closed
+                    # there is a 3min no-activity (e.g. silence) timeout on the stream, after which the stream is closed  # noqa: E501
                     if (
-                        "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR"
+                        "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR"  # noqa: E501
                         in ve.message
                     ):
                         logger.warning(f"Validation error: {ve}\nAttempting to recover...")
@@ -986,7 +987,7 @@ class RealtimeSession(
         await asyncio.sleep(min(delay, DEFAULT_MAX_SESSION_RESTART_DELAY))
         await self.initialize_streams(is_restart=True)
         logger.info(
-            f"Session restarted successfully ({self._session_restart_attempts}/{DEFAULT_MAX_SESSION_RESTART_ATTEMPTS})"
+            f"Session restarted successfully ({self._session_restart_attempts}/{DEFAULT_MAX_SESSION_RESTART_ATTEMPTS})"  # noqa: E501
         )
 
     @property
@@ -1025,7 +1026,7 @@ class RealtimeSession(
             await self._send_raw_event(event)
             # logger.debug(f"Sent tool event: {event}")
 
-    def _tool_choice_adapter(self, tool_choice: llm.ToolChoice) -> Dict[str, Dict[str, str]] | None:
+    def _tool_choice_adapter(self, tool_choice: llm.ToolChoice) -> dict[str, dict[str, str]] | None:
         """Translate the LiveKit ToolChoice enum into Sonic's JSON schema."""
         if tool_choice == "auto":
             return {"auto": {}}
@@ -1036,7 +1037,7 @@ class RealtimeSession(
         else:
             return None
 
-    # note: return value from tool functions registered to Sonic must be Structured Output (a dict that is JSON serializable)
+    # note: return value from tool functions registered to Sonic must be Structured Output (a dict that is JSON serializable)  # noqa: E501
     async def update_tools(self, tools: list[llm.FunctionTool | llm.RawFunctionTool | Any]) -> None:
         """Replace the active tool set with tools and notify Sonic if necessary."""
         logger.debug(f"Updating tools: {tools}")
@@ -1052,7 +1053,7 @@ class RealtimeSession(
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         """Live update of inference options is not supported by Sonic yet."""
         logger.warning(
-            "updating inference configuration options is not yet supported by Nova Sonic's Realtime API"
+            "updating inference configuration options is not yet supported by Nova Sonic's Realtime API"  # noqa: E501
         )
 
     @utils.log_exceptions(logger=logger)
@@ -1120,7 +1121,7 @@ class RealtimeSession(
                 self._audio_input_chan.close()
                 self._tool_results_ch.close()
                 raise
-            except Exception as e:
+            except Exception:
                 logger.exception("Error processing audio")
 
     # for debugging purposes only
@@ -1135,9 +1136,9 @@ class RealtimeSession(
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """Enqueue an incoming mic rtc.AudioFrame for transcription."""
         if not self._audio_input_chan.closed:
-            # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
+            # logger.debug(f"Raw audio received: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")  # noqa: E501
             for f in self._resample_audio(frame):
-                # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")
+                # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")  # noqa: E501
 
                 for nf in self._bstream.write(f.data.tobytes()):
                     self._log_significant_audio(nf.data)
