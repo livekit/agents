@@ -19,13 +19,28 @@ Support for AWS AI including Bedrock, Polly, Transcribe and optionally Nova Soni
 See https://docs.livekit.io/agents/integrations/aws/ for more information.
 """
 
-try:
+import typing
+
+
+if typing.TYPE_CHECKING:
     from .experimental import realtime
-except ImportError as e:
-    raise ImportError(
-        "The 'realtime' module requires optional dependencies. "
-        "Please install them with: pip install 'livekit-plugins-aws[realtime]'"
-    ) from e
+
+
+def __getattr__(name: str) -> typing.Any:
+    if name == "realtime":
+        try:
+            from .experimental import realtime
+        except ImportError as e:
+            raise ImportError(
+                "The 'realtime' module requires optional dependencies. "
+                "Please install them with: pip install 'livekit-plugins-aws[realtime]'"
+            ) from e
+
+        return realtime
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 from .llm import LLM
 from .stt import STT, SpeechStream
 from .tts import TTS, ChunkedStream
