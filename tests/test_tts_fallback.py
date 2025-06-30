@@ -8,7 +8,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, utils
 from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
-from livekit.agents.tts.tts import SynthesizeStream
+from livekit.agents.tts.tts import SynthesizedAudio, SynthesizeStream
 from livekit.agents.utils.aio.channel import ChanEmpty
 
 from .fake_tts import FakeTTS
@@ -58,7 +58,7 @@ async def test_tts_fallback() -> None:
         assert fake1.synthesize_ch.recv_nowait()
         assert fake2.synthesize_ch.recv_nowait()
 
-        assert rtc.combine_audio_frames(frames).duration == 5.0
+        assert rtc.combine_audio_frames(frames).duration == 5.01
 
     assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
 
@@ -184,17 +184,19 @@ async def test_audio_resampled() -> None:
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
 
     async with fallback_adapter.synthesize("hello test") as stream:
-        frames = []
+        frames: list[SynthesizedAudio] = []
         async for data in stream:
-            frames.append(data.frame)
+            frames.append(data)
 
         assert fake1.synthesize_ch.recv_nowait()
         assert fake2.synthesize_ch.recv_nowait()
 
         assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
 
-        combined_frame = rtc.combine_audio_frames(frames)
-        assert combined_frame.duration == 5.0
+        assert frames[-1].is_final is True, "last frame should be final"
+
+        combined_frame = rtc.combine_audio_frames([f.frame for f in frames])
+        assert combined_frame.duration == 5.01
         assert combined_frame.sample_rate == 48000
 
     assert await asyncio.wait_for(fake1.synthesize_ch.recv(), 1.0)
@@ -203,15 +205,15 @@ async def test_audio_resampled() -> None:
         stream.push_text("hello test")
         stream.end_input()
 
-        frames = []
+        frames: list[SynthesizedAudio] = []
         async for data in stream:
-            frames.append(data.frame)
-
-        print(frames)
+            frames.append(data)
 
         assert fake2.stream_ch.recv_nowait()
 
-        combined_frame = rtc.combine_audio_frames(frames)
+        assert frames[-1].is_final is True, "last frame should be final"
+
+        combined_frame = rtc.combine_audio_frames([f.frame for f in frames])
         assert combined_frame.duration == 5.01  # 5.0 + 0.01 final flag
         assert combined_frame.sample_rate == 48000
 
