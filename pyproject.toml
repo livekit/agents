@@ -39,7 +39,7 @@ livekit-plugins-inworld = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
-exclude = ["livekit-plugins/livekit-plugins-browser"]
+exclude = ["livekit-plugins/livekit-plugins-browser", "livekit-plugins/livekit-blingfire"]
 
 [dependency-groups]
 dev = [
