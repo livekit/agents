@@ -46,7 +46,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG={extdir}",
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE={extdir}",
             f"-DPYTHON_EXECUTABLE={sys.executable}",
-            f"-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
         ]
 
@@ -64,7 +64,9 @@ class CMakeBuild(build_ext):
 
         subprocess.run(["cmake", ext.sourcedir, *cmake_args], cwd=self.build_temp, check=True)
         subprocess.run(
-            ["cmake", "--build", ".", "--target", ext.name, "--config", "Release"], cwd=self.build_temp, check=True
+            ["cmake", "--build", ".", "--target", ext.name, "--config", "Release"],
+            cwd=self.build_temp,
+            check=True,
         )
 
 

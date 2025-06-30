@@ -7,3 +7,4 @@ repair-wheel-command = "" # getting issues with unresolved files
 
 [tool.cibuildwheel]
 before-build = "pip install pybind11[global]"
+skip = "*-musllinux_*"
