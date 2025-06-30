@@ -48,6 +48,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DPYTHON_EXECUTABLE={sys.executable}",
             f"-DCMAKE_BUILD_TYPE={cfg}",
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
         ]
 
         print(f"cmake_args: {cmake_args}")
