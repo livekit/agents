@@ -1,8 +1,8 @@
 # LMNT plugin for LiveKit Agents
 
-Support for voice synthesis with [LMNT](https://lmnt.com/).
+Support for voice synthesis with [LMNT](https://lmnt.com/) in LiveKit Agents.
 
-See [https://docs.livekit.io/agents/integrations/tts/lmnt/](https://docs.livekit.io/agents/integrations/tts/lmnt/) for more information.
+See the [LMNT TTS docs](https://docs.livekit.io/agents/integrations/tts/lmnt/) for more information.
 
 ## Installation
 
