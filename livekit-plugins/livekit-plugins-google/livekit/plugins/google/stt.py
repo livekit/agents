@@ -624,7 +624,7 @@ def _recognize_response_to_speech_event(
 
     confidence /= valid_results
     lg = resp.results[0].language_code
-
+    logger.debug(f"Batch STT confidence: {confidence}, text: {text}")
     if confidence < min_confidence_threshold:
         return None
     if text == "":
