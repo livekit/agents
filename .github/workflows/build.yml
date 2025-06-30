@@ -1,0 +1,121 @@
+name: Build package
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        required: true
+        type: string
+      artifact_name:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Name of the package to build"
+        required: true
+        default: "livekit-plugins-browser"
+      artifact_name:
+        description: "Artifact name for the distribution package"
+        required: true
+        default: "build-artifact"
+
+jobs:
+  build_plugins:
+    runs-on: ubuntu-latest
+    if: inputs.package != 'livekit-plugins-browser' && inputs.package != 'livekit-blingfire'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Build package
+        run: uv build --package ${{inputs.package}}
+
+      - name: Upload distribution package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: dist/
+
+  build_browser:
+    if: inputs.package == 'livekit-plugins-browser'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-14] # TODO(theomonnom): other platforms
+
+    defaults:
+      run:
+        working-directory: livekit-plugins/livekit-plugins-browser
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install cibuildwheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install cibuildwheel
+
+      - name: Build wheels
+        run: cibuildwheel --output-dir dist
+        env:
+          CIBW_SKIP: pp* cp313-*
+          CIBW_BUILD_VERBOSITY: 3
+
+      - name: Upload distribution package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: livekit-plugins/livekit-plugins-browser/dist/
+
+
+  build_blingfire:
+    if: inputs.package == 'livekit-blingfire'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+
+    defaults:
+      run:
+        working-directory: livekit-plugins/livekit-blingfire
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install cibuildwheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install cibuildwheel
+
+      - name: Build wheels
+        run: cibuildwheel --output-dir dist
+        env:
+          CIBW_BUILD_VERBOSITY: 3
+
+      - name: Upload distribution package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: livekit-plugins/livekit-blingfire/dist/
