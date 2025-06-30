@@ -77,7 +77,7 @@ class MistralLLM(LLM):
             max_completion_tokens=max_completion_tokens,
         )
         self._provider_fmt = _provider_fmt or "mistralai"
-        self._client = Mistral(api_key=api_key or os.environ["MISTRAL_API_KEY"])
+        self._client = Mistral(api_key=api_key or os.environ.get("MISTRAL_API_KEY"))
 
     def chat(
         self,

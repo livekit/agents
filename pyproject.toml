@@ -17,6 +17,7 @@ livekit-plugins-google = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-openai = { workspace = true }
+livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-silero = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }

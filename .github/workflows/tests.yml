@@ -95,6 +95,7 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+          MISTRALAI_API_KEY:  ${{ secrets.MISTRALAI_API_KEY }}
         working-directory: tests
         run: make test
 
