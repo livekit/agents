@@ -14,11 +14,10 @@
 
 
 from __future__ import annotations
-from .version import __version__
-
-from typing import List, Tuple
 
 import livekit_blingfire as _cext
+
+from .version import __version__
 
 
 def text_to_sentences(text: str) -> str:
@@ -27,7 +26,7 @@ def text_to_sentences(text: str) -> str:
 
 def text_to_sentences_with_offsets(
     text: str,
-) -> Tuple[str, List[Tuple[int, int]]]:
+) -> tuple[str, list[tuple[int, int]]]:
     return _cext.text_to_sentences_with_offsets(text)
 
 
@@ -37,7 +36,7 @@ def text_to_words(text: str) -> str:
 
 def text_to_words_with_offsets(
     text: str,
-) -> Tuple[str, List[Tuple[int, int]]]:
+) -> tuple[str, list[tuple[int, int]]]:
     return _cext.text_to_words_with_offsets(text)
 
 
@@ -46,4 +45,5 @@ __all__ = [
     "text_to_sentences_with_offsets",
     "text_to_words",
     "text_to_words_with_offsets",
+    "__version__",
 ]
