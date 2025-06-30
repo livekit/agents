@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-import livekit_blingfire as _cext
+import lk_blingfire as _cext
 
 from .version import __version__
 

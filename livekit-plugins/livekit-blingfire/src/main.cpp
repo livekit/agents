@@ -119,8 +119,8 @@ py::tuple text_to_words_with_offsets(const std::string &s) {
   return py::make_tuple(utf8, spans);
 }
 
-PYBIND11_MODULE(livekit_blingfire, m) {
-  m.doc() = "Exact-behaviour BlingFire bindings (matches reference ctypes)";
+PYBIND11_MODULE(lk_blingfire, m) {
+  m.doc() = "BlingFire bindings for livekit-agents";
 
   m.def("text_to_sentences", &text_to_sentences,
         "TextToSentences (buffer size len*2)");
