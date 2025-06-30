@@ -18,6 +18,8 @@ FetchContent_MakeAvailable(blingfire)
 
 include_directories(${blingfire_SOURCE_DIR})
 
+set (default_build_type "Release") # override blingfire hardcoded build_type for windows
+
 pybind11_add_module(lk_blingfire src/main.cpp)
 target_link_libraries(lk_blingfire PRIVATE blingfiretokdll_static fsaClient)
 
