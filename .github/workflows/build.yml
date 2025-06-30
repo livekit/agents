@@ -127,7 +127,6 @@ jobs:
         env:
           CIBW_BUILD_VERBOSITY: 3
           CIBW_ARCHS: ${{ matrix.archs }}
-          CIBW_SKIP: "musllinux_*"
 
       - name: Upload distribution package
         uses: actions/upload-artifact@v4
