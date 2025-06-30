@@ -269,9 +269,13 @@ class STT(stt.STT):
                     timeout=conn_options.timeout,
                 )
 
-                return _recognize_response_to_speech_event(
+                result = _recognize_response_to_speech_event(
                     raw, min_confidence_threshold=self._config.min_confidence_threshold
-                )  # type: ignore
+                )
+                if result is not None:
+                    return result
+
+                return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[])
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
@@ -584,22 +588,47 @@ class SpeechStream(stt.SpeechStream):
 def _recognize_response_to_speech_event(
     resp: cloud_speech.RecognizeResponse,
     *,
-    min_confidence_threshold: float = _default_min_confidence,
-) -> stt.SpeechEvent:
+    min_confidence_threshold: float,
+) -> stt.SpeechEvent | None:
     text = ""
     confidence = 0.0
+    valid_results = 0
+
     for result in resp.results:
+        if not result.alternatives or len(result.alternatives) == 0:
+            continue
+
         text += result.alternatives[0].transcript
         confidence += result.alternatives[0].confidence
+        valid_results += 1
+
+    if valid_results == 0:
+        return None
+
+    if (
+        not resp.results
+        or not resp.results[0].alternatives
+        or len(resp.results[0].alternatives) == 0
+    ):
+        return None
+
+    first_result = resp.results[0].alternatives[0]
+    last_result = resp.results[-1].alternatives[0]
+
+    if not first_result.words or not last_result.words:
+        return None
 
     # not sure why start_offset and end_offset returns a timedelta
-    start_offset = resp.results[0].alternatives[0].words[0].start_offset
-    end_offset = resp.results[-1].alternatives[0].words[-1].end_offset
+    start_offset = first_result.words[0].start_offset
+    end_offset = last_result.words[-1].end_offset
 
-    confidence /= len(resp.results)
-    logger.debug(f"Batch STT confidence: {confidence}, text: {text}")
+    confidence /= valid_results
     lg = resp.results[0].language_code
 
+    if confidence < min_confidence_threshold:
+        return None
+    if text == "":
+        return None
     return stt.SpeechEvent(
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
