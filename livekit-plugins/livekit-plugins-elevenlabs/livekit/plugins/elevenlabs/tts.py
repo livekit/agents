@@ -21,7 +21,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Union
 
 import aiohttp
 
@@ -84,10 +84,11 @@ class _TTSOptions:
     encoding: TTSEncoding
     sample_rate: int
     streaming_latency: NotGivenOr[int]
-    word_tokenizer: tokenize.WordTokenizer
+    word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     chunk_length_schedule: NotGivenOr[list[int]]
     enable_ssml_parsing: bool
     inactivity_timeout: int
+    auto_mode: NotGivenOr[bool]
 
 
 class TTS(tts.TTS):
@@ -102,7 +103,8 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
-        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
+        auto_mode: NotGivenOr[bool] = NOT_GIVEN,
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         enable_ssml_parsing: bool = False,
         chunk_length_schedule: NotGivenOr[list[int]] = NOT_GIVEN,  # range is [50, 500]
         http_session: aiohttp.ClientSession | None = None,
@@ -119,7 +121,8 @@ class TTS(tts.TTS):
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
-            word_tokenizer (NotGivenOr[tokenize.WordTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            auto_mode (bool): Reduces latency by disabling chunk schedule and buffers. Recommended for full sentences/phrases. Defaults to False.
+            word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
@@ -144,8 +147,15 @@ class TTS(tts.TTS):
             )
 
         if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(
-                ignore_punctuation=False  # punctuation can help for intonation
+            word_tokenizer = (
+                tokenize.basic.WordTokenizer(ignore_punctuation=False)
+                if not auto_mode
+                else tokenize.basic.SentenceTokenizer()
+            )
+        elif auto_mode and not isinstance(word_tokenizer, tokenize.SentenceTokenizer):
+            logger.warning(
+                "auto_mode is enabled, it expects full sentences or phrases, "
+                "please provide a SentenceTokenizer instead of a WordTokenizer."
             )
 
         self._opts = _TTSOptions(
@@ -162,6 +172,7 @@ class TTS(tts.TTS):
             enable_ssml_parsing=enable_ssml_parsing,
             language=language,
             inactivity_timeout=inactivity_timeout,
+            auto_mode=auto_mode,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -288,7 +299,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        self._segments_ch = utils.aio.Chan[Union[tokenize.WordStream, tokenize.SentenceStream]]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -343,7 +354,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
-        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
+        self,
+        word_stream: tokenize.WordStream | tokenize.SentenceStream,
+        output_emitter: tts.AudioEmitter,
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
@@ -386,7 +399,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     xml_content.append(text)
 
                     if any(data.token.find(end) > -1 for end in xml_end_tokens):
-                        text = self._opts.word_tokenizer.format_words(xml_content)
+                        text = (
+                            self._opts.word_tokenizer.format_words(xml_content)
+                            if isinstance(self._opts.word_tokenizer, tokenize.WordTokenizer)
+                            else " ".join(xml_content)
+                        )
                         xml_content = []
                     else:
                         continue
@@ -491,5 +508,7 @@ def _stream_url(opts: _TTSOptions) -> str:
         url += f"&language_code={language}"
     if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
+    if is_given(opts.auto_mode):
+        url += f"&auto_mode={opts.auto_mode}"
 
     return url
