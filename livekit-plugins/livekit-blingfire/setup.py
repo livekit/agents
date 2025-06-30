@@ -64,7 +64,7 @@ class CMakeBuild(build_ext):
 
         subprocess.run(["cmake", ext.sourcedir, *cmake_args], cwd=self.build_temp, check=True)
         subprocess.run(
-            ["cmake", "--build", ".", "--target", ext.name], cwd=self.build_temp, check=True
+            ["cmake", "--build", ".", "--target", ext.name, "--config", "Release"], cwd=self.build_temp, check=True
         )
 
 
