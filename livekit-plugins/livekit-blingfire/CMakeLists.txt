@@ -17,10 +17,7 @@ FetchContent_Declare(blingfire
                      GIT_REPOSITORY https://github.com/microsoft/BlingFire)
 FetchContent_MakeAvailable(blingfire)
 
-include_directories(
-  ${blingfire_SOURCE_DIR}
-)
+include_directories(${blingfire_SOURCE_DIR})
 
 pybind11_add_module(livekit_blingfire main.cpp)
-target_link_libraries(livekit_blingfire PRIVATE blingfiretokdll_static
-                                                fsaClient)
+target_link_libraries(livekit_blingfire PRIVATE blingfiretokdll_static fsaClient)
