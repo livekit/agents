@@ -114,17 +114,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download all dump shards
+      - name: download all dump shards
         uses: actions/download-artifact@v4
         with:
           pattern: lk-dump-*
           path: all_lk_dump
           merge-multiple: true
 
-      - name: Create tarball
-        run: tar -czf lk-dump-all.tar.gz -C all_lk_dump .
+      - name: create tarball
+        id: tar
+        run: |
+          if [ -d "all_lk_dump" ] && [ "$(ls -A all_lk_dump)" ]; then
+            tar -czf lk-dump-all.tar.gz -C all_lk_dump .
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No dump shards found, skipping tarball creation."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload merged dump
+      - name: upload merged dump
+        if: steps.tar.outputs.created == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: lk-dump-all
