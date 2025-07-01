@@ -5,7 +5,7 @@ import inspect
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Optional, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -25,7 +25,7 @@ from ..llm.tool_context import (
     is_raw_function_tool,
 )
 from ..log import logger
-from ..types import NotGivenOr
+from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
 from ..utils import aio
 from . import io
 from .speech_handle import SpeechHandle
@@ -131,12 +131,14 @@ def perform_llm_inference(
 @dataclass
 class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
+    timed_texts_fut: asyncio.Future[aio.Chan[io.TimedString] | None]
 
 
 def perform_tts_inference(
     *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
+    timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task() -> bool:
@@ -145,17 +147,30 @@ def perform_tts_inference(
             tts_node = await tts_node
 
         if isinstance(tts_node, AsyncIterable):
+            timed_text_ch = aio.Chan[io.TimedString]()
+            timed_texts_fut.set_result(timed_text_ch)
+
             async for audio_frame in tts_node:
+                for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
+                    timed_text_ch.send_nowait(text)
+
                 audio_ch.send_nowait(audio_frame)
 
             return True
 
+        timed_texts_fut.set_result(None)
         return False
 
     tts_task = asyncio.create_task(_inference_task())
-    tts_task.add_done_callback(lambda _: audio_ch.close())
 
-    return tts_task, _TTSGenerationData(audio_ch=audio_ch)
+    def _inference_done(_: asyncio.Task[bool]) -> None:
+        if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
+            timed_text_ch.close()
+        audio_ch.close()
+
+    tts_task.add_done_callback(_inference_done)
+
+    return tts_task, _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
 
 @dataclass
