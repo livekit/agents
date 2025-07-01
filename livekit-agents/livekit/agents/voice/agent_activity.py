@@ -1607,6 +1607,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
                 model_settings=model_settings,
+                skip_authorization=True,
             )
         finally:
             # reset tool_choice value
@@ -1623,6 +1624,7 @@ class AgentActivity(RecognitionHooks):
         speech_handle: SpeechHandle,
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
+        skip_authorization: bool = False,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
@@ -1639,10 +1641,11 @@ class AgentActivity(RecognitionHooks):
         )
         tool_ctx = llm.ToolContext(self.tools)
 
-        await speech_handle.wait_if_not_interrupted(
-            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
-        )
-        speech_handle._clear_authorization()
+        if not skip_authorization:
+            await speech_handle.wait_if_not_interrupted(
+                [asyncio.ensure_future(speech_handle._wait_for_authorization())]
+            )
+            speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
             return  # TODO(theomonnom): remove the message from the serverside history
