@@ -261,10 +261,44 @@ wheels = [
 
 [[package]]
 name = "amazon-transcribe"
+version = "0.6.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version == '3.11.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.11.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version == '3.11.*' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version == '3.10.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.10.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version == '3.10.*' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.10.*' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version < '3.10' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.10' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version < '3.10' and platform_machine != 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.10' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.10' and sys_platform != 'darwin' and sys_platform != 'linux')",
+]
+dependencies = [
+    { name = "awscrt", version = "0.16.26", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/df/1c/ca7de0b4735c63c455092b223191a4b31905a8e81b50aa906110a42528d5/amazon-transcribe-0.6.2.tar.gz", hash = "sha256:2d57e7590adc782a1f52b06be38e4e7d9e07e1fe8b22c53933bf99f625375109", size = 31042, upload_time = "2023-06-15T16:13:19.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/7d/9424134095bbff76022725f789dc1e3cd28e70e7229ac3da6c89fdb02d16/amazon_transcribe-0.6.2-py3-none-any.whl", hash = "sha256:29c7cab0f84d642eed2468b276991ecd87fc1224d9c7fd158ea336f14ae66538", size = 38769, upload_time = "2023-06-15T16:13:17.283Z" },
+]
+
+[[package]]
+name = "amazon-transcribe"
 version = "0.6.4"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.13' and sys_platform == 'darwin'",
+    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version >= '3.12.4' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and python_full_version < '3.12.4' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version >= '3.12' and python_full_version < '3.12.4' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.12.4' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "(python_full_version >= '3.12' and python_full_version < '3.12.4' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.12' and python_full_version < '3.12.4' and sys_platform != 'darwin' and sys_platform != 'linux')",
+]
 dependencies = [
-    { name = "awscrt" },
+    { name = "awscrt", version = "0.26.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/3a/f2bf812e8716d25fad092a21e2f01377d00c15e3a1e9be97d132a1d33850/amazon_transcribe-0.6.4.tar.gz", hash = "sha256:89770100e88446a451241f49ad14820bf3113f4545df0a32e82c73455928432c", size = 33687, upload_time = "2025-05-05T10:02:20.156Z" }
 wheels = [
@@ -315,11 +349,11 @@ wheels = [
 
 [[package]]
 name = "async-timeout"
-version = "5.0.1"
+version = "4.0.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a5/ae/136395dfbfe00dfc94da3f3e136d0b13f394cba8f4841120e34226265780/async_timeout-5.0.1.tar.gz", hash = "sha256:d9321a7a3d5a6a5e187e824d2fa0793ce379a202935782d555d6e9d2735677d3", size = 9274, upload_time = "2024-11-06T16:41:39.6Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/d6/21b30a550dafea84b1b8eee21b5e23fa16d010ae006011221f33dcd8d7f8/async-timeout-4.0.3.tar.gz", hash = "sha256:4640d96be84d82d02ed59ea2b7105a0f7b33abe8703703cd0ab0bf87c427522f", size = 8345, upload_time = "2023-08-10T16:35:56.907Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/ba/e2081de779ca30d473f21f5b30e0e737c438205440784c7dfc81efc2b029/async_timeout-5.0.1-py3-none-any.whl", hash = "sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c", size = 6233, upload_time = "2024-11-06T16:41:37.9Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/fa/e01228c2938de91d47b307831c62ab9e4001e747789d0b05baf779a6488c/async_timeout-4.0.3-py3-none-any.whl", hash = "sha256:7405140ff1230c310e51dc27b3145b9092d659ce68ff733fb0cefe3ee42be028", size = 5721, upload_time = "2023-08-10T16:35:55.203Z" },
 ]
 
 [[package]]
@@ -445,8 +479,61 @@ wheels = [
 
 [[package]]
 name = "awscrt"
+version = "0.16.26"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version == '3.11.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.11.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version == '3.11.*' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version == '3.10.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.10.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version == '3.10.*' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.10.*' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version < '3.10' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.10' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version < '3.10' and platform_machine != 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.10' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.10' and sys_platform != 'darwin' and sys_platform != 'linux')",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e7/97/5c7d6c78d9f40fe03f3ca04da85fe45da1566f4b48b157634dbcb46ecb6c/awscrt-0.16.26.tar.gz", hash = "sha256:1cc8cfa42cd16cb54d8b75417fec0fb038f7318c490209290bdb6c42ad3c2dff", size = 31262472, upload_time = "2023-07-19T01:33:09.904Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/84/7ffc911450a86498362314b05e88ccf7d95d1c4e4077414369ac75b4f0ae/awscrt-0.16.26-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:b83621f697b3aed064c82175845194b82e024184b1d4af30666b5087e93eb625", size = 1333709, upload_time = "2023-07-19T01:31:54.917Z" },
+    { url = "https://files.pythonhosted.org/packages/60/f7/2224d5cddfd0bac7d49c7cba89bf97ff7b05697e2ec9bea958c265cef85e/awscrt-0.16.26-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:dd6b8cdff1f6c4724b4422ff678334ab377b93230b1da1fe20a64acd80ff2121", size = 7402265, upload_time = "2023-07-19T01:31:57.036Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/34/75508a2a8077a2945dc2e21809ea5fd1ddb3eede08d4f6da40dbd7b3dc45/awscrt-0.16.26-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b31d90066d3f44ab2be58c122b817131cc1c756411ad9a93efff6bff979c02b3", size = 7760720, upload_time = "2023-07-19T01:31:58.562Z" },
+    { url = "https://files.pythonhosted.org/packages/15/53/42835d813a4b9aa4aaaaba465373de912c75e532927d06e69b605787b902/awscrt-0.16.26-cp310-cp310-musllinux_1_1_aarch64.whl", hash = "sha256:127cfe2e838c13b41620642e0a78d3cf38d70f7c2695a9fc873aff12306403aa", size = 7582650, upload_time = "2023-07-19T01:32:00.856Z" },
+    { url = "https://files.pythonhosted.org/packages/01/9a/59d111d6a2cb6781dbb393cc1ad08c700ce0688317ec322c3453dc9d8fab/awscrt-0.16.26-cp310-cp310-musllinux_1_1_x86_64.whl", hash = "sha256:b8e86404c8dea31e57504c97a424de3cce486cb5abfdf319d7cec78f010befb8", size = 7993772, upload_time = "2023-07-19T01:32:03.219Z" },
+    { url = "https://files.pythonhosted.org/packages/94/d4/fbe87fbff8775663027c0e3a0afb69dd2687c7228c5425ec5873b8ec870e/awscrt-0.16.26-cp310-cp310-win32.whl", hash = "sha256:63253072ae3d8c24a1ce1b3296ec3eef523f08ab93411fc00cc88a976054ea32", size = 2309244, upload_time = "2023-07-19T01:32:05.605Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/18/cfbc70fda74b0a3a83d19e66cf07e82cc11d2b25dad1c080a81b1854d233/awscrt-0.16.26-cp310-cp310-win_amd64.whl", hash = "sha256:3f301ec4d734948953458d98ea2ec360d41fa590f424a69d188a79560d76c7e3", size = 2392722, upload_time = "2023-07-19T01:32:07.359Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/55/9780174797ff690a1d2a8d0d5382a7a6a0c7f4c840718069d14ea90febbe/awscrt-0.16.26-cp311-abi3-macosx_10_9_universal2.whl", hash = "sha256:9f612ebac3084b09a2f4e6a1ded9a694ac6d07531fad61106f5ebf47c1e17de2", size = 1333856, upload_time = "2023-07-19T01:32:09.193Z" },
+    { url = "https://files.pythonhosted.org/packages/88/04/c9988e3cc5f56c435b992281818e1a3d37ad5d40c488e17ba83768055d82/awscrt-0.16.26-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f7e0e19992ba4ef0cf8d39e1ebc3e5f5db69f415c8401c843f258227c8947bc6", size = 7368241, upload_time = "2023-07-19T01:32:10.614Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/c9/68c3c556cd9040bfeeae8bd9b75ae168c6cc5247263850aaabb8fab6c23f/awscrt-0.16.26-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:85e40658a3ab0b84084500cb7b09ec56e944b47358a1320035fc675e532a418b", size = 7725715, upload_time = "2023-07-19T01:32:12.251Z" },
+    { url = "https://files.pythonhosted.org/packages/00/83/fb3878433dd8c37c8c8b704fd090854c7e8deacdf8e13988cecf3a32854e/awscrt-0.16.26-cp311-abi3-musllinux_1_1_aarch64.whl", hash = "sha256:52a22dab188bd88d662f0f8643885e74e48b1027ea944388325e43f37a84ec63", size = 7540235, upload_time = "2023-07-19T01:32:14.4Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/37/3a0a4591dad3a8590ea8c0b92a995cb82d0dcec12f244cbb739ecec18fa9/awscrt-0.16.26-cp311-abi3-musllinux_1_1_x86_64.whl", hash = "sha256:c5b51529ea1e4b32ad2ee6e68447c89a48cf1c533746ecba5261cb600592c371", size = 7952646, upload_time = "2023-07-19T01:32:17.19Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/1b/d56d512e262634e3d413b57e3b3b5c625fc95fd2581a904528001fdaa6aa/awscrt-0.16.26-cp311-abi3-win32.whl", hash = "sha256:aa1a848d85dc19f6785f354230369d05f9bdfdab0bd3089333d2d2f9b720e68a", size = 2306526, upload_time = "2023-07-19T01:32:18.788Z" },
+    { url = "https://files.pythonhosted.org/packages/03/0e/77a0317e7e98be2ea91fbd63498728a2efabe52cbcb8a5919edeb2d25c92/awscrt-0.16.26-cp311-abi3-win_amd64.whl", hash = "sha256:6fe57aacb74505af490005584ba8ba8a7b637b90b0fb066950792f0d3205e2c4", size = 2389793, upload_time = "2023-07-19T01:32:20.587Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/f2/60cc80ad4d9e2de4f427b34fd4f4f6ab1373176748fe5f4d1cffbd0d2570/awscrt-0.16.26-cp39-cp39-macosx_10_9_universal2.whl", hash = "sha256:f07791cdd1bcb1f18fec538f15a2597e98e61f1d02c000a575e56abfcc17d812", size = 1333665, upload_time = "2023-07-19T01:32:54.113Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/f3/e09b435cecae97aaf2c45611938a1da94b2a8a0ba868d53e8665f494d936/awscrt-0.16.26-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e29cfd4be93fc32328c898f472b4a54fa6d5202724ac797c1659c5487c4a74e0", size = 7399402, upload_time = "2023-07-19T01:32:55.727Z" },
+    { url = "https://files.pythonhosted.org/packages/74/ef/c09961644685ca2ef18151cdf1f1a0c20c40988bbcaf9720e723e4973f1e/awscrt-0.16.26-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:29422396a58107e85153622754fe82956f7f962d803369879578f5963701b733", size = 7757803, upload_time = "2023-07-19T01:32:57.702Z" },
+    { url = "https://files.pythonhosted.org/packages/86/0b/27f6d2565cdb57f4c8506db798ac01adc08e1525d11cef34955b47acde54/awscrt-0.16.26-cp39-cp39-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:3ffed91a63012da12a43ce55ae3234088602d1f9eaec115e674cd31613c01383", size = 6739698, upload_time = "2023-07-19T01:32:59.415Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/1c/90c3f3908e9529198d9ea5f7083c963462db57b030f3f2c5fc120b33bf75/awscrt-0.16.26-cp39-cp39-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:d814efba00ce1dadc37f847c581427da3b3fd2113b880e8a0e6b8ac2d6697951", size = 7431569, upload_time = "2023-07-19T01:33:01.127Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/cc/665430f1fb1cff2666a026bb8ba1434ffd15a2f37eca72e495553be68ee6/awscrt-0.16.26-cp39-cp39-musllinux_1_1_aarch64.whl", hash = "sha256:f0a1ad7d2b0a213bcb83ed9b17daca606b66bbf42daa52510681a8d0e831e10f", size = 7579795, upload_time = "2023-07-19T01:33:03.333Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/fc/ad19337b078cfe65930f050798582c6b04cf232d060adc0b02073ba2e170/awscrt-0.16.26-cp39-cp39-musllinux_1_1_x86_64.whl", hash = "sha256:dbcbba9b322a2c42f5c9a7d5d2edfde913c2d3cfe68afa488ac2b747d53d78ed", size = 7992240, upload_time = "2023-07-19T01:33:05.06Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/09/8c8bd2d54e12228439cd6c2460f76080ea43556b8a74dd031b7cb2d88cfa/awscrt-0.16.26-cp39-cp39-win32.whl", hash = "sha256:fb1cf73f0bd25dc76e1c9763c294d7e307421294b61f72305305682c9a3e4589", size = 2307628, upload_time = "2023-07-19T01:33:06.721Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/c1/011311aba209cba079c5a2f1c3f67df31aa82952a7a42cbb4c3fcbc30e3e/awscrt-0.16.26-cp39-cp39-win_amd64.whl", hash = "sha256:a0fe0700ae7d84981be6897987da888958bd4c1579875318e92e92d05e59f1a5", size = 2391310, upload_time = "2023-07-19T01:33:08.213Z" },
+]
+
+[[package]]
+name = "awscrt"
 version = "0.26.1"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.13' and sys_platform == 'darwin'",
+    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version >= '3.12.4' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12' and python_full_version < '3.12.4' and sys_platform == 'darwin'",
+    "python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version >= '3.12' and python_full_version < '3.12.4' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.12.4' and python_full_version < '3.13' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.12.4' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "(python_full_version >= '3.12' and python_full_version < '3.12.4' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.12' and python_full_version < '3.12.4' and sys_platform != 'darwin' and sys_platform != 'linux')",
+]
 sdist = { url = "https://files.pythonhosted.org/packages/42/db/72989a426cdf2b9f38454b1cdba246b2d2e95a77397ad3df18d1d9d4f5b3/awscrt-0.26.1.tar.gz", hash = "sha256:a8d63a7dcc6484c5c1675b31a8d1b6726c3dc85b13796fb143dfb0072260935e", size = 77265756, upload_time = "2025-04-09T20:51:33.943Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/43/02/de3a20f6c3962dd6fa5237f88ad5198fc94efd34d3010659d1e59f881a52/awscrt-0.26.1-cp310-cp310-macosx_10_15_universal2.whl", hash = "sha256:b855d2e1005791c8c872443fac6a40f6fbaa951bbb8b30ce6a28c8e7e2839663", size = 3215855, upload_time = "2025-04-09T20:50:17.92Z" },
@@ -818,14 +905,11 @@ wheels = [
 
 [[package]]
 name = "exceptiongroup"
-version = "1.3.0"
+version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload_time = "2025-05-10T17:42:51.123Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/09/35/2495c4ac46b980e4ca1f6ad6db102322ef3ad2410b79fdde159a4b0f3b92/exceptiongroup-1.2.2.tar.gz", hash = "sha256:47c2edf7c6738fafb49fd34290706d1a1a2f4d1c6df275526b62cbb4aa5393cc", size = 28883, upload_time = "2024-07-12T22:26:00.161Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/f4/c6e662dade71f56cd2f3735141b265c3c79293c109549c1e6933b0651ffc/exceptiongroup-1.3.0-py3-none-any.whl", hash = "sha256:4d111e6e0c13d0644cad6ddaa7ed0261a0b36971f6d23e7ec9b4b9097da78a10", size = 16674, upload_time = "2025-05-10T17:42:49.33Z" },
+    { url = "https://files.pythonhosted.org/packages/02/cc/b7e31358aac6ed1ef2bb790a9746ac2c69bcb3c8588b41616914eb106eaf/exceptiongroup-1.2.2-py3-none-any.whl", hash = "sha256:3111b9d131c238bec2f8f516e123e14ba243563fb135d3fe885990585aa7795b", size = 16453, upload_time = "2024-07-12T22:25:58.476Z" },
 ]
 
 [[package]]
@@ -1918,7 +2002,8 @@ name = "livekit-plugins-aws"
 source = { editable = "livekit-plugins/livekit-plugins-aws" }
 dependencies = [
     { name = "aioboto3" },
-    { name = "amazon-transcribe" },
+    { name = "amazon-transcribe", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "amazon-transcribe", version = "0.6.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "livekit-agents" },
 ]
 
@@ -4664,7 +4749,7 @@ wheels = [
 
 [package.optional-dependencies]
 awscrt = [
-    { name = "awscrt", marker = "python_full_version >= '3.12'" },
+    { name = "awscrt", version = "0.26.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
 [[package]]
