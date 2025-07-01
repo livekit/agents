@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import time
 from dataclasses import dataclass
@@ -288,14 +289,8 @@ class FallbackRecognizeStream(RecognizeStream):
                     logger.exception("error happened in forwarding input", extra={"streamed": True})
 
             if main_stream is not None:
-                try:
+                with contextlib.suppress(RuntimeError):
                     main_stream.end_input()
-                except RuntimeError:
-                    pass
-                except Exception:
-                    logger.exception(
-                        "error happened in closing recognize stream", extra={"streamed": True}
-                    )
 
         for i, stt in enumerate(self._fallback_adapter._stt_instances):
             stt_status = self._fallback_adapter._status[i]
