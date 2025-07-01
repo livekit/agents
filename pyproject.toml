@@ -35,10 +35,11 @@ livekit-plugins-hedra = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }
+livekit-plugins-inworld = { workspace = true }
 
 [tool.uv.workspace]
 members = ["livekit-plugins/*", "livekit-agents"]
-exclude = ["livekit-plugins/livekit-plugins-browser"]
+exclude = ["livekit-plugins/livekit-plugins-browser", "livekit-plugins/livekit-blingfire"]
 
 [dependency-groups]
 dev = [
@@ -50,6 +51,10 @@ dev = [
     "jiwer>=3.1.0",
     "scipy>=1.13.1",
     "tiktoken>=0.9.0",
+]
+docs = [
+    "pdoc3",
+    "setuptools",
 ]
 
 [tool.ruff]

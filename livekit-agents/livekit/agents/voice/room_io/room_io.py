@@ -311,6 +311,12 @@ class RoomIO:
             return None
         return self._participant_available_fut.result()
 
+    @property
+    def subscribed_fut(self) -> asyncio.Future[None] | None:
+        if self._audio_output:
+            return self._audio_output.subscribed
+        return None
+
     def set_participant(self, participant_identity: str | None) -> None:
         """Switch audio and video streams to specified participant"""
         if participant_identity is None:
@@ -419,16 +425,24 @@ class RoomIO:
                 if self._close_session_atask is not None:
                     return
 
-            logger.debug(
-                "closing agent session due to participant disconnect",
-                extra={
-                    "participant": participant.identity,
-                    "reason": rtc.DisconnectReason.Name(participant.disconnect_reason),
-                },
-            )
-            self._close_session_atask = asyncio.create_task(
-                self._agent_session._aclose_impl(reason=CloseReason.PARTICIPANT_DISCONNECTED)
-            )
+            async def _close_session() -> None:
+                if not self._agent_session._started:
+                    return
+
+                logger.info(
+                    "closing agent session due to participant disconnect "
+                    "(disable via `RoomInputOptions.close_on_disconnect=False`)",
+                    extra={
+                        "participant": participant.identity,
+                        "reason": rtc.DisconnectReason.Name(
+                            participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
+                        ),
+                    },
+                )
+                await self._agent_session._aclose_impl(reason=CloseReason.PARTICIPANT_DISCONNECTED)
+                await self._room.disconnect()
+
+            self._close_session_atask = asyncio.create_task(_close_session())
             self._close_session_atask.add_done_callback(_on_closed)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
