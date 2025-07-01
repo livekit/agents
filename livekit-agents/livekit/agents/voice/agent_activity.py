@@ -695,6 +695,8 @@ class AgentActivity(RecognitionHooks):
                 heapq.heappush(self._speech_q, (-priority, time.perf_counter_ns(), speech))
                 break
             except TypeError:
+                # handle TypeError when identical timestamps cause speech comparison failure
+                # with perf_counter_ns(), collisions should be rare
                 pass
 
         self._wake_up_main_task()
