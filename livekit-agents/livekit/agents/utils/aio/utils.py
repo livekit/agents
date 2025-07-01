@@ -1,8 +1,9 @@
 import asyncio
 import functools
+from typing import Any
 
 
-async def cancel_and_wait(*futures: asyncio.Future):
+async def cancel_and_wait(*futures: asyncio.Future[Any]) -> None:
     loop = asyncio.get_running_loop()
     waiters = []
 
@@ -22,7 +23,7 @@ async def cancel_and_wait(*futures: asyncio.Future):
             fut.remove_done_callback(cb)
 
 
-def _release_waiter(waiter, *_):
+def _release_waiter(waiter: asyncio.Future[Any], *_: Any) -> None:
     if not waiter.done():
         waiter.set_result(None)
 

@@ -20,13 +20,17 @@ import os
 from dataclasses import dataclass
 from typing import Any, cast
 
-from google import genai
 from google.auth._default_async import default_async
-from google.genai import types
+from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents.llm import FunctionTool, ToolChoice, utils as llm_utils
-from livekit.agents.llm.tool_context import get_function_info
+from livekit.agents.llm import FunctionTool, RawFunctionTool, ToolChoice, utils as llm_utils
+from livekit.agents.llm.tool_context import (
+    get_function_info,
+    get_raw_function_info,
+    is_function_tool,
+    is_raw_function_tool,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -37,7 +41,8 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .utils import to_chat_ctx, to_fnc_ctx, to_response_format
+from .tools import _LLMTool
+from .utils import create_tools_config, to_fnc_ctx, to_response_format
 
 
 @dataclass
@@ -54,6 +59,10 @@ class _LLMOptions:
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
+    automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
+    gemini_tools: NotGivenOr[list[_LLMTool]]
+    http_options: NotGivenOr[types.HttpOptions]
+    seed: NotGivenOr[int]
 
 
 class LLM(llm.LLM):
@@ -73,6 +82,12 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfigOrDict] = NOT_GIVEN,
+        automatic_function_calling_config: NotGivenOr[
+            types.AutomaticFunctionCallingConfigOrDict
+        ] = NOT_GIVEN,
+        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
+        http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
+        seed: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Google GenAI LLM.
@@ -98,10 +113,13 @@ class LLM(llm.LLM):
             frequency_penalty (float, optional): Penalizes the model for repeating words. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
             thinking_config (ThinkingConfigOrDict, optional): The thinking configuration for response generation. Defaults to None.
+            automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
+            gemini_tools (list[LLMTool], optional): The Gemini-specific tools to use for the session.
+            http_options (HttpOptions, optional): The HTTP options to use for the session.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
-        gcp_location = (
+        gcp_location: str | None = (
             location
             if is_given(location)
             else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
@@ -115,7 +133,7 @@ class LLM(llm.LLM):
 
         if use_vertexai:
             if not gcp_project:
-                _, gcp_project = default_async(
+                _, gcp_project = default_async(  # type: ignore
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
             gemini_api_key = None  # VertexAI does not require an API key
@@ -157,8 +175,12 @@ class LLM(llm.LLM):
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             thinking_config=thinking_config,
+            automatic_function_calling_config=automatic_function_calling_config,
+            gemini_tools=gemini_tools,
+            http_options=http_options,
+            seed=seed,
         )
-        self._client = genai.Client(
+        self._client = Client(
             api_key=gemini_api_key,
             vertexai=use_vertexai,
             project=gcp_project,
@@ -169,7 +191,7 @@ class LLM(llm.LLM):
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools: list[FunctionTool] | None = None,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
@@ -177,50 +199,58 @@ class LLM(llm.LLM):
             types.SchemaUnion | type[llm_utils.ResponseFormatT]
         ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
 
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+        tool_choice = (
+            cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
+        )
         if is_given(tool_choice):
             gemini_tool_choice: types.ToolConfig
             if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
-                        mode="ANY",
+                        mode=types.FunctionCallingConfigMode.ANY,
                         allowed_function_names=[tool_choice["function"]["name"]],
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "required":
+                tool_names = []
+                for tool in tools or []:
+                    if is_function_tool(tool):
+                        tool_names.append(get_function_info(tool).name)
+                    elif is_raw_function_tool(tool):
+                        tool_names.append(get_raw_function_info(tool).name)
+
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
-                        mode="ANY",
-                        allowed_function_names=[get_function_info(fnc).name for fnc in tools]
-                        if tools
-                        else None,
+                        mode=types.FunctionCallingConfigMode.ANY,
+                        allowed_function_names=tool_names or None,
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "auto":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
-                        mode="AUTO",
+                        mode=types.FunctionCallingConfigMode.AUTO,
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice
             elif tool_choice == "none":
                 gemini_tool_choice = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
-                        mode="NONE",
+                        mode=types.FunctionCallingConfigMode.NONE,
                     )
                 )
                 extra["tool_config"] = gemini_tool_choice
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)
+            extra["response_schema"] = to_response_format(response_format)  # type: ignore
             extra["response_mime_type"] = "application/json"
 
         if is_given(self._opts.temperature):
@@ -235,10 +265,17 @@ class LLM(llm.LLM):
             extra["presence_penalty"] = self._opts.presence_penalty
         if is_given(self._opts.frequency_penalty):
             extra["frequency_penalty"] = self._opts.frequency_penalty
+        if is_given(self._opts.seed):
+            extra["seed"] = self._opts.seed
 
         # Add thinking config if thinking_budget is provided
         if is_given(self._opts.thinking_config):
             extra["thinking_config"] = self._opts.thinking_config
+
+        if is_given(self._opts.automatic_function_calling_config):
+            extra["automatic_function_calling"] = self._opts.automatic_function_calling_config
+
+        gemini_tools = gemini_tools if is_given(gemini_tools) else self._opts.gemini_tools
 
         return LLMStream(
             self,
@@ -247,6 +284,7 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
+            gemini_tools=gemini_tools,
             extra_kwargs=extra,
         )
 
@@ -256,32 +294,46 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        client: genai.Client,
+        client: Client,
         model: str | ChatModels,
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
-        tools: list[FunctionTool],
+        tools: list[FunctionTool | RawFunctionTool],
         extra_kwargs: dict[str, Any],
+        gemini_tools: NotGivenOr[list[_LLMTool]] = NOT_GIVEN,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm
         self._extra_kwargs = extra_kwargs
+        self._gemini_tools = gemini_tools
 
     async def _run(self) -> None:
         retryable = True
         request_id = utils.shortuuid()
 
         try:
-            turns, system_instruction = to_chat_ctx(self._chat_ctx, id(self._llm), generate=True)
+            turns_dict, extra_data = self._chat_ctx.to_provider_format(format="google")
+            turns = [types.Content.model_validate(turn) for turn in turns_dict]
             function_declarations = to_fnc_ctx(self._tools)
-            if function_declarations:
-                self._extra_kwargs["tools"] = [
-                    types.Tool(function_declarations=function_declarations)
-                ]
+            tools_config = create_tools_config(
+                function_tools=function_declarations,
+                gemini_tools=self._gemini_tools if is_given(self._gemini_tools) else None,
+            )
+            if tools_config:
+                self._extra_kwargs["tools"] = tools_config
+
             config = types.GenerateContentConfig(
-                system_instruction=system_instruction,
+                system_instruction=(
+                    [types.Part(text=content) for content in extra_data.system_messages]
+                    if extra_data.system_messages
+                    else None
+                ),
+                http_options=(
+                    self._llm._opts.http_options
+                    or types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
+                ),
                 **self._extra_kwargs,
             )
 
@@ -304,11 +356,8 @@ class LLMStream(llm.LLMStream):
                     or not response.candidates[0].content
                     or not response.candidates[0].content.parts
                 ):
-                    raise APIStatusError(
-                        "No candidates in the response",
-                        retryable=True,
-                        request_id=request_id,
-                    )
+                    logger.warning(f"no candidates in the response: {response}")
+                    continue
 
                 if len(response.candidates) > 1:
                     logger.warning(
@@ -374,7 +423,7 @@ class LLMStream(llm.LLMStream):
                     tool_calls=[
                         llm.FunctionToolCall(
                             arguments=json.dumps(part.function_call.args),
-                            name=part.function_call.name,
+                            name=part.function_call.name,  # type: ignore
                             call_id=part.function_call.id or utils.shortuuid("function_call_"),
                         )
                     ],

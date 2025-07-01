@@ -3,15 +3,7 @@ import os
 
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    JobContext,
-    RoomOutputOptions,
-    WorkerOptions,
-    WorkerType,
-    cli,
-)
+from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, WorkerType, cli
 from livekit.plugins import openai, tavus
 
 logger = logging.getLogger("tavus-avatar-example")
@@ -21,8 +13,6 @@ load_dotenv()
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(voice="alloy"),
     )
@@ -32,12 +22,13 @@ async def entrypoint(ctx: JobContext):
     tavus_avatar = tavus.AvatarSession(persona_id=persona_id, replica_id=replica_id)
     await tavus_avatar.start(session, room=ctx.room)
 
+    # start the agent, it will join the room and wait for the avatar to join
     await session.start(
         agent=Agent(instructions="Talk to me!"),
         room=ctx.room,
-        # audio is forwarded to the avatar, so we disable room audio output
-        room_output_options=RoomOutputOptions(audio_enabled=False),
     )
+
+    session.generate_reply(instructions="say hello to the user")
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ class LogQueueListener:
 
         lger.callHandlers(record)
 
-    def _monitor(self):
+    def _monitor(self) -> None:
         while True:
             try:
                 data = self._duplex.recv_bytes()
@@ -64,7 +64,7 @@ class LogQueueHandler(logging.Handler):
         self._send_thread = threading.Thread(target=self._forward_logs, name="ipc_log_forwarder")
         self._send_thread.start()
 
-    def _forward_logs(self):
+    def _forward_logs(self) -> None:
         while True:
             serialized_record = self._send_q.get()
             if serialized_record is None:

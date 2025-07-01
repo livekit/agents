@@ -30,7 +30,7 @@ __all__ = ["TTS", "LLM", "STT", "__version__"]
 
 
 class GroqPlugin(Plugin):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 

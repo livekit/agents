@@ -6,14 +6,15 @@ import sys
 import uuid
 
 import aiohttp
-import nest_asyncio
+import nest_asyncio  # type: ignore
 
 from livekit import api
 from livekit.rtc.jupyter import display_room
 
 from .cli import _run, proto
+from .job import JobExecutorType
 from .types import NOT_GIVEN, NotGivenOr
-from .worker import JobExecutorType, WorkerOptions
+from .worker import WorkerOptions
 
 
 def run_app(
@@ -26,7 +27,7 @@ def run_app(
     nest_asyncio.apply()
 
     if IN_COLAB:
-        from google.colab import userdata
+        from google.colab import userdata  # type: ignore
 
         if not jupyter_url:
             opts.ws_url = userdata.get("LIVEKIT_URL")
@@ -45,7 +46,7 @@ def run_app(
 
     if jupyter_url:
 
-        async def fetch_join_tokens(url: str):
+        async def fetch_join_tokens(url: str) -> tuple[str, str, str]:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url) as response:
                     data = await response.json()

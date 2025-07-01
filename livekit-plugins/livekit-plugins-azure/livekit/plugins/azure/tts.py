@@ -13,46 +13,33 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
-from dataclasses import dataclass
-from typing import Callable, Literal
+from dataclasses import dataclass, replace
+from typing import Literal
 
-import azure.cognitiveservices.speech as speechsdk  # type: ignore
-from livekit.agents import (
-    APIConnectionError,
+import aiohttp
+
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, tts, utils
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
     APIConnectOptions,
-    APITimeoutError,
-    tts,
-    utils,
+    NotGivenOr,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
-
-# only raw & pcm
-SUPPORTED_SAMPLE_RATE = {
-    8000: speechsdk.SpeechSynthesisOutputFormat.Raw8Khz16BitMonoPcm,
-    16000: speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm,
-    22050: speechsdk.SpeechSynthesisOutputFormat.Raw22050Hz16BitMonoPcm,
-    24000: speechsdk.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm,
-    44100: speechsdk.SpeechSynthesisOutputFormat.Raw44100Hz16BitMonoPcm,
-    48000: speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm,
+SUPPORTED_OUTPUT_FORMATS = {
+    8000: "raw-8khz-16bit-mono-pcm",
+    16000: "raw-16khz-16bit-mono-pcm",
+    22050: "raw-22050hz-16bit-mono-pcm",
+    24000: "raw-24khz-16bit-mono-pcm",
+    44100: "raw-44100hz-16bit-mono-pcm",
+    48000: "raw-48khz-16bit-mono-pcm",
 }
 
 
 @dataclass
 class ProsodyConfig:
-    """
-    Prosody configuration for Azure TTS.
-
-    Args:
-        rate: Speaking rate. Can be one of "x-slow", "slow", "medium", "fast", "x-fast", or a float. A float value of 1.0 represents normal speed.
-        volume: Speaking volume. Can be one of "silent", "x-soft", "soft", "medium", "loud", "x-loud", or a float. A float value of 100 (x-loud) represents the highest volume and it's the default pitch.
-        pitch: Speaking pitch. Can be one of "x-low", "low", "medium", "high", "x-high". The default pitch is "medium".
-    """  # noqa: E501
-
     rate: Literal["x-slow", "slow", "medium", "fast", "x-fast"] | float | None = None
     volume: Literal["silent", "x-soft", "soft", "medium", "loud", "x-loud"] | float | None = None
     pitch: Literal["x-low", "low", "medium", "high", "x-high"] | None = None
@@ -85,7 +72,6 @@ class ProsodyConfig:
                 raise ValueError(
                     "Prosody volume must be one of 'silent', 'x-soft', 'soft', 'medium', 'loud', 'x-loud'"  # noqa: E501
                 )
-
         if self.pitch and self.pitch not in [
             "x-low",
             "low",
@@ -97,20 +83,12 @@ class ProsodyConfig:
                 "Prosody pitch must be one of 'x-low', 'low', 'medium', 'high', 'x-high'"
             )
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.validate()
 
 
 @dataclass
 class StyleConfig:
-    """
-    Style configuration for Azure TTS neural voices.
-
-    Args:
-        style: Speaking style for neural voices. Examples: "cheerful", "sad", "angry", etc.
-        degree: Intensity of the style, from 0.1 to 2.0.
-    """
-
     style: str
     degree: float | None = None
 
@@ -118,129 +96,95 @@ class StyleConfig:
         if self.degree is not None and not 0.1 <= self.degree <= 2.0:
             raise ValueError("Style degree must be between 0.1 and 2.0")
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.validate()
 
 
 @dataclass
 class _TTSOptions:
     sample_rate: int
-    speech_key: NotGivenOr[str] = NOT_GIVEN
-    speech_region: NotGivenOr[str] = NOT_GIVEN
-    # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-ntts?tabs=container#use-the-container
-    speech_host: NotGivenOr[str] = NOT_GIVEN
-    # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts
-    voice: NotGivenOr[str] = NOT_GIVEN
-    # for using custom voices (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python#use-a-custom-endpoint)
-    endpoint_id: NotGivenOr[str] = NOT_GIVEN
-    # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
-    speech_auth_token: NotGivenOr[str] = NOT_GIVEN
-    # Useful to specify the language with multi-language voices
-    language: NotGivenOr[str] = NOT_GIVEN
-    # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#adjust-prosody
-    prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN
-    speech_endpoint: NotGivenOr[str] = NOT_GIVEN
-    style: NotGivenOr[StyleConfig] = NOT_GIVEN
-    # See https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis?tabs=browserjs%2Cterminal&pivots=programming-language-python
-    on_bookmark_reached_event: NotGivenOr[Callable] = NOT_GIVEN
-    on_synthesis_canceled_event: NotGivenOr[Callable] = NOT_GIVEN
-    on_synthesis_completed_event: NotGivenOr[Callable] = NOT_GIVEN
-    on_synthesis_started_event: NotGivenOr[Callable] = NOT_GIVEN
-    on_synthesizing_event: NotGivenOr[Callable] = NOT_GIVEN
-    on_viseme_event: NotGivenOr[Callable] = NOT_GIVEN
-    on_word_boundary_event: NotGivenOr[Callable] = NOT_GIVEN
+    subscription_key: str | None
+    region: str | None
+    voice: str
+    language: str | None
+    speech_endpoint: str | None
+    deployment_id: str | None
+    prosody: NotGivenOr[ProsodyConfig]
+    style: NotGivenOr[StyleConfig]
+    auth_token: str | None = None
+
+    def get_endpoint_url(self) -> str:
+        base = (
+            self.speech_endpoint
+            or f"https://{self.region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        )
+        if self.deployment_id:
+            return f"{base}?deploymentId={self.deployment_id}"
+        return base
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
+        voice: str = "en-US-JennyNeural",
+        language: str | None = None,
         sample_rate: int = 24000,
-        voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
         prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
-        speech_key: NotGivenOr[str] = NOT_GIVEN,
-        speech_region: NotGivenOr[str] = NOT_GIVEN,
-        speech_host: NotGivenOr[str] = NOT_GIVEN,
-        speech_auth_token: NotGivenOr[str] = NOT_GIVEN,
-        endpoint_id: NotGivenOr[str] = NOT_GIVEN,
         style: NotGivenOr[StyleConfig] = NOT_GIVEN,
-        on_bookmark_reached_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_synthesis_canceled_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_synthesis_completed_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_synthesis_started_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_synthesizing_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_viseme_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_word_boundary_event: NotGivenOr[Callable] = NOT_GIVEN,
-        speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
+        speech_key: str | None = None,
+        speech_region: str | None = None,
+        speech_endpoint: str | None = None,
+        deployment_id: str | None = None,
+        speech_auth_token: str | None = None,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        """
-        Create a new instance of Azure TTS.
-
-        Either ``speech_host`` or ``speech_key`` and ``speech_region`` or
-        ``speech_auth_token`` and ``speech_region`` must be set using arguments.
-         Alternatively,  set the ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY``
-        and ``AZURE_SPEECH_REGION`` environmental variables, respectively.
-        ``speech_auth_token`` must be set using the arguments as it's an ephemeral token.
-        """
-
-        if sample_rate not in SUPPORTED_SAMPLE_RATE:
-            raise ValueError(
-                f"Unsupported sample rate {sample_rate}. Supported sample rates: {list(SUPPORTED_SAMPLE_RATE.keys())}"  # noqa: E501
-            )
-
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=False,
-            ),
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
             num_channels=1,
         )
+        if sample_rate not in SUPPORTED_OUTPUT_FORMATS:
+            raise ValueError(
+                f"Unsupported sample rate {sample_rate}. Supported: {list(SUPPORTED_OUTPUT_FORMATS)}"  # noqa: E501
+            )
 
-        if not is_given(speech_host):
-            speech_host = os.environ.get("AZURE_SPEECH_HOST")
-
-        if not is_given(speech_key):
+        if not speech_key:
             speech_key = os.environ.get("AZURE_SPEECH_KEY")
 
-        if not is_given(speech_region):
+        if not speech_region:
             speech_region = os.environ.get("AZURE_SPEECH_REGION")
 
-        if not (
-            is_given(speech_host)
-            or (is_given(speech_key) and is_given(speech_region))
-            or (is_given(speech_auth_token) and is_given(speech_region))
-            or (is_given(speech_key) and is_given(speech_endpoint))
-        ):
+        if not speech_endpoint:
+            speech_endpoint = os.environ.get("AZURE_SPEECH_ENDPOINT")
+
+        has_endpoint = bool(speech_endpoint)
+        has_key_and_region = bool(speech_key and speech_region)
+        has_token_and_region = bool(speech_auth_token and speech_region)
+        if not (has_endpoint or has_key_and_region or has_token_and_region):
             raise ValueError(
-                "AZURE_SPEECH_HOST or AZURE_SPEECH_KEY and AZURE_SPEECH_REGION or speech_auth_token and AZURE_SPEECH_REGION or AZURE_SPEECH_KEY and speech_endpoint must be set"  # noqa: E501
+                "Authentication requires one of: speech_endpoint (AZURE_SPEECH_ENDPOINT), "
+                "speech_key & speech_region (AZURE_SPEECH_KEY & AZURE_SPEECH_REGION), "
+                "or speech_auth_token & speech_region."
             )
 
         if is_given(prosody):
             prosody.validate()
-
         if is_given(style):
             style.validate()
 
+        self._session = http_session
         self._opts = _TTSOptions(
             sample_rate=sample_rate,
-            speech_key=speech_key,
-            speech_region=speech_region,
-            speech_host=speech_host,
-            speech_auth_token=speech_auth_token,
+            subscription_key=speech_key,
+            region=speech_region,
+            speech_endpoint=speech_endpoint,
             voice=voice,
-            endpoint_id=endpoint_id,
+            deployment_id=deployment_id,
             language=language,
             prosody=prosody,
             style=style,
-            on_bookmark_reached_event=on_bookmark_reached_event,
-            on_synthesis_canceled_event=on_synthesis_canceled_event,
-            on_synthesis_completed_event=on_synthesis_completed_event,
-            on_synthesis_started_event=on_synthesis_started_event,
-            on_synthesizing_event=on_synthesizing_event,
-            on_viseme_event=on_viseme_event,
-            on_word_boundary_event=on_word_boundary_event,
-            speech_endpoint=speech_endpoint,
+            auth_token=speech_auth_token,
         )
 
     def update_options(
@@ -250,215 +194,105 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
         style: NotGivenOr[StyleConfig] = NOT_GIVEN,
-        on_bookmark_reached_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_synthesis_canceled_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_synthesis_completed_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_synthesis_started_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_synthesizing_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_viseme_event: NotGivenOr[Callable] = NOT_GIVEN,
-        on_word_boundary_event: NotGivenOr[Callable] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
             self._opts.language = language
         if is_given(prosody):
+            prosody.validate()
             self._opts.prosody = prosody
         if is_given(style):
+            style.validate()
             self._opts.style = style
 
-        if is_given(on_bookmark_reached_event):
-            self._opts.on_bookmark_reached_event = on_bookmark_reached_event
-        if is_given(on_synthesis_canceled_event):
-            self._opts.on_synthesis_canceled_event = on_synthesis_canceled_event
-        if is_given(on_synthesis_completed_event):
-            self._opts.on_synthesis_completed_event = on_synthesis_completed_event
-        if is_given(on_synthesis_started_event):
-            self._opts.on_synthesis_started_event = on_synthesis_started_event
-        if is_given(on_synthesizing_event):
-            self._opts.on_synthesizing_event = on_synthesizing_event
-        if is_given(on_viseme_event):
-            self._opts.on_viseme_event = on_viseme_event
-        if is_given(on_word_boundary_event):
-            self._opts.on_word_boundary_event = on_word_boundary_event
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+        return self._session
 
     def synthesize(
         self,
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options, opts=self._opts)
+    ) -> tts.ChunkedStream:
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        opts: _TTSOptions,
-        conn_options: APIConnectOptions,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._opts = opts
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
 
-    async def _run(self):
-        stream_callback = speechsdk.audio.PushAudioOutputStream(
-            _PushAudioOutputStreamCallback(
-                self._opts.sample_rate, asyncio.get_running_loop(), self._event_ch
-            )
+    def _build_ssml(self) -> str:
+        lang = self._opts.language or "en-US"
+        ssml = (
+            f'<speak version="1.0" '
+            f'xmlns="http://www.w3.org/2001/10/synthesis" '
+            f'xmlns:mstts="http://www.w3.org/2001/mstts" '
+            f'xml:lang="{lang}">'
         )
-        synthesizer = _create_speech_synthesizer(
-            config=self._opts,
-            stream=stream_callback,
+        ssml += f'<voice name="{self._opts.voice}">'
+        if is_given(self._opts.style):
+            degree = f' styledegree="{self._opts.style.degree}"' if self._opts.style.degree else ""
+            ssml += f'<mstts:express-as style="{self._opts.style.style}"{degree}>'
+
+        if is_given(self._opts.prosody):
+            p = self._opts.prosody
+
+            rate_attr = f' rate="{p.rate}"' if p.rate is not None else ""
+            vol_attr = f' volume="{p.volume}"' if p.volume is not None else ""
+            pitch_attr = f' pitch="{p.pitch}"' if p.pitch is not None else ""
+            ssml += f"<prosody{rate_attr}{vol_attr}{pitch_attr}>{self.input_text}</prosody>"
+        else:
+            ssml += self.input_text
+
+        if is_given(self._opts.style):
+            ssml += "</mstts:express-as>"
+
+        ssml += "</voice></speak>"
+        return ssml
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        headers = {
+            "Content-Type": "application/ssml+xml",
+            "X-Microsoft-OutputFormat": SUPPORTED_OUTPUT_FORMATS[self._opts.sample_rate],
+            "User-Agent": "LiveKit Agents",
+        }
+        if self._opts.auth_token:
+            headers["Authorization"] = f"Bearer {self._opts.auth_token}"
+
+        elif self._opts.subscription_key:
+            headers["Ocp-Apim-Subscription-Key"] = self._opts.subscription_key
+
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            mime_type="audio/pcm",
         )
 
-        def _synthesize() -> speechsdk.SpeechSynthesisResult:
-            if self._opts.prosody or self._opts.style:
-                ssml = (
-                    '<speak version="1.0" '
-                    'xmlns="http://www.w3.org/2001/10/synthesis" '
-                    'xmlns:mstts="http://www.w3.org/2001/mstts" '
-                    f'xml:lang="{self._opts.language or "en-US"}">'
-                )
-                ssml += f'<voice name="{self._opts.voice}">'
-
-                # Add style if specified
-                if self._opts.style:
-                    style_degree = (
-                        f' styledegree="{self._opts.style.degree}"'
-                        if self._opts.style.degree
-                        else ""
-                    )
-                    ssml += f'<mstts:express-as style="{self._opts.style.style}"{style_degree}>'
-
-                # Add prosody if specified
-                if self._opts.prosody:
-                    ssml += "<prosody"
-                    if self._opts.prosody.rate:
-                        ssml += f' rate="{self._opts.prosody.rate}"'
-                    if self._opts.prosody.volume:
-                        ssml += f' volume="{self._opts.prosody.volume}"'
-                    if self._opts.prosody.pitch:
-                        ssml += f' pitch="{self._opts.prosody.pitch}"'
-                    ssml += ">"
-                    ssml += self._input_text
-                    ssml += "</prosody>"
-                else:
-                    ssml += self._input_text
-
-                # Close style tag if it was opened
-                if self._opts.style:
-                    ssml += "</mstts:express-as>"
-
-                ssml += "</voice></speak>"
-                return synthesizer.speak_ssml_async(ssml).get()  # type: ignore
-
-            return synthesizer.speak_text_async(self.input_text).get()  # type: ignore
-
-        result = None
         try:
-            result = await asyncio.to_thread(_synthesize)
-            if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
-                if (
-                    result.cancellation_details.error_code
-                    == speechsdk.CancellationErrorCode.ServiceTimeout
-                ):
-                    raise APITimeoutError()
-                else:
-                    cancel_details = result.cancellation_details
-                    raise APIConnectionError(cancel_details.error_details)
-        finally:
+            async with self._tts._ensure_session().post(
+                url=self._opts.get_endpoint_url(),
+                headers=headers,
+                data=self._build_ssml(),
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+            ) as resp:
+                resp.raise_for_status()
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
 
-            def _cleanup() -> None:
-                # cleanup resources inside an Executor
-                # to avoid blocking the event loop
-                nonlocal synthesizer, stream_callback, result
-                del synthesizer
-                del stream_callback
-
-                if result is not None:
-                    del result
-
-            try:
-                await asyncio.to_thread(_cleanup)
-            except Exception:
-                logger.exception("failed to cleanup Azure TTS resources")
-
-
-class _PushAudioOutputStreamCallback(speechsdk.audio.PushAudioOutputStreamCallback):
-    def __init__(
-        self,
-        sample_rate: int,
-        loop: asyncio.AbstractEventLoop,
-        event_ch: utils.aio.ChanSender[tts.SynthesizedAudio],
-    ):
-        super().__init__()
-        self._event_ch = event_ch
-        self._loop = loop
-        self._request_id = utils.shortuuid()
-
-        self._bstream = utils.audio.AudioByteStream(sample_rate=sample_rate, num_channels=1)
-
-    def write(self, audio_buffer: memoryview) -> int:
-        for frame in self._bstream.write(audio_buffer.tobytes()):
-            audio = tts.SynthesizedAudio(
-                request_id=self._request_id,
-                frame=frame,
-            )
-            with contextlib.suppress(RuntimeError):
-                self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
-
-        return audio_buffer.nbytes
-
-    def close(self) -> None:
-        for frame in self._bstream.flush():
-            audio = tts.SynthesizedAudio(
-                request_id=self._request_id,
-                frame=frame,
-            )
-            with contextlib.suppress(RuntimeError):
-                self._loop.call_soon_threadsafe(self._event_ch.send_nowait, audio)
-
-
-def _create_speech_synthesizer(
-    *, config: _TTSOptions, stream: speechsdk.audio.AudioOutputStream
-) -> speechsdk.SpeechSynthesizer:
-    # let the SpeechConfig constructor to validate the arguments
-    speech_config = speechsdk.SpeechConfig(
-        subscription=config.speech_key if is_given(config.speech_key) else None,
-        region=config.speech_region if is_given(config.speech_region) else None,
-        endpoint=config.speech_endpoint if is_given(config.speech_endpoint) else None,
-        host=config.speech_host if is_given(config.speech_host) else None,
-        auth_token=config.speech_auth_token if is_given(config.speech_auth_token) else None,
-        speech_recognition_language=config.language if is_given(config.language) else "en-US",
-    )
-
-    speech_config.set_speech_synthesis_output_format(SUPPORTED_SAMPLE_RATE[config.sample_rate])
-    stream_config = speechsdk.audio.AudioOutputConfig(stream=stream)
-    if is_given(config.voice):
-        speech_config.speech_synthesis_voice_name = config.voice
-        if is_given(config.endpoint_id):
-            speech_config.endpoint_id = config.endpoint_id
-
-    synthesizer = speechsdk.SpeechSynthesizer(
-        speech_config=speech_config, audio_config=stream_config
-    )
-
-    if is_given(config.on_bookmark_reached_event):
-        synthesizer.bookmark_reached.connect(config.on_bookmark_reached_event)
-    if is_given(config.on_synthesis_canceled_event):
-        synthesizer.synthesis_canceled.connect(config.on_synthesis_canceled_event)
-    if is_given(config.on_synthesis_completed_event):
-        synthesizer.synthesis_completed.connect(config.on_synthesis_completed_event)
-    if is_given(config.on_synthesis_started_event):
-        synthesizer.synthesis_started.connect(config.on_synthesis_started_event)
-    if is_given(config.on_synthesizing_event):
-        synthesizer.synthesizing.connect(config.on_synthesizing_event)
-    if is_given(config.on_viseme_event):
-        synthesizer.viseme_received.connect(config.on_viseme_event)
-    if is_given(config.on_word_boundary_event):
-        synthesizer.synthesis_word_boundary.connect(config.on_word_boundary_event)
-
-    return synthesizer
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=None,
+                body=None,
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(str(e)) from e

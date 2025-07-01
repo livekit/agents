@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 
-def _finish_fut(fut: asyncio.Future[Any]):
+def _finish_fut(fut: asyncio.Future[Any]) -> None:
     if fut.cancelled():
         return
     fut.set_result(None)
@@ -45,7 +45,7 @@ class Interval:
     def __aiter__(self) -> Interval:
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> int:
         return await self.tick()
 
 

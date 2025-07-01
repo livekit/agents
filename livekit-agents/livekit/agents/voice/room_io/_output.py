@@ -33,10 +33,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms)
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
-        self._started_fut = asyncio.Future[None]()
+        self._subscribed_fut = asyncio.Future[None]()
 
-        self._republish_task: asyncio.Task | None = None  # used to republish track on reconnection
-        self._flush_task: asyncio.Task | None = None
+        # used to republish track on reconnection
+        self._republish_task: asyncio.Task[None] | None = None
+        self._flush_task: asyncio.Task[None] | None = None
         self._interrupted_event = asyncio.Event()
 
         self._pushed_duration: float = 0.0
@@ -49,10 +50,15 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 track, self._publish_options
             )
             await self._publication.wait_for_subscription()
+            if not self._subscribed_fut.done():
+                self._subscribed_fut.set_result(None)
+
+    @property
+    def subscribed(self) -> asyncio.Future[None]:
+        return self._subscribed_fut
 
     async def start(self) -> None:
         await self._publish_track()
-        self._started_fut.set_result(None)
         self._room.on("reconnected", self._on_reconnected)
 
     async def aclose(self) -> None:
@@ -65,7 +71,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         await self._audio_source.aclose()
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        await self._started_fut
+        await self._subscribed_fut
 
         await super().capture_frame(frame)
 
@@ -90,7 +96,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
         if not self._pushed_duration:
             return
         self._interrupted_event.set()
@@ -141,7 +146,7 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
 
         self._room.on("track_published", self._on_track_published)
         self._room.on("local_track_published", self._on_local_track_published)
-        self._flush_task: asyncio.Task | None = None
+        self._flush_task: asyncio.Task[None] | None = None
 
         self._reset_state()
         self.set_participant(participant)
@@ -159,16 +164,16 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
 
         # find track id from existing participants
         if self._participant_identity == self._room.local_participant.identity:
-            for track in self._room.local_participant.track_publications.values():
-                self._on_local_track_published(track, track.track)
+            for local_track in self._room.local_participant.track_publications.values():
+                self._on_local_track_published(local_track, local_track.track)
                 if self._track_id is not None:
                     break
         if not self._track_id:
             for p in self._room.remote_participants.values():
                 if not self._is_local_proxy_participant(p):
                     continue
-                for track in p.track_publications.values():
-                    self._on_track_published(track, p)
+                for remote_track in p.track_publications.values():
+                    self._on_track_published(remote_track, p)
                     if self._track_id is not None:
                         break
 
@@ -245,7 +250,9 @@ class _ParticipantLegacyTranscriptionOutput(io.TextOutput):
         self._track_id = track.sid
         self._represented_by = participant.identity
 
-    def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
+    def _on_local_track_published(
+        self, track: rtc.LocalTrackPublication, _: rtc.Track | None
+    ) -> None:
         if (
             self._participant_identity is None
             or self._participant_identity != self._room.local_participant.identity
@@ -285,7 +292,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
 
         self._room.on("track_published", self._on_track_published)
         self._room.on("local_track_published", self._on_local_track_published)
-        self._flush_atask: asyncio.Task | None = None
+        self._flush_atask: asyncio.Task[None] | None = None
 
         self._reset_state()
         self.set_participant(participant)
@@ -361,7 +368,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         except Exception as e:
             logger.warning("failed to publish transcription", exc_info=e)
 
-    async def _flush_task(self, writer: rtc.TextStreamWriter | None):
+    async def _flush_task(self, writer: rtc.TextStreamWriter | None) -> None:
         attributes = {
             ATTRIBUTE_TRANSCRIPTION_FINAL: "true",
         }

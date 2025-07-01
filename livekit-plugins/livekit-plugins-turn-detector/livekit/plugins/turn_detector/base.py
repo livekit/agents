@@ -2,22 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from abc import ABC, abstractmethod
+from typing import Any
 
 from livekit.agents import llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
+from livekit.agents.utils import hw
 
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
 
-MAX_HISTORY_TOKENS = 256
+MAX_HISTORY_TOKENS = 128
 MAX_HISTORY_TURNS = 6
 
 
-def _download_from_hf_hub(repo_id, filename, **kwargs):
+def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     from huggingface_hub import hf_hub_download
 
     local_path = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
@@ -29,15 +32,21 @@ class _EUORunnerBase(_InferenceRunner):
         super().__init__()
         self._model_revision = MODEL_REVISIONS[model_type]
 
-    def _format_chat_ctx(self, chat_ctx: dict):
+    def _format_chat_ctx(self, chat_ctx: list[dict[str, Any]]) -> str:
         new_chat_ctx = []
+        last_msg: dict[str, Any] | None = None
         for msg in chat_ctx:
             content = msg["content"]
             if not content:
                 continue
 
-            msg["content"] = content
-            new_chat_ctx.append(msg)
+            # need to combine adjacent turns together to match training data
+            if last_msg and last_msg["role"] == msg["role"]:
+                last_msg["content"] += content
+            else:
+                msg["content"] = content
+                new_chat_ctx.append(msg)
+                last_msg = msg
 
         convo_text = self._tokenizer.apply_chat_template(
             new_chat_ctx,
@@ -49,12 +58,12 @@ class _EUORunnerBase(_InferenceRunner):
         # remove the EOU token from current utterance
         ix = convo_text.rfind("<|im_end|>")
         text = convo_text[:ix]
-        return text
+        return text  # type: ignore
 
     def initialize(self) -> None:
-        import onnxruntime as ort
+        import onnxruntime as ort  # type: ignore
         from huggingface_hub import errors
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer  # type: ignore
 
         try:
             local_path_onnx = _download_from_hf_hub(
@@ -64,8 +73,14 @@ class _EUORunnerBase(_InferenceRunner):
                 revision=self._model_revision,
                 local_files_only=True,
             )
+            sess_options = ort.SessionOptions()
+            sess_options.intra_op_num_threads = max(
+                1, math.ceil(hw.get_cpu_monitor().cpu_count()) // 2
+            )
+            sess_options.inter_op_num_threads = 1
+            sess_options.add_session_config_entry("session.dynamic_block_base", "4")
             self._session = ort.InferenceSession(
-                local_path_onnx, providers=["CPUExecutionProvider"]
+                local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
 
             self._tokenizer = AutoTokenizer.from_pretrained(
@@ -105,15 +120,15 @@ class _EUORunnerBase(_InferenceRunner):
         )
         # Run inference
         outputs = self._session.run(None, {"input_ids": inputs["input_ids"].astype("int64")})
-        eou_probability = outputs[0][0]
+        eou_probability = outputs[0].flatten()[-1]
         end_time = time.perf_counter()
 
-        data = {
+        result: dict[str, Any] = {
             "eou_probability": float(eou_probability),
             "input": text,
             "duration": round(end_time - start_time, 3),
         }
-        return json.dumps(data).encode()
+        return json.dumps(result).encode()
 
 
 class EOUModelBase(ABC):
@@ -140,7 +155,7 @@ class EOUModelBase(ABC):
         self._unlikely_threshold = unlikely_threshold
 
     @abstractmethod
-    def _inference_method(self): ...
+    def _inference_method(self) -> str: ...
 
     def unlikely_threshold(self, language: str | None) -> float | None:
         if language is None:
@@ -162,7 +177,7 @@ class EOUModelBase(ABC):
         if self._unlikely_threshold is not None:
             return self._unlikely_threshold
         else:
-            return lang_data["threshold"]
+            return lang_data["threshold"]  # type: ignore
 
     def supports_language(self, language: str | None) -> bool:
         return self.unlikely_threshold(language) is not None
@@ -174,7 +189,7 @@ class EOUModelBase(ABC):
     async def predict_end_of_turn(
         self, chat_ctx: llm.ChatContext, *, timeout: float | None = 3
     ) -> float:
-        messages = []
+        messages: list[dict[str, Any]] = []
 
         for item in chat_ctx.items:
             if item.type != "message":
@@ -204,9 +219,9 @@ class EOUModelBase(ABC):
 
         assert result is not None, "end_of_utterance prediction should always returns a result"
 
-        result_json = json.loads(result.decode())
+        result_json: dict[str, Any] = json.loads(result.decode())
         logger.debug(
             "eou prediction",
             extra=result_json,
         )
-        return result_json["eou_probability"]
+        return result_json["eou_probability"]  # type: ignore

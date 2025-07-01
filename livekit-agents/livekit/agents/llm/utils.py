@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
+import sys
+import types
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -35,6 +38,9 @@ from .tool_context import (
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
+
+THINK_TAG_START = "<think>"
+THINK_TAG_END = "</think>"
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -220,7 +226,7 @@ def build_strict_openai_schema(
 ResponseFormatT = TypeVar("ResponseFormatT", default=None)
 
 
-def is_typed_dict(cls) -> bool:
+def is_typed_dict(cls: type | Any) -> bool:
     return isinstance(cls, type) and issubclass(cls, dict) and hasattr(cls, "__annotations__")
 
 
@@ -229,13 +235,15 @@ def is_typed_dict(cls) -> bool:
 
 
 def to_response_format_param(
-    response_format: type | dict,
+    response_format: type | dict[str, Any],
 ) -> tuple[str, type[BaseModel] | TypeAdapter[Any]]:
     if isinstance(response_format, dict):
         # TODO(theomonnom): better type validation, copy TypedDict from OpenAI
         if response_format.get("type", "") not in ("text", "json_schema", "json_object"):
             raise TypeError("Unsupported response_format type")
 
+        # TODO(long): fix return value
+        raise TypeError("Unsupported response_format type")
         return response_format
 
     # add support for TypedDict
@@ -259,7 +267,7 @@ def to_response_format_param(
     return name, json_schema_type
 
 
-def to_openai_response_format(response_format: type | dict) -> dict:
+def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
     name, json_schema_type = to_response_format_param(response_format)
 
     schema = _strict.to_strict_json_schema(json_schema_type)
@@ -273,13 +281,13 @@ def to_openai_response_format(response_format: type | dict) -> dict:
     }
 
 
-def function_arguments_to_pydantic_model(func: Callable) -> type[BaseModel]:
-    """Create a Pydantic model from a function’s signature. (excluding context types)"""
+def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
+    """Create a Pydantic model from a function's signature. (excluding context types)"""
 
     from docstring_parser import parse_from_object
 
-    fnc_name = func.__name__.split("_")
-    fnc_name = "".join(x.capitalize() for x in fnc_name)
+    fnc_names = func.__name__.split("_")
+    fnc_name = "".join(x.capitalize() for x in fnc_names)
     model_name = fnc_name + "Args"
 
     docstring = parse_from_object(func)
@@ -323,7 +331,7 @@ def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
     json_arguments: str,  # raw function output from the LLM
-    call_ctx: RunContext | None = None,
+    call_ctx: RunContext[Any] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """
     Create the positional and keyword arguments to call a function tool from
@@ -378,8 +386,16 @@ def prepare_function_arguments(
 
 
 def _is_optional_type(hint: Any) -> bool:
+    if get_origin(hint) is Annotated:
+        hint = get_args(hint)[0]
+
     origin = get_origin(hint)
-    return origin is Union and type(None) in get_args(hint)
+
+    is_union = origin is Union
+    if sys.version_info >= (3, 10):
+        is_union = is_union or origin is types.UnionType
+
+    return is_union and type(None) in get_args(hint)
 
 
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
@@ -388,3 +404,23 @@ def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str
         key = field.alias if by_alias and field.alias else name
         result[key] = getattr(model, name)
     return result
+
+
+def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str | None:
+    if content is None:
+        return None
+
+    if thinking.is_set():
+        idx = content.find(THINK_TAG_END)
+        if idx >= 0:
+            thinking.clear()
+            content = content[idx + len(THINK_TAG_END) :]
+        else:
+            content = None
+    else:
+        idx = content.find(THINK_TAG_START)
+        if idx >= 0:
+            thinking.set()
+            content = content[idx + len(THINK_TAG_START) :]
+
+    return content

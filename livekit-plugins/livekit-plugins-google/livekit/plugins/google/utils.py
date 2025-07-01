@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -19,8 +18,9 @@ from livekit.agents.llm.tool_context import (
 )
 
 from .log import logger
+from .tools import _LLMTool
 
-__all__ = ["to_chat_ctx", "to_fnc_ctx"]
+__all__ = ["to_fnc_ctx"]
 
 
 def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.FunctionDeclaration]:
@@ -28,10 +28,52 @@ def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.Functio
     for fnc in fncs:
         if is_raw_function_tool(fnc):
             info = get_raw_function_info(fnc)
-            tools.append(types.FunctionDeclaration(**info.raw_schema))
+            tools.append(
+                types.FunctionDeclaration(
+                    name=info.name,
+                    description=info.raw_schema.get("description", ""),
+                    parameters_json_schema=info.raw_schema.get("parameters", {}),
+                )
+            )
 
         elif is_function_tool(fnc):
             tools.append(_build_gemini_fnc(fnc))
+
+    return tools
+
+
+def create_tools_config(
+    *,
+    function_tools: list[types.FunctionDeclaration] | None = None,
+    gemini_tools: list[_LLMTool] | None = None,
+) -> list[types.Tool]:
+    tools: list[types.Tool] = []
+
+    if function_tools:
+        tools.append(types.Tool(function_declarations=function_tools))
+
+    if gemini_tools:
+        for tool in gemini_tools:
+            if isinstance(tool, types.GoogleSearchRetrieval):
+                tools.append(types.Tool(google_search_retrieval=tool))
+            elif isinstance(tool, types.ToolCodeExecution):
+                tools.append(types.Tool(code_execution=tool))
+            elif isinstance(tool, types.GoogleSearch):
+                tools.append(types.Tool(google_search=tool))
+            elif isinstance(tool, types.UrlContext):
+                tools.append(types.Tool(url_context=tool))
+            elif isinstance(tool, types.GoogleMaps):
+                tools.append(types.Tool(google_maps=tool))
+            else:
+                logger.warning(f"Warning: Received unhandled tool type: {type(tool)}")
+                continue
+
+    if len(tools) > 1:
+        # https://github.com/google/adk-python/issues/53#issuecomment-2799538041
+        logger.warning(
+            "Multiple kinds of tools are not supported in Gemini. Only the first tool will be used."
+        )
+        tools = tools[:1]
 
     return tools
 
@@ -58,98 +100,13 @@ def get_tool_results_for_realtime(
     )
 
 
-def to_chat_ctx(
-    chat_ctx: llm.ChatContext,
-    cache_key: Any,
-    ignore_functions: bool = False,
-    generate: bool = False,
-) -> tuple[list[types.Content], types.Content | None]:
-    turns: list[types.Content] = []
-    system_instruction: types.Content | None = None
-    current_role: str | None = None
-    parts: list[types.Part] = []
-
-    for msg in chat_ctx.items:
-        if msg.type == "message" and msg.role == "system":
-            sys_parts = []
-            for content in msg.content:
-                if content and isinstance(content, str):
-                    sys_parts.append(types.Part(text=content))
-            system_instruction = types.Content(parts=sys_parts)
-            continue
-
-        if msg.type == "message":
-            role = "model" if msg.role == "assistant" else "user"
-        elif msg.type == "function_call":
-            role = "model"
-        elif msg.type == "function_call_output":
-            role = "user"
-
-        # if the effective role changed, finalize the previous turn.
-        if role != current_role:
-            if current_role is not None and parts:
-                turns.append(types.Content(role=current_role, parts=parts))
-            parts = []
-            current_role = role
-
-        if msg.type == "message":
-            for content in msg.content:
-                if content and isinstance(content, str):
-                    parts.append(types.Part(text=content))
-                elif content and isinstance(content, dict):
-                    parts.append(types.Part(text=json.dumps(content)))
-                elif isinstance(content, llm.ImageContent):
-                    parts.append(_to_image_part(content, cache_key))
-        elif msg.type == "function_call" and not ignore_functions:
-            parts.append(
-                types.Part(
-                    function_call=types.FunctionCall(
-                        name=msg.name,
-                        args=json.loads(msg.arguments),
-                    )
-                )
-            )
-        elif msg.type == "function_call_output" and not ignore_functions:
-            parts.append(
-                types.Part(
-                    function_response=types.FunctionResponse(
-                        name=msg.name,
-                        response={"text": msg.output},
-                    )
-                )
-            )
-
-    if current_role is not None and parts:
-        turns.append(types.Content(role=current_role, parts=parts))
-
-    # Gemini requires the last message to end with user's turn before they can generate
-    if generate and current_role != "user":
-        turns.append(types.Content(role="user", parts=[types.Part(text=".")]))
-
-    return turns, system_instruction
-
-
-def _to_image_part(image: llm.ImageContent, cache_key: Any) -> types.Part:
-    img = llm.utils.serialize_image(image)
-    if img.external_url:
-        if img.mime_type:
-            mime_type = img.mime_type
-        else:
-            logger.debug("No media type provided for image, defaulting to image/jpeg.")
-            mime_type = "image/jpeg"
-        return types.Part.from_uri(file_uri=img.external_url, mime_type=mime_type)
-    if cache_key not in image._cache:
-        image._cache[cache_key] = img.data_bytes
-    return types.Part.from_bytes(data=image._cache[cache_key], mime_type=img.mime_type)
-
-
 def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
     fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
     json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
     return types.FunctionDeclaration(
         name=fnc["name"],
         description=fnc["description"],
-        parameters=json_schema,
+        parameters=types.Schema.model_validate(json_schema) if json_schema else None,
     )
 
 

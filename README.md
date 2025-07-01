@@ -10,6 +10,7 @@
 <br />
 
 ![PyPI - Version](https://img.shields.io/pypi/v/livekit-agents)
+[![PyPI Downloads](https://static.pepy.tech/badge/livekit-agents/month)](https://pepy.tech/projects/livekit-agents)
 [![Slack community](https://img.shields.io/endpoint?url=https%3A%2F%2Flivekit.io%2Fbadges%2Fslack)](https://livekit.io/join-slack)
 [![Twitter Follow](https://img.shields.io/twitter/follow/livekit)](https://twitter.com/livekit)
 [![Ask DeepWiki for understanding the codebase](https://deepwiki.com/badge.svg)](https://deepwiki.com/livekit/agents)
@@ -255,18 +256,34 @@ async def entrypoint(ctx: JobContext):
 <h3>💬 Text-only agent</h3>
 <p>Skip voice altogether and use the same code for text-only integrations</p>
 <p>
-<a href="examples/text_only.py/text_only.py">Code</a>
+<a href="examples/other/text_only.py">Code</a>
 </p>
 </td>
 </tr>
 
+<tr>
+<td width="50%">
+<h3>📝 Multi-user transcriber</h3>
+<p>Produce transcriptions from all users in the room</p>
+<p>
+<a href="examples/other/transcription/multi-user-transcriber.py">Code</a>
+</p>
+</td>
+<td width="50%">
+<h3>🎥 Video avatars</h3>
+<p>Add an AI avatar with Tavus, Beyond Presence, and Bithuman</p>
+<p>
+<a href="examples/avatar_agents/">Code</a>
+</p>
+</td>
+</tr>
 
 <tr>
 <td width="50%">
 <h3>🍽️ Restaurant ordering and reservations</h3>
 <p>Full example of an agent that handles calls for a restaurant.</p>
 <p>
-<a href="examples/full_examples/restaurant_agent/">Code</a>
+<a href="examples/voice_agents/restaurant_agent.py">Code</a>
 </p>
 </td>
 <td width="50%">

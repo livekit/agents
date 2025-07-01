@@ -62,16 +62,17 @@ class STT(stt.STT):
         """
 
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=True))
-        self._secret = secret if is_given(secret) else os.environ.get("CLOVA_STT_SECRET_KEY")
+        clova_secret = secret if is_given(secret) else os.environ.get("CLOVA_STT_SECRET_KEY")
         self._invoke_url = (
             invoke_url if is_given(invoke_url) else os.environ.get("CLOVA_STT_INVOKE_URL")
         )
         self._language = clova_languages_mapping.get(language, language)
         self._session = http_session
-        if self._secret is None:
+        if clova_secret is None:
             raise ValueError(
                 "Clova STT secret key is required. It should be set with env CLOVA_STT_SECRET_KEY"
             )
+        self._secret = clova_secret
         self.threshold = threshold
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:

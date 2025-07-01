@@ -79,7 +79,7 @@ class _SpeakingRateData:
 
         if end_time is not None:
             self.add_by_annotation(
-                "", start_time=end_time, end_time=None, text_to_hyphens=text_to_hyphens
+                text="", start_time=end_time, end_time=None, text_to_hyphens=text_to_hyphens
             )
 
     def accumulate_to(self, timestamp: float) -> float:
@@ -160,6 +160,14 @@ class _SegmentSynchronizerImpl:
     @property
     def closed(self) -> bool:
         return self._close_future.done()
+
+    @property
+    def audio_input_ended(self) -> bool:
+        return self._audio_data.done
+
+    @property
+    def text_input_ended(self) -> bool:
+        return self._text_data.done
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if self.closed:
@@ -247,7 +255,8 @@ class _SegmentSynchronizerImpl:
 
         if not self._text_data.done or not self._audio_data.done:
             logger.warning(
-                "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done"
+                "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done",
+                extra={"text_done": self._text_data.done, "audio_done": self._audio_data.done},
             )
             return
 
@@ -336,7 +345,7 @@ class _SegmentSynchronizerImpl:
     def _calc_hyphens(self, text: str) -> list[str]:
         """Calculate hyphens for text."""
         hyphens: list[str] = []
-        words: list[tuple[str, int, int]] = self._opts.split_words(text=text)
+        words: list[tuple[str, int, int]] = self._opts.split_words(text)
         for word, _, _ in words:
             new = self._opts.hyphenate_word(word)
             hyphens.extend(new)
@@ -374,7 +383,7 @@ class TranscriptSynchronizer:
         speed: float = 1.0,
         hyphenate_word: Callable[[str], list[str]] = tokenize.basic.hyphenate_word,
         split_words: Callable[[str], list[tuple[str, int, int]]] = functools.partial(
-            tokenize.basic.split_words, ignore_punctuation=False
+            tokenize.basic.split_words, ignore_punctuation=False, split_character=True
         ),
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
@@ -437,7 +446,7 @@ class TranscriptSynchronizer:
 
         self.set_enabled(self._audio_attached and self._text_attached)
 
-    async def _rotate_segment_task(self, old_task: asyncio.Task | None) -> None:
+    async def _rotate_segment_task(self, old_task: asyncio.Task[None] | None) -> None:
         if old_task:
             await old_task
 
@@ -472,7 +481,7 @@ class _SyncedAudioOutput(io.AudioOutput):
         self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.AudioOutput
     ) -> None:
         super().__init__(next_in_chain=next_in_chain, sample_rate=next_in_chain.sample_rate)
-        self._next_in_chain = next_in_chain  # redefined for better typing
+        self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
         self._capturing = False
         self._pushed_duration: float = 0.0
@@ -489,6 +498,14 @@ class _SyncedAudioOutput(io.AudioOutput):
 
         if not self._synchronizer.enabled:
             return
+
+        if self._synchronizer._impl.audio_input_ended:
+            # this should not happen if `on_playback_finished` is called after each flush
+            logger.warning(
+                "_SegmentSynchronizerImpl audio marked as ended in capture audio, rotating segment"
+            )
+            self._synchronizer.rotate_segment()
+            await self._synchronizer.barrier()
 
         self._synchronizer._impl.push_audio(frame)
 
@@ -508,8 +525,6 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._synchronizer._impl.end_audio_input()
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
-
         self._next_in_chain.clear_buffer()
         self._capturing = False
 
@@ -555,23 +570,29 @@ class _SyncedTextOutput(io.TextOutput):
         self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.TextOutput
     ) -> None:
         super().__init__(next_in_chain=next_in_chain)
-        self._next_in_chain = next_in_chain  # redefined for better typing
+        self._next_in_chain: io.TextOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
         self._capturing = False
 
     async def capture_text(self, text: str) -> None:
         await self._synchronizer.barrier()
 
-        await super().capture_text(text)
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
             await self._next_in_chain.capture_text(text)
             return
 
         self._capturing = True
+        if self._synchronizer._impl.text_input_ended:
+            # this should not happen if `on_playback_finished` is called after each flush
+            logger.warning(
+                "_SegmentSynchronizerImpl text marked as ended in capture text, rotating segment"
+            )
+            self._synchronizer.rotate_segment()
+            await self._synchronizer.barrier()
+
         self._synchronizer._impl.push_text(text)
 
     def flush(self) -> None:
-        super().flush()
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
             self._next_in_chain.flush()
             return

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import struct
-from typing import ClassVar, Protocol, runtime_checkable
+from typing import ClassVar, Protocol, cast, runtime_checkable
 
 from .. import utils
 
@@ -101,7 +101,7 @@ def write_float(b: io.BytesIO, f: float) -> None:
 
 
 def read_float(b: io.BytesIO) -> float:
-    return struct.unpack("f", b.read(4))[0]
+    return cast(float, struct.unpack("f", b.read(4))[0])
 
 
 def write_double(b: io.BytesIO, d: float) -> None:
@@ -109,7 +109,7 @@ def write_double(b: io.BytesIO, d: float) -> None:
 
 
 def read_double(b: io.BytesIO) -> float:
-    return struct.unpack("d", b.read(8))[0]
+    return cast(float, struct.unpack("d", b.read(8))[0])
 
 
 def write_long(b: io.BytesIO, long: int) -> None:

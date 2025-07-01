@@ -38,14 +38,14 @@ class TracingGraph:
 
 class TracingHandle:
     def __init__(self) -> None:
-        self._kv = {}
-        self._events: list[dict] = []
+        self._kv: dict[str, str | dict[str, Any]] = {}
+        self._events: list[dict[str, Any]] = []
         self._graphs: list[TracingGraph] = []
 
-    def store_kv(self, key: str, value: str | dict) -> None:
+    def store_kv(self, key: str, value: str | dict[str, Any]) -> None:
         self._kv[key] = value
 
-    def log_event(self, name: str, data: dict | None) -> None:
+    def log_event(self, name: str, data: dict[str, Any] | None) -> None:
         self._events.append({"name": name, "data": data, "timestamp": time.time()})
 
     def add_graph(
@@ -83,7 +83,7 @@ class TracingHandle:
 class Tracing:
     _instance = None
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._handles: dict[str, TracingHandle] = {}
 
     @classmethod
@@ -111,11 +111,11 @@ class Tracing:
         return Tracing.with_handle(f"job_{job_id}")
 
     @staticmethod
-    def store_kv(key: str, value: str | dict) -> None:
+    def store_kv(key: str, value: str | dict[str, Any]) -> None:
         Tracing._get_current_handle().store_kv(key, value)
 
     @staticmethod
-    def log_event(name: str, data: dict | None = None) -> None:
+    def log_event(name: str, data: dict[str, Any] | None = None) -> None:
         Tracing._get_current_handle().log_event(name, data)
 
     @staticmethod

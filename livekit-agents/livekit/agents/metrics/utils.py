@@ -6,7 +6,7 @@ from ..log import logger as default_logger
 from .base import AgentMetrics, EOUMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
 
 
-def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None):
+def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) -> None:
     if logger is None:
         logger = default_logger
 

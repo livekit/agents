@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from multiprocessing import current_process
+from types import TracebackType
 
 if current_process().name == "inference_proc":
     import signal
@@ -8,7 +11,9 @@ if current_process().name == "inference_proc":
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-    def _no_traceback_excepthook(exc_type, exc_val, traceback):
+    def _no_traceback_excepthook(
+        exc_type: type[BaseException], exc_val: BaseException, traceback: TracebackType | None
+    ) -> None:
         if isinstance(exc_val, KeyboardInterrupt):
             return
         sys.__excepthook__(exc_type, exc_val, traceback)
@@ -17,13 +22,15 @@ if current_process().name == "inference_proc":
 
 
 import asyncio
+import math
 import socket
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from ..inference_runner import _RunnersDict
 from ..log import logger
-from ..utils import aio, log_exceptions
+from ..utils import aio, hw, log_exceptions
 from . import proto
 from .channel import Message
 from .proc_client import _ProcClient
@@ -60,6 +67,7 @@ class _InferenceProc:
     def __init__(self, runners: _RunnersDict) -> None:
         # create an instance of each runner (the ctor must not requires any argument)
         self._runners = {name: runner() for name, runner in runners.items()}
+        self._executor = ThreadPoolExecutor(max_workers=math.ceil(hw.get_cpu_monitor().cpu_count()))
 
     def initialize(self, init_req: proto.InitializeRequest, client: _ProcClient) -> None:
         self._client = client
@@ -102,7 +110,9 @@ class _InferenceProc:
             logger.warning("unknown inference method", extra={"method": msg.method})
 
         try:
-            data = await loop.run_in_executor(None, self._runners[msg.method].run, msg.data)
+            data = await loop.run_in_executor(
+                self._executor, self._runners[msg.method].run, msg.data
+            )
             await self._client.send(
                 proto.InferenceResponse(
                     request_id=msg.request_id,

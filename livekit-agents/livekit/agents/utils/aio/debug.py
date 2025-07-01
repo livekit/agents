@@ -11,16 +11,12 @@ from ...log import logger
 def hook_slow_callbacks(slow_duration: float) -> None:
     _run = asyncio.events.Handle._run
 
-    def instrumented(self: Any):
+    def instrumented(self: Any) -> Any:
         start = time.monotonic()
         val = _run(self)
         dt = time.monotonic() - start
         if dt >= slow_duration:
-            logger.warning(
-                "Running %s took too long: %.2f seconds",
-                _format_handle(self),  # type: ignore
-                dt,
-            )
+            logger.warning("Running %s took too long: %.2f seconds", _format_handle(self), dt)
         return val
 
     asyncio.events.Handle._run = instrumented  # type: ignore

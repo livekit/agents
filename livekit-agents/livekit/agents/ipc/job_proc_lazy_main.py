@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from multiprocessing import current_process
+from types import TracebackType
 
 if current_process().name == "job_proc":
     import signal
@@ -10,7 +11,9 @@ if current_process().name == "job_proc":
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-    def _no_traceback_excepthook(exc_type, exc_val, traceback):
+    def _no_traceback_excepthook(
+        exc_type: type[BaseException], exc_val: BaseException, traceback: TracebackType | None
+    ) -> None:
         if isinstance(exc_val, KeyboardInterrupt):
             return
         sys.__excepthook__(exc_type, exc_val, traceback)
@@ -22,7 +25,7 @@ import asyncio
 import contextlib
 import socket
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from livekit import rtc
 
@@ -129,7 +132,7 @@ class _JobProc:
         self._user_arguments = user_arguments
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
-        self._job_task: asyncio.Task | None = None
+        self._job_task: asyncio.Task[None] | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
         self._ctx_connect_called = False
@@ -155,7 +158,7 @@ class _JobProc:
         self._shutdown_fut: asyncio.Future[_ShutdownInfo] = asyncio.Future()
 
         @log_exceptions(logger=logger)
-        async def _read_ipc_task():
+        async def _read_ipc_task() -> None:
             async for msg in cch:
                 if isinstance(msg, StartJobRequest):
                     if self.has_running_job:
@@ -210,12 +213,12 @@ class _JobProc:
         if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
             from .mock_room import MockRoom
 
-            self._room = MockRoom
+            self._room = cast(rtc.Room, MockRoom)
         else:
             self._room = rtc.Room()
 
         @self._room.on("disconnected")
-        def _on_room_disconnected(*args):
+        def _on_room_disconnected(*args: Any) -> None:
             with contextlib.suppress(asyncio.InvalidStateError):
                 self._shutdown_fut.set_result(
                     _ShutdownInfo(user_initiated=False, reason="room disconnected")
@@ -243,7 +246,7 @@ class _JobProc:
 
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
 
-        def _exit_proc_cb(_: asyncio.Task) -> None:
+        def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
 
         self._job_task.add_done_callback(_exit_proc_cb)
@@ -256,7 +259,7 @@ class _JobProc:
             self._job_entrypoint_fnc(self._job_ctx), name="job_user_entrypoint"
         )
 
-        async def _warn_not_connected_task():
+        async def _warn_not_connected_task() -> None:
             if cli.CLI_ARGUMENTS is not None and cli.CLI_ARGUMENTS.console:
                 return
 
@@ -270,7 +273,7 @@ class _JobProc:
         warn_unconnected_task = asyncio.create_task(_warn_not_connected_task())
         job_entry_task.add_done_callback(lambda _: warn_unconnected_task.cancel())
 
-        def log_exception(t: asyncio.Task) -> None:
+        def log_exception(t: asyncio.Task[Any]) -> None:
             if not t.cancelled() and t.exception():
                 logger.error(
                     "unhandled exception while running the job task",

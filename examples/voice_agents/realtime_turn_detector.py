@@ -1,10 +1,11 @@
 import logging
 
 from dotenv import load_dotenv
+from google.genai import types  # noqa: F401
 
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
-from livekit.plugins import deepgram, openai, silero
-from livekit.plugins.turn_detector.english import EnglishModel
+from livekit.plugins import deepgram, google, openai, silero  # noqa: F401
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("realtime-turn-detector")
 logger.setLevel(logging.INFO)
@@ -22,9 +23,10 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         allow_interruptions=True,
-        turn_detection=EnglishModel(),
+        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
+        # To use OpenAI Realtime API
         llm=openai.realtime.RealtimeModel(
             voice="alloy",
             # it's necessary to turn off turn detection in the OpenAI Realtime API in order to use
@@ -32,6 +34,15 @@ async def entrypoint(ctx: JobContext):
             turn_detection=None,
             input_audio_transcription=None,  # we use Deepgram STT instead
         ),
+        # To use Gemini Live API
+        # llm=google.beta.realtime.RealtimeModel(
+        #     realtime_input_config=types.RealtimeInputConfig(
+        #         automatic_activity_detection=types.AutomaticActivityDetection(
+        #             disabled=True,
+        #         ),
+        #     ),
+        #     input_audio_transcription=None,
+        # ),
     )
     await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
 
