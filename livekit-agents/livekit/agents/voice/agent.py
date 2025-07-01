@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, TurnDetectionMode
+    from .io import TimedString
 
 
 @dataclass
@@ -48,6 +49,7 @@ class Agent:
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
+        use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         self._instructions = instructions
@@ -60,6 +62,7 @@ class Agent:
         self._vad = vad
         self._allow_interruptions = allow_interruptions
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
+        self._use_tts_aligned_transcript = use_tts_aligned_transcript
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -241,8 +244,12 @@ class Agent:
         return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
     def transcription_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[str] | Coroutine[Any, Any, AsyncIterable[str]] | Coroutine[Any, Any, None]:
+        self, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
+    ) -> (
+        AsyncIterable[str | TimedString]
+        | Coroutine[Any, Any, AsyncIterable[str | TimedString]]
+        | Coroutine[Any, Any, None]
+    ):
         """
         A node in the processing pipeline that finalizes transcriptions from text segments.
 
@@ -253,7 +260,7 @@ class Agent:
         You can override this node to customize post-processing logic according to your needs.
 
         Args:
-            text (AsyncIterable[str]): An asynchronous stream of text segments.
+            text (AsyncIterable[str | TimedString]): An asynchronous stream of text segments.
             model_settings (ModelSettings): Configuration and parameters for model execution.
 
         Yields:
@@ -264,7 +271,7 @@ class Agent:
     def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> (
-        AsyncGenerator[rtc.AudioFrame, None]
+        AsyncIterable[rtc.AudioFrame]
         | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
         | Coroutine[Any, Any, None]
     ):
@@ -376,7 +383,8 @@ class Agent:
 
             if not activity.tts.capabilities.streaming:
                 wrapped_tts = tts.StreamAdapter(
-                    tts=wrapped_tts, sentence_tokenizer=tokenize.blingfire.SentenceTokenizer()
+                    tts=wrapped_tts,
+                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
                 )
 
             conn_options = activity.session.conn_options.tts_conn_options
@@ -397,8 +405,8 @@ class Agent:
 
         @staticmethod
         async def transcription_node(
-            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
-        ) -> AsyncGenerator[str, None]:
+            agent: Agent, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
+        ) -> AsyncGenerator[str | TimedString, None]:
             """Default implementation for `Agent.transcription_node`"""
             async for delta in text:
                 yield delta
@@ -532,6 +540,20 @@ class Agent:
             NotGivenOr[float]: The minimum consecutive speech delay.
         """
         return self._min_consecutive_speech_delay
+
+    @property
+    def use_tts_aligned_transcript(self) -> NotGivenOr[bool]:
+        """
+        Indicates whether to use TTS-aligned transcript as the input of
+        the ``transcription_node``.
+
+        If this property was not set at Agent creation, but an ``AgentSession`` provides a value for
+        the use of TTS-aligned transcript, the session's value will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[bool]: Whether to use TTS-aligned transcript.
+        """
+        return self._use_tts_aligned_transcript
 
     @property
     def session(self) -> AgentSession:

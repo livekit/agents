@@ -12,31 +12,32 @@ __all__ = [
 ]
 
 
-def _split_sentences(text: str, min_sentence_len: int) -> list[tuple[str, int, int]]:
-    bf_sentences, offsets = blingfire.text_to_sentences_with_offsets(text)
-    raw_sentences = bf_sentences.split("\n")
+def _split_sentences(
+    text: str, min_sentence_len: int, *, retain_format: bool = False
+) -> list[tuple[str, int, int]]:
+    _, offsets = blingfire.text_to_sentences_with_offsets(text)
 
     merged_sentences = []
-    buffer = ""
-    buffer_start = None
+    start = 0
 
-    for i, (sentence, (start, end)) in enumerate(zip(raw_sentences, offsets)):
-        sentence = sentence.strip()
-        if not sentence:
+    for _, end in offsets:
+        raw_sentence = text[start:end]
+        sentence = raw_sentence.strip()
+        if not sentence or len(sentence) < min_sentence_len:
             continue
 
-        if buffer:
-            buffer += " " + sentence
-            buffer_end = end
+        if retain_format:
+            merged_sentences.append((raw_sentence, start, end))
         else:
-            buffer = sentence
-            buffer_start = start
-            buffer_end = end
+            merged_sentences.append((sentence, start, end))
+        start = end
 
-        if len(buffer) >= min_sentence_len or i == len(offsets) - 1:
-            merged_sentences.append((buffer, buffer_start, buffer_end))
-            buffer = ""
-            buffer_start = None
+    if start < len(text):
+        raw_sentence = text[start:]
+        if retain_format:
+            merged_sentences.append((raw_sentence, start, len(text)))
+        elif sentence := raw_sentence.strip():
+            merged_sentences.append((sentence, start, len(text)))
 
     return merged_sentences
 
@@ -45,6 +46,7 @@ def _split_sentences(text: str, min_sentence_len: int) -> list[tuple[str, int, i
 class _TokenizerOptions:
     min_sentence_len: int
     stream_context_len: int
+    retain_format: bool
 
 
 class SentenceTokenizer(tokenizer.SentenceTokenizer):
@@ -53,20 +55,30 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
         *,
         min_sentence_len: int = 20,
         stream_context_len: int = 10,
+        retain_format: bool = False,
     ) -> None:
         self._config = _TokenizerOptions(
-            min_sentence_len=min_sentence_len, stream_context_len=stream_context_len
+            min_sentence_len=min_sentence_len,
+            stream_context_len=stream_context_len,
+            retain_format=retain_format,
         )
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         return [
-            tok[0] for tok in _split_sentences(text, min_sentence_len=self._config.min_sentence_len)
+            tok[0]
+            for tok in _split_sentences(
+                text,
+                min_sentence_len=self._config.min_sentence_len,
+                retain_format=self._config.retain_format,
+            )
         ]
 
     def stream(self, *, language: str | None = None) -> tokenizer.SentenceStream:
         return token_stream.BufferedSentenceStream(
             tokenizer=functools.partial(
-                _split_sentences, min_sentence_len=self._config.min_sentence_len
+                _split_sentences,
+                min_sentence_len=self._config.min_sentence_len,
+                retain_format=self._config.retain_format,
             ),
             min_token_len=self._config.min_sentence_len,
             min_ctx_len=self._config.stream_context_len,
