@@ -82,6 +82,7 @@ spitch = ["livekit-plugins-spitch>=1.1.5"]
 inworld = ["livekit-plugins-inworld>=1.1.5"]
 hedra = ["livekit-plugins-hedra>=1.1.5"]
 
+
 [project.urls]
 Documentation = "https://docs.livekit.io"
 Website = "https://livekit.io/"
