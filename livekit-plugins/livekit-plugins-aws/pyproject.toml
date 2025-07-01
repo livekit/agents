@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "LiveKit Agents Plugin for services from AWS"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9.0"
+requires-python = ">=3.12.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "aws", "nova", "sonic"]
 classifiers = [
@@ -26,10 +26,6 @@ dependencies = [
     "livekit-agents>=1.1.5",
     "aioboto3>=14.1.0",
     "amazon-transcribe>=0.6.2",
-]
-
-[project.optional-dependencies]
-realtime = [
     "aws-sdk-bedrock-runtime==0.0.2; python_version >= '3.12'",
     "boto3>1.35.10",
 ]
