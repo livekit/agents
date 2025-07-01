@@ -49,9 +49,6 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
 
-BUFFERED_WORDS_COUNT = 10
-
-
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
@@ -266,9 +263,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
-            min_sentence_len=BUFFERED_WORDS_COUNT
-        ).stream()
+        self._sent_tokenizer_stream = tokenize.blingfire.SentenceTokenizer().stream()
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:

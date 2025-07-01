@@ -1,7 +1,7 @@
 import pytest
 
 from livekit.agents import tokenize
-from livekit.agents.tokenize import basic
+from livekit.agents.tokenize import basic, blingfire
 from livekit.agents.tokenize._basic_paragraph import split_paragraphs
 from livekit.plugins import nltk
 
@@ -59,6 +59,17 @@ EXPECTED_MIN_20_NLTK = [
     "这是一个中文句子。これは日本語の文章です。你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
 ]
 
+EXPECTED_MIN_20_BLINGFIRE = [
+    "Hi! LiveKit is a platform for live audio and video applications and services.",
+    "R.T.C stands for Real-Time Communication... again R.T.C. Mr. Theo is testing the sentence tokenizer.",
+    "This is a test. Another test.",
+    "A short sentence. A longer sentence that is longer than the previous sentence. f(x) = x * 2.54 + 42.",
+    "Hey! Hi! Hello! This is a sentence.",
+    "这是一个中文句子。 これは日本語の文章です。",
+    "你好！ LiveKit是一个直播音频和视频应用程序和服务的平台。",
+]
+
+
 SENT_TOKENIZERS = [
     (nltk.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20_NLTK),
     (basic.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20),
@@ -66,6 +77,7 @@ SENT_TOKENIZERS = [
         basic.SentenceTokenizer(min_sentence_len=20, retain_format=True),
         EXPECTED_MIN_20_RETAIN_FORMAT,
     ),
+    (blingfire.SentenceTokenizer(min_sentence_len=20), EXPECTED_MIN_20_BLINGFIRE),
 ]
 
 
