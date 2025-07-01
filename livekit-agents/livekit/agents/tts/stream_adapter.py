@@ -34,7 +34,7 @@ class StreamAdapter(TTS):
             num_channels=tts.num_channels,
         )
         self._wrapped_tts = tts
-        self._sentence_tokenizer = sentence_tokenizer or tokenize.basic.SentenceTokenizer(
+        self._sentence_tokenizer = sentence_tokenizer or tokenize.blingfire.SentenceTokenizer(
             retain_format=True
         )
 
@@ -44,17 +44,12 @@ class StreamAdapter(TTS):
             self.emit("metrics_collected", *args, **kwargs)
 
     def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         return self._wrapped_tts.synthesize(text=text, conn_options=conn_options)
 
     def stream(
-        self,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> StreamAdapterWrapper:
         return StreamAdapterWrapper(tts=self, conn_options=conn_options)
 

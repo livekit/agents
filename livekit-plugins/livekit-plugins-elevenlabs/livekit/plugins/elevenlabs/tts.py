@@ -156,7 +156,7 @@ class TTS(tts.TTS):
             word_tokenizer = (
                 tokenize.basic.WordTokenizer(ignore_punctuation=False)
                 if not auto_mode
-                else tokenize.basic.SentenceTokenizer()
+                else tokenize.blingfire.SentenceTokenizer()
             )
         elif auto_mode and not isinstance(word_tokenizer, tokenize.SentenceTokenizer):
             logger.warning(
