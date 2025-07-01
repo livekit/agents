@@ -2,7 +2,7 @@ import json
 import uuid
 from typing import Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 
 from livekit.agents import llm
 
@@ -20,7 +20,7 @@ SAMPLE_SIZE_BITS = Literal[16]  # only supports 16-bit audio
 CHANNEL_COUNT = Literal[1]  # only supports monochannel audio
 
 
-class BaseModel(BaseModel):
+class BaseModel(_BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
