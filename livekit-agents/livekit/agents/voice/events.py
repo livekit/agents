@@ -156,6 +156,7 @@ class CloseReason(str, Enum):
     JOB_SHUTDOWN = "job_shutdown"
     PARTICIPANT_DISCONNECTED = "participant_disconnected"
     USER_INITIATED = "user_initiated"
+    TASK_COMPLETED = "task_completed"
 
 
 class CloseEvent(BaseModel):

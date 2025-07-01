@@ -142,12 +142,22 @@ class FunctionCall(BaseModel):
 
 class FunctionCallOutput(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
-    name: str = Field(default="")
     type: Literal["function_call_output"] = Field(default="function_call_output")
+    name: str = Field(default="")
     call_id: str
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+
+
+# class AgentHandoff(BaseModel):
+#     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
+#     type: Literal["agent_handoff"] = Field(default="agent_handoff")
+#     old_agent_id: str | None
+#     new_agent_id: str
+#     old_agent: Agent | None = Field(exclude=True)
+#     new_agent: Agent | None = Field(exclude=True)
+#     created_at: float = Field(default_factory=time.time)
 
 
 ChatItem = Annotated[
@@ -212,7 +222,9 @@ class ChatContext:
         return next((item for item in self.items if item.id == item_id), None)
 
     def index_by_id(self, item_id: str) -> int | None:
-        return next((i for i, item in enumerate(self.items) if item.id == item_id), None)
+        return next(
+            (i for i, item in enumerate(self.items) if item.id == item_id), None
+        )
 
     def copy(
         self,
@@ -220,7 +232,9 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_instructions: bool = False,
         exclude_empty_message: bool = False,
-        tools: NotGivenOr[Sequence[FunctionTool | RawFunctionTool | str | Any]] = NOT_GIVEN,
+        tools: NotGivenOr[
+            Sequence[FunctionTool | RawFunctionTool | str | Any]
+        ] = NOT_GIVEN,
     ) -> ChatContext:
         items = []
 
@@ -261,7 +275,9 @@ class ChatContext:
 
             if (
                 is_given(tools)
-                and (item.type == "function_call" or item.type == "function_call_output")
+                and (
+                    item.type == "function_call" or item.type == "function_call_output"
+                )
                 and item.name not in valid_tools
             ):
                 continue
@@ -277,7 +293,11 @@ class ChatContext:
         Preserves the first system message by adding it back to the beginning.
         """
         instructions = next(
-            (item for item in self._items if item.type == "message" and item.role == "system"),
+            (
+                item
+                for item in self._items
+                if item.type == "message" and item.role == "system"
+            ),
             None,
         )
 
@@ -293,6 +313,37 @@ class ChatContext:
             new_items.insert(0, instructions)
 
         self._items[:] = new_items
+        return self
+
+    def merge(
+        self,
+        other_chat_ctx: ChatContext,
+        *,
+        exclude_function_call: bool = False,
+        exclude_instructions: bool = False,
+    ) -> ChatContext:
+        """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
+        existing_ids = {item.id for item in self._items}
+
+        for item in other_chat_ctx.items:
+            if exclude_function_call and item.type in [
+                "function_call",
+                "function_call_output",
+            ]:
+                continue
+
+            if (
+                exclude_instructions
+                and item.type == "message"
+                and item.role in ["system", "developer"]
+            ):
+                continue
+
+            if item.id not in existing_ids:
+                idx = self.find_insertion_index(created_at=item.created_at)
+                self._items.insert(idx, item)
+                existing_ids.add(item.id)
+
         return self
 
     def to_dict(
@@ -314,9 +365,13 @@ class ChatContext:
             if item.type == "message":
                 item = item.model_copy()
                 if exclude_image:
-                    item.content = [c for c in item.content if not isinstance(c, ImageContent)]
+                    item.content = [
+                        c for c in item.content if not isinstance(c, ImageContent)
+                    ]
                 if exclude_audio:
-                    item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+                    item.content = [
+                        c for c in item.content if not isinstance(c, AudioContent)
+                    ]
 
             items.append(item)
 
@@ -357,7 +412,9 @@ class ChatContext:
     ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
 
     @overload
-    def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
+    def to_provider_format(
+        self, format: str, **kwargs: Any
+    ) -> tuple[list[dict], Any]: ...
 
     def to_provider_format(
         self,

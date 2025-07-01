@@ -148,8 +148,6 @@ class ChunkedStream(tts.ChunkedStream):
                     async with response["AudioStream"] as resp:
                         async for data, _ in resp.content.iter_chunks():
                             output_emitter.push(data)
-
-                    output_emitter.flush()
         except botocore.exceptions.ConnectTimeoutError:
             raise APITimeoutError() from None
         except Exception as e:
