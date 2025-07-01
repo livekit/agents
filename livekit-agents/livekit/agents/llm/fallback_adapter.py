@@ -226,6 +226,7 @@ class FallbackLLMStream(LLMStream):
                         )
 
                     if chunk_sent:
+                        logger.error(f"{llm.label} failed after sending chunk, skip retrying")
                         raise
 
             self._try_recovery(llm)

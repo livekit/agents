@@ -255,7 +255,8 @@ class _SegmentSynchronizerImpl:
 
         if not self._text_data.done or not self._audio_data.done:
             logger.warning(
-                "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done"
+                "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done",
+                extra={"text_done": self._text_data.done, "audio_done": self._audio_data.done},
             )
             return
 
