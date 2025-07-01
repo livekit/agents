@@ -61,6 +61,7 @@ jobs:
               -p livekit.agents
               -p livekit.plugins.openai
               -p livekit.plugins.anthropic
+              -p livekit.plugins.mistralai
               -p livekit.plugins.assemblyai
               -p livekit.plugins.aws
               -p livekit.plugins.azure
