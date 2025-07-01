@@ -10,24 +10,12 @@ To run the examples, you'll need:
 
 - A [LiveKit Cloud](https://cloud.livekit.io) account or a local [LiveKit server](https://github.com/livekit/livekit)
 - API keys for the model providers you want to use in a `.env` file
-- A virtual environment (e.g. `venv`)
+- Python 3.9 or higher
+- [uv](https://docs.astral.sh/uv/)
 
-From the `examples` directory, create your `venv`:
+### Environment file
 
-```bash
-cd examples
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-```
-
-Then install the local workspace with all plugins:
-
-```bash
-pip install -e ../livekit-agents
-pip install -e ../livekit-plugins/livekit-plugins-*
-```
-
-Create a `.env` file in the `examples` directory and add your API keys:
+Create a `.env` file in the `examples` directory and add your API keys (see `examples/.env.example`):
 
 ```env
 LIVEKIT_URL="wss://your-project.livekit.cloud"
@@ -37,12 +25,22 @@ OPENAI_API_KEY="sk-xxx" # or any other model provider API key
 ... # other model provider API keys as needed
 ```
 
+### Install dependencies
+
+From the repository root, run the following command:
+
+```bash
+uv sync --all-extras --dev
+```
+
+### Running an individual example
+
 Run an example agent:
 
 ```bash
-python voice_agents/basic_agent.py console
+uv run examples/voice_agents/basic_agent.py console
 ```
 
-Your agent is now running in the console. 
+Your agent is now running in the console.
 
-For frontend support, see the [Agents playground](https://docs.livekit.io/agents/start/playground/) and the [starter apps](https://docs.livekit.io/agents/start/frontend/#starter-apps).
+For frontend support, use the [Agents playground](https://playground.livekit.io/) or the [starter apps](https://docs.livekit.io/agents/start/frontend/#starter-apps).

@@ -336,7 +336,59 @@ Runs the agent with production-ready optimizations.
 
 ## Contributing
 
-The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).
+The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in the [LiveKit Slack community](https://livekit.io/join-slack).
+
+### Development & running locally
+
+This project uses [uv](https://docs.astral.sh/uv/) for package management.
+
+To install dependencies for development, run the following command:
+
+```shell
+uv sync --all-extras --dev
+```
+
+### Examples
+
+This project includes a large number of examples in the `examples` directory.  These can be used to demonstrate framework capabilities and usage, as well as to test and verify new features.
+
+To run examples, you must first create the file `examples/.env` with credentials for LiveKit Server and any necessary model providers (see `examples/.env.example`). Then run any example with `uv run examples/path/to/agent.py dev`.
+
+```shell
+uv run examples/voice_agents/basic_agent.py dev
+```
+
+For more information on examples, see the [examples README](examples/README.md).
+
+
+### Tests
+
+A number of unit tests are included under the `tests` directory.  These can be run locally individually using `uv run pytest test/test_<name>.py`.
+
+This project also performs integration tests for each plugin, which require various API credentials (e.g. OpenAI API Key). These run automatically in GitHub CI for PRs submitted by project maintainers. For more information, see the [tests workflow](.github/workflows/tests.yml).
+
+### Formatting
+
+This project uses [ruff](https://github.com/astral-sh/ruff) for formatting, and includes a format check in the [CI workflow](.github/workflows/ci.yml). To reformat the project after making changes, run the following commands:
+
+```shell
+uv run ruff format
+uv run ruff check --fix
+```
+
+### Documentation
+
+This project uses [pdoc3](https://github.com/pdoc3/pdoc) to generate [documentation](https://docs.livekit.io/reference/python/v1/) for LiveKit Agents, all plugins, and the [LiveKit Python SDK](https://github.com/livekit/python-sdks).
+
+To generate the docs locally for verification, run the following command:
+
+```shell
+uv sync --all-extras --group docs
+uv run --active pdoc --skip-errors --html --output-dir=docs livekit
+```
+
+Use the GitHub Action [Publish docs](.github/workflows/publish-docs.yml) to publish the docs to the [LiveKit docs site](https://docs.livekit.io/reference/python/v1/).
+
 
 <!--BEGIN_REPO_NAV-->
 
