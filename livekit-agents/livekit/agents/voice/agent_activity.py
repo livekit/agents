@@ -1583,7 +1583,6 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(
             [asyncio.ensure_future(speech_handle._wait_for_authorization())]
         )
-        speech_handle._clear_authorization()
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
@@ -1603,6 +1602,7 @@ class AgentActivity(RecognitionHooks):
                 instructions=instructions or NOT_GIVEN
             )
 
+            # _realtime_generation_task will clear the authorization
             await self._realtime_generation_task(
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
