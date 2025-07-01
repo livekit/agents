@@ -41,15 +41,9 @@ def _normalize_text(text: str) -> str:
     return text
 
 
-def _preprocess_convo(convo: list[dict[str, Any]], normalize: bool = True) -> list[dict[str, Any]]:
-    PUNCS_ON = "<|puncs_on|>"
-    PUNCS_OFF = "<|puncs_off|>"
-
+def _normalize_convo(convo: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for msg in convo:
-        if normalize:
-            msg["content"] = PUNCS_OFF + _normalize_text(msg["content"])
-        else:
-            msg["content"] = PUNCS_ON + msg["content"]
+        msg["content"] = _normalize_text(msg["content"])
     return convo
 
 
@@ -68,13 +62,13 @@ class _EUORunnerBase(_InferenceRunner):
 
             # need to combine adjacent turns together to match training data
             if last_msg and last_msg["role"] == msg["role"]:
-                last_msg["content"] += content
+                last_msg["content"] += f" {content}"
             else:
                 msg["content"] = content
                 new_chat_ctx.append(msg)
                 last_msg = msg
 
-        new_chat_ctx = _preprocess_convo(new_chat_ctx)
+        new_chat_ctx = _normalize_convo(new_chat_ctx)
         convo_text = self._tokenizer.apply_chat_template(
             new_chat_ctx,
             add_generation_prompt=False,
