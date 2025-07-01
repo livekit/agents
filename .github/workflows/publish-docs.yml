@@ -29,7 +29,7 @@ jobs:
 
       - name: Install package and all plugins
         run: |
-          uv sync --active
+          uv sync --all-extras
 
       - name: Install pdoc and other dependencies
         run: |
