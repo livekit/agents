@@ -49,9 +49,6 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
 
-BUFFERED_WORDS_COUNT = 10
-
-
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
@@ -112,6 +109,13 @@ class TTS(tts.TTS):
         cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not cartesia_api_key:
             raise ValueError("CARTESIA_API_KEY must be set")
+
+        if (speed or emotion) and model != "sonic-2-2025-03-07":
+            logger.warning(
+                "speed and emotion controls are only supported for model 'sonic-2-2025-03-07', "
+                "see https://docs.cartesia.ai/developer-tools/changelog for details",
+                extra={"model": model, "speed": speed, "emotion": emotion},
+            )
 
         self._opts = _TTSOptions(
             model=model,
@@ -185,6 +189,13 @@ class TTS(tts.TTS):
         if is_given(emotion):
             self._opts.emotion = emotion
 
+        if (speed or emotion) and self._opts.model != "sonic-2-2025-03-07":
+            logger.warning(
+                "speed and emotion controls are only supported for model 'sonic-2-2025-03-07', "
+                "see https://docs.cartesia.ai/developer-tools/changelog for details",
+                extra={"model": self._opts.model, "speed": speed, "emotion": emotion},
+            )
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
@@ -252,9 +263,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._sent_tokenizer_stream = tokenize.basic.SentenceTokenizer(
-            min_sentence_len=BUFFERED_WORDS_COUNT
-        ).stream()
+        self._sent_tokenizer_stream = tokenize.blingfire.SentenceTokenizer().stream()
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
