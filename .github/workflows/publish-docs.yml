@@ -27,13 +27,9 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: Install package and all plugins
+      - name: Install package, plugins, and docs dependencies
         run: |
-          uv sync --all-extras
-
-      - name: Install pdoc and other dependencies
-        run: |
-          uv pip install pdoc3 setuptools
+          uv sync --all-extras --group docs
 
       - name: Build Docs
         run: |
