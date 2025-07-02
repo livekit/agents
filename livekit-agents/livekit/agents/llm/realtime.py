@@ -55,6 +55,7 @@ class RealtimeCapabilities:
     turn_detection: bool
     user_transcription: bool
     auto_tool_reply_generation: bool
+    audio_output: bool
 
 
 class RealtimeError(Exception):
@@ -163,7 +164,9 @@ class RealtimeSession(ABC, rtc.EventEmitter[Union[EventTypes, TEvent]], Generic[
 
     # message_id is the ID of the message to truncate (inside the ChatCtx)
     @abstractmethod
-    def truncate(self, *, message_id: str, audio_end_ms: int) -> None: ...
+    def truncate(
+        self, *, message_id: str, audio_end_ms: int, audio_transcript: NotGivenOr[str] = NOT_GIVEN
+    ) -> None: ...
 
     @abstractmethod
     async def aclose(self) -> None: ...
