@@ -622,7 +622,7 @@ def _drink_menu_instructions(items: list[MenuItem]) -> str:
             line += " UNAVAILABLE"
         menu_lines.append(line)
 
-    return f"# Drinks:\n{'\n'.join(menu_lines)}"
+    return "# Drinks:\n" + "\n".join(menu_lines)
 
 
 def _combo_menu_instructions(items: list[MenuItem]) -> str:
