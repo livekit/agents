@@ -690,4 +690,4 @@ def _regular_menu_instructions(items: list[MenuItem]) -> str:
             line += " UNAVAILABLE"
         menu_lines.append(line)
 
-    return f"# Regular items/À la carte:\n{'\n'.join(menu_lines)}"
+    return "# Regular items/À la carte:\n" + "\n".join(menu_lines)
