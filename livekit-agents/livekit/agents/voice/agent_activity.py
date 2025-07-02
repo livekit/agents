@@ -1361,11 +1361,12 @@ class AgentActivity(RecognitionHooks):
         tr_node = self._agent.transcription_node(tr_input, model_settings)
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
         text_out: _TextOutput | None = None
+        text_forward_task: asyncio.Task | None = None
         if tr_node_result is not None:
-            forward_task, text_out = perform_text_forwarding(
+            text_forward_task, text_out = perform_text_forwarding(
                 text_output=text_output, source=tr_node_result
             )
-            tasks.append(forward_task)
+            tasks.append(text_forward_task)
 
         def _on_first_frame(_: asyncio.Future[None]) -> None:
             self._session._update_agent_state("speaking")
@@ -1382,6 +1383,22 @@ class AgentActivity(RecognitionHooks):
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
+
+        # before executing tools, make sure we generated all the text (this ensure everything is kept ordered)
+        if text_forward_task:
+            await speech_handle.wait_if_not_interrupted([text_forward_task])
+
+        generated_msg: llm.ChatMessage | None = None
+        if text_out:
+            # emit the assistant message to the SpeechHandle before calling the tools
+            generated_msg = llm.ChatMessage(
+                role="assistant",
+                content=[text_out.text],
+                id=llm_gen_data.id,
+                interrupted=False,
+                created_at=reply_started_at,
+            )
+            speech_handle._item_added([generated_msg])
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
@@ -1438,17 +1455,13 @@ class AgentActivity(RecognitionHooks):
                 else:
                     forwarded_text = ""
 
-            if forwarded_text:
-                msg = chat_ctx.add_message(
-                    role="assistant",
-                    content=forwarded_text,
-                    id=llm_gen_data.id,
-                    interrupted=True,
-                    created_at=reply_started_at,
-                )
-                self._agent._chat_ctx.insert(msg)
-                self._session._conversation_item_added(msg)
-                speech_handle._item_added([msg])
+            if generated_msg:
+                copy_msg = generated_msg.model_copy()
+                copy_msg.content = [forwarded_text] 
+                copy_msg.interrupted = True
+                if forwarded_text:
+                    self._agent._chat_ctx.insert(copy_msg)
+                    self._session._conversation_item_added(copy_msg)
 
             if self._session.agent_state == "speaking":
                 self._session._update_agent_state("listening")
@@ -1457,17 +1470,9 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(exe_task)
             return
 
-        if text_out and text_out.text:
-            msg = chat_ctx.add_message(
-                role="assistant",
-                content=text_out.text,
-                id=llm_gen_data.id,
-                interrupted=False,
-                created_at=reply_started_at,
-            )
-            self._agent._chat_ctx.insert(msg)
-            self._session._conversation_item_added(msg)
-            speech_handle._item_added([msg])
+        if generated_msg:
+            self._agent._chat_ctx.insert(generated_msg)
+            self._session._conversation_item_added(generated_msg)
 
         if len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
