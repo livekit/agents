@@ -35,7 +35,7 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
     ) -> None:
         super().__init__(
             instructions=(
-                "You are only a single step in a broader system, responsible solely for capturing and confirming the user's email address.\n"
+                "You are only a single step in a broader system, responsible solely for capturing the user's email address.\n"
                 "Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:\n"
                 "- 'john dot doe at gmail dot com'\n"
                 "- 'susan underscore smith at yahoo dot co dot uk'\n"
