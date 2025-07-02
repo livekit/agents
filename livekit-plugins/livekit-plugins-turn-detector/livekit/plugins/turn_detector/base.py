@@ -144,6 +144,8 @@ class EOUModelBase(ABC):
         self._model_type = model_type
         self._executor = inference_executor or get_job_context().inference_executor
         self._unlikely_threshold = unlikely_threshold
+        self._languages: dict[str, Any] = {}
+
 
         if load_languages:
             config_fname = _download_from_hf_hub(
@@ -153,9 +155,7 @@ class EOUModelBase(ABC):
                 local_files_only=True,
             )
             with open(config_fname) as f:
-                self._languages: dict[str, Any] = json.load(f)
-        else:
-            self._languages: dict[str, Any] = {}
+                self._languages = json.load(f)
 
     @abstractmethod
     def _inference_method(self) -> str: ...
