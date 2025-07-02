@@ -277,8 +277,8 @@ async def _audio_forwarding_task(
 
 @dataclass
 class _ToolOutput:
-    output: list[_PythonOutput]
-    first_tool_fut: asyncio.Future[None]
+    output: list[ToolExecutionOutput]
+    first_tool_started_fut: asyncio.Future[None]
 
 
 def perform_tool_executions(
@@ -288,8 +288,10 @@ def perform_tool_executions(
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
+    tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
+    tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
 ) -> tuple[asyncio.Task[None], _ToolOutput]:
-    tool_output = _ToolOutput(output=[], first_tool_fut=asyncio.Future())
+    tool_output = _ToolOutput(output=[], first_tool_started_fut=asyncio.Future())
     task = asyncio.create_task(
         _execute_tools_task(
             session=session,
@@ -298,6 +300,8 @@ def perform_tool_executions(
             tool_choice=tool_choice,
             function_stream=function_stream,
             tool_output=tool_output,
+            tool_execution_started_cb=tool_execution_started_cb,
+            tool_execution_completed_cb=tool_execution_completed_cb,
         ),
         name="execute_tools_task",
     )
@@ -312,12 +316,18 @@ async def _execute_tools_task(
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
+    tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
+    tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
     tool_output: _ToolOutput,
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
     from .agent import _set_activity_task_info
     from .events import RunContext
+
+    def _tool_completed(out: ToolExecutionOutput):
+        tool_execution_completed_cb(out)
+        tool_output.output.append(out)
 
     tasks: list[asyncio.Task[Any]] = []
     try:
@@ -354,7 +364,7 @@ async def _execute_tools_task(
                 )
                 continue
 
-            py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
+            # py_out = _PythonOutput(fnc_call=fnc_call, output=None, exception=None)
             try:
                 json_args = fnc_call.arguments or "{}"
                 fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
@@ -376,13 +386,13 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                py_out.exception = e
-                tool_output.output.append(py_out)
+                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
                 continue
 
-            if not tool_output.first_tool_fut.done():
-                tool_output.first_tool_fut.set_result(None)
+            if not tool_output.first_tool_started_fut.done():
+                tool_output.first_tool_started_fut.set_result(None)
 
+            tool_execution_started_cb(fnc_call)
             try:
                 from .run_result import _MockToolsContextVar
 
@@ -400,7 +410,7 @@ async def _execute_tools_task(
                         },
                     )
 
-                    async def _run_mock() -> Any:
+                    async def _run_mock(mock: Callable) -> Any:
                         sig = inspect.signature(mock)
                         bound = sig.bind_partial(*fnc_args, **fnc_kwargs)
                         bound.apply_defaults()
@@ -410,10 +420,7 @@ async def _execute_tools_task(
                         else:
                             return mock(*fnc_args, **fnc_kwargs)
 
-                    task = asyncio.create_task(
-                        _run_mock(),
-                        name=f"mock_tool_{fnc_call.name}",
-                    )
+                    task = asyncio.create_task(_run_mock(mock), name=f"mock_tool_{fnc_call.name}")
                 else:
                     logger.debug(
                         "executing tool",
@@ -446,14 +453,12 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                py_out.exception = e
-                tool_output.output.append(py_out)
+                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
                 continue
 
             def _log_exceptions(
                 task: asyncio.Task[Any],
                 *,
-                py_out: _PythonOutput,
                 fnc_call: llm.FunctionCall,
             ) -> None:
                 if task.exception() is not None:
@@ -465,15 +470,17 @@ async def _execute_tools_task(
                         },
                         exc_info=task.exception(),
                     )
-                    py_out.exception = task.exception()
-                    tool_output.output.append(py_out)
+                    _tool_completed(
+                        make_tool_output(fnc_call=fnc_call, output=None, exception=task.exception())
+                    )
                     return
 
-                py_out.output = task.result()
-                tool_output.output.append(py_out)
+                _tool_completed(
+                    make_tool_output(fnc_call=fnc_call, output=task.result(), exception=None)
+                )
                 tasks.remove(task)
 
-            task.add_done_callback(partial(_log_exceptions, py_out=py_out, fnc_call=fnc_call))
+            task.add_done_callback(partial(_log_exceptions, fnc_call=fnc_call))
 
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
@@ -530,120 +537,130 @@ def _is_valid_function_output(value: Any) -> bool:
 
 
 @dataclass
-class _SanitizedOutput:
+class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
     fnc_call_out: llm.FunctionCallOutput | None
     agent_task: Agent | None
+    raw_output: Any
+    raw_exception: BaseException | None
     reply_required: bool = field(default=True)
 
 
-@dataclass
-class _PythonOutput:
-    fnc_call: llm.FunctionCall
-    output: Any
-    exception: BaseException | None
+def make_tool_output(
+    *, fnc_call: llm.FunctionCall, output: Any, exception: BaseException | None
+) -> ToolExecutionOutput:
+    from .agent import Agent
 
-    def sanitize(self) -> _SanitizedOutput:
-        from .agent import Agent
+    if isinstance(exception, ToolError):
+        return ToolExecutionOutput(
+            fnc_call=fnc_call.model_copy(),
+            fnc_call_out=llm.FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output=exception.message,
+                is_error=True,
+            ),
+            agent_task=None,
+            raw_output=output,
+            raw_exception=exception,
+        )
 
-        if isinstance(self.exception, ToolError):
-            return _SanitizedOutput(
-                fnc_call=self.fnc_call.model_copy(),
-                fnc_call_out=llm.FunctionCallOutput(
-                    name=self.fnc_call.name,
-                    call_id=self.fnc_call.call_id,
-                    output=self.exception.message,
-                    is_error=True,
-                ),
-                agent_task=None,
-            )
+    if isinstance(exception, StopResponse):
+        return ToolExecutionOutput(
+            fnc_call=fnc_call.model_copy(),
+            fnc_call_out=None,
+            agent_task=None,
+            raw_output=output,
+            raw_exception=exception,
+        )
 
-        if isinstance(self.exception, StopResponse):
-            return _SanitizedOutput(
-                fnc_call=self.fnc_call.model_copy(),
-                fnc_call_out=None,
-                agent_task=None,
-            )
+    if exception is not None:
+        return ToolExecutionOutput(
+            fnc_call=fnc_call.model_copy(),
+            fnc_call_out=llm.FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information  # noqa: E501
+                is_error=True,
+            ),
+            agent_task=None,
+            raw_output=output,
+            raw_exception=exception,
+        )
 
-        if self.exception is not None:
-            return _SanitizedOutput(
-                fnc_call=self.fnc_call.model_copy(),
-                fnc_call_out=llm.FunctionCallOutput(
-                    name=self.fnc_call.name,
-                    call_id=self.fnc_call.call_id,
-                    output="An internal error occurred",  # Don't send the actual error message, as it may contain sensitive information  # noqa: E501
-                    is_error=True,
-                ),
-                agent_task=None,
-            )
-
-        task: Agent | None = None
-        fnc_out: Any = self.output
-        if (
-            isinstance(self.output, list)
-            or isinstance(self.output, set)
-            or isinstance(self.output, frozenset)
-            or isinstance(self.output, tuple)
-        ):
-            agent_tasks = [item for item in self.output if isinstance(item, Agent)]
-            other_outputs = [item for item in self.output if not isinstance(item, Agent)]
-            if len(agent_tasks) > 1:
-                logger.error(
-                    f"AI function `{self.fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                    extra={
-                        "call_id": self.fnc_call.call_id,
-                        "output": self.output,
-                    },
-                )
-
-                return _SanitizedOutput(
-                    fnc_call=self.fnc_call.model_copy(),
-                    fnc_call_out=None,
-                    agent_task=None,
-                )
-
-            task = next(iter(agent_tasks), None)
-
-            # fmt: off
-            fnc_out = (
-                other_outputs if task is None
-                else None if not other_outputs
-                else other_outputs[0] if len(other_outputs) == 1
-                else other_outputs
-            )
-            # fmt: on
-
-        elif isinstance(fnc_out, Agent):
-            task = fnc_out
-            fnc_out = None
-
-        if not _is_valid_function_output(fnc_out):
+    task: Agent | None = None
+    fnc_out: Any = output
+    if (
+        isinstance(output, list)
+        or isinstance(output, set)
+        or isinstance(output, frozenset)
+        or isinstance(output, tuple)
+    ):
+        agent_tasks = [item for item in output if isinstance(item, Agent)]
+        other_outputs = [item for item in output if not isinstance(item, Agent)]
+        if len(agent_tasks) > 1:
             logger.error(
-                f"AI function `{self.fnc_call.name}` returned an invalid output",
+                f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
                 extra={
-                    "call_id": self.fnc_call.call_id,
-                    "output": self.output,
+                    "call_id": fnc_call.call_id,
+                    "output": output,
                 },
             )
-            return _SanitizedOutput(
-                fnc_call=self.fnc_call.model_copy(),
+
+            return ToolExecutionOutput(
+                fnc_call=fnc_call.model_copy(),
                 fnc_call_out=None,
                 agent_task=None,
+                raw_output=output,
+                raw_exception=exception,
             )
 
-        return _SanitizedOutput(
-            fnc_call=self.fnc_call.model_copy(),
-            fnc_call_out=(
-                llm.FunctionCallOutput(
-                    name=self.fnc_call.name,
-                    call_id=self.fnc_call.call_id,
-                    output=str(fnc_out or ""),  # take the string representation of the output
-                    is_error=False,
-                )
-            ),
-            reply_required=fnc_out is not None,  # require a reply if the tool returned an output
-            agent_task=task,
+        task = next(iter(agent_tasks), None)
+
+        # fmt: off
+        fnc_out = (
+            other_outputs if task is None
+            else None if not other_outputs
+            else other_outputs[0] if len(other_outputs) == 1
+            else other_outputs
         )
+        # fmt: on
+
+    elif isinstance(fnc_out, Agent):
+        task = fnc_out
+        fnc_out = None
+
+    if not _is_valid_function_output(fnc_out):
+        logger.error(
+            f"AI function `{fnc_call.name}` returned an invalid output",
+            extra={
+                "call_id": fnc_call.call_id,
+                "output": output,
+            },
+        )
+        return ToolExecutionOutput(
+            fnc_call=fnc_call.model_copy(),
+            fnc_call_out=None,
+            agent_task=None,
+            raw_output=output,
+            raw_exception=exception,
+        )
+
+    return ToolExecutionOutput(
+        fnc_call=fnc_call.model_copy(),
+        fnc_call_out=(
+            llm.FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output=str(fnc_out or ""),  # take the string representation of the output
+                is_error=False,
+            )
+        ),
+        reply_required=fnc_out is not None,  # require a reply if the tool returned an output
+        agent_task=task,
+        raw_output=output,
+        raw_exception=exception,
+    )
 
 
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
