@@ -1,14 +1,12 @@
-import logging
-from typing import Protocol
-from zoneinfo import ZoneInfo
-from dataclasses import dataclass
-import datetime
-from urllib.parse import urlencode
-import random
-
-import hashlib
 import base64
-
+import datetime
+import hashlib
+import logging
+import random
+from dataclasses import dataclass
+from typing import Protocol
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 from livekit.agents.utils import http_context
 
@@ -40,9 +38,13 @@ class Calendar(Protocol):
 
 
 class FakeCalendar(Calendar):
-    def __init__(self, *, timezone: str) -> None:
+    def __init__(self, *, timezone: str, slots: list[AvailableSlot] | None = None) -> None:
         self.tz = ZoneInfo(timezone)
         self._slots: list[AvailableSlot] = []
+
+        if slots is not None:
+            self._slots.extend(slots)
+            return
 
         today = datetime.datetime.now(self.tz).date()
         for day_offset in range(1, 90):  # generate slots for the next 90 days
