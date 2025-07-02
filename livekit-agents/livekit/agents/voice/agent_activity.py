@@ -1317,7 +1317,7 @@ class AgentActivity(RecognitionHooks):
         )
         tasks.append(llm_task)
         text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
-        tts_text_input, llm_output = text_tee
+        tts_text_input, tr_input = text_tee
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
