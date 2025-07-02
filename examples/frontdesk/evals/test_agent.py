@@ -82,11 +82,11 @@ async def test_slot_scheduling() -> None:
         )
         result.expect.function_call_output()
         await result.expect.message(role="assistant").judge(
-            llm, intent="must ask for the email address confirmation"
+            llm, intent="must ask for the email address confirmation/validation"
         )
 
         result = await sess.run(user_input="Yes, it's valid")
-        result.expect.function_call(name="validate_email_address")
+        result.expect.function_call(name="confirm_email_address")
         result.expect.function_call_output()
         result.expect.agent_handoff(new_agent_type=FrontDeskAgent)
 
