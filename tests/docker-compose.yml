@@ -80,7 +80,7 @@ services:
       - "api.lmnt.com:172.30.0.10"
       - "api.inworld.ai:172.30.0.10"
       - "api.mistralai.com:172.30.0.10"
-    neworks:
+    networks:
       - toxinet
 
 networks:
