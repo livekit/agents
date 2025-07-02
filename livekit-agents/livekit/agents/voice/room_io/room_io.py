@@ -145,7 +145,6 @@ class RoomIO:
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
-        self._close_session_atask: asyncio.Task[None] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
         self._text_stream_handler_registered = False
@@ -417,7 +416,6 @@ class RoomIO:
         if (
             self._input_options.close_on_disconnect
             and participant.disconnect_reason in DEFAULT_CLOSE_ON_DISCONNECT_REASONS
-            and not self._close_session_atask
         ):
             logger.info(
                 "closing agent session due to participant disconnect "
