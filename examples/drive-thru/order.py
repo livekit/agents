@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import secrets
 import string
 from dataclasses import dataclass
