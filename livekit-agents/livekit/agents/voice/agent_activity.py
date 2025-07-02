@@ -38,6 +38,7 @@ from .events import (
     UserInputTranscribedEvent,
 )
 from .generation import (
+    ToolExecutionOutput,
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
@@ -1315,8 +1316,8 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
         )
         tasks.append(llm_task)
-        tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
-        tts_text_input, tr_input = tee
+        text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
+        tts_text_input, llm_output = text_tee
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -1341,7 +1342,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
-            await tee.aclose()
+            await text_tee.aclose()
             return
 
         reply_started_at = time.time()
@@ -1371,6 +1372,13 @@ class AgentActivity(RecognitionHooks):
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
+        def _tool_execution_started_cb(fnc_call: llm.FunctionCall):
+            speech_handle._item_added([fnc_call])
+
+        def _tool_execution_completed_cb(out: ToolExecutionOutput):
+            if out.fnc_call_out:
+                speech_handle._item_added([out.fnc_call_out])
+
         # start to execute tools (only after play())
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
@@ -1378,6 +1386,8 @@ class AgentActivity(RecognitionHooks):
             tool_ctx=tool_ctx,
             tool_choice=model_settings.tool_choice,
             function_stream=llm_gen_data.function_ch,
+            tool_execution_started_cb=_tool_execution_started_cb,
+            tool_execution_completed_cb=_tool_execution_completed_cb,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
@@ -1397,7 +1407,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
-            await tee.aclose()
+            await text_tee.aclose()
 
             forwarded_text = text_out.text if text_out else ""
             # if the audio playout was enabled, clear the buffer
@@ -1456,7 +1466,7 @@ class AgentActivity(RecognitionHooks):
         log_event("playout completed", speech_id=speech_handle.id)
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
-        await tee.aclose()
+        await text_tee.aclose()
 
         await exe_task
 
@@ -1482,12 +1492,9 @@ class AgentActivity(RecognitionHooks):
             new_agent_task: Agent | None = None
             ignore_task_switch = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
-                function_calls=[],
-                function_call_outputs=[],
+                function_calls=[], function_call_outputs=[]
             )
-            for py_out in tool_output.output:
-                sanitized_out = py_out.sanitize()
-
+            for sanitized_out in tool_output.output:
                 if sanitized_out.fnc_call_out is not None:
                     new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
@@ -1512,8 +1519,6 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            speech_handle._item_added(tool_messages)
-
             if generate_tool_reply:
                 chat_ctx.items.extend(tool_messages)
 
@@ -1680,12 +1685,21 @@ class AgentActivity(RecognitionHooks):
             )
         ]
 
+        def _tool_execution_started_cb(fnc_call: llm.FunctionCall):
+            speech_handle._item_added([fnc_call])
+
+        def _tool_execution_completed_cb(out: ToolExecutionOutput):
+            if out.fnc_call_out:
+                speech_handle._item_added([out.fnc_call_out])
+
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             tool_choice=model_settings.tool_choice,
             function_stream=generation_ev.function_stream,
+            tool_execution_started_cb=_tool_execution_started_cb,
+            tool_execution_completed_cb=_tool_execution_completed_cb,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
@@ -1756,7 +1770,7 @@ class AgentActivity(RecognitionHooks):
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
-        tool_output.first_tool_fut.add_done_callback(
+        tool_output.first_tool_started_fut.add_done_callback(
             lambda _: self._session._update_agent_state("thinking")
         )
         await exe_task
@@ -1775,16 +1789,10 @@ class AgentActivity(RecognitionHooks):
             new_agent_task: Agent | None = None
             ignore_task_switch = False
 
-            for py_out in tool_output.output:
-                sanitized_out = py_out.sanitize()
-
+            for sanitized_out in tool_output.output:
                 # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
-
-                speech_handle._chat_items.append(sanitized_out.fnc_call)
-                if sanitized_out.fnc_call_out:
-                    speech_handle._chat_items.append(sanitized_out.fnc_call_out)
 
                 if sanitized_out.fnc_call_out is not None:
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
