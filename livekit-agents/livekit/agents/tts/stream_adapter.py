@@ -98,8 +98,12 @@ class StreamAdapterWrapper(SynthesizeStream):
                 output_emitter.push_timed_transcript(
                     TimedString(text=ev.token, start_time=duration)
                 )
+
+                if not (text := ev.token.strip()):
+                    continue
+
                 async with self._tts._wrapped_tts.synthesize(
-                    ev.token.strip(), conn_options=self._wrapped_tts_conn_options
+                    text, conn_options=self._wrapped_tts_conn_options
                 ) as tts_stream:
                     async for audio in tts_stream:
                         output_emitter.push(audio.frame.data.tobytes())
