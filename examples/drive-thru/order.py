@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import secrets
 import string
 from dataclasses import dataclass
@@ -38,7 +40,7 @@ class OrderedRegular(BaseModel):
 
 
 OrderedItem = Annotated[
-    Union[OrderedCombo | OrderedHappy | OrderedRegular], Field(discriminator="type")
+    Union[OrderedCombo, OrderedHappy, OrderedRegular], Field(discriminator="type")
 ]
 
 

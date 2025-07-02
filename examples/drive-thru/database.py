@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import defaultdict
 from typing import Literal
 
@@ -620,7 +622,7 @@ def _drink_menu_instructions(items: list[MenuItem]) -> str:
             line += " UNAVAILABLE"
         menu_lines.append(line)
 
-    return f"# Drinks:\n{'\n'.join(menu_lines)}"
+    return "# Drinks:\n" + "\n".join(menu_lines)
 
 
 def _combo_menu_instructions(items: list[MenuItem]) -> str:
@@ -664,7 +666,7 @@ def _sauce_menu_instructions(items: list[MenuItem]) -> str:
             line += " UNAVAILABLE"
         menu_lines.append(line)
 
-    return f"# Sauces:\n{'\n'.join(menu_lines)}"
+    return "# Sauces:\n" + "\n".join(menu_lines)
 
 
 # regular/a la carte
@@ -688,4 +690,4 @@ def _regular_menu_instructions(items: list[MenuItem]) -> str:
             line += " UNAVAILABLE"
         menu_lines.append(line)
 
-    return f"# Regular items/À la carte:\n{'\n'.join(menu_lines)}"
+    return "# Regular items/À la carte:\n" + "\n".join(menu_lines)

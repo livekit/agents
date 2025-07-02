@@ -1,4 +1,4 @@
-name: tests
+name: evals
 
 on:
   push:
@@ -14,11 +14,18 @@ permissions:
   actions: write
 
 jobs:
+  evals:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [frontdesk, drive-thru]
 
-  unit-tests:
     runs-on: ubuntu-latest
+    name: ${{ matrix.example }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -27,38 +34,13 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.9"
 
       - name: Install the project
         run: uv sync --all-extras --dev
 
-      - name: Run tests
-        run: uv run pytest tests/test_agent_session.py
-                  tests/test_tts_fallback.py
-                  tests/test_stt_fallback.py
-                  tests/test_aio.py
-                  tests/test_chat_ctx.py
-                  tests/test_config.py
-                  tests/test_schema_gemini.py
-                  tests/test_tokenizer.py
-                  tests/test_workflows.py
-                  tests/test_transcription_filter.py
-
-  tests:
-    # don't run tests for PRs on forks
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
-    strategy:
-      fail-fast: false
-      matrix:
-        plugin: [cartesia, aws, azure, deepgram, elevenlabs, google, groq, resemble, openai, rime, speechify, hume, inworld]
-
-    runs-on: ubuntu-latest
-    name: livekit-plugins-${{ matrix.plugin }}
-    steps:
-      - uses: actions/checkout@v4
-
       - name: Setup Google credentials
-        if: matrix.plugin == 'google'
+        if: matrix.example == 'google'
         shell: bash
         run: |
           printf '%s' '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > tests/google.json
@@ -66,7 +48,7 @@ jobs:
       - name: Run tests
         shell: bash
         env:
-          PLUGIN: ${{ matrix.plugin }}
+          PLUGIN: ${{ matrix.example }}
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
@@ -96,47 +78,4 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
-        working-directory: tests
-        run: make test
-
-      - name: Upload LiveKit dump
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lk-dump-${{ matrix.plugin }}
-          path: lk_dump/**
-          if-no-files-found: ignore
-          retention-days: 1 
-
-
-  aggregate-dumps:
-    if: always()
-    needs: tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: download all dump shards
-        uses: actions/download-artifact@v4
-        with:
-          pattern: lk-dump-*
-          path: all_lk_dump
-          merge-multiple: true
-
-      - name: create tarball
-        id: tar
-        run: |
-          if [ -d "all_lk_dump" ] && [ "$(ls -A all_lk_dump)" ]; then
-            tar -czf lk-dump-all.tar.gz -C all_lk_dump .
-            echo "created=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No dump shards found, skipping tarball creation."
-            echo "created=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: upload merged dump
-        if: steps.tar.outputs.created == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: lk-dump-all
-          path: lk-dump-all.tar.gz
-          retention-days: 5
+        run: uv run pytest examples/${{matrix.example}}/evals/
