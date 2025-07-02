@@ -325,7 +325,7 @@ async def _execute_tools_task(
     from .agent import _set_activity_task_info
     from .events import RunContext
 
-    def _tool_completed(out: ToolExecutionOutput):
+    def _tool_completed(out: ToolExecutionOutput) -> None:
         tool_execution_completed_cb(out)
         tool_output.output.append(out)
 

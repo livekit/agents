@@ -1372,10 +1372,10 @@ class AgentActivity(RecognitionHooks):
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        def _tool_execution_started_cb(fnc_call: llm.FunctionCall):
+        def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
 
-        def _tool_execution_completed_cb(out: ToolExecutionOutput):
+        def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
                 speech_handle._item_added([out.fnc_call_out])
 
@@ -1685,10 +1685,10 @@ class AgentActivity(RecognitionHooks):
             )
         ]
 
-        def _tool_execution_started_cb(fnc_call: llm.FunctionCall):
+        def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])
 
-        def _tool_execution_completed_cb(out: ToolExecutionOutput):
+        def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             if out.fnc_call_out:
                 speech_handle._item_added([out.fnc_call_out])
 
