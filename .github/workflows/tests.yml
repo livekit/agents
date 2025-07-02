@@ -41,6 +41,7 @@ jobs:
                   tests/test_config.py
                   tests/test_schema_gemini.py
                   tests/test_tokenizer.py
+                  tests/test_workflows.py
                   tests/test_transcription_filter.py
 
   tests:
