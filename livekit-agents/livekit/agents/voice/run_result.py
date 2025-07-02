@@ -15,6 +15,7 @@ from typing import (
     Generic,
     Literal,
     TypeVar,
+    Union,
     overload,
 )
 
@@ -56,7 +57,7 @@ class AgentHandoffEvent:
     type: Literal["agent_handoff"] = "agent_handoff"
 
 
-RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
+RunEvent = Union[ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent, AgentHandoffEvent]
 
 
 class RunResult(Generic[Run_T]):
