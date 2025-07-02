@@ -245,6 +245,6 @@ async def test_conv():
         )
         result.expect.function_call_output()
         await result.expect.message(role="assistant").judge(
-            llm, intent="should confirm the order of a Big Mac meal"
+            llm, intent="must confirm a Big Mac Combo meal was added/ordered"
         )
         result.expect.no_more_events()
