@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass
+import re
 
 from livekit import blingfire
 
@@ -22,7 +23,7 @@ def _split_sentences(
 
     for _, end in offsets:
         raw_sentence = text[start:end]
-        sentence = raw_sentence.strip()
+        sentence = re.sub(r"\s*\n+\s*", " ", raw_sentence).strip()
         if not sentence or len(sentence) < min_sentence_len:
             continue
 
