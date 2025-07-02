@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Optional, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -24,7 +25,7 @@ from ..llm.tool_context import (
     is_raw_function_tool,
 )
 from ..log import logger
-from ..types import NotGivenOr
+from ..types import USERDATA_TIMED_TRANSCRIPT, NotGivenOr
 from ..utils import aio
 from . import io
 from .speech_handle import SpeechHandle
@@ -130,12 +131,14 @@ def perform_llm_inference(
 @dataclass
 class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
+    timed_texts_fut: asyncio.Future[aio.Chan[io.TimedString] | None]
 
 
 def perform_tts_inference(
     *, node: io.TTSNode, input: AsyncIterable[str], model_settings: ModelSettings
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
+    timed_texts_fut = asyncio.Future[Optional[aio.Chan[io.TimedString]]]()
 
     @utils.log_exceptions(logger=logger)
     async def _inference_task() -> bool:
@@ -144,17 +147,30 @@ def perform_tts_inference(
             tts_node = await tts_node
 
         if isinstance(tts_node, AsyncIterable):
+            timed_text_ch = aio.Chan[io.TimedString]()
+            timed_texts_fut.set_result(timed_text_ch)
+
             async for audio_frame in tts_node:
+                for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
+                    timed_text_ch.send_nowait(text)
+
                 audio_ch.send_nowait(audio_frame)
 
             return True
 
+        timed_texts_fut.set_result(None)
         return False
 
     tts_task = asyncio.create_task(_inference_task())
-    tts_task.add_done_callback(lambda _: audio_ch.close())
 
-    return tts_task, _TTSGenerationData(audio_ch=audio_ch)
+    def _inference_done(_: asyncio.Task[bool]) -> None:
+        if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
+            timed_text_ch.close()
+        audio_ch.close()
+
+    tts_task.add_done_callback(_inference_done)
+
+    return tts_task, _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
 
 @dataclass
@@ -300,7 +316,7 @@ async def _execute_tools_task(
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
-    from .agent import _authorize_inline_task
+    from .agent import _set_activity_task_info
     from .events import RunContext
 
     tasks: list[asyncio.Task[Any]] = []
@@ -345,7 +361,9 @@ async def _execute_tools_task(
                     fnc=function_tool,
                     json_arguments=json_args,
                     call_ctx=RunContext(
-                        session=session, speech_handle=speech_handle, function_call=fnc_call
+                        session=session,
+                        speech_handle=speech_handle,
+                        function_call=fnc_call,
                     ),
                 )
 
@@ -365,23 +383,56 @@ async def _execute_tools_task(
             if not tool_output.first_tool_fut.done():
                 tool_output.first_tool_fut.set_result(None)
 
-            logger.debug(
-                "executing tool",
-                extra={
-                    "function": fnc_call.name,
-                    "arguments": fnc_call.arguments,
-                    "speech_id": speech_handle.id,
-                },
-            )
-
             try:
-                task = asyncio.create_task(
-                    function_tool(*fnc_args, **fnc_kwargs),
-                    name=f"function_tool_{fnc_call.name}",
-                )
+                from .run_result import _MockToolsContextVar
+
+                mock_tools = _MockToolsContextVar.get().get(type(session.current_agent), {})
+
+                if mock := mock_tools.get(fnc_call.name):
+                    logger.debug(
+                        "executing mock tool",
+                        extra={
+                            "function": fnc_call.name,
+                            "arguments": fnc_call.arguments,
+                            "speech_id": speech_handle.id,
+                        },
+                    )
+
+                    async def _run_mock():
+                        sig = inspect.signature(mock)
+                        bound = sig.bind_partial(*fnc_args, **fnc_kwargs)
+                        bound.apply_defaults()
+
+                        if asyncio.iscoroutinefunction(mock):
+                            return await mock(*fnc_args, **fnc_kwargs)
+                        else:
+                            return mock(*fnc_args, **fnc_kwargs)
+
+                    task = asyncio.create_task(
+                        _run_mock(),
+                        name=f"mock_tool_{fnc_call.name}",
+                    )
+                else:
+                    logger.debug(
+                        "executing tool",
+                        extra={
+                            "function": fnc_call.name,
+                            "arguments": fnc_call.arguments,
+                            "speech_id": speech_handle.id,
+                        },
+                    )
+                    task = asyncio.create_task(
+                        function_tool(*fnc_args, **fnc_kwargs),
+                        name=f"function_tool_{fnc_call.name}",
+                    )
 
                 tasks.append(task)
-                _authorize_inline_task(task, function_call=fnc_call)
+                _set_activity_task_info(
+                    task,
+                    speech_handle=speech_handle,
+                    function_call=fnc_call,
+                    inline_task=True,
+                )
             except Exception as e:
                 # catching exceptions here because even though the function is asynchronous,
                 # errors such as missing or incompatible arguments can still occur at
@@ -626,7 +677,8 @@ def update_instructions(chat_ctx: ChatContext, *, instructions: str, add_if_miss
     elif add_if_missing:
         # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
-            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions])
+            0,
+            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]),
         )
 
 
