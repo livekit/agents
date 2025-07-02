@@ -29,36 +29,32 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     return local_path
 
 
-def _normalize_text(text: str) -> str:
-    if not text:
-        return ""
-
-    text = unicodedata.normalize("NFKC", text.lower())
-    text = "".join(
-        ch for ch in text if not (unicodedata.category(ch).startswith("P") and ch not in ["'", "-"])
-    )
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def _normalize_convo(convo: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    for msg in convo:
-        msg["content"] = _normalize_text(msg["content"])
-    return convo
-
-
 class _EUORunnerBase(_InferenceRunner):
     def __init__(self, model_type: EOUModelType):
         super().__init__()
         self._model_revision = MODEL_REVISIONS[model_type]
 
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return ""
+
+        text = unicodedata.normalize("NFKC", text.lower())
+        text = "".join(
+            ch
+            for ch in text
+            if not (unicodedata.category(ch).startswith("P") and ch not in ["'", "-"])
+        )
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
     def _format_chat_ctx(self, chat_ctx: list[dict[str, Any]]) -> str:
         new_chat_ctx = []
         last_msg: dict[str, Any] | None = None
         for msg in chat_ctx:
-            content = msg["content"]
-            if not content:
+            if not msg["content"]:
                 continue
+
+            content = self._normalize_text(msg["content"])
 
             # need to combine adjacent turns together to match training data
             if last_msg and last_msg["role"] == msg["role"]:
@@ -68,7 +64,6 @@ class _EUORunnerBase(_InferenceRunner):
                 new_chat_ctx.append(msg)
                 last_msg = msg
 
-        new_chat_ctx = _normalize_convo(new_chat_ctx)
         convo_text = self._tokenizer.apply_chat_template(
             new_chat_ctx,
             add_generation_prompt=False,
