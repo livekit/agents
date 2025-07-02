@@ -666,7 +666,7 @@ def _sauce_menu_instructions(items: list[MenuItem]) -> str:
             line += " UNAVAILABLE"
         menu_lines.append(line)
 
-    return f"# Sauces:\n{'\n'.join(menu_lines)}"
+    return "# Sauces:\n" + "\n".join(menu_lines)
 
 
 # regular/a la carte
