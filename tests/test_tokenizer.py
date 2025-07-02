@@ -21,6 +21,7 @@ TEXT = (
     "\n\n"
     "This is a sentence. 这是一个中文句子。これは日本語の文章です。"
     "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。"
+    "\nThis is a sentence contains   consecutive spaces."
 )
 
 EXPECTED_MIN_20 = [
@@ -33,6 +34,7 @@ EXPECTED_MIN_20 = [
     "Hey! Hi! Hello! This is a sentence.",
     "这是一个中文句子。 これは日本語の文章です。",
     "你好！ LiveKit是一个直播音频和视频应用程序和服务的平台。",
+    "This is a sentence contains   consecutive spaces.",
 ]
 
 EXPECTED_MIN_20_RETAIN_FORMAT = [
@@ -45,6 +47,7 @@ EXPECTED_MIN_20_RETAIN_FORMAT = [
     " Hey!\n Hi! Hello! \n\nThis is a sentence.",
     " 这是一个中文句子。これは日本語の文章です。",
     "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
+    "\nThis is a sentence contains   consecutive spaces.",
 ]
 
 EXPECTED_MIN_20_NLTK = [
@@ -56,7 +59,7 @@ EXPECTED_MIN_20_NLTK = [
     "f(x) = x * 2.54 + 42.",
     "Hey! Hi! Hello! This is a sentence.",
     # nltk does not support character-based languages like CJK
-    "这是一个中文句子。これは日本語の文章です。你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
+    "这是一个中文句子。これは日本語の文章です。你好！LiveKit是一个直播音频和视频应用程序和服务的平台。\nThis is a sentence contains   consecutive spaces.",  # noqa: E501
 ]
 
 EXPECTED_MIN_20_BLINGFIRE = [
@@ -67,6 +70,7 @@ EXPECTED_MIN_20_BLINGFIRE = [
     "Hey! Hi! Hello! This is a sentence.",
     "这是一个中文句子。これは日本語の文章です。",
     "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
+    "This is a sentence contains   consecutive spaces.",
 ]
 
 

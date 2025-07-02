@@ -23,7 +23,7 @@ def _split_sentences(
 
     for _, end in offsets:
         raw_sentence = text[start:end]
-        sentence = re.sub(r"\s+", " ", raw_sentence).strip()
+        sentence = re.sub(r"\s*\n+\s*", " ", raw_sentence).strip()
         if not sentence or len(sentence) < min_sentence_len:
             continue
 
