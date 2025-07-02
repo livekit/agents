@@ -40,7 +40,7 @@ class OrderedRegular(BaseModel):
 
 
 OrderedItem = Annotated[
-    Union[OrderedCombo | OrderedHappy | OrderedRegular], Field(discriminator="type")
+    Union[OrderedCombo, OrderedHappy, OrderedRegular], Field(discriminator="type")
 ]
 
 
