@@ -103,7 +103,7 @@ async def test_no_availability() -> None:
     async with _llm_model() as llm, AgentSession(llm=llm, userdata=userdata) as sess:
         await sess.start(FrontDeskAgent(timezone=TIMEZONE))
         result = await sess.run(
-            user_input="Hello, can I need an appointment, what's your availability?"
+            user_input="Hello, can I need an appointment, what's your availability for the next 2 weeks?"
         )
         print(result.events)
         result.expect.maybe_message(role="assistant")
