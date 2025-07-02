@@ -15,6 +15,7 @@ from typing import (
     Generic,
     Literal,
     TypeVar,
+    Union,
     overload,
 )
 
@@ -56,7 +57,7 @@ class AgentHandoffEvent:
     type: Literal["agent_handoff"] = "agent_handoff"
 
 
-RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
+RunEvent = Union[ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent, AgentHandoffEvent]
 
 
 class RunResult(Generic[Run_T]):
@@ -101,7 +102,7 @@ class RunResult(Generic[Run_T]):
     def _agent_handoff(self, *, old_agent: Agent | None, new_agent: Agent) -> None:
         self._recorded_items.append(AgentHandoffEvent(old_agent=old_agent, new_agent=new_agent))
 
-    def _item_added(self, item: llm.ChatItem):
+    def _item_added(self, item: llm.ChatItem) -> None:
         if self._done_fut.done():
             return
 
@@ -127,7 +128,7 @@ class RunResult(Generic[Run_T]):
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
 
-    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None):
+    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None) -> None:
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
@@ -191,7 +192,7 @@ class RunAssert:
         event = self[self._current_index]
         return event
 
-    def _raise_with_debug_info(self, message: str, index: int | None = None):
+    def _raise_with_debug_info(self, message: str, index: int | None = None) -> None:
         marker_index = self._current_index if index is None else index
         lines: list[str] = []
 
@@ -312,7 +313,7 @@ class EventAssert:
         self._parent = parent
         self._index = index
 
-    def _raise(self, message: str):
+    def _raise(self, message: str) -> None:
         self._parent._raise_with_debug_info(message, index=self._index)
 
     def is_function_call(
@@ -323,6 +324,9 @@ class EventAssert:
     ) -> FunctionCallAssert:
         if not isinstance(self._event, FunctionCallEvent):
             self._raise("Expected FunctionCallEvent")
+
+        assert isinstance(self._event, FunctionCallEvent)  # type check
+
         if is_given(name) and self._event.item.name != name:
             self._raise(f"Expected call name '{name}', got '{self._event.item.name}'")
         if is_given(arguments):
@@ -337,6 +341,9 @@ class EventAssert:
     ) -> FunctionCallOutputAssert:
         if not isinstance(self._event, FunctionCallOutputEvent):
             self._raise("Expected FunctionCallOutputEvent")
+
+        assert isinstance(self._event, FunctionCallOutputEvent)  # type check
+
         if is_given(output) and self._event.item.output != output:
             self._raise(f"Expected output '{output}', got '{self._event.item.output}'")
         if is_given(is_error) and self._event.item.is_error != is_error:
@@ -346,6 +353,9 @@ class EventAssert:
     def is_message(self, *, role: NotGivenOr[llm.ChatRole] = NOT_GIVEN) -> ChatMessageAssert:
         if not isinstance(self._event, ChatMessageEvent):
             self._raise("Expected ChatMessageEvent")
+
+        assert isinstance(self._event, ChatMessageEvent)  # type check
+
         if is_given(role) and self._event.item.role != role:
             self._raise(f"Expected role '{role}', got '{self._event.item.role}'")
         return ChatMessageAssert(self._event, self._parent, self._index)
@@ -355,6 +365,9 @@ class EventAssert:
     ) -> AgentHandoffAssert:
         if not isinstance(self._event, AgentHandoffEvent):
             self._raise("Expected AgentHandoffEvent")
+
+        assert isinstance(self._event, AgentHandoffEvent)  # type check
+
         if is_given(new_agent_type) and not isinstance(self._event.new_agent, new_agent_type):
             self._raise(
                 f"Expected new_agent '{new_agent_type.__name__}', got '{type(self._event.new_agent).__name__}'"
@@ -382,6 +395,7 @@ class EventRangeAssert:
         self._parent._raise_with_debug_info(
             f"No FunctionCallEvent satisfying criteria found in range {self._rng!r}"
         )
+        raise RuntimeError("unreachable")
 
     def contains_message(
         self,
@@ -396,6 +410,7 @@ class EventRangeAssert:
         self._parent._raise_with_debug_info(
             f"No ChatMessageEvent matching criteria found in range {self._rng!r}"
         )
+        raise RuntimeError("unreachable")
 
     def contains_function_call_output(
         self,
@@ -411,6 +426,7 @@ class EventRangeAssert:
         self._parent._raise_with_debug_info(
             f"No FunctionCallOutputEvent matching criteria found in range {self._rng!r}"
         )
+        raise RuntimeError("unreachable")
 
 
 class ChatMessageAssert:
@@ -419,7 +435,7 @@ class ChatMessageAssert:
         self._parent = parent
         self._index = index
 
-    def _raise(self, message: str):
+    def _raise(self, message: str) -> None:
         self._parent._raise_with_debug_info(message, index=self._index)
 
     def event(self) -> ChatMessageEvent:
@@ -435,7 +451,7 @@ class ChatMessageAssert:
             self._raise("Intent is required to judge the message.")
 
         @function_tool
-        async def check_intent(success: bool, reason: str):
+        async def check_intent(success: bool, reason: str) -> tuple[bool, str]:
             """
             Determines whether the message correctly fulfills the given intent.
 
@@ -483,6 +499,8 @@ class ChatMessageAssert:
         if not arguments:
             self._raise("LLM did not return any arguments for evaluation.")
 
+        assert isinstance(arguments, str)  # type check
+
         fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
             fnc=check_intent, json_arguments=arguments
         )
@@ -525,20 +543,21 @@ class AgentHandoffAssert:
 
 
 # to make testing easier, we allow sync Callable too
-MockTools: dict[type[Agent], dict[str, Callable]]
-_MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools", default={})
+if TYPE_CHECKING:
+    MockTools = dict[type[Agent], dict[str, Callable]]
+_MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
 
 
 @contextmanager
-def mock_tools(agent: type[Agent], mocks: dict[str, Callable]):
+def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
     """
     Temporarily assign a set of mock tool callables to a specific Agent type within the current context.
 
     Usage:
         with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
             # inside this block, MyAgentClass will see the given mocks
-    """
-    current = _MockToolsContextVar.get()
+    """  # noqa: E501
+    current = _MockToolsContextVar.get({})
     updated = {**current, agent: mocks}  # create a new dict
     token = _MockToolsContextVar.set(updated)
     try:

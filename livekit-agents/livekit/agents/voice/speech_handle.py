@@ -36,7 +36,7 @@ class SpeechHandle:
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
 
-        def _on_done(_):
+        def _on_done(_: asyncio.Future[None]) -> None:
             for cb in self._done_callbacks:
                 cb(self)
 

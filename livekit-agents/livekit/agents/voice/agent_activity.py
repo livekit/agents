@@ -38,6 +38,7 @@ from .events import (
     UserInputTranscribedEvent,
 )
 from .generation import (
+    ToolExecutionOutput,
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
@@ -307,8 +308,8 @@ class AgentActivity(RecognitionHooks):
             # mark a speech_handle as done, if every "linked" tasks are done
             speech_handle._tasks.append(task)
 
-            def _mark_done_if_needed(_: asyncio.Task):
-                if all([task.done() for task in speech_handle._tasks]):
+            def _mark_done_if_needed(_: asyncio.Task) -> None:
+                if all(task.done() for task in speech_handle._tasks):
                     speech_handle._mark_done()
 
             task.add_done_callback(_mark_done_if_needed)
@@ -356,8 +357,8 @@ class AgentActivity(RecognitionHooks):
             )
             _set_activity_task_info(task, inline_task=False)
 
-    async def _start_session(self):
-        assert self._lock.locked, "_start_session should only be used when locked."
+    async def _start_session(self) -> None:
+        assert self._lock.locked(), "_start_session should only be used when locked."
 
         if self.mcp_servers:
 
@@ -445,7 +446,7 @@ class AgentActivity(RecognitionHooks):
             turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
             min_endpointing_delay=self._session.options.min_endpointing_delay,
             max_endpointing_delay=self._session.options.max_endpointing_delay,
-            turn_detection_mode=self._turn_detection_mode,  # type: ignore
+            turn_detection_mode=self._turn_detection_mode,
         )
         self._audio_recognition.start()
 
@@ -464,7 +465,7 @@ class AgentActivity(RecognitionHooks):
     async def _pause_scheduling_task(
         self, *, blocked_tasks: list[asyncio.Task] | None = None
     ) -> None:
-        assert self._lock.locked, "_finalize_main_task should only be used when locked."
+        assert self._lock.locked(), "_finalize_main_task should only be used when locked."
 
         if self._scheduling_paused:
             return
@@ -480,7 +481,7 @@ class AgentActivity(RecognitionHooks):
             await asyncio.shield(self._scheduling_atask)
 
     async def _resume_scheduling_task(self) -> None:
-        assert self._lock.locked, "_finalize_main_task should only be used when locked."
+        assert self._lock.locked(), "_finalize_main_task should only be used when locked."
 
         if not self._scheduling_paused:
             return
@@ -512,7 +513,7 @@ class AgentActivity(RecognitionHooks):
             await self._close_session()
 
     async def _close_session(self) -> None:
-        assert self._lock.locked, "_close_session should only be used when locked."
+        assert self._lock.locked(), "_close_session should only be used when locked."
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
@@ -1326,8 +1327,8 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
         )
         tasks.append(llm_task)
-        tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
-        tts_text_input, tr_input = tee
+        text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
+        tts_text_input, tr_input = text_tee
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -1352,7 +1353,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
-            await tee.aclose()
+            await text_tee.aclose()
             return
 
         reply_started_at = time.time()
@@ -1382,6 +1383,13 @@ class AgentActivity(RecognitionHooks):
         elif text_out is not None:
             text_out.first_text_fut.add_done_callback(_on_first_frame)
 
+        def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
+            speech_handle._item_added([fnc_call])
+
+        def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
+            if out.fnc_call_out:
+                speech_handle._item_added([out.fnc_call_out])
+
         # start to execute tools (only after play())
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
@@ -1389,6 +1397,8 @@ class AgentActivity(RecognitionHooks):
             tool_ctx=tool_ctx,
             tool_choice=model_settings.tool_choice,
             function_stream=llm_gen_data.function_ch,
+            tool_execution_started_cb=_tool_execution_started_cb,
+            tool_execution_completed_cb=_tool_execution_completed_cb,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
@@ -1408,7 +1418,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
-            await tee.aclose()
+            await text_tee.aclose()
 
             forwarded_text = text_out.text if text_out else ""
             # if the audio playout was enabled, clear the buffer
@@ -1467,7 +1477,7 @@ class AgentActivity(RecognitionHooks):
         log_event("playout completed", speech_id=speech_handle.id)
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
-        await tee.aclose()
+        await text_tee.aclose()
 
         await exe_task
 
@@ -1493,12 +1503,9 @@ class AgentActivity(RecognitionHooks):
             new_agent_task: Agent | None = None
             ignore_task_switch = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
-                function_calls=[],
-                function_call_outputs=[],
+                function_calls=[], function_call_outputs=[]
             )
-            for py_out in tool_output.output:
-                sanitized_out = py_out.sanitize()
-
+            for sanitized_out in tool_output.output:
                 if sanitized_out.fnc_call_out is not None:
                     new_calls.append(sanitized_out.fnc_call)
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)
@@ -1523,8 +1530,6 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            speech_handle._item_added(tool_messages)
-
             if generate_tool_reply:
                 chat_ctx.items.extend(tool_messages)
 
@@ -1721,12 +1726,21 @@ class AgentActivity(RecognitionHooks):
             )
         )
 
+        def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
+            speech_handle._item_added([fnc_call])
+
+        def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
+            if out.fnc_call_out:
+                speech_handle._item_added([out.fnc_call_out])
+
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
             tool_choice=model_settings.tool_choice,
             function_stream=generation_ev.function_stream,
+            tool_execution_started_cb=_tool_execution_started_cb,
+            tool_execution_completed_cb=_tool_execution_completed_cb,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
@@ -1803,7 +1817,7 @@ class AgentActivity(RecognitionHooks):
         for tee in tees:
             await tee.aclose()
 
-        tool_output.first_tool_fut.add_done_callback(
+        tool_output.first_tool_started_fut.add_done_callback(
             lambda _: self._session._update_agent_state("thinking")
         )
         await exe_task
@@ -1822,16 +1836,10 @@ class AgentActivity(RecognitionHooks):
             new_agent_task: Agent | None = None
             ignore_task_switch = False
 
-            for py_out in tool_output.output:
-                sanitized_out = py_out.sanitize()
-
+            for sanitized_out in tool_output.output:
                 # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
-
-                speech_handle._chat_items.append(sanitized_out.fnc_call)
-                if sanitized_out.fnc_call_out:
-                    speech_handle._chat_items.append(sanitized_out.fnc_call_out)
 
                 if sanitized_out.fnc_call_out is not None:
                     new_fnc_outputs.append(sanitized_out.fnc_call_out)

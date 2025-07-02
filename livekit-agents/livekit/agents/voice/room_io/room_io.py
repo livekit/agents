@@ -98,9 +98,7 @@ class RoomOutputOptions:
     audio_sample_rate: int = 24000
     audio_num_channels: int = 1
     audio_publish_options: rtc.TrackPublishOptions = field(
-        default_factory=lambda: rtc.TrackPublishOptions(
-            source=rtc.TrackSource.SOURCE_MICROPHONE
-        )
+        default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
     """False to disable transcription synchronization with audio output.
@@ -125,9 +123,7 @@ class RoomIO:
         self._input_options = input_options
         self._output_options = output_options
         self._participant_identity = (
-            participant.identity
-            if isinstance(participant, rtc.RemoteParticipant)
-            else participant
+            participant.identity if isinstance(participant, rtc.RemoteParticipant) else participant
         )
         if self._participant_identity is None and utils.is_given(
             input_options.participant_identity
@@ -163,13 +159,9 @@ class RoomIO:
             )
             self._pre_connect_audio_handler.register()
 
-        if self._input_options.text_enabled or not utils.is_given(
-            self._input_options.text_enabled
-        ):
+        if self._input_options.text_enabled or not utils.is_given(self._input_options.text_enabled):
             try:
-                self._room.register_text_stream_handler(
-                    TOPIC_CHAT, self._on_user_text_input
-                )
+                self._room.register_text_stream_handler(TOPIC_CHAT, self._on_user_text_input)
                 self._text_stream_handler_registered = True
             except ValueError:
                 if self._input_options.text_enabled:
@@ -208,9 +200,7 @@ class RoomIO:
             self._user_tr_output = self._create_transcription_output(
                 is_delta_stream=False, participant=self._participant_identity
             )
-            self._user_transcript_atask = asyncio.create_task(
-                self._forward_user_transcript()
-            )
+            self._user_transcript_atask = asyncio.create_task(self._forward_user_transcript())
             # TODO(long): add next in the chain for session.output.transcription
             self._agent_tr_output = self._create_transcription_output(
                 is_delta_stream=True, participant=None
@@ -253,18 +243,14 @@ class RoomIO:
             self._agent_session.output.transcription = self.transcription_output
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
-        self._agent_session.on(
-            "user_input_transcribed", self._on_user_input_transcribed
-        )
+        self._agent_session.on("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session._room_io = self
 
     async def aclose(self) -> None:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
-        self._agent_session.off(
-            "user_input_transcribed", self._on_user_input_transcribed
-        )
+        self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
 
         if self._text_stream_handler_registered:
             self._room.unregister_text_stream_handler(TOPIC_CHAT)
@@ -397,9 +383,7 @@ class RoomIO:
             if ev.is_final:
                 self._user_tr_output.flush()
 
-    def _on_connection_state_changed(
-        self, state: rtc.ConnectionState.ValueType
-    ) -> None:
+    def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
 
@@ -417,9 +401,7 @@ class RoomIO:
         ):
             return
 
-        accepted_kinds = (
-            self._input_options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
-        )
+        accepted_kinds = self._input_options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
         if participant.kind not in accepted_kinds:
             # not an accepted participant kind, skip
             return
@@ -427,10 +409,7 @@ class RoomIO:
         self._participant_available_fut.set_result(participant)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
-        if (
-            not (linked := self.linked_participant)
-            or participant.identity != linked.identity
-        ):
+        if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
 
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
@@ -446,8 +425,7 @@ class RoomIO:
                 extra={
                     "participant": participant.identity,
                     "reason": rtc.DisconnectReason.Name(
-                        participant.disconnect_reason
-                        or rtc.DisconnectReason.UNKNOWN_REASON
+                        participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
                     ),
                 },
             )
@@ -457,9 +435,7 @@ class RoomIO:
         if self._user_transcript_atask:
             self._user_transcript_ch.send_nowait(ev)
 
-    def _on_user_text_input(
-        self, reader: rtc.TextStreamReader, participant_identity: str
-    ) -> None:
+    def _on_user_text_input(self, reader: rtc.TextStreamReader, participant_identity: str) -> None:
         if participant_identity != self._participant_identity:
             return
 

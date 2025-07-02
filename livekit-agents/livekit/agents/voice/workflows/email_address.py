@@ -49,8 +49,9 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
                 "- Filter out filler words or hesitations.\n"
                 "- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).\n"
                 "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
-                "Call 'update_email_address' only when you are confident in the complete email. \n"
-                "Use 'validate_email_address' only after the user confirms the email, and only if 'update_email_address' was already called at least once.\n"
+                "Call update_email_address whenever there are changes to the email. \n"
+                "Use validate_email_address only after update_email_address has been called at least once, and only "
+                "when the email is complete and confirmed by the user. \n"
                 "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. \n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary."
             ),
