@@ -146,7 +146,6 @@ class EOUModelBase(ABC):
         self._unlikely_threshold = unlikely_threshold
         self._languages: dict[str, Any] = {}
 
-
         if load_languages:
             config_fname = _download_from_hf_hub(
                 HG_MODEL,
