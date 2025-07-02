@@ -5,7 +5,7 @@ import inspect
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Any, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -386,7 +386,9 @@ async def _execute_tools_task(
             try:
                 from .run_result import _MockToolsContextVar
 
-                mock_tools = _MockToolsContextVar.get().get(type(session.current_agent), {})
+                mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
+                    type(session.current_agent), {}
+                )
 
                 if mock := mock_tools.get(fnc_call.name):
                     logger.debug(
@@ -398,7 +400,7 @@ async def _execute_tools_task(
                         },
                     )
 
-                    async def _run_mock():
+                    async def _run_mock() -> Any:
                         sig = inspect.signature(mock)
                         bound = sig.bind_partial(*fnc_args, **fnc_kwargs)
                         bound.apply_defaults()
