@@ -1457,7 +1457,7 @@ class AgentActivity(RecognitionHooks):
 
             if generated_msg:
                 copy_msg = generated_msg.model_copy()
-                copy_msg.content = [forwarded_text] 
+                copy_msg.content = [forwarded_text]
                 copy_msg.interrupted = True
                 if forwarded_text:
                     self._agent._chat_ctx.insert(copy_msg)

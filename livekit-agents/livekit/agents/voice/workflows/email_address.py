@@ -67,7 +67,9 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
         self._current_email = ""
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask for the email address")
+        self.session.generate_reply(
+            instructions="Ask the user to provide their email address. If you already have it, ask for confirmation."
+        )
 
     @function_tool
     async def update_email_address(self, email: str) -> str:
