@@ -50,6 +50,7 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "Cartesia-Version"
 API_VERSION = "2024-06-10"
 
+
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
