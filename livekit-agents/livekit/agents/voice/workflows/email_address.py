@@ -49,9 +49,10 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
                 "- Filter out filler words or hesitations.\n"
                 "- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).\n"
                 "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
-                "Call update_email_address whenever there are changes to the email. \n"
-                "Use confirm_email_address only after update_email_address has been called at least once, and only "
-                "when the email is complete and confirmed by the user. \n"
+                "Call `update_email_address` whenever there are changes to make to the email address. \n"
+                "Use `confirm_email_address` **only** the user explicitly confirmed the email address was correct. \n"
+                "You must call `update_email_address` at least once before calling `confirm_email_address`. "
+                "Make sure the email address has been set or changed before attempting to confirm it. \n"
                 "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. \n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary."
             ),
@@ -87,8 +88,8 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
         separated_email = " ".join(email)
 
         return (
-            f"Confirm the provided email address with the user: {email}\n"
-            f"For clarity, also repeat it character by character: {separated_email} if needed"
+            f"The email has been updated: {email}\n"
+            f"For clarity, you can also repeat it character by character: {separated_email} if needed"
         )
 
     @function_tool
