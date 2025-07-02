@@ -57,7 +57,6 @@ class MultilingualModel(EOUModelBase):
         if not url:
             return super().predict_end_of_turn(chat_ctx, timeout=timeout)
 
-        print(f"requesting eou: {chat_ctx.to_dict(exclude_function_call=True)}")
         async with utils.http_context.http_session().post(
             url=url,
             json=chat_ctx.to_dict(exclude_function_call=True),
