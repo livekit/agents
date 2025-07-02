@@ -325,8 +325,8 @@ class AgentActivity(RecognitionHooks):
             # mark a speech_handle as done, if every "linked" tasks are done
             speech_handle._tasks.append(task)
 
-            def _mark_done_if_needed(_: asyncio.Task):
-                if all([task.done() for task in speech_handle._tasks]):
+            def _mark_done_if_needed(_: asyncio.Task) -> None:
+                if all(task.done() for task in speech_handle._tasks):
                     speech_handle._mark_done()
 
             task.add_done_callback(_mark_done_if_needed)
@@ -374,8 +374,8 @@ class AgentActivity(RecognitionHooks):
             )
             _set_activity_task_info(task, inline_task=False)
 
-    async def _start_session(self):
-        assert self._lock.locked, "_start_session should only be used when locked."
+    async def _start_session(self) -> None:
+        assert self._lock.locked(), "_start_session should only be used when locked."
 
         if self.mcp_servers:
 
@@ -452,7 +452,7 @@ class AgentActivity(RecognitionHooks):
             turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
             min_endpointing_delay=self._session.options.min_endpointing_delay,
             max_endpointing_delay=self._session.options.max_endpointing_delay,
-            turn_detection_mode=self._turn_detection_mode,  # type: ignore
+            turn_detection_mode=self._turn_detection_mode,
         )
         self._audio_recognition.start()
 
@@ -472,7 +472,7 @@ class AgentActivity(RecognitionHooks):
     async def _pause_scheduling_task(
         self, *, blocked_tasks: list[asyncio.Task] | None = None
     ) -> None:
-        assert self._lock.locked, "_finalize_main_task should only be used when locked."
+        assert self._lock.locked(), "_finalize_main_task should only be used when locked."
 
         if self._scheduling_paused:
             return
@@ -488,7 +488,7 @@ class AgentActivity(RecognitionHooks):
             await asyncio.shield(self._scheduling_atask)
 
     async def _resume_scheduling_task(self) -> None:
-        assert self._lock.locked, "_finalize_main_task should only be used when locked."
+        assert self._lock.locked(), "_finalize_main_task should only be used when locked."
 
         if not self._scheduling_paused:
             return
@@ -520,7 +520,7 @@ class AgentActivity(RecognitionHooks):
             await self._close_session()
 
     async def _close_session(self) -> None:
-        assert self._lock.locked, "_close_session should only be used when locked."
+        assert self._lock.locked(), "_close_session should only be used when locked."
 
         if self._rt_session is not None:
             await self._rt_session.aclose()

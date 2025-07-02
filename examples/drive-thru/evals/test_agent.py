@@ -201,9 +201,7 @@ async def test_consecutive_order() -> None:
         await (
             result.expect[-1]
             .is_message(role="assistant")
-            .judge(
-                llm, intent="should confirm that a ketchup and a McFlurry Oreo was ordered"
-            )
+            .judge(llm, intent="should confirm that a ketchup and a McFlurry Oreo was ordered")
         )
 
 
