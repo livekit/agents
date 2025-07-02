@@ -69,6 +69,7 @@ class BackgroundAudioPlayer:
         thinking_sound: NotGivenOr[
             AudioSource | AudioConfig | list[AudioConfig] | None
         ] = NOT_GIVEN,
+        audio_mixer_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         """
         Initializes the BackgroundAudio component with optional ambient and thinking sounds.
@@ -98,8 +99,14 @@ class BackgroundAudioPlayer:
         self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
 
         self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
+
+        audio_mixer_kwargs = audio_mixer_kwargs if is_given(audio_mixer_kwargs) else {}
         self._audio_mixer = rtc.AudioMixer(
-            48000, 1, blocksize=4800, capacity=1, stream_timeout_ms=200
+            audio_mixer_kwargs.get("sample_rate", 48000),
+            audio_mixer_kwargs.get("num_channels", 1),
+            blocksize=audio_mixer_kwargs.get('blocksize', 4800),
+            capacity=audio_mixer_kwargs.get('capacity', 1),
+            stream_timeout_ms=audio_mixer_kwargs.get('stream_timeout_ms', 200)
         )
         self._publication: rtc.LocalTrackPublication | None = None
         self._lock = asyncio.Lock()
