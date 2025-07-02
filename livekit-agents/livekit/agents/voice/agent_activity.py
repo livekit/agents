@@ -1389,7 +1389,7 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.wait_if_not_interrupted([text_forward_task])
 
         generated_msg: llm.ChatMessage | None = None
-        if text_out:
+        if text_out and text_out.text:
             # emit the assistant message to the SpeechHandle before calling the tools
             generated_msg = llm.ChatMessage(
                 role="assistant",
