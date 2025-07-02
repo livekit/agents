@@ -65,8 +65,8 @@ EXPECTED_MIN_20_BLINGFIRE = [
     "This is a test. Another test.",
     "A short sentence. A longer sentence that is longer than the previous sentence. f(x) = x * 2.54 + 42.",
     "Hey! Hi! Hello! This is a sentence.",
-    "这是一个中文句子。 これは日本語の文章です。",
-    "你好！ LiveKit是一个直播音频和视频应用程序和服务的平台。",
+    "这是一个中文句子。これは日本語の文章です。",
+    "你好！LiveKit是一个直播音频和视频应用程序和服务的平台。",
 ]
 
 
