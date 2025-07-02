@@ -38,10 +38,10 @@ from .events import (
     UserInputTranscribedEvent,
 )
 from .generation import (
+    ToolExecutionOutput,
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
-    ToolExecutionOutput,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
