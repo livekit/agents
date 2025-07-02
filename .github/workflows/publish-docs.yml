@@ -27,29 +27,16 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: Create and activate virtual environment
+      - name: Install package, plugins, and docs dependencies
         run: |
-          uv venv
-          source .venv/bin/activate
-
-      - name: Install package and all plugins
-        run: |
-          source .venv/bin/activate
-          uv sync --active
-
-      - name: Install pdoc and other dependencies
-        run: |
-          source .venv/bin/activate
-          uv pip install pdoc3 setuptools
+          uv sync --all-extras --group docs
 
       - name: Build Docs
         run: |
-          source .venv/bin/activate
           uv run --active pdoc --skip-errors --html --output-dir=docs livekit
 
       - name: S3 Upload
         run: |
-          source .venv/bin/activate
           BRANCH="${GITHUB_REF#refs/heads/}"
           # If branch is not 0.x, upload to /v1
           if [[ $BRANCH != "0.x" ]]; then
