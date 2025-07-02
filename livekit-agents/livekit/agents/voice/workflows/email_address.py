@@ -50,7 +50,7 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
                 "- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).\n"
                 "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
                 "Call update_email_address whenever there are changes to the email. \n"
-                "Use validate_email_address only after update_email_address has been called at least once, and only "
+                "Use confirm_email_address only after update_email_address has been called at least once, and only "
                 "when the email is complete and confirmed by the user. \n"
                 "If the email is unclear or invalid, prompt for it in parts—first the part before the '@', then the domain—only if needed. \n"
                 "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary."
@@ -92,7 +92,7 @@ class GetEmailAgent(AgentTask[GetEmailResult]):
         )
 
     @function_tool
-    async def validate_email_address(self) -> None:
+    async def confirm_email_address(self) -> None:
         """Validates the email address after explicit user confirmation."""
         if not self._current_email.strip():
             raise ToolError("No valid email address were provided")
