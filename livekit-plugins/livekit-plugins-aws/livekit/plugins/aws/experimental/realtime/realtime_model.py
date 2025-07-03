@@ -1178,7 +1178,13 @@ class RealtimeSession(  # noqa: F811
         instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         logger.warning("unprompted generation is not supported by Nova Sonic's Realtime API")
-        return asyncio.Future[llm.GenerationCreatedEvent]()
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        fut.set_exception(
+            llm.RealtimeError(
+                "unprompted generation is not supported by Nova Sonic's Realtime API"
+            )
+        )
+        return fut
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by Nova Sonic's Realtime API")
