@@ -98,9 +98,7 @@ async def entrypoint(ctx: JobContext):
             instructions=agent.instructions,
             voice="Puck",
             realtime_input_config=types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=False
-                )
+                automatic_activity_detection=types.AutomaticActivityDetection(disabled=False)
             ),
         ),
         allow_interruptions=True,
@@ -168,9 +166,7 @@ async def run_friendly_conversation(session: AgentSession, state: ConversationSt
         logger.warning("Realtime session not ready, proceeding anyway")
 
     # Start with first agent - use direct content instruction
-    await safe_generate_reply(
-        session, state, instructions=topic, voice="Puck", speaker="agent1"
-    )
+    await safe_generate_reply(session, state, instructions=topic, voice="Puck", speaker="agent1")
 
     # Main conversation loop
     while state.conversation_active and state.turn_count < state.max_turns:
@@ -297,9 +293,7 @@ async def safe_generate_reply(
                 contextual_instructions = instructions
 
             # Generate reply with context
-            logger.info(
-                f"{speaker.capitalize()} speaking (turn {state.turn_count + 1})"
-            )
+            logger.info(f"{speaker.capitalize()} speaking (turn {state.turn_count + 1})")
             speech_handle = session.generate_reply(user_input=contextual_instructions)
 
             # Wait for speech to complete with timeout
@@ -325,9 +319,7 @@ async def safe_generate_reply(
                 return False
             else:
                 retry_count += 1
-                logger.warning(
-                    f"RuntimeError for {speaker} (attempt {retry_count}): {e}"
-                )
+                logger.warning(f"RuntimeError for {speaker} (attempt {retry_count}): {e}")
                 if retry_count < max_retries:
                     await asyncio.sleep(1)
                     continue
@@ -348,9 +340,7 @@ async def safe_generate_reply(
     return False
 
 
-async def verify_session_health(
-    session: AgentSession, state: ConversationState
-) -> bool:
+async def verify_session_health(session: AgentSession, state: ConversationState) -> bool:
     """Verify session is healthy and ready for operations"""
 
     try:
