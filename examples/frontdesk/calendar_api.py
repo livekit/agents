@@ -12,6 +12,13 @@ from zoneinfo import ZoneInfo
 
 from livekit.agents.utils import http_context
 
+try:
+    import tzdata  # noqa: F401
+except ImportError as e:
+    raise ImportError(
+        "tzdata is required for this example. Please install it with `pip install tzdata`"
+    ) from e
+
 
 @dataclass
 class AvailableSlot:
