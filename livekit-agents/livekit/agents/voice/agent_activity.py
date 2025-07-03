@@ -23,6 +23,7 @@ from ..metrics import (
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
+from . import io
 from .agent import Agent, ModelSettings
 from .audio_recognition import AudioRecognition, RecognitionHooks, _EndOfTurnInfo
 from .events import (
@@ -45,7 +46,6 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
-from . import io
 
 
 def log_event(event: str, **kwargs: Any) -> None:
