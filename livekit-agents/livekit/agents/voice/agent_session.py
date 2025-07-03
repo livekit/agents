@@ -567,14 +567,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts = 0
             self._tts_error_counts = 0
 
-            logger.debug("session closed", extra={"reason": reason.value, "error": error})
-
-            if reason == CloseReason.PARTICIPANT_DISCONNECTED:
-                # disconnect the room if reason is participant disconnected
-                try:
-                    await get_job_context().room.disconnect()
-                except RuntimeError:
-                    pass
+        logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
