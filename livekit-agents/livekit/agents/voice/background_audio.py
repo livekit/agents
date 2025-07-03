@@ -279,14 +279,15 @@ class BackgroundAudioPlayer:
             if not self._mixer_atask:
                 return  # not started
 
-            await self._audio_mixer.aclose()
             await cancel_and_wait(*self._play_tasks)
 
             if self._republish_task:
                 await cancel_and_wait(self._republish_task)
 
             await cancel_and_wait(self._mixer_atask)
+            self._mixer_atask = None
 
+            await self._audio_mixer.aclose()
             await self._audio_source.aclose()
 
             if self._agent_session:
