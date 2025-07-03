@@ -365,7 +365,6 @@ class BackgroundAudioPlayer:
             if play_handle._stop_fut.done():
                 await gen.aclose()
 
-
     @log_exceptions(logger=logger)
     async def _run_mixer_task(self) -> None:
         async for frame in self._audio_mixer:

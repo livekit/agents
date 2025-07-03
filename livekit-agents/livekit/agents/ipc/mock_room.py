@@ -1,4 +1,4 @@
-from unittest.mock import create_autospec, AsyncMock
+from unittest.mock import AsyncMock, create_autospec
 
 from livekit import rtc
 
@@ -25,11 +25,11 @@ MockRoom.remote_participants = {mock_remote_participant.sid: mock_remote_partici
 if __name__ == "__main__":
     mock_room = MockRoom
 
-
     async def test():
         print("sid", await mock_room.sid())
 
     import asyncio
+
     asyncio.run(test())
 
     print("local_participant", mock_room.local_participant)
