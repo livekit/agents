@@ -6,7 +6,7 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import Field
 
-from livekit.agents import JobContext, WorkerOptions, cli
+from livekit.agents import NOT_GIVEN, JobContext, NotGivenOr, WorkerOptions, cli, llm, tts
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession, RunContext
 from livekit.agents.voice.room_io import RoomInputOptions
@@ -18,13 +18,6 @@ logger = logging.getLogger("restaurant-example")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
-
-voices = {
-    "greeter": "794f9389-aac1-45b6-b726-9d9369183238",
-    "reservation": "156fb8d2-335b-4950-9cb3-a2d33befec77",
-    "takeaway": "6f84f4b8-58a2-430c-8c79-688dad597532",
-    "checkout": "39b376fc-488e-4d0c-8b37-e00b72059fdd",
-}
 
 
 @dataclass
@@ -139,15 +132,21 @@ class BaseAgent(Agent):
 
 
 class Greeter(BaseAgent):
-    def __init__(self, menu: str) -> None:
+    def __init__(
+        self,
+        menu: str,
+        *,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
             instructions=(
                 f"You are a friendly restaurant receptionist. The menu is: {menu}\n"
                 "Your jobs are to greet the caller and understand if they want to "
                 "make a reservation or order takeaway. Guide them to the right agent using tools."
             ),
-            llm=openai.LLM(parallel_tool_calls=False),
-            tts=cartesia.TTS(voice=voices["greeter"]),
+            llm=llm,
+            tts=tts,
         )
         self.menu = menu
 
@@ -168,13 +167,19 @@ class Greeter(BaseAgent):
 
 
 class Reservation(BaseAgent):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
             instructions="You are a reservation agent at a restaurant. Your jobs are to ask for "
             "the reservation time, then customer's name, and phone number. Then "
             "confirm the reservation details with the customer.",
             tools=[update_name, update_phone, to_greeter],
-            tts=cartesia.TTS(voice=voices["reservation"]),
+            llm=llm,
+            tts=tts,
         )
 
     @function_tool()
@@ -203,7 +208,13 @@ class Reservation(BaseAgent):
 
 
 class Takeaway(BaseAgent):
-    def __init__(self, menu: str) -> None:
+    def __init__(
+        self,
+        menu: str,
+        *,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
             instructions=(
                 f"Your are a takeaway agent that takes orders from the customer. "
@@ -211,7 +222,8 @@ class Takeaway(BaseAgent):
                 "Clarify special requests and confirm the order with the customer."
             ),
             tools=[to_greeter],
-            tts=cartesia.TTS(voice=voices["takeaway"]),
+            llm=llm,
+            tts=tts,
         )
 
     @function_tool()
@@ -236,7 +248,13 @@ class Takeaway(BaseAgent):
 
 
 class Checkout(BaseAgent):
-    def __init__(self, menu: str) -> None:
+    def __init__(
+        self,
+        menu: str,
+        *,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
+    ) -> None:
         super().__init__(
             instructions=(
                 f"You are a checkout agent at a restaurant. The menu is: {menu}\n"
@@ -245,7 +263,8 @@ class Checkout(BaseAgent):
                 "information, including the card number, expiry date, and CVV step by step."
             ),
             tools=[update_name, update_phone, to_greeter],
-            tts=cartesia.TTS(voice=voices["checkout"]),
+            llm=llm,
+            tts=tts,
         )
 
     @function_tool()
@@ -301,21 +320,28 @@ class Checkout(BaseAgent):
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
+    # cartesia voices
+    voices = {
+        "greeter": "794f9389-aac1-45b6-b726-9d9369183238",
+        "reservation": "156fb8d2-335b-4950-9cb3-a2d33befec77",
+        "takeaway": "6f84f4b8-58a2-430c-8c79-688dad597532",
+        "checkout": "39b376fc-488e-4d0c-8b37-e00b72059fdd",
+    }
+
     menu = "Pizza: $10, Salad: $5, Ice Cream: $3, Coffee: $2"
     userdata = UserData()
     userdata.agents.update(
         {
-            "greeter": Greeter(menu),
-            "reservation": Reservation(),
-            "takeaway": Takeaway(menu),
-            "checkout": Checkout(menu),
+            "greeter": Greeter(menu, tts=cartesia.TTS(voice=voices["greeter"])),
+            "reservation": Reservation(tts=cartesia.TTS(voice=voices["reservation"])),
+            "takeaway": Takeaway(menu, tts=cartesia.TTS(voice=voices["takeaway"])),
+            "checkout": Checkout(menu, tts=cartesia.TTS(voice=voices["checkout"])),
         }
     )
     session = AgentSession[UserData](
         userdata=userdata,
         stt=deepgram.STT(),
-        llm=openai.LLM(),
-        tts=cartesia.TTS(),
+        llm=openai.LLM(model="gpt-4o-mini", parallel_tool_calls=False),
         vad=silero.VAD.load(),
         max_tool_steps=5,
         # to use realtime model, replace the stt, llm, tts and vad with the following

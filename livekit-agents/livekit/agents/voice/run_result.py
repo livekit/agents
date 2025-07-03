@@ -441,8 +441,13 @@ class ChatMessageAssert:
     def event(self) -> ChatMessageEvent:
         return self._event
 
-    async def judge(self, llm_v: llm.LLM, *, intent: str) -> ChatMessageAssert:
+    async def judge(
+        self, llm_v: llm.LLM, *, intent: str, verbose: bool = False
+    ) -> ChatMessageAssert:
         msg_content = self._event.item.text_content
+
+        if verbose:
+            print(f"Judging message: {msg_content}")
 
         if not msg_content:
             self._raise("The chat message is empty.")
@@ -508,6 +513,8 @@ class ChatMessageAssert:
         success, reason = await check_intent(*fnc_args, **fnc_kwargs)
         if not success:
             self._raise(f"Judgement failed: {reason}")
+        elif verbose:
+            print(f"Judgement passed: {reason}")
 
         return self
 
