@@ -104,3 +104,15 @@ follow_untyped_imports = true
 [[tool.mypy.overrides]]
 module = "boto3"
 follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "aws_sdk_bedrock_runtime.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_aws_core.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_core.*"
+ignore_missing_imports = true
