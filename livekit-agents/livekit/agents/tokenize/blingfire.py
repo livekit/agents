@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import functools
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 from livekit import blingfire
 

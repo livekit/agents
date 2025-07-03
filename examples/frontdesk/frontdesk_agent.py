@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailable, SlotUnavailableError
+from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailableError
 from dotenv import load_dotenv
 
 from livekit.agents import (

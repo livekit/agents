@@ -11,12 +11,14 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import aiohttp
+
 from livekit.agents.utils import http_context
 
 
 class SlotUnavailableError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
 
 @dataclass
 class AvailableSlot:
