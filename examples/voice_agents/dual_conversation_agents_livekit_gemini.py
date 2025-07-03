@@ -16,11 +16,13 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Optional
+
 from dotenv import load_dotenv
+from google.genai import types
+
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.voice import Agent, AgentSession
 from livekit.plugins.google.beta.realtime import RealtimeModel
-from google.genai import types
 
 load_dotenv()
 logger = logging.getLogger("dual-agent-conversation")
