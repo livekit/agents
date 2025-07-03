@@ -609,13 +609,14 @@ class RealtimeSession(  # noqa: F811
     async def _handle_text_output_content_start_event(self, event_data: dict) -> None:
         """Handle text_output_content_start for both user and assistant roles."""
         log_event_data(event_data)
-        assert self._current_generation is not None, "current_generation is None"
-
         role = event_data["event"]["contentStart"]["role"]
 
         # note: does not work if you emit llm.GCE too early (for some reason)
         if role == "USER":
             self._create_response_generation()
+
+            assert self._current_generation is not None, "current_generation is None"
+
             content_id = event_data["event"]["contentStart"]["contentId"]
             self._current_generation.user_messages[content_id] = self._current_generation.input_id
 
@@ -623,6 +624,8 @@ class RealtimeSession(  # noqa: F811
             role == "ASSISTANT"
             and "SPECULATIVE" in event_data["event"]["contentStart"]["additionalModelFields"]
         ):
+            assert self._current_generation is not None, "current_generation is None"
+
             text_content_id = event_data["event"]["contentStart"]["contentId"]
             self._current_generation.speculative_messages[text_content_id] = (
                 self._current_generation.response_id
@@ -631,8 +634,6 @@ class RealtimeSession(  # noqa: F811
     async def _handle_text_output_content_event(self, event_data: dict) -> None:
         """Stream partial text tokens into the current _MessageGeneration."""
         log_event_data(event_data)
-        assert self._current_generation is not None, "current_generation is None"
-
         text_content_id = event_data["event"]["textOutput"]["contentId"]
         text_content = f"{event_data['event']['textOutput']['content']}\n"
 
@@ -642,10 +643,15 @@ class RealtimeSession(  # noqa: F811
             # this is b/c audio playback is desynced from text transcription
             # TODO: fix this; possibly via a playback timer
             idx = self._chat_ctx.find_insertion_index(created_at=time.time()) - 1
+            if idx < 0:
+                logger.warning("Barge-in DETECTED but no previous message found")
+                return
+
             logger.debug(
                 f"BARGE-IN DETECTED using idx: {idx} and chat_msg: {self._chat_ctx.items[idx]}"
             )
-            self._chat_ctx.items[idx].interrupted = True
+            if (item := self._chat_ctx.items[idx]).type == "message":
+                item.interrupted = True
             self._close_current_generation()
             return
 
@@ -681,13 +687,12 @@ class RealtimeSession(  # noqa: F811
             self._chat_ctx.add_message(role=role, content=text_content)
         else:
             prev_utterance = self._chat_ctx.items[-1]
-            if prev_utterance.role == role:
-                if (
-                    len(prev_utterance.content[0].encode("utf-8"))
-                    + len(text_content.encode("utf-8"))
+            if prev_utterance.type == "message" and prev_utterance.role == role:
+                if isinstance(prev_content := prev_utterance.content[0], str) and (
+                    len(prev_content.encode("utf-8")) + len(text_content.encode("utf-8"))
                     < MAX_MESSAGE_SIZE
                 ):
-                    prev_utterance.content[0] = "\n".join([prev_utterance.content[0], text_content])
+                    prev_utterance.content[0] = "\n".join([prev_content, text_content])
                 else:
                     self._chat_ctx.add_message(role=role, content=text_content)
                     if len(self._chat_ctx.items) > MAX_MESSAGES:
