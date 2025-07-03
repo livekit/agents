@@ -101,7 +101,7 @@ async def entrypoint(ctx: JobContext):
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     disabled=False
                 )
-            )
+            ),
         ),
         allow_interruptions=True,
         turn_detection="realtime_llm",
@@ -162,17 +162,14 @@ async def run_friendly_conversation(session: AgentSession, state: ConversationSt
     await asyncio.sleep(2)  # Give time for full initialization
 
     # Verify realtime session is ready
-    if hasattr(session._activity, '_rt_session') and session._activity._rt_session:
+    if hasattr(session._activity, "_rt_session") and session._activity._rt_session:
         logger.info("Realtime session confirmed ready")
     else:
         logger.warning("Realtime session not ready, proceeding anyway")
 
     # Start with first agent - use direct content instruction
     await safe_generate_reply(
-        session, state,
-        instructions=topic,
-        voice="Puck",
-        speaker="agent1"
+        session, state, instructions=topic, voice="Puck", speaker="agent1"
     )
 
     # Main conversation loop
@@ -187,18 +184,12 @@ async def run_friendly_conversation(session: AgentSession, state: ConversationSt
         if state.current_speaker == "agent1":
             state.current_speaker = "agent2"
             await safe_generate_reply(
-                session, state,
-                instructions=topic,
-                voice="Charon",
-                speaker="agent2"
+                session, state, instructions=topic, voice="Charon", speaker="agent2"
             )
         else:
             state.current_speaker = "agent1"
             await safe_generate_reply(
-                session, state,
-                instructions=topic,
-                voice="Puck",
-                speaker="agent1"
+                session, state, instructions=topic, voice="Puck", speaker="agent1"
             )
 
         logger.info(f"Completed turn {state.turn_count}/{state.max_turns}")
@@ -213,17 +204,18 @@ async def run_debate_conversation(session: AgentSession, state: ConversationStat
     await asyncio.sleep(2)  # Give time for full initialization
 
     # Verify realtime session is ready
-    if hasattr(session._activity, '_rt_session') and session._activity._rt_session:
+    if hasattr(session._activity, "_rt_session") and session._activity._rt_session:
         logger.info("Realtime session confirmed ready")
     else:
         logger.warning("Realtime session not ready, proceeding anyway")
 
     # Start with optimist perspective
     await safe_generate_reply(
-        session, state,
+        session,
+        state,
         instructions=topic,  # Direct content
         voice="Puck",
-        speaker="optimist"
+        speaker="optimist",
     )
 
     # Main conversation loop
@@ -238,18 +230,20 @@ async def run_debate_conversation(session: AgentSession, state: ConversationStat
         if state.current_speaker == "optimist":
             state.current_speaker = "skeptic"
             await safe_generate_reply(
-                session, state,
+                session,
+                state,
                 instructions=topic,  # Direct content
                 voice="Charon",
-                speaker="skeptic"
+                speaker="skeptic",
             )
         else:
             state.current_speaker = "optimist"
             await safe_generate_reply(
-                session, state,
+                session,
+                state,
                 instructions=topic,  # Direct content
                 voice="Puck",
-                speaker="optimist"
+                speaker="optimist",
             )
 
         logger.info(f"Completed turn {state.turn_count}/{state.max_turns}")
@@ -260,7 +254,7 @@ async def safe_generate_reply(
     state: ConversationState,
     instructions: str,
     voice: str,
-    speaker: str
+    speaker: str,
 ) -> bool:
     """Safely generate a reply with error handling and retries"""
 
@@ -276,12 +270,11 @@ async def safe_generate_reply(
 
             # Check if session is draining
             if session._activity.draining:
-                logger.warning(
-                    f"Session draining, cannot generate reply for {speaker}")
+                logger.warning(f"Session draining, cannot generate reply for {speaker}")
                 return False
 
             # Update voice
-            if hasattr(session.llm, 'voice'):
+            if hasattr(session.llm, "voice"):
                 session.llm.voice = voice
 
             # Get conversation history for context
@@ -291,22 +284,23 @@ async def safe_generate_reply(
                 # Get last 3 messages for context
                 recent_items = chat_history.items[-3:]
                 for item in recent_items:
-                    if hasattr(item, 'text_content') and item.text_content:
+                    if hasattr(item, "text_content") and item.text_content:
                         recent_messages.append(item.text_content)
 
             # Create context-aware instructions
             if recent_messages:
-                context = " Previous context: " + \
-                    " | ".join(recent_messages[-2:])  # Last 2 messages
+                context = " Previous context: " + " | ".join(
+                    recent_messages[-2:]
+                )  # Last 2 messages
                 contextual_instructions = f"{instructions}. {context}"
             else:
                 contextual_instructions = instructions
 
             # Generate reply with context
             logger.info(
-                f"{speaker.capitalize()} speaking (turn {state.turn_count + 1})")
-            speech_handle = session.generate_reply(
-                user_input=contextual_instructions)
+                f"{speaker.capitalize()} speaking (turn {state.turn_count + 1})"
+            )
+            speech_handle = session.generate_reply(user_input=contextual_instructions)
 
             # Wait for speech to complete with timeout
             try:
@@ -316,8 +310,7 @@ async def safe_generate_reply(
 
             except asyncio.TimeoutError:
                 if retry_count < max_retries:
-                    logger.warning(
-                        f"Speech timeout for {speaker}, retrying...")
+                    logger.warning(f"Speech timeout for {speaker}, retrying...")
                     retry_count += 1
                     await asyncio.sleep(2)
                     continue
@@ -333,7 +326,8 @@ async def safe_generate_reply(
             else:
                 retry_count += 1
                 logger.warning(
-                    f"RuntimeError for {speaker} (attempt {retry_count}): {e}")
+                    f"RuntimeError for {speaker} (attempt {retry_count}): {e}"
+                )
                 if retry_count < max_retries:
                     await asyncio.sleep(1)
                     continue
@@ -343,8 +337,7 @@ async def safe_generate_reply(
 
         except Exception as e:
             retry_count += 1
-            logger.error(
-                f"Unexpected error for {speaker} (attempt {retry_count}): {e}")
+            logger.error(f"Unexpected error for {speaker} (attempt {retry_count}): {e}")
             if retry_count < max_retries:
                 await asyncio.sleep(1)
                 continue
@@ -355,7 +348,9 @@ async def safe_generate_reply(
     return False
 
 
-async def verify_session_health(session: AgentSession, state: ConversationState) -> bool:
+async def verify_session_health(
+    session: AgentSession, state: ConversationState
+) -> bool:
     """Verify session is healthy and ready for operations"""
 
     try:
@@ -419,9 +414,12 @@ async def cleanup_session(session: AgentSession, state: ConversationState):
         logger.error(f"Critical error during cleanup: {e}")
 
     # Final status report
-    logger.info(f"Conversation completed: {state.turn_count} turns, "
-                f"healthy: {state.session_healthy}, "
-                f"last_error: {state.last_error}")
+    logger.info(
+        f"Conversation completed: {state.turn_count} turns, "
+        f"healthy: {state.session_healthy}, "
+        f"last_error: {state.last_error}"
+    )
+
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
