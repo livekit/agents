@@ -1,3 +1,5 @@
+# mypy: disable-error-code=unused-ignore
+
 from __future__ import annotations
 
 import asyncio
@@ -154,7 +156,7 @@ class _ResponseGeneration:
     _completed_timestamp: float | None = None
 
 
-class Boto3CredentialsResolver(IdentityResolver):
+class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
     """IdentityResolver implementation that sources AWS credentials from boto3.
 
     The resolver delegates to the default boto3.Session() credential chain which
@@ -1180,9 +1182,7 @@ class RealtimeSession(  # noqa: F811
         logger.warning("unprompted generation is not supported by Nova Sonic's Realtime API")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         fut.set_exception(
-            llm.RealtimeError(
-                "unprompted generation is not supported by Nova Sonic's Realtime API"
-            )
+            llm.RealtimeError("unprompted generation is not supported by Nova Sonic's Realtime API")
         )
         return fut
 

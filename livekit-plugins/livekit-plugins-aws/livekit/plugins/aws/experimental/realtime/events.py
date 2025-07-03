@@ -91,7 +91,7 @@ class Tool(BaseModel):
 
 
 class ToolConfiguration(BaseModel):
-    toolChoice: dict[str, dict[str, str]] | None = None
+    toolChoice: Optional[dict[str, dict[str, str]]] = None
     tools: list[Tool]
 
 
