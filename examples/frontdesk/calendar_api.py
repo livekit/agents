@@ -10,8 +10,13 @@ from typing import Protocol
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
+import aiohttp
 from livekit.agents.utils import http_context
 
+
+class SlotUnavailableError(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
 
 @dataclass
 class AvailableSlot:
@@ -93,7 +98,12 @@ class CalComCalendar(Calendar):
     def __init__(self, *, api_key: str, timezone: str) -> None:
         self.tz = ZoneInfo(timezone)
         self._api_key = api_key
-        self._http_session = http_context.http_session()
+
+        try:
+            self._http_session = http_context.http_session()
+        except:
+            self._http_session = aiohttp.ClientSession()
+
         self._logger = logging.getLogger("cal.com")
 
     async def initialize(self) -> None:
@@ -152,6 +162,12 @@ class CalComCalendar(Calendar):
                 "eventTypeId": self._lk_event_id,
             },
         ) as resp:
+            data = await resp.json()
+            if error := data.get("error"):
+                message = error["message"]
+                if "User either already has booking at this time or is not available" in message:
+                    raise SlotUnavailableError(error["message"])
+
             resp.raise_for_status()
 
     async def list_available_slots(

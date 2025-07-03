@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar
+from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailable, SlotUnavailableError
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -78,9 +78,14 @@ class FrontDeskAgent(Agent):
 
         email_result = await workflows.GetEmailAgent(chat_ctx=self.chat_ctx)
 
-        await ctx.userdata.cal.schedule_appointment(
-            start_time=slot.start_time, attendee_email=email_result.email_address
-        )
+        try:
+            await ctx.userdata.cal.schedule_appointment(
+                start_time=slot.start_time, attendee_email=email_result.email_address
+            )
+        except SlotUnavailableError:
+            # exceptions other than ToolError are treated as "An internal error occured" for the LLM.
+            # Tell the LLM this slot isn't available anymore
+            raise ToolError("This slot isn't available anymore") from None
 
         local = slot.start_time.astimezone(self.tz)
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
