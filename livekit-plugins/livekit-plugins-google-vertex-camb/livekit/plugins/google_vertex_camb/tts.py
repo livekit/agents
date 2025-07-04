@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import os
@@ -238,8 +237,6 @@ class ChunkedStream(tts.ChunkedStream):
                 # Flush to complete the emission
                 output_emitter.flush()
 
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
         except Exception as e:
             if "credentials" in str(e).lower():
                 raise APIConnectionError(f"Authentication failed: {e}") from e
