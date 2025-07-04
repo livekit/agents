@@ -145,7 +145,7 @@ class RoomIO:
         self._user_transcript_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._update_state_atask: asyncio.Task[None] | None = None
-        self._close_session_atask: asyncio.Task[None] | None = None
+        self._disconnect_room_atask: asyncio.Task[None] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
         self._text_stream_handler_registered = False
@@ -417,7 +417,6 @@ class RoomIO:
         if (
             self._input_options.close_on_disconnect
             and participant.disconnect_reason in DEFAULT_CLOSE_ON_DISCONNECT_REASONS
-            and not self._close_session_atask
         ):
             logger.info(
                 "closing agent session due to participant disconnect "
@@ -429,7 +428,17 @@ class RoomIO:
                     ),
                 },
             )
-            self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
+            closing_task = self._agent_session._close_soon(
+                reason=CloseReason.PARTICIPANT_DISCONNECTED
+            )
+
+            def on_closed(task: asyncio.Task[None]) -> None:
+                if not task.cancelled() and (
+                    not self._disconnect_room_atask or self._disconnect_room_atask.done()
+                ):
+                    self._disconnect_room_atask = asyncio.create_task(self._room.disconnect())
+
+            closing_task.add_done_callback(on_closed)
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_atask:
