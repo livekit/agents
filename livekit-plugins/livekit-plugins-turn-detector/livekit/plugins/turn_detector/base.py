@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 import time
+import unicodedata
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -32,17 +34,31 @@ class _EUORunnerBase(_InferenceRunner):
         super().__init__()
         self._model_revision = MODEL_REVISIONS[model_type]
 
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return ""
+
+        text = unicodedata.normalize("NFKC", text.lower())
+        text = "".join(
+            ch
+            for ch in text
+            if not (unicodedata.category(ch).startswith("P") and ch not in ["'", "-"])
+        )
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
     def _format_chat_ctx(self, chat_ctx: list[dict[str, Any]]) -> str:
         new_chat_ctx = []
         last_msg: dict[str, Any] | None = None
         for msg in chat_ctx:
-            content = msg["content"]
-            if not content:
+            if not msg["content"]:
                 continue
+
+            content = self._normalize_text(msg["content"])
 
             # need to combine adjacent turns together to match training data
             if last_msg and last_msg["role"] == msg["role"]:
-                last_msg["content"] += content
+                last_msg["content"] += f" {content}"
             else:
                 msg["content"] = content
                 new_chat_ctx.append(msg)

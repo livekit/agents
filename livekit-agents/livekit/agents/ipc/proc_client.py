@@ -77,7 +77,6 @@ class _ProcClient:
         asyncio.set_event_loop(loop)
         loop.set_debug(self._init_req.asyncio_debug)
         loop.slow_callback_duration = 0.1  # 100ms
-        aio.debug.hook_slow_callbacks(2.0)
 
         try:
             self._task = loop.create_task(self._monitor_task(), name="proc_client_main")

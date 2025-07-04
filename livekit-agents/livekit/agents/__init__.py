@@ -60,6 +60,7 @@ from .voice import (
     AgentEvent,
     AgentSession,
     AgentStateChangedEvent,
+    AgentTask,
     CloseEvent,
     ConversationItemAddedEvent,
     ErrorEvent,
@@ -71,6 +72,7 @@ from .voice import (
     UserStateChangedEvent,
     avatar,
     io,
+    workflows,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -135,6 +137,7 @@ __all__ = [
     "AgentEvent",
     "ModelSettings",
     "Agent",
+    "AgentTask",
     "AssignmentTimeoutError",
     "APIConnectionError",
     "APIError",
@@ -161,6 +164,7 @@ __all__ = [
     "utils",
     "vad",
     "voice",
+    "workflows",
 ]
 
 # Cleanup docs of unexported modules
