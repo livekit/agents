@@ -132,7 +132,7 @@ class RunResult(Generic[Run_T]):
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
-        if all([handle.done() for handle in self._handles]):
+        if all(handle.done() for handle in self._handles):
             self._mark_done()
 
     def _mark_done(self) -> None:
@@ -441,7 +441,9 @@ class ChatMessageAssert:
     def event(self) -> ChatMessageEvent:
         return self._event
 
-    async def judge(self, llm_v: llm.LLM, *, intent: str) -> ChatMessageAssert:
+    async def judge(
+        self, llm_v: llm.LLM, *, intent: str, verbose: bool = False
+    ) -> ChatMessageAssert:
         msg_content = self._event.item.text_content
 
         if not msg_content:
@@ -506,6 +508,11 @@ class ChatMessageAssert:
         )
 
         success, reason = await check_intent(*fnc_args, **fnc_kwargs)
+
+        if verbose:
+            print(f"\n>>> Judging message: {msg_content.replace('\n', '\\n')}")
+            print(f">>> Judgement result: {success}, {reason}")
+
         if not success:
             self._raise(f"Judgement failed: {reason}")
 
