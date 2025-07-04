@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -31,8 +31,6 @@ from typing import (
 
 from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
 
-from livekit.agents.llm.chat_context import FunctionCall
-
 
 # Used by ToolChoice
 class Function(TypedDict, total=False):
@@ -46,18 +44,9 @@ class NamedToolChoice(TypedDict, total=False):
 
 ToolChoice = Union[NamedToolChoice, Literal["auto", "required", "none"]]
 
-AsyncToolReplyMode = Literal["when_idle", "interrupt", "silent"]
+ToolReplyMode = Literal["when_idle", "interrupt", "silent"]
 
-AsyncToolPendingResult = Union[Callable[[FunctionCall], Any], dict[str, Any], str, None]
-
-DEFAULT_ASYNC_TOOL_REPLY_MODE: AsyncToolReplyMode = "when_idle"
-
-
-def default_async_tool_pending_result(call: FunctionCall) -> dict[str, Any]:
-    return {
-        "id": call.call_id,
-        "result": f"Tool {call.name} is executing, please wait...",
-    }
+DEFAULT_TOOL_REPLY_MODE: ToolReplyMode = "when_idle"
 
 
 class ToolError(Exception):
@@ -94,6 +83,7 @@ class StopResponse(Exception):
 class _FunctionToolInfo:
     name: str
     description: str | None
+    reply_mode: ToolReplyMode | None
 
 
 @runtime_checkable
@@ -123,6 +113,7 @@ class RawFunctionDescription(TypedDict):
 class _RawFunctionToolInfo:
     name: str
     raw_schema: dict[str, Any]
+    reply_mode: ToolReplyMode | None
 
 
 @runtime_checkable
@@ -134,38 +125,55 @@ class RawFunctionTool(Protocol):
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 Raw_F = TypeVar("Raw_F", bound=Callable[..., Awaitable[Any]])
+Async_F = TypeVar("Async_F", bound=Callable[..., AsyncIterator[Any]])
+Async_Raw_F = TypeVar("Async_Raw_F", bound=Callable[..., AsyncIterator[Any]])
 
 
 @overload
 def function_tool(
-    f: Raw_F, *, raw_schema: RawFunctionDescription | dict[str, Any]
+    f: Raw_F,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    reply_mode: ToolReplyMode | None = None,
 ) -> RawFunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, raw_schema: RawFunctionDescription | dict[str, Any]
+    f: None = None,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    reply_mode: ToolReplyMode | None = None,
 ) -> Callable[[Raw_F], RawFunctionTool]: ...
 
 
 @overload
 def function_tool(
-    f: F, *, name: str | None = None, description: str | None = None
+    f: F,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    reply_mode: ToolReplyMode | None = None,
 ) -> FunctionTool: ...
 
 
 @overload
 def function_tool(
-    f: None = None, *, name: str | None = None, description: str | None = None
+    f: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    reply_mode: ToolReplyMode | None = None,
 ) -> Callable[[F], FunctionTool]: ...
 
 
 def function_tool(
-    f: F | Raw_F | None = None,
+    f: F | Raw_F | Async_F | Async_Raw_F | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+    reply_mode: ToolReplyMode | None = None,
 ) -> (
     FunctionTool
     | RawFunctionTool
@@ -182,7 +190,11 @@ def function_tool(
             # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
-        info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
+        info = _RawFunctionToolInfo(
+            raw_schema={**raw_schema},
+            name=raw_schema["name"],
+            reply_mode=reply_mode,
+        )
         setattr(func, "__livekit_raw_tool_info", info)
         return cast(RawFunctionTool, func)
 
@@ -193,127 +205,10 @@ def function_tool(
         info = _FunctionToolInfo(
             name=name or func.__name__,
             description=description or docstring.description,
+            reply_mode=reply_mode,
         )
         setattr(func, "__livekit_tool_info", info)
         return cast(FunctionTool, func)
-
-    if f is not None:
-        return deco_raw(cast(Raw_F, f)) if raw_schema is not None else deco_func(cast(F, f))
-
-    return deco_raw if raw_schema is not None else deco_func
-
-
-@dataclass
-class _AsyncToolInfo:
-    reply_mode: AsyncToolReplyMode
-    pending_result: AsyncToolPendingResult
-
-
-@runtime_checkable
-class AsyncFunctionTool(FunctionTool, Protocol):
-    __livekit_async_tool_info: _AsyncToolInfo
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Awaitable[Any]: ...
-
-
-@runtime_checkable
-class AsyncRawFunctionTool(RawFunctionTool, Protocol):
-    __livekit_async_tool_info: _AsyncToolInfo
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Awaitable[Any]: ...
-
-
-@overload
-def async_function_tool(
-    f: Raw_F,
-    *,
-    raw_schema: RawFunctionDescription | dict[str, Any],
-    reply_mode: AsyncToolReplyMode | None = None,
-    pending_result: Any = None,
-) -> AsyncRawFunctionTool: ...
-
-
-@overload
-def async_function_tool(
-    f: None = None,
-    *,
-    raw_schema: RawFunctionDescription | dict[str, Any],
-    reply_mode: AsyncToolReplyMode | None = None,
-    pending_result: AsyncToolPendingResult = None,
-) -> Callable[[Raw_F], AsyncRawFunctionTool]: ...
-
-
-@overload
-def async_function_tool(
-    f: F,
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    reply_mode: AsyncToolReplyMode | None = None,
-    pending_result: AsyncToolPendingResult = None,
-) -> AsyncFunctionTool: ...
-
-
-@overload
-def async_function_tool(
-    f: None = None,
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    reply_mode: AsyncToolReplyMode | None = None,
-    pending_result: AsyncToolPendingResult = None,
-) -> Callable[[F], AsyncFunctionTool]: ...
-
-
-@overload
-def async_function_tool(
-    f: F | Raw_F | None = None,
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
-    reply_mode: AsyncToolReplyMode | None = None,
-    pending_result: AsyncToolPendingResult = None,
-) -> (
-    AsyncFunctionTool
-    | AsyncRawFunctionTool
-    | Callable[[F], AsyncFunctionTool]
-    | Callable[[Raw_F], AsyncRawFunctionTool]
-):
-    def deco_raw(func: Raw_F) -> RawFunctionTool:
-        assert raw_schema is not None
-
-        if not raw_schema.get("name"):
-            raise ValueError("raw function name cannot be empty")
-
-        if "parameters" not in raw_schema:
-            # support empty parameters
-            raise ValueError("raw function description must contain a parameters key")
-
-        func_info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
-        async_info = _AsyncToolInfo(
-            reply_mode=reply_mode or DEFAULT_ASYNC_TOOL_REPLY_MODE,
-            pending_result=pending_result or default_async_tool_pending_result,
-        )
-        setattr(func, "__livekit_raw_tool_info", func_info)
-        setattr(func, "__livekit_async_tool_info", async_info)
-        return cast(AsyncRawFunctionTool, func)
-
-    def deco_func(func: F) -> FunctionTool:
-        from docstring_parser import parse_from_object
-
-        docstring = parse_from_object(func)
-        func_info = _FunctionToolInfo(
-            name=name or func.__name__,
-            description=description or docstring.description,
-        )
-        async_info = _AsyncToolInfo(
-            reply_mode=reply_mode or DEFAULT_ASYNC_TOOL_REPLY_MODE,
-            pending_result=pending_result or default_async_tool_pending_result,
-        )
-        setattr(func, "__livekit_tool_info", func_info)
-        setattr(func, "__livekit_async_tool_info", async_info)
-        return cast(AsyncFunctionTool, func)
 
     if f is not None:
         return deco_raw(cast(Raw_F, f)) if raw_schema is not None else deco_func(cast(F, f))
@@ -337,12 +232,16 @@ def get_raw_function_info(f: RawFunctionTool) -> _RawFunctionToolInfo:
     return cast(_RawFunctionToolInfo, getattr(f, "__livekit_raw_tool_info"))
 
 
-def is_async_tool(f: Callable[..., Any]) -> TypeGuard[AsyncFunctionTool | AsyncRawFunctionTool]:
-    return is_function_tool(f) and hasattr(f, "__livekit_async_tool_info")
+@overload
+def is_async_tool(f: FunctionTool) -> TypeGuard[Async_F]: ...
 
 
-def get_async_tool_info(f: AsyncFunctionTool | AsyncRawFunctionTool) -> _AsyncToolInfo:
-    return cast(_AsyncToolInfo, getattr(f, "__livekit_async_tool_info"))
+@overload
+def is_async_tool(f: RawFunctionTool) -> TypeGuard[Async_Raw_F]: ...
+
+
+def is_async_tool(f: FunctionTool | RawFunctionTool) -> TypeGuard[Async_F | Async_Raw_F]:
+    return inspect.iscoroutinefunction(f)
 
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
