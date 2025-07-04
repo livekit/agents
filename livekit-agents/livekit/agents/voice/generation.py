@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -20,6 +20,7 @@ from ..llm import (
     utils as llm_utils,
 )
 from ..llm.tool_context import (
+    is_async_tool,
     is_function_tool,
     is_raw_function_tool,
 )
@@ -260,9 +261,16 @@ async def _audio_forwarding_task(
 
 
 @dataclass
+class _ScheduledToolTask:
+    function_call: llm.FunctionCall
+    execution_stream: AsyncGenerator[Any, Any]
+
+
+@dataclass
 class _ToolOutput:
     output: list[_PythonOutput]
     first_tool_fut: asyncio.Future[None]
+    scheduled_tool_tasks: list[_ScheduledToolTask]
 
 
 def perform_tool_executions(
@@ -273,7 +281,7 @@ def perform_tool_executions(
     tool_choice: NotGivenOr[llm.ToolChoice],
     function_stream: AsyncIterable[llm.FunctionCall],
 ) -> tuple[asyncio.Task[None], _ToolOutput]:
-    tool_output = _ToolOutput(output=[], first_tool_fut=asyncio.Future())
+    tool_output = _ToolOutput(output=[], first_tool_fut=asyncio.Future(), scheduled_tool_tasks=[])
     task = asyncio.create_task(
         _execute_tools_task(
             session=session,
@@ -374,11 +382,19 @@ async def _execute_tools_task(
                 },
             )
 
+            async_tool_stream: AsyncGenerator[Any, Any] | None = None
             try:
-                task = asyncio.create_task(
-                    function_tool(*fnc_args, **fnc_kwargs),
-                    name=f"function_tool_{fnc_call.name}",
-                )
+                if is_async_tool(function_tool):
+                    async_tool_stream = function_tool(*fnc_args, **fnc_kwargs)
+                    task = asyncio.create_task(
+                        async_tool_stream.__anext__(),
+                        name=f"function_tool_{fnc_call.name}",
+                    )
+                else:
+                    task = asyncio.create_task(
+                        function_tool(*fnc_args, **fnc_kwargs),
+                        name=f"function_tool_{fnc_call.name}",
+                    )
 
                 tasks.append(task)
                 _authorize_inline_task(task, function_call=fnc_call)
@@ -402,6 +418,7 @@ async def _execute_tools_task(
                 *,
                 py_out: _PythonOutput,
                 fnc_call: llm.FunctionCall,
+                async_tool_stream: AsyncGenerator[Any, Any] | None,
             ) -> None:
                 if task.exception() is not None:
                     logger.error(
@@ -414,13 +431,35 @@ async def _execute_tools_task(
                     )
                     py_out.exception = task.exception()
                     tool_output.output.append(py_out)
+
+                    # close the async tool stream if it exists
+                    if async_tool_stream is not None:
+                        asyncio.create_task(async_tool_stream.aclose())
+
                     return
 
                 py_out.output = task.result()
                 tool_output.output.append(py_out)
+
+                # add the async tool stream to the tool output if it exists
+                if async_tool_stream is not None:
+                    tool_output.scheduled_tool_tasks.append(
+                        _ScheduledToolTask(
+                            function_call=fnc_call,
+                            execution_stream=async_tool_stream,
+                        )
+                    )
+
                 tasks.remove(task)
 
-            task.add_done_callback(partial(_log_exceptions, py_out=py_out, fnc_call=fnc_call))
+            task.add_done_callback(
+                partial(
+                    _log_exceptions,
+                    py_out=py_out,
+                    fnc_call=fnc_call,
+                    async_tool_stream=async_tool_stream,
+                )
+            )
 
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
@@ -442,6 +481,14 @@ async def _execute_tools_task(
                 },
             )
             await asyncio.gather(*tasks)
+
+        # if tool execution is cancelled (i.e. interrupted), close & clear the scheduled tool tasks
+        if len(tool_output.scheduled_tool_tasks) > 0:
+            await asyncio.gather(
+                *[task.execution_stream.aclose() for task in tool_output.scheduled_tool_tasks],
+                return_exceptions=True,
+            )
+            tool_output.scheduled_tool_tasks = []
     finally:
         await utils.aio.cancel_and_wait(*tasks)
 

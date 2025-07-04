@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -125,8 +125,8 @@ class RawFunctionTool(Protocol):
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 Raw_F = TypeVar("Raw_F", bound=Callable[..., Awaitable[Any]])
-Async_F = TypeVar("Async_F", bound=Callable[..., AsyncIterator[Any]])
-Async_Raw_F = TypeVar("Async_Raw_F", bound=Callable[..., AsyncIterator[Any]])
+Async_F = TypeVar("Async_F", bound=Callable[..., AsyncGenerator[Any]])
+Async_Raw_F = TypeVar("Async_Raw_F", bound=Callable[..., AsyncGenerator[Any]])
 
 
 @overload
@@ -232,16 +232,10 @@ def get_raw_function_info(f: RawFunctionTool) -> _RawFunctionToolInfo:
     return cast(_RawFunctionToolInfo, getattr(f, "__livekit_raw_tool_info"))
 
 
-@overload
-def is_async_tool(f: FunctionTool) -> TypeGuard[Async_F]: ...
-
-
-@overload
-def is_async_tool(f: RawFunctionTool) -> TypeGuard[Async_Raw_F]: ...
-
-
-def is_async_tool(f: FunctionTool | RawFunctionTool) -> TypeGuard[Async_F | Async_Raw_F]:
-    return inspect.iscoroutinefunction(f)
+def is_async_tool(
+    f: FunctionTool | RawFunctionTool,
+) -> TypeGuard[Callable[..., AsyncGenerator[Any]]]:
+    return inspect.isasyncgenfunction(f)
 
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
