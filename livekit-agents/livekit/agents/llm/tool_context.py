@@ -31,6 +31,8 @@ from typing import (
 
 from typing_extensions import NotRequired, Required, TypedDict, TypeGuard
 
+from livekit.agents.llm.chat_context import FunctionCall
+
 
 # Used by ToolChoice
 class Function(TypedDict, total=False):
@@ -43,6 +45,19 @@ class NamedToolChoice(TypedDict, total=False):
 
 
 ToolChoice = Union[NamedToolChoice, Literal["auto", "required", "none"]]
+
+AsyncToolReplyMode = Literal["when_idle", "interrupt", "silent"]
+
+AsyncToolPendingResult = Union[Callable[[FunctionCall], Any], dict[str, Any], str, None]
+
+DEFAULT_ASYNC_TOOL_REPLY_MODE: AsyncToolReplyMode = "when_idle"
+
+
+def default_async_tool_pending_result(call: FunctionCall) -> dict[str, Any]:
+    return {
+        "id": call.call_id,
+        "result": f"Tool {call.name} is executing, please wait...",
+    }
 
 
 class ToolError(Exception):
@@ -188,6 +203,124 @@ def function_tool(
     return deco_raw if raw_schema is not None else deco_func
 
 
+@dataclass
+class _AsyncToolInfo:
+    reply_mode: AsyncToolReplyMode
+    pending_result: AsyncToolPendingResult
+
+
+@runtime_checkable
+class AsyncFunctionTool(FunctionTool, Protocol):
+    __livekit_async_tool_info: _AsyncToolInfo
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Awaitable[Any]: ...
+
+
+@runtime_checkable
+class AsyncRawFunctionTool(RawFunctionTool, Protocol):
+    __livekit_async_tool_info: _AsyncToolInfo
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Awaitable[Any]: ...
+
+
+@overload
+def async_function_tool(
+    f: Raw_F,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    reply_mode: AsyncToolReplyMode | None = None,
+    pending_result: Any = None,
+) -> AsyncRawFunctionTool: ...
+
+
+@overload
+def async_function_tool(
+    f: None = None,
+    *,
+    raw_schema: RawFunctionDescription | dict[str, Any],
+    reply_mode: AsyncToolReplyMode | None = None,
+    pending_result: AsyncToolPendingResult = None,
+) -> Callable[[Raw_F], AsyncRawFunctionTool]: ...
+
+
+@overload
+def async_function_tool(
+    f: F,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    reply_mode: AsyncToolReplyMode | None = None,
+    pending_result: AsyncToolPendingResult = None,
+) -> AsyncFunctionTool: ...
+
+
+@overload
+def async_function_tool(
+    f: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    reply_mode: AsyncToolReplyMode | None = None,
+    pending_result: AsyncToolPendingResult = None,
+) -> Callable[[F], AsyncFunctionTool]: ...
+
+
+@overload
+def async_function_tool(
+    f: F | Raw_F | None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+    reply_mode: AsyncToolReplyMode | None = None,
+    pending_result: AsyncToolPendingResult = None,
+) -> (
+    AsyncFunctionTool
+    | AsyncRawFunctionTool
+    | Callable[[F], AsyncFunctionTool]
+    | Callable[[Raw_F], AsyncRawFunctionTool]
+):
+    def deco_raw(func: Raw_F) -> RawFunctionTool:
+        assert raw_schema is not None
+
+        if not raw_schema.get("name"):
+            raise ValueError("raw function name cannot be empty")
+
+        if "parameters" not in raw_schema:
+            # support empty parameters
+            raise ValueError("raw function description must contain a parameters key")
+
+        func_info = _RawFunctionToolInfo(raw_schema={**raw_schema}, name=raw_schema["name"])
+        async_info = _AsyncToolInfo(
+            reply_mode=reply_mode or DEFAULT_ASYNC_TOOL_REPLY_MODE,
+            pending_result=pending_result or default_async_tool_pending_result,
+        )
+        setattr(func, "__livekit_raw_tool_info", func_info)
+        setattr(func, "__livekit_async_tool_info", async_info)
+        return cast(AsyncRawFunctionTool, func)
+
+    def deco_func(func: F) -> FunctionTool:
+        from docstring_parser import parse_from_object
+
+        docstring = parse_from_object(func)
+        func_info = _FunctionToolInfo(
+            name=name or func.__name__,
+            description=description or docstring.description,
+        )
+        async_info = _AsyncToolInfo(
+            reply_mode=reply_mode or DEFAULT_ASYNC_TOOL_REPLY_MODE,
+            pending_result=pending_result or default_async_tool_pending_result,
+        )
+        setattr(func, "__livekit_tool_info", func_info)
+        setattr(func, "__livekit_async_tool_info", async_info)
+        return cast(AsyncFunctionTool, func)
+
+    if f is not None:
+        return deco_raw(cast(Raw_F, f)) if raw_schema is not None else deco_func(cast(F, f))
+
+    return deco_raw if raw_schema is not None else deco_func
+
+
 def is_function_tool(f: Callable[..., Any]) -> TypeGuard[FunctionTool]:
     return hasattr(f, "__livekit_tool_info")
 
@@ -202,6 +335,14 @@ def is_raw_function_tool(f: Callable[..., Any]) -> TypeGuard[RawFunctionTool]:
 
 def get_raw_function_info(f: RawFunctionTool) -> _RawFunctionToolInfo:
     return cast(_RawFunctionToolInfo, getattr(f, "__livekit_raw_tool_info"))
+
+
+def is_async_tool(f: Callable[..., Any]) -> TypeGuard[AsyncFunctionTool | AsyncRawFunctionTool]:
+    return is_function_tool(f) and hasattr(f, "__livekit_async_tool_info")
+
+
+def get_async_tool_info(f: AsyncFunctionTool | AsyncRawFunctionTool) -> _AsyncToolInfo:
+    return cast(_AsyncToolInfo, getattr(f, "__livekit_async_tool_info"))
 
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
