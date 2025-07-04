@@ -100,7 +100,9 @@ class BackgroundAudioPlayer:
 
         self._audio_source = rtc.AudioSource(48000, 1, queue_size_ms=_AUDIO_SOURCE_BUFFER_MS)
 
-        self._audio_mixer = rtc.AudioMixer(48000, 1, blocksize=4800, capacity=1, stream_timeout_ms=stream_timeout_ms)
+        self._audio_mixer = rtc.AudioMixer(
+            48000, 1, blocksize=4800, capacity=1, stream_timeout_ms=stream_timeout_ms
+        )
         self._publication: rtc.LocalTrackPublication | None = None
         self._lock = asyncio.Lock()
 
