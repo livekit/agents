@@ -12,6 +12,7 @@ from livekit.agents.llm import utils as llm_utils
 from livekit.agents.llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
+    get_function_info,
     get_raw_function_info,
     is_function_tool,
     is_raw_function_tool,
@@ -28,8 +29,12 @@ def to_fnc_ctx(fncs: list[FunctionTool | RawFunctionTool]) -> list[types.Functio
     for fnc in fncs:
         if is_raw_function_tool(fnc):
             info = get_raw_function_info(fnc)
+            behavior = types.Behavior.UNSPECIFIED
+            if info.blocking is not None:
+                behavior = types.Behavior.BLOCKING if info.blocking else types.Behavior.NON_BLOCKING
             tools.append(
                 types.FunctionDeclaration(
+                    behavior=behavior,
                     name=info.name,
                     description=info.raw_schema.get("description", ""),
                     parameters_json_schema=info.raw_schema.get("parameters", {}),
@@ -87,6 +92,7 @@ def get_tool_results_for_realtime(
             res = types.FunctionResponse(
                 name=msg.name,
                 response={"output": msg.output},
+                scheduling=types.FunctionResponseScheduling.WHEN_IDLE,
             )
             if not vertexai:
                 # vertexai does not support id in FunctionResponse
@@ -103,7 +109,12 @@ def get_tool_results_for_realtime(
 def _build_gemini_fnc(function_tool: FunctionTool) -> types.FunctionDeclaration:
     fnc = llm.utils.build_legacy_openai_schema(function_tool, internally_tagged=True)
     json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
+    info = get_function_info(function_tool)
+    behavior = types.Behavior.NON_BLOCKING
+    if info.blocking is not None:
+        behavior = types.Behavior.BLOCKING if info.blocking else types.Behavior.NON_BLOCKING
     return types.FunctionDeclaration(
+        behavior=behavior,
         name=fnc["name"],
         description=fnc["description"],
         parameters=types.Schema.model_validate(json_schema) if json_schema else None,

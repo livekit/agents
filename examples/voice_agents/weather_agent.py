@@ -1,4 +1,5 @@
 import logging
+import asyncio
 
 import aiohttp
 from dotenv import load_dotenv
@@ -7,7 +8,8 @@ from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.room_io import RoomInputOptions, RoomOutputOptions
-from livekit.plugins import openai
+from livekit.plugins import google, cartesia, openai
+from google.genai import types
 
 logger = logging.getLogger("weather-example")
 logger.setLevel(logging.INFO)
@@ -19,10 +21,15 @@ class WeatherAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a weather agent.",
-            llm=openai.realtime.RealtimeModel(),
+            # llm=openai.realtime.RealtimeModel(),
+            llm=google.beta.realtime.RealtimeModel(
+                # model="gemini-live-2.5-flash-preview",
+                # modalities=[types.Modality.TEXT],
+            ),
+            # tts=cartesia.TTS(),
         )
 
-    @function_tool
+    @function_tool(blocking=True)
     async def get_weather(
         self,
         latitude: str,
@@ -40,6 +47,7 @@ class WeatherAgent(Agent):
         logger.info(f"getting weather for {latitude}, {longitude}")
         url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
         weather_data = {}
+        await asyncio.sleep(10)
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
