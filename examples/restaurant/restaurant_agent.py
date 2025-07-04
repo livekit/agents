@@ -260,7 +260,8 @@ class Checkout(BaseAgent):
                 f"You are a checkout agent at a restaurant. The menu is: {menu}\n"
                 "Your are responsible for confirming the expense of the "
                 "order and then collecting customer's name, phone number and credit card "
-                "information, including the card number, expiry date, and CVV step by step."
+                "information, including the card number, expiry date, and CVV step by step. "
+                "Transfer user to the takeaway agent if they want to update their order."
             ),
             tools=[update_name, update_phone, to_greeter],
             llm=llm,
