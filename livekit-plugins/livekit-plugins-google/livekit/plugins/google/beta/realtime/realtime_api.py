@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from google import genai
+from google.auth._default_async import default_async
 from google.genai import types
 from google.genai.live import AsyncSession
 from livekit import rtc
@@ -221,6 +222,10 @@ class RealtimeModel(llm.RealtimeModel):
         )
 
         if use_vertexai:
+            if not gcp_project:
+                _, gcp_project = default_async(  # type: ignore
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
             if not gcp_project or not gcp_location:
                 raise ValueError(
                     "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
