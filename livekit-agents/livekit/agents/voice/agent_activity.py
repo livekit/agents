@@ -33,6 +33,7 @@ from .events import (
     UserInputTranscribedEvent,
 )
 from .generation import (
+    ScheduledToolTask,
     _AudioOutput,
     _TextOutput,
     _TTSGenerationData,
@@ -82,6 +83,9 @@ class AgentActivity(RecognitionHooks):
         self._main_atask: asyncio.Task[None] | None = None
         self._user_turn_completed_atask: asyncio.Task[None] | None = None
         self._speech_tasks: list[asyncio.Task[Any]] = []
+
+        # tool_call_id -> scheduled tool task
+        self._scheduled_tool_tasks: dict[str, ScheduledToolTask] = {}
 
         self._turn_detection_mode = (
             self.turn_detection if isinstance(self.turn_detection, str) else None

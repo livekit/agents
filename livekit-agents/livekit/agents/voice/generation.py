@@ -261,8 +261,8 @@ async def _audio_forwarding_task(
 
 
 @dataclass
-class _ScheduledToolTask:
-    function_call: llm.FunctionCall
+class ScheduledToolTask:
+    fnc_call: llm.FunctionCall
     execution_stream: AsyncGenerator[Any, Any]
 
 
@@ -270,7 +270,7 @@ class _ScheduledToolTask:
 class _ToolOutput:
     output: list[_PythonOutput]
     first_tool_fut: asyncio.Future[None]
-    scheduled_tool_tasks: list[_ScheduledToolTask]
+    scheduled_tool_tasks: list[ScheduledToolTask]
 
 
 def perform_tool_executions(
@@ -294,6 +294,45 @@ def perform_tool_executions(
         name="execute_tools_task",
     )
     return task, tool_output
+
+
+def schedule_async_tool_execution(
+    *,
+    tool_task: ScheduledToolTask,
+    speech_handle: SpeechHandle,
+) -> asyncio.Task[_PythonOutput]:
+    from .agent import _authorize_inline_task
+
+    async def _run_scheduled_tool_task() -> _PythonOutput:
+        py_out: _PythonOutput = _PythonOutput(
+            fnc_call=tool_task.fnc_call,
+            output=None,
+            exception=None,
+        )
+        try:
+            # TODO(brian): support yielding progress updates and handle them
+            async for item in tool_task.execution_stream:
+                # right now we only accept the last yielded value as the result
+                py_out.output = item
+        except Exception as e:
+            logger.exception(
+                "exception occurred while executing tool",
+                extra={
+                    "function": tool_task.fnc_call.name,
+                    "speech_id": speech_handle.id,
+                },
+            )
+            py_out.output = None
+            py_out.exception = e
+
+        return py_out
+
+    task = asyncio.create_task(
+        _run_scheduled_tool_task(), name=f"scheduled_tool_task_{tool_task.fnc_call.name}"
+    )
+    _authorize_inline_task(task, function_call=tool_task.fnc_call)
+
+    return task
 
 
 @utils.log_exceptions(logger=logger)
@@ -444,8 +483,8 @@ async def _execute_tools_task(
                 # add the async tool stream to the tool output if it exists
                 if async_tool_stream is not None:
                     tool_output.scheduled_tool_tasks.append(
-                        _ScheduledToolTask(
-                            function_call=fnc_call,
+                        ScheduledToolTask(
+                            fnc_call=fnc_call,
                             execution_stream=async_tool_stream,
                         )
                     )
@@ -482,12 +521,23 @@ async def _execute_tools_task(
             )
             await asyncio.gather(*tasks)
 
-        # if tool execution is cancelled (i.e. interrupted), close & clear the scheduled tool tasks
         if len(tool_output.scheduled_tool_tasks) > 0:
+            names = [task.fnc_call.name for task in tool_output.scheduled_tool_tasks]
+            logger.debug(
+                "waiting for scheduled tool tasks to close before fully cancelling",
+                extra={"functions": names, "speech_id": speech_handle.id},
+            )
+            debug.Tracing.log_event(
+                "waiting for scheduled tool tasks to close before fully cancelling",
+                {"functions": names, "speech_id": speech_handle.id},
+            )
             await asyncio.gather(
                 *[task.execution_stream.aclose() for task in tool_output.scheduled_tool_tasks],
                 return_exceptions=True,
             )
+
+            # if tool execution is cancelled (i.e. interrupted), clear the scheduled tool tasks
+            # so we won't accidentally schedule them in AgentActivity
             tool_output.scheduled_tool_tasks = []
     finally:
         await utils.aio.cancel_and_wait(*tasks)
