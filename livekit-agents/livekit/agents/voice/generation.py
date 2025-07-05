@@ -20,6 +20,7 @@ from ..llm import (
     utils as llm_utils,
 )
 from ..llm.tool_context import (
+    DEFAULT_TOOL_REPLY_MODE,
     ToolReplyMode,
     get_function_info,
     get_raw_function_info,
@@ -492,12 +493,11 @@ async def _execute_tools_task(
 
                 # add the async tool stream to the tool output if it exists
                 if async_tool_stream is not None:
-                    assert reply_mode is not None, "reply_mode should not be None for async tool"
                     tool_output.scheduled_tool_tasks.append(
                         ScheduledToolTask(
                             fnc_call=fnc_call,
                             execution_stream=async_tool_stream,
-                            reply_mode=reply_mode,
+                            reply_mode=reply_mode or DEFAULT_TOOL_REPLY_MODE,
                         )
                     )
 
