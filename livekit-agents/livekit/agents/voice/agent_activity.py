@@ -1442,6 +1442,7 @@ class AgentActivity(RecognitionHooks):
                 name=f"scheduled_tool_task_{scheduled_task.fnc_call.name}",
             )
 
+    @utils.log_exceptions(logger=logger)
     async def _schedule_async_tool_task(
         self,
         scheduled_task: ScheduledToolTask,
