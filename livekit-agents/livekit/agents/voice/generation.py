@@ -20,6 +20,9 @@ from ..llm import (
     utils as llm_utils,
 )
 from ..llm.tool_context import (
+    ToolReplyMode,
+    get_function_info,
+    get_raw_function_info,
     is_async_tool,
     is_function_tool,
     is_raw_function_tool,
@@ -263,6 +266,7 @@ async def _audio_forwarding_task(
 @dataclass
 class ScheduledToolTask:
     fnc_call: llm.FunctionCall
+    reply_mode: ToolReplyMode
     execution_stream: AsyncGenerator[Any, Any]
 
 
@@ -421,6 +425,11 @@ async def _execute_tools_task(
                 },
             )
 
+            if is_function_tool(function_tool):
+                reply_mode = get_function_info(function_tool).reply_mode
+            elif is_raw_function_tool(function_tool):
+                reply_mode = get_raw_function_info(function_tool).reply_mode
+
             async_tool_stream: AsyncGenerator[Any, Any] | None = None
             try:
                 if is_async_tool(function_tool):
@@ -458,6 +467,7 @@ async def _execute_tools_task(
                 py_out: _PythonOutput,
                 fnc_call: llm.FunctionCall,
                 async_tool_stream: AsyncGenerator[Any, Any] | None,
+                reply_mode: ToolReplyMode | None,
             ) -> None:
                 if task.exception() is not None:
                     logger.error(
@@ -482,10 +492,12 @@ async def _execute_tools_task(
 
                 # add the async tool stream to the tool output if it exists
                 if async_tool_stream is not None:
+                    assert reply_mode is not None, "reply_mode should not be None for async tool"
                     tool_output.scheduled_tool_tasks.append(
                         ScheduledToolTask(
                             fnc_call=fnc_call,
                             execution_stream=async_tool_stream,
+                            reply_mode=reply_mode,
                         )
                     )
 
@@ -497,6 +509,7 @@ async def _execute_tools_task(
                     py_out=py_out,
                     fnc_call=fnc_call,
                     async_tool_stream=async_tool_stream,
+                    reply_mode=reply_mode,
                 )
             )
 

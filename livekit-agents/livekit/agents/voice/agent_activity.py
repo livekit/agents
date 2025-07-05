@@ -43,6 +43,7 @@ from .generation import (
     perform_tool_executions,
     perform_tts_inference,
     remove_instructions,
+    schedule_async_tool_execution,
     update_instructions,
 )
 from .speech_handle import SpeechHandle
@@ -1430,6 +1431,30 @@ class AgentActivity(RecognitionHooks):
                 for msg in tool_messages:
                     msg.created_at = reply_started_at
                 self._agent._chat_ctx.insert(tool_messages)
+
+        for scheduled_task in tool_output.scheduled_tool_tasks:
+            asyncio.create_task(
+                self._schedule_async_tool_task(scheduled_task, speech_handle),
+                name=f"scheduled_tool_task_{scheduled_task.fnc_call.name}",
+            )
+
+    async def _schedule_async_tool_task(
+        self,
+        scheduled_task: ScheduledToolTask,
+        speech_handle: SpeechHandle,
+    ) -> None:
+        fnc_call = scheduled_task.fnc_call
+        self._scheduled_tool_tasks[fnc_call.call_id] = scheduled_task
+
+        py_out = await schedule_async_tool_execution(
+            tool_task=scheduled_task,
+            speech_handle=speech_handle,
+        )
+
+        self._scheduled_tool_tasks.pop(fnc_call.call_id, None)
+
+        sanitized_out = py_out.sanitize()
+        # schedule based on the reply mode
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
