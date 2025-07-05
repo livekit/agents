@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import heapq
+import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from livekit import rtc
 
 from .. import debug, llm, stt, tts, utils, vad
-from ..llm.tool_context import StopResponse
+from ..llm.tool_context import StopResponse, ToolReplyMode
 from ..log import logger
 from ..metrics import (
     EOUMetrics,
@@ -247,6 +248,7 @@ class AgentActivity(RecognitionHooks):
             await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        # TODO(brian): lock this method?
         chat_ctx = chat_ctx.copy(tools=self.tools)
 
         self._agent._chat_ctx = chat_ctx
@@ -550,6 +552,7 @@ class AgentActivity(RecognitionHooks):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        priority: NotGivenOr[int] = NOT_GIVEN,
     ) -> SpeechHandle:
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -628,7 +631,8 @@ class AgentActivity(RecognitionHooks):
             )
             task.add_done_callback(self._on_pipeline_reply_done)
 
-        self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+        priority = priority if is_given(priority) else SpeechHandle.SPEECH_PRIORITY_NORMAL
+        self._schedule_speech(handle, priority)
         return handle
 
     def interrupt(self) -> asyncio.Future[None]:
@@ -1454,7 +1458,54 @@ class AgentActivity(RecognitionHooks):
         self._scheduled_tool_tasks.pop(fnc_call.call_id, None)
 
         sanitized_out = py_out.sanitize()
-        # schedule based on the reply mode
+        fnc_executed_ev = FunctionToolsExecutedEvent(
+            function_calls=[sanitized_out.fnc_call],
+            function_call_outputs=[sanitized_out.fnc_call_out],
+        )
+        self._session.emit("function_tools_executed", fnc_executed_ev)
+
+        # TODO(brian): should we allow user to run agent handoff in long running tools?
+        if sanitized_out.agent_task is not None:
+            logger.error(
+                "Unable to run AgentTask from the async tool execution",
+                extra={
+                    "function": sanitized_out.fnc_call.name,
+                    "speech_id": speech_handle.id,
+                },
+            )
+            return
+
+        reply_mode: ToolReplyMode = (
+            scheduled_task.reply_mode if sanitized_out.reply_required else "silent"
+        )
+
+        content = json.dumps(
+            {
+                "id": fnc_call.call_id,
+                "output": sanitized_out.fnc_call_out.output if sanitized_out.fnc_call_out else "",
+            },
+            indent=2,
+        )
+
+        chat_ctx = self._agent._chat_ctx.copy()
+        # TODO(brian): allow user to customize this message?
+        chat_ctx.add_message(
+            role="user",
+            content=[f"Tool {fnc_call.name} finished execution with output:\n{content}"],
+        )
+
+        if reply_mode == "silent":
+            await self.update_chat_ctx(chat_ctx=chat_ctx)
+            return
+
+        if reply_mode == "when_idle":
+            self._generate_reply(chat_ctx=chat_ctx, priority=SpeechHandle.SPEECH_PRIORITY_LOW)
+            return
+
+        if reply_mode == "interrupt":
+            self.interrupt()
+            self._generate_reply(chat_ctx=chat_ctx, priority=SpeechHandle.SPEECH_PRIORITY_HIGH)
+            return
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
