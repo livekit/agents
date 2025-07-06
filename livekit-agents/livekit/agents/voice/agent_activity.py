@@ -464,6 +464,11 @@ class AgentActivity(RecognitionHooks):
             if self._main_atask is not None:
                 await utils.aio.cancel_and_wait(self._main_atask)
 
+            if len(self._scheduled_tool_tasks) > 0:
+                await asyncio.gather(
+                    *[utils.aio.cancel_and_wait(task) for task in self._scheduled_tool_tasks]
+                )
+
             self._agent._activity = None
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
