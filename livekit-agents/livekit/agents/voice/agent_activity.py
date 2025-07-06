@@ -6,6 +6,7 @@ import heapq
 import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from livekit import rtc
@@ -85,9 +86,7 @@ class AgentActivity(RecognitionHooks):
         self._main_atask: asyncio.Task[None] | None = None
         self._user_turn_completed_atask: asyncio.Task[None] | None = None
         self._speech_tasks: list[asyncio.Task[Any]] = []
-
-        # tool_call_id -> scheduled tool task
-        self._scheduled_tool_tasks: dict[str, ScheduledToolTask] = {}
+        self._scheduled_tool_tasks: set[asyncio.Task[Any]] = set()
 
         self._turn_detection_mode = (
             self.turn_detection if isinstance(self.turn_detection, str) else None
@@ -1437,10 +1436,16 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.insert(tool_messages)
 
         for scheduled_task in tool_output.scheduled_tool_tasks:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._schedule_async_tool_task(scheduled_task, speech_handle),
                 name=f"scheduled_tool_task_{scheduled_task.fnc_call.name}",
             )
+            tasks.append(task)
+
+            def _on_async_tool_task_done(_, *, task: asyncio.Task[None]) -> None:
+                self._scheduled_tool_tasks.discard(task)
+
+            task.add_done_callback(partial(_on_async_tool_task_done, task=task))
 
     @utils.log_exceptions(logger=logger)
     async def _schedule_async_tool_task(
@@ -1448,15 +1453,10 @@ class AgentActivity(RecognitionHooks):
         scheduled_task: ScheduledToolTask,
         speech_handle: SpeechHandle,
     ) -> None:
-        fnc_call = scheduled_task.fnc_call
-        self._scheduled_tool_tasks[fnc_call.call_id] = scheduled_task
-
         py_out = await schedule_async_tool_execution(
             tool_task=scheduled_task,
             speech_handle=speech_handle,
         )
-
-        self._scheduled_tool_tasks.pop(fnc_call.call_id, None)
 
         sanitized_out = py_out.sanitize()
         fnc_executed_ev = FunctionToolsExecutedEvent(
@@ -1482,7 +1482,7 @@ class AgentActivity(RecognitionHooks):
 
         content = json.dumps(
             {
-                "id": fnc_call.call_id,
+                "id": scheduled_task.fnc_call.call_id,
                 "output": sanitized_out.fnc_call_out.output if sanitized_out.fnc_call_out else "",
             },
             indent=2,
@@ -1492,7 +1492,9 @@ class AgentActivity(RecognitionHooks):
         # TODO(brian): allow user to customize this message?
         chat_ctx.add_message(
             role="user",
-            content=[f"Tool {fnc_call.name} finished execution with output:\n{content}"],
+            content=[
+                f"Long running tool {scheduled_task.fnc_call.name} finished execution with output:\n{content}"  # noqa: E501
+            ],
         )
 
         if reply_mode == "silent":
